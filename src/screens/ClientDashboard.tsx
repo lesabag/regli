@@ -149,7 +149,7 @@ export default function ClientDashboard({
     [requests]
   )
 
-  const { walkerLocation, walkerBearing, userLocation, etaMinutes, isArrived, gpsQuality, proximityLevel, routePolyline } = useJobTracking(
+  const { walkerLocation, walkerBearing, userLocation, hasUserLocation, etaMinutes, isArrived, gpsQuality, proximityLevel, routePolyline } = useJobTracking(
     trackedJob?.id ?? null
   )
 
@@ -922,8 +922,9 @@ export default function ClientDashboard({
                     : '#64748B',
                 }}>
                   <span style={{ fontSize: 12, fontWeight: 700 }}>
-                    {gpsQuality === 'none' && 'Waiting for GPS'}
-                    {gpsQuality === 'live' && 'Locating...'}
+                    {gpsQuality === 'none' && !hasUserLocation && 'Requesting location...'}
+                    {gpsQuality === 'none' && hasUserLocation && 'Waiting for walker location'}
+                    {gpsQuality === 'live' && 'Calculating ETA...'}
                     {gpsQuality === 'last_known' && 'Using last known location'}
                     {gpsQuality === 'delayed' && 'GPS signal delayed'}
                     {gpsQuality === 'offline' && 'Walker temporarily offline'}

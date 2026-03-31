@@ -157,6 +157,7 @@ export interface JobTrackingState {
   walkerLocation: [number, number] | null
   walkerBearing: number | null
   userLocation: [number, number]
+  hasUserLocation: boolean
   etaMinutes: number | null
   isArrived: boolean
   gpsQuality: GpsQuality
@@ -170,6 +171,7 @@ export function useJobTracking(jobId: string | null): JobTrackingState {
   const [walkerLocation, setWalkerLocation] = useState<[number, number] | null>(null)
   const [walkerBearing, setWalkerBearing] = useState<number | null>(null)
   const [userLocation, setUserLocation] = useState<[number, number]>(DEFAULT_LOCATION)
+  const [hasUserLocation, setHasUserLocation] = useState(false)
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null)
   const [isArrived, setIsArrived] = useState(false)
   const [gpsQuality, setGpsQuality] = useState<GpsQuality>('none')
@@ -460,6 +462,7 @@ export function useJobTracking(jobId: string | null): JobTrackingState {
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         hasRealUserLocation.current = true
+        setHasUserLocation(true)
         setUserLocation([pos.coords.latitude, pos.coords.longitude])
       },
       (err) => console.warn('[useJobTracking] geo error:', err.message),
@@ -639,6 +642,7 @@ export function useJobTracking(jobId: string | null): JobTrackingState {
     walkerLocation,
     walkerBearing,
     userLocation,
+    hasUserLocation,
     etaMinutes,
     isArrived,
     gpsQuality,
