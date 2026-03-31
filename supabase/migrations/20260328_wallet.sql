@@ -1,0 +1,11 @@
+-- Wallet System for Walkers
+-- No schema changes needed — wallet balances are computed from existing columns:
+--   - walker_earnings (from 20260328_add_commission.sql)
+--   - payment_status (from 20260327_add_payments.sql)
+--   - status (original column)
+--
+-- Available Balance  = SUM(walker_earnings) WHERE status='completed' AND payment_status='paid'
+-- Pending Earnings   = SUM(walker_earnings) WHERE status='completed' AND payment_status!='paid'
+-- Total Earnings     = Available + Pending
+--
+-- If a dedicated wallet table or payout tracking is needed later, add it here.

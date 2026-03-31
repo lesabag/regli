@@ -1,0 +1,26 @@
+[functions.get-connect-status]
+verify_jwt = false
+
+[functions.create-connect-account]
+verify_jwt = false
+
+[functions.create-connect-onboarding-link]
+verify_jwt = false
+
+[functions.create-payment-intent]
+verify_jwt = false
+
+[functions.capture-payment]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.create-transfer]
+verify_jwt = false
+
+[functions.retry-failed-transfers]
+verify_jwt = false
+
+[functions.recover-stuck-payouts]
+verify_jwt = false
