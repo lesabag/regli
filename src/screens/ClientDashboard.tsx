@@ -619,15 +619,17 @@ export default function ClientDashboard({
 
         {/* Payment Modal */}
         {payingJobId && clientSecret && (
-          <div style={overlayStyle}>
-            <div style={modalStyle}>
-              <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Complete Payment</h2>
-              <Elements stripe={stripePromise} options={{ clientSecret }}>
-                <CheckoutForm
-                  onSuccess={handlePaymentSuccess}
-                  onCancel={handlePaymentCancel}
-                />
-              </Elements>
+          <div style={paymentOverlayStyle} onClick={handlePaymentCancel}>
+            <div style={paymentSheetStyle} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: '24px 28px', paddingBottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
+                <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Complete Payment</h2>
+                <Elements stripe={stripePromise} options={{ clientSecret }}>
+                  <CheckoutForm
+                    onSuccess={handlePaymentSuccess}
+                    onCancel={handlePaymentCancel}
+                  />
+                </Elements>
+              </div>
             </div>
           </div>
         )}
@@ -1329,7 +1331,18 @@ function CheckoutForm({
           {error}
         </div>
       )}
-      <div style={{ display: 'flex', gap: 12, marginTop: 18 }}>
+      <div style={{
+        display: 'flex',
+        gap: 12,
+        marginTop: 18,
+        position: 'sticky',
+        bottom: 0,
+        background: '#FFFFFF',
+        paddingTop: 16,
+        paddingBottom: 8,
+        borderTop: '1px solid #F1F5F9',
+        zIndex: 1,
+      }}>
         <button
           type="submit"
           disabled={!stripe || processing}
@@ -1588,6 +1601,28 @@ const modalStyle: React.CSSProperties = {
   width: '100%',
   maxWidth: 480,
   boxShadow: '0 18px 40px rgba(15, 23, 42, 0.2)',
+}
+
+const paymentOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.5)',
+  zIndex: 1000,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-end',
+}
+
+const paymentSheetStyle: React.CSSProperties = {
+  background: '#FFFFFF',
+  borderRadius: '20px 20px 0 0',
+  width: '100%',
+  maxWidth: 480,
+  maxHeight: '85vh',
+  margin: '0 auto',
+  boxShadow: '0 -8px 40px rgba(15, 23, 42, 0.2)',
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
 }
 
 const priceSummaryStyle: React.CSSProperties = {
