@@ -169,6 +169,7 @@ export default function HomeScreen({
         minHeight: '100svh',
         background: '#F3F6FB',
         padding: '32px 20px',
+        paddingTop: 'calc(32px + env(safe-area-inset-top))',
         fontFamily: 'Inter, system-ui, sans-serif',
         color: '#001A33',
       }}

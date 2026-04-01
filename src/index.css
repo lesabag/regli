@@ -8,8 +8,7 @@
 
 body {
   margin: 0;
-  /* Safe area support for iPhone notch/home indicator */
-  padding-top: env(safe-area-inset-top);
+  /* Safe area support for iPhone — left/right handled globally, top/bottom per-screen */
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }

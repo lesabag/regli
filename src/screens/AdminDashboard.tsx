@@ -1815,6 +1815,7 @@ function transferBadge(status: string): React.CSSProperties {
 const st: Record<string, React.CSSProperties> = {
   page: {
     padding: '24px 32px',
+    paddingTop: 'calc(24px + env(safe-area-inset-top))',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     background: '#F8FAFC',
     minHeight: '100svh',

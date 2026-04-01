@@ -571,6 +571,7 @@ export default function ClientDashboard({
         minHeight: '100svh',
         background: '#F8FAFC',
         padding: '28px 20px',
+        paddingTop: 'calc(28px + env(safe-area-inset-top))',
         paddingBottom: 'calc(28px + env(safe-area-inset-bottom))',
         fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
         color: '#0F172A',
