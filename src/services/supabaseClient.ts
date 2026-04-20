@@ -26,7 +26,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
  */
 export async function invokeEdgeFunction<T = unknown>(
   functionName: string,
-  options?: { body?: unknown }
+  options?: { body?: unknown; timeoutMs?: number }
 ): Promise<{ data: T | null; error: string | null }> {
   const { data: { session } } = await supabase.auth.getSession()
 
@@ -36,16 +36,38 @@ export async function invokeEdgeFunction<T = unknown>(
   }
 
   const url = `${supabaseUrl}/functions/v1/${functionName}`
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), options?.timeoutMs ?? 30_000)
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: supabaseAnonKey,
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: options?.body ? JSON.stringify(options.body) : undefined,
-  })
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: options?.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    const aborted =
+      error instanceof DOMException
+        ? error.name === 'AbortError'
+        : error instanceof Error && error.name === 'AbortError'
+
+    if (aborted) {
+      console.error(`[invokeEdgeFunction] ${functionName} timed out`)
+      return { data: null, error: 'Request timed out. Please try again.' }
+    }
+
+    const message = error instanceof Error ? error.message : 'Network request failed'
+    console.error(`[invokeEdgeFunction] ${functionName} network error:`, message)
+    return { data: null, error: message }
+  } finally {
+    window.clearTimeout(timeout)
+  }
 
   let body: T | null = null
   try {

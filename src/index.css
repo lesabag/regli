@@ -1,13 +1,23 @@
 @import "tailwindcss";
 
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
 #root {
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 body {
   margin: 0;
+  background: #FAFAF8;
   /* Safe area support for iPhone — left/right handled globally, top/bottom per-screen */
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
@@ -25,6 +35,54 @@ body {
 .leaflet-tooltip-left::before,
 .leaflet-tooltip-right::before {
   display: none !important;
+}
+
+/* iOS tap feedback — premium press feel */
+button:active:not(:disabled) {
+  opacity: 0.75;
+  transform: scale(0.97);
+  transition: opacity 0.08s ease, transform 0.08s ease;
+}
+
+/* Hover states for desktop — subtle lift */
+@media (hover: hover) {
+  button:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
+/* Hide scrollbar on filter pills */
+.filter-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Splash screen ─── */
+
+.splash-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #FFCD00;
+  opacity: 0.35;
+  animation: splashDotPulse 1.4s ease-in-out infinite;
+}
+
+.splash-logo-pulse {
+  animation: splashLogoPulse 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes splashLogoPulse {
+  0%, 100% { transform: scale(1); opacity: 0.92; }
+  50% { transform: scale(1.025); opacity: 1; }
+}
+
+.splash-dot-1 { animation-delay: 0s; }
+.splash-dot-2 { animation-delay: 0.18s; }
+.splash-dot-3 { animation-delay: 0.36s; }
+
+@keyframes splashDotPulse {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.35); }
 }
 
 @keyframes fadeIn {
@@ -86,4 +144,346 @@ body {
 
 @keyframes completionSpin {
   to { transform: rotate(360deg); }
+}
+
+/* Menu animations */
+@keyframes menuFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes menuSlideDown {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Online status pulse */
+@keyframes onlinePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(22, 163, 74, 0); }
+}
+
+/* ─── Incoming request overlay animations ─── */
+
+@keyframes reqOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes reqBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes reqSheetSlideUp {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes reqAcceptPulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(22, 163, 74, 0.3); }
+  50% { box-shadow: 0 4px 24px rgba(22, 163, 74, 0.5), 0 0 0 4px rgba(22, 163, 74, 0.08); }
+}
+
+/* Request taken toast */
+@keyframes takenToastIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* User location GPS ring pulse */
+.user-gps-ring {
+  animation: userGpsRingPulse 2s ease-in-out infinite;
+}
+
+@keyframes userGpsRingPulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.3); opacity: 0; }
+}
+
+/* Nearby walker halo pulse */
+.nearby-walker-halo {
+  animation: nearbyHaloPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes nearbyHaloPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.18); opacity: 0.5; }
+}
+
+/* Searching pulse animation */
+@keyframes searchPulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.5); opacity: 0; }
+}
+
+/* Search radar rings on map during "Finding a walker" */
+.search-radar-ring-1,
+.search-radar-ring-2,
+.search-radar-ring-3 {
+  animation: searchRadarRing 2.8s ease-out infinite;
+}
+.search-radar-ring-2 {
+  animation-delay: 0.9s;
+}
+.search-radar-ring-3 {
+  animation-delay: 1.8s;
+}
+
+@keyframes searchRadarRing {
+  0%   { stroke-opacity: 0; fill-opacity: 0.06; }
+  20%  { stroke-opacity: 0.35; fill-opacity: 0.04; }
+  80%  { stroke-opacity: 0.08; fill-opacity: 0; }
+  100% { stroke-opacity: 0; fill-opacity: 0; }
+}
+
+/* ─── Searching sheet animations ─── */
+
+.searching-sheet-enter {
+  animation: searchingSheetSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes searchingSheetSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Pulse rings around the search icon */
+.searching-icon-ring-1 {
+  animation: searchIconRingPulse 2s ease-out infinite;
+}
+
+.searching-icon-ring-2 {
+  animation: searchIconRingPulse 2s ease-out infinite 0.6s;
+}
+
+@keyframes searchIconRingPulse {
+  0%   { transform: scale(0.85); opacity: 1; }
+  70%  { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+/* Subtitle text fade-in on change */
+@keyframes searchSubtitleFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Message banner animation ─── */
+
+.message-banner-enter {
+  animation: bannerSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes bannerSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Status card enter animation ─── */
+
+.status-card-enter {
+  animation: statusCardEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes statusCardEnter {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Tracking card animations ─── */
+
+.tracking-card-enter {
+  animation: trackingCardEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes trackingCardEnter {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Live ETA pulse dot */
+.tracking-eta-pulse {
+  animation: trackingEtaPulse 2s ease-in-out infinite;
+}
+
+@keyframes trackingEtaPulse {
+  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  50% { transform: scale(1.2); opacity: 0.8; box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+}
+
+/* Arrival celebration */
+.arrival-celebration {
+  animation: arrivalCelebrate 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes arrivalCelebrate {
+  0% { opacity: 0; transform: scale(0.92) translateY(10px); }
+  60% { transform: scale(1.02) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Walker marker arrival burst on map */
+.walker-arrived-burst {
+  animation: walkerArrivedBurst 0.8s ease-out both;
+}
+
+@keyframes walkerArrivedBurst {
+  0% { transform: scale(0.8); opacity: 0; }
+  40% { transform: scale(1.4); opacity: 0.6; }
+  100% { transform: scale(2); opacity: 0; }
+}
+
+/* ─── ETA value change animation ─── */
+.eta-value-change {
+  animation: etaValueChange 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes etaValueChange {
+  0% { transform: scale(1); opacity: 1; }
+  30% { transform: scale(1.08); opacity: 0.7; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ─── Arrived badge pop ─── */
+.arrived-badge-pop {
+  animation: arrivedBadgePop 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes arrivedBadgePop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ─── Arrived text fade ─── */
+.arrived-text-fade {
+  animation: arrivedTextFade 0.5s ease-out 0.15s both;
+}
+
+@keyframes arrivedTextFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Premium user/client marker glow pulse ─── */
+
+.premium-user-glow {
+  animation: premiumUserGlow 2.2s ease-in-out infinite;
+}
+
+@keyframes premiumUserGlow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.4; }
+}
+
+/* Rating item enter animation */
+.rating-item-enter {
+  animation: ratingItemEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes ratingItemEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Rating submit success animation */
+.rating-submit-success {
+  animation: ratingSubmitSuccess 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes ratingSubmitSuccess {
+  0% { opacity: 0; transform: scale(0.95) translateY(4px); }
+  60% { transform: scale(1.02) translateY(-1px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ─── Notification animations ─── */
+
+/* Badge bounce when unread count changes */
+.notif-badge-bounce {
+  animation: notifBadgeBounce 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes notifBadgeBounce {
+  0% { transform: scale(0.5); }
+  50% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+
+/* Panel slide-in */
+.notif-panel-enter {
+  animation: notifPanelEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes notifPanelEnter {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Notification item staggered enter */
+.notif-item-enter {
+  animation: notifItemEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes notifItemEnter {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Toast slide down from top (mobile-first) */
+.notif-toast-enter {
+  animation: notifToastEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes notifToastEnter {
+  from { opacity: 0; transform: translateY(-16px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Toast progress bar countdown */
+.notif-toast-progress {
+  animation: notifToastProgress linear both;
+}
+
+@keyframes notifToastProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+/* ─── Sheet state transitions (idle ↔ searching ↔ tracking ↔ completed) ─── */
+
+.sheet-state-enter {
+  animation: sheetStateEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes sheetStateEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Input focus ring for premium feel */
+input:focus {
+  border-color: #CBD5E1 !important;
+  background: #FFFFFF !important;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04);
+}
+
+textarea:focus {
+  border-color: #CBD5E1 !important;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04);
+}
+@keyframes searchPulse {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
 }

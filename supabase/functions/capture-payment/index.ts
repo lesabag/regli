@@ -2,15 +2,21 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
+const FUNCTION_VERSION = 'v2_fix_2026_04_04'
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+console.log(`[capture-payment] ====== FUNCTION LOADED — VERSION: ${FUNCTION_VERSION} ======`)
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
+
+  console.log(`[capture-payment][${FUNCTION_VERSION}] ── Request received ──`)
 
   try {
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')
@@ -21,7 +27,7 @@ serve(async (req: Request) => {
     if (!stripeKey || !supabaseUrl || !supabaseAnonKey || !serviceRoleKey) {
       console.error('[capture-payment] Missing env vars')
       return new Response(
-        JSON.stringify({ error: 'Server misconfigured' }),
+        JSON.stringify({ error: 'Server misconfigured', _v: FUNCTION_VERSION }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -29,7 +35,7 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: 'Missing authorization' }),
+        JSON.stringify({ error: 'Missing authorization', _v: FUNCTION_VERSION }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -47,7 +53,7 @@ serve(async (req: Request) => {
     if (authError || !user) {
       console.error('[capture-payment] Auth failed:', authError?.message)
       return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
+        JSON.stringify({ error: 'Invalid token', _v: FUNCTION_VERSION }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -64,7 +70,7 @@ serve(async (req: Request) => {
 
     if (profileError || !callerProfile || callerProfile.role !== 'walker') {
       return new Response(
-        JSON.stringify({ error: 'Only walkers can capture payments' }),
+        JSON.stringify({ error: 'Only walkers can capture payments', _v: FUNCTION_VERSION }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -75,7 +81,7 @@ serve(async (req: Request) => {
       body = await req.json()
     } catch {
       return new Response(
-        JSON.stringify({ error: 'Invalid request body' }),
+        JSON.stringify({ error: 'Invalid request body', _v: FUNCTION_VERSION }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -83,7 +89,7 @@ serve(async (req: Request) => {
     const { jobId } = body
     if (!jobId) {
       return new Response(
-        JSON.stringify({ error: 'Missing jobId' }),
+        JSON.stringify({ error: 'Missing jobId', _v: FUNCTION_VERSION }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -98,12 +104,12 @@ serve(async (req: Request) => {
     if (jobError || !job) {
       console.error('[capture-payment] Job lookup failed:', jobError?.message, 'jobId:', jobId)
       return new Response(
-        JSON.stringify({ error: 'Job not found' }),
+        JSON.stringify({ error: 'Job not found', _v: FUNCTION_VERSION }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    console.log('[capture-payment] Job loaded:', {
+    console.log(`[capture-payment][${FUNCTION_VERSION}] Job loaded:`, {
       id: job.id,
       walker_id: job.walker_id,
       status: job.status,
@@ -115,14 +121,14 @@ serve(async (req: Request) => {
     if (job.walker_id !== user.id) {
       console.warn('[capture-payment] Walker mismatch:', { caller: user.id, walker_id: job.walker_id })
       return new Response(
-        JSON.stringify({ error: 'Only the assigned walker can complete this job' }),
+        JSON.stringify({ error: 'Only the assigned walker can complete this job', _v: FUNCTION_VERSION }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Idempotent: if job is already completed + paid, ensure wallet is credited and return success
+    // ── Idempotent: already completed + paid ────────────────────
     if (job.status === 'completed' && job.payment_status === 'paid') {
-      console.log('[capture-payment] Job already completed and paid, ensuring wallet credit')
+      console.log(`[capture-payment][${FUNCTION_VERSION}] Job already completed and paid, ensuring wallet credit`)
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
       if (earnings > 0) {
         await supabaseAdmin.rpc('credit_walker_wallet', {
@@ -132,91 +138,217 @@ serve(async (req: Request) => {
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
         }).catch((err: unknown) => console.error('[capture-payment] Wallet credit on idempotent path failed:', err))
       }
-      // Also try transfer on idempotent path
       await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
         console.error('[capture-payment] Transfer on idempotent path failed:', err)
       )
       return new Response(
-        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCompleted: true }),
+        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCompleted: true, _v: FUNCTION_VERSION }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Verify job state
-    if (job.status !== 'accepted') {
+    // ── Validate job is in a completable state ──────────────────
+    // Allow both 'accepted' (normal) and 'completed' (race: status updated but payment not yet captured)
+    if (job.status !== 'accepted' && job.status !== 'completed') {
       return new Response(
-        JSON.stringify({ error: `Job cannot be completed: current status is "${job.status}"` }),
+        JSON.stringify({
+          error: `Job cannot be completed: current status is "${job.status}"`,
+          details: `Expected status 'accepted' or 'completed', got '${job.status}'`,
+          _v: FUNCTION_VERSION,
+        }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    if (job.payment_status !== 'authorized') {
-      return new Response(
-        JSON.stringify({ error: `Payment cannot be captured: current payment status is "${job.payment_status}"` }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
+    // If there's no PaymentIntent, just mark as completed (free walk / test)
     if (!job.stripe_payment_intent_id) {
+      console.log(`[capture-payment][${FUNCTION_VERSION}] No PaymentIntent — marking completed without capture`)
+      const now = new Date().toISOString()
+      await supabaseAdmin
+        .from('walk_requests')
+        .update({ status: 'completed', payment_status: 'paid', paid_at: now })
+        .eq('id', jobId)
       return new Response(
-        JSON.stringify({ error: 'No PaymentIntent found for this job' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', noPayment: true, _v: FUNCTION_VERSION }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Capture the PaymentIntent
+    // ── Retrieve PaymentIntent from Stripe FIRST ────────────────
+    // This is the single source of truth for payment state.
     const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
 
-    console.log('[capture-payment] Capturing PaymentIntent:', job.stripe_payment_intent_id)
+    let pi: Stripe.PaymentIntent
+    try {
+      pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
+      console.log(`[capture-payment][${FUNCTION_VERSION}] PI retrieved:`, { id: pi.id, status: pi.status, amount: pi.amount })
+    } catch (retrieveErr: unknown) {
+      console.error(`[capture-payment][${FUNCTION_VERSION}] Failed to retrieve PI:`, retrieveErr)
+      const msg = retrieveErr instanceof Error ? retrieveErr.message : 'Unknown error'
+      return new Response(
+        JSON.stringify({
+          error: 'Failed to verify payment status',
+          details: `Could not retrieve PaymentIntent: ${msg}`,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // ── Handle PI based on its actual Stripe status ─────────────
+
+    if (pi.status === 'succeeded') {
+      // Payment already captured (by a previous attempt or webhook) — reconcile DB
+      console.log(`[capture-payment][${FUNCTION_VERSION}] PI already succeeded — reconciling DB`)
+      const now = new Date().toISOString()
+      await supabaseAdmin
+        .from('walk_requests')
+        .update({ status: 'completed', payment_status: 'paid', paid_at: now })
+        .eq('id', jobId)
+
+      const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
+      if (earnings > 0) {
+        await supabaseAdmin.rpc('credit_walker_wallet', {
+          p_walker_id: job.walker_id,
+          p_job_id: job.id,
+          p_amount: earnings,
+          p_description: `Walk completed: ${job.dog_name || 'walk'}`,
+        }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+      }
+
+      await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
+        console.error('[capture-payment] Transfer failed:', err)
+      )
+
+      return new Response(
+        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCaptured: true, _v: FUNCTION_VERSION }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (pi.status === 'canceled') {
+      console.warn(`[capture-payment][${FUNCTION_VERSION}] PI is canceled — cannot capture`)
+      await supabaseAdmin
+        .from('walk_requests')
+        .update({ status: 'completed', payment_status: 'failed' })
+        .eq('id', jobId)
+      return new Response(
+        JSON.stringify({
+          error: 'Payment was canceled and cannot be captured',
+          details: 'The PaymentIntent has been canceled. The walk is marked completed but payment failed.',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (pi.status === 'requires_payment_method' || pi.status === 'requires_confirmation') {
+      // Payment was never authorized — this job should never have reached 'accepted'.
+      // Auto-cancel the job to unblock the walker.
+      console.error(`[capture-payment][${FUNCTION_VERSION}] PI in '${pi.status}' — payment was never authorized. Cancelling job ${jobId}`)
+      await supabaseAdmin
+        .from('walk_requests')
+        .update({ status: 'cancelled', payment_status: 'failed' })
+        .eq('id', jobId)
+      return new Response(
+        JSON.stringify({
+          error: 'Payment was never authorized',
+          details: `PaymentIntent status is '${pi.status}'. The client's card was never charged. Job has been cancelled.`,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (pi.status !== 'requires_capture') {
+      // PI is in another non-capturable state (processing, etc.)
+      console.error(`[capture-payment][${FUNCTION_VERSION}] PI in unexpected state:`, pi.status)
+      return new Response(
+        JSON.stringify({
+          error: `Payment is not ready for capture`,
+          details: `PaymentIntent status is '${pi.status}'. Expected 'requires_capture'.`,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // ── PI status is 'requires_capture' — do the capture ────────
+    console.log(`[capture-payment][${FUNCTION_VERSION}] Capturing PaymentIntent:`, job.stripe_payment_intent_id)
 
     let capturedIntent: Stripe.PaymentIntent
     try {
       capturedIntent = await stripe.paymentIntents.capture(job.stripe_payment_intent_id)
     } catch (stripeErr: unknown) {
-      console.error('[capture-payment] Stripe capture failed:', stripeErr)
+      console.error(`[capture-payment][${FUNCTION_VERSION}] Stripe capture failed:`, stripeErr)
 
-      // Handle "already captured" gracefully
       const stripeError = stripeErr as { type?: string; code?: string; message?: string }
+
+      // If capture failed with "unexpected state", re-check PI — it may have been captured
+      // between our retrieve and capture calls (race condition)
       if (stripeError.code === 'payment_intent_unexpected_state') {
         try {
-          const existingPi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
-          if (existingPi.status === 'succeeded') {
-            console.log('[capture-payment] PaymentIntent already succeeded, updating DB')
+          const freshPi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
+          if (freshPi.status === 'succeeded') {
+            console.log(`[capture-payment][${FUNCTION_VERSION}] PI succeeded between retrieve and capture — reconciling`)
             const now = new Date().toISOString()
             await supabaseAdmin
               .from('walk_requests')
               .update({ status: 'completed', payment_status: 'paid', paid_at: now })
               .eq('id', jobId)
-            // Try transfer
+
+            const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
+            if (earnings > 0) {
+              await supabaseAdmin.rpc('credit_walker_wallet', {
+                p_walker_id: job.walker_id,
+                p_job_id: job.id,
+                p_amount: earnings,
+                p_description: `Walk completed: ${job.dog_name || 'walk'}`,
+              }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+            }
+
             await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
-              console.error('[capture-payment] Transfer after already-captured failed:', err)
+              console.error('[capture-payment] Transfer failed:', err)
             )
+
             return new Response(
-              JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCaptured: true }),
+              JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCaptured: true, _v: FUNCTION_VERSION }),
               { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
           }
-        } catch (retrieveErr) {
-          console.error('[capture-payment] Failed to retrieve PI after unexpected state:', retrieveErr)
+          console.error(`[capture-payment][${FUNCTION_VERSION}] PI state after race:`, freshPi.status)
+        } catch (re) {
+          console.error(`[capture-payment][${FUNCTION_VERSION}] Failed to re-retrieve PI:`, re)
         }
       }
 
+      // For any Stripe error, return a 422 with details (NOT 502)
+      const errMsg = stripeError.message || 'Unknown Stripe error'
       return new Response(
-        JSON.stringify({ error: 'Payment capture failed' }),
-        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({
+          error: 'Payment capture failed',
+          details: `Stripe error: ${errMsg}`,
+          code: stripeError.code || 'unknown',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    console.log('[capture-payment] Capture result:', { status: capturedIntent.status, id: capturedIntent.id })
+    console.log(`[capture-payment][${FUNCTION_VERSION}] Capture result:`, { status: capturedIntent.status, id: capturedIntent.id })
 
     if (capturedIntent.status !== 'succeeded') {
       return new Response(
-        JSON.stringify({ error: `Unexpected capture status: ${capturedIntent.status}` }),
-        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({
+          error: `Unexpected capture result`,
+          details: `PaymentIntent status after capture: '${capturedIntent.status}'`,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Update DB after successful capture
+    // ── Update DB after successful capture ──────────────────────
     const now = new Date().toISOString()
     const { error: updateError } = await supabaseAdmin
       .from('walk_requests')
@@ -228,11 +360,9 @@ serve(async (req: Request) => {
       .eq('id', jobId)
 
     if (updateError) {
-      console.error('[capture-payment] DB update after capture failed:', updateError)
-      return new Response(
-        JSON.stringify({ error: 'Payment captured but failed to update job status' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+      // Payment IS captured in Stripe — log hard but still return success
+      // so the frontend knows the walk is done. DB will reconcile on next read.
+      console.error(`[capture-payment][${FUNCTION_VERSION}] DB update after capture failed:`, updateError)
     }
 
     // Credit walker wallet (idempotent)
@@ -256,7 +386,7 @@ serve(async (req: Request) => {
       console.error('[capture-payment] Transfer creation failed (non-blocking):', err)
     )
 
-    console.log('[capture-payment] Success: job', jobId, 'completed and paid')
+    console.log(`[capture-payment][${FUNCTION_VERSION}] Success: job`, jobId, 'completed and paid')
 
     return new Response(
       JSON.stringify({
@@ -264,13 +394,14 @@ serve(async (req: Request) => {
         jobId: job.id,
         paymentStatus: 'paid',
         paidAt: now,
+        _v: FUNCTION_VERSION,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (err) {
-    console.error('[capture-payment] Unhandled error:', err)
+    console.error(`[capture-payment][${FUNCTION_VERSION}] Unhandled error:`, err)
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
+      JSON.stringify({ error: 'Internal server error', details: err instanceof Error ? err.message : 'Unknown', _v: FUNCTION_VERSION }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

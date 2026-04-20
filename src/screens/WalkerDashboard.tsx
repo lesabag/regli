@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
-import NotificationsBell, { createNotification } from '../components/NotificationsBell'
-import { useWalkerTracking } from '../hooks/useWalkerTracking'
+import { hapticMedium, hapticSuccess } from '../utils/haptics'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import NotificationsBell from '../components/NotificationsBell'
+import ProfileAvatar from '../components/ProfileAvatar'
+import CompactRatingList from '../components/CompactRatingList'
+import { useWalkerFlow } from '../hooks/useWalkerFlow'
+import { useProfilePhoto } from '../hooks/useProfilePhoto'
+import { usePushNotifications } from '../hooks/usePushNotifications'
+
+const REQUEST_TIMEOUT_SECONDS = 20
 
 type AppRole = 'client' | 'walker' | 'admin'
 
@@ -15,62 +21,6 @@ interface WalkerDashboardProps {
   onSignOut: () => Promise<void>
 }
 
-interface WalkRequestRow {
-  id: string
-  client_id: string
-  walker_id: string | null
-  status: 'open' | 'accepted' | 'completed' | 'cancelled'
-  dog_name: string | null
-  location: string | null
-  address: string | null
-  notes: string | null
-  created_at: string | null
-  price: number | null
-  platform_fee: number | null
-  walker_earnings: number | null
-  payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
-  paid_at: string | null
-  stripe_payment_intent_id: string | null
-  client?: { id: string; full_name: string | null; email: string | null } | null
-}
-
-interface RatingRow {
-  id: string
-  job_id: string
-  from_user_id: string
-  to_user_id: string
-  rating: number
-  review: string | null
-  created_at: string
-}
-
-interface PayoutRequestRow {
-  id: string
-  walker_id: string
-  amount: number
-  status: 'pending' | 'approved' | 'paid' | 'rejected'
-  note: string | null
-  created_at: string
-  processed_at: string | null
-}
-
-interface WalkerPayoutRow {
-  id: string
-  walker_id: string
-  job_id: string
-  gross_amount: number
-  platform_fee: number
-  net_amount: number
-  currency: string
-  status: 'pending' | 'processing' | 'transferred' | 'in_transit' | 'paid_out' | 'failed' | 'reversed' | 'refunded'
-  stripe_transfer_id: string | null
-  stripe_payout_id: string | null
-  failure_reason: string | null
-  available_at: string | null
-  created_at: string
-  updated_at: string
-}
-
 interface ConnectStatus {
   connected: boolean
   stripe_connect_account_id: string | null
@@ -79,1505 +29,946 @@ interface ConnectStatus {
   charges_enabled: boolean
 }
 
-/**
- * Prepare auth for edge function calls.
- * Calls setAuth so the FunctionsClient picks up the current token.
- * Returns false if there is no active session.
- */
-async function prepareEdgeFunctionAuth(): Promise<boolean> {
-  const { data: { session } } = await supabase.auth.getSession()
-  console.log('[prepareEdgeFunctionAuth] session exists:', !!session)
-  console.log('[prepareEdgeFunctionAuth] access_token exists:', !!session?.access_token)
-  if (!session?.access_token) return false
-  supabase.functions.setAuth(session.access_token)
-  return true
+interface WalkerHistoryItem {
+  id: string
+  dogName: string
+  clientName: string
+  rating: number | null
+  reviewText: string | null
+  price: number | null
+  status: string | null
+  createdAt: string | null
 }
 
-export default function WalkerDashboard({
-  profile,
-  onSignOut,
-}: WalkerDashboardProps) {
-  const [openJobs, setOpenJobs] = useState<WalkRequestRow[]>([])
-  const [myJobs, setMyJobs] = useState<WalkRequestRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+function friendlyError(raw: string): string {
+  const lower = raw.toLowerCase()
+  if (lower.includes('load failed') || lower.includes('fetch') || lower.includes('network')) {
+    return 'Connection issue. Retrying...'
+  }
+  if (lower.includes('timeout')) return 'Request timed out. Try again.'
+  // Only show "Session expired" if it's truly a no_session error from auth
+  if (lower.includes('no_session') && (lower.includes('auth') || lower.includes('postgres'))) {
+    return 'Session expired. Please sign in again.'
+  }
+  if (lower.includes('invalid token') || (lower.includes('auth') && lower.includes('jwt'))) {
+    return 'Authentication issue. Please refresh and try again.'
+  }
+  if (lower.includes('attempt_expired')) {
+    return 'This offer expired. Waiting for the next request.'
+  }
+  if (lower.includes('permission') || lower.includes('forbidden')) {
+    return "You don't have permission for this action."
+  }
+  if (raw.length > 60) return 'Something went wrong. Please try again.'
+  return raw
+}
 
-  const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
-  const [ratingsGiven, setRatingsGiven] = useState<RatingRow[]>([])
-  const [ratingJobId, setRatingJobId] = useState<string | null>(null)
-  const [ratingValue, setRatingValue] = useState(0)
-  const [ratingHover, setRatingHover] = useState(0)
-  const [ratingReview, setRatingReview] = useState('')
-  const [ratingSubmitting, setRatingSubmitting] = useState(false)
+function durationFromPrice(price: number | null | undefined): string {
+  if (price == null) return '—'
+  if (price <= 30) return '20 min'
+  if (price <= 50) return '40 min'
+  return '60 min'
+}
 
-  const [payoutRequests, setPayoutRequests] = useState<PayoutRequestRow[]>([])
-  const [payoutAmount, setPayoutAmount] = useState('')
-  const [payoutNote, setPayoutNote] = useState('')
-  const [payoutSubmitting, setPayoutSubmitting] = useState(false)
+function formatRelativeDate(value: string | null | undefined): string {
+  if (!value) return 'Recently'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return 'Recently'
 
-  const [walkerPayouts, setWalkerPayouts] = useState<WalkerPayoutRow[]>([])
+  const diffMs = Date.now() - dt.getTime()
+  const diffMin = Math.round(diffMs / 60000)
+  if (diffMin < 60) return 'Recently'
+  if (diffMin < 24 * 60) return `${Math.floor(diffMin / 60)}h ago`
+  if (diffMin < 7 * 24 * 60) return `${Math.floor(diffMin / (24 * 60))}d ago`
 
-  const [balanceAdjustments, setBalanceAdjustments] = useState<{
-    id: string
-    job_id: string | null
-    type: string
-    amount: number
-    description: string | null
-    created_at: string
-  }[]>([])
+  return dt.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  })
+}
 
-  const [connectStatus, setConnectStatus] = useState<ConnectStatus | null>(null)
-  const [connectLoading, setConnectLoading] = useState(true)
-  const [connectError, setConnectError] = useState<string | null>(null)
+function formatStatus(status: string | null | undefined): string {
+  const normalized = (status || 'completed').toLowerCase()
+  if (normalized === 'completed') return 'Completed'
+  if (normalized === 'cancelled') return 'Cancelled'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
 
+export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardProps) {
   const walkerName = profile.full_name || profile.email || 'Walker'
-  const firstName = (profile.full_name || '').split(' ')[0] || walkerName
+  const flow = useWalkerFlow(profile.id, walkerName)
+  const photo = useProfilePhoto(profile.id)
+  usePushNotifications(profile.id)
 
-  const avgRating = useMemo(() => {
-    if (ratingsReceived.length === 0) return null
-    const sum = ratingsReceived.reduce((acc, r) => acc + r.rating, 0)
-    return Math.round((sum / ratingsReceived.length) * 10) / 10
-  }, [ratingsReceived])
+  const [burgerOpen, setBurgerOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(true)
+  const [compRating, setCompRating] = useState(0)
+  const [compHover, setCompHover] = useState(0)
+  const [compPressed, setCompPressed] = useState(0)
+  const [compReview, setCompReview] = useState('')
+  const [compRatingDone, setCompRatingDone] = useState(false)
+  const [hiddenHistoryIds, setHiddenHistoryIds] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const ratedJobIds = useMemo(() => {
-    const set = new Set<string>()
-    ratingsGiven.forEach((r) => set.add(r.job_id))
-    return set
-  }, [ratingsGiven])
+  const closeAll = useCallback(() => {
+    setBurgerOpen(false)
+    setProfileOpen(false)
+  }, [])
 
-  const myRatingByJobId = useMemo(() => {
-    const map = new Map<string, RatingRow>()
-    ratingsGiven.forEach((r) => map.set(r.job_id, r))
-    return map
-  }, [ratingsGiven])
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(`regli_walker_history_hidden_${profile.id}`)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as string[]
+      setHiddenHistoryIds(Array.isArray(parsed) ? parsed : [])
+    } catch {
+      // noop
+    }
+  }, [profile.id])
 
-  const clientRatingByJobId = useMemo(() => {
-    const map = new Map<string, RatingRow>()
-    ratingsReceived.forEach((r) => map.set(r.job_id, r))
-    return map
-  }, [ratingsReceived])
+  const persistHiddenIds = useCallback(
+    (ids: string[]) => {
+      setHiddenHistoryIds(ids)
+      try {
+        window.localStorage.setItem(`regli_walker_history_hidden_${profile.id}`, JSON.stringify(ids))
+      } catch {
+        // noop
+      }
+    },
+    [profile.id],
+  )
 
-  const payoutByJobId = useMemo(() => {
-    const map = new Map<string, WalkerPayoutRow>()
-    walkerPayouts.forEach((p) => map.set(p.job_id, p))
-    return map
-  }, [walkerPayouts])
+  const prevCompJobId = useRef<string | null>(null)
+  useEffect(() => {
+    const jobId = flow.completionSuccess?.jobId ?? null
+    if (jobId !== prevCompJobId.current) {
+      prevCompJobId.current = jobId
+      setCompRating(0)
+      setCompHover(0)
+      setCompPressed(0)
+      setCompReview('')
+      setCompRatingDone(jobId ? flow.ratedJobIds.has(jobId) : false)
+    }
+  }, [flow.completionSuccess?.jobId, flow.ratedJobIds])
 
-  const transferBreakdown = useMemo(() => {
-    let total = 0
-    let inTransit = 0
-    let paidOut = 0
-    let failed = 0
+  const handleCompRatingSubmit = useCallback(() => {
+    if (compRating < 1) return
+    flow.submitCompletionRating(compRating, compReview.trim())
+    setCompRatingDone(true)
+  }, [compRating, compReview, flow.submitCompletionRating])
 
-    walkerPayouts.forEach((p) => {
-      total += p.net_amount
-      if (p.status === 'transferred' || p.status === 'in_transit') inTransit += p.net_amount
-      else if (p.status === 'paid_out') paidOut += p.net_amount
-      else if (p.status === 'failed' || p.status === 'reversed' || p.status === 'refunded') failed += p.net_amount
+  const topRequest = flow.openJobs[0] ?? null
+  const activeJob = flow.activeJobs[0] ?? null
+  const activeJobCanComplete =
+    !!activeJob &&
+    (activeJob.booking_timing !== 'scheduled' || activeJob.dispatch_state === 'dispatched')
+
+  const requestPrice = topRequest
+    ? topRequest.walker_earnings != null
+      ? `₪${topRequest.walker_earnings.toFixed(0)}`
+      : topRequest.price != null
+        ? `₪${(topRequest.price * 0.8).toFixed(0)}`
+        : '—'
+    : '—'
+
+  const requestDuration = topRequest?.price ? durationFromPrice(topRequest.price) : '—'
+
+  const historyItems: WalkerHistoryItem[] = useMemo(() => {
+    const ratingByJobId = new Map<string, { rating: number; review: string | null }>()
+    flow.ratingsGiven.forEach((r) => {
+      ratingByJobId.set(r.job_id, { rating: r.rating, review: r.review })
     })
 
-    return { transferred: total, inTransit, paidOut, failed }
-  }, [walkerPayouts])
+    return flow.completedJobs
+      .map((j) => {
+        const ratingInfo = ratingByJobId.get(j.id)
+        return {
+          id: j.id,
+          dogName: j.dog_name || 'Walk',
+          clientName: j.client?.full_name || j.client?.email || 'Client',
+          rating: ratingInfo?.rating ?? null,
+          reviewText: ratingInfo?.review ?? null,
+          price: j.walker_earnings ?? (j.price != null ? Math.round(j.price * 0.8) : null),
+          status: j.status,
+          createdAt: j.created_at,
+        }
+      })
+      .filter((item) => !hiddenHistoryIds.includes(item.id))
+  }, [flow.completedJobs, flow.ratingsGiven, hiddenHistoryIds])
 
-  const [walletData, setWalletData] = useState<{
-    available_balance: number
-    pending_balance: number
-    total_earned: number
-  } | null>(null)
+  const clientNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    flow.completedJobs.forEach((j) => {
+      if (j.client?.id) {
+        map.set(j.client.id, j.client.full_name || j.client.email || 'Client')
+      }
+    })
+    return map
+  }, [flow.completedJobs])
 
-  // Derive pending from jobs as fallback (accepted jobs with authorized payment)
-  const pendingFromJobs = useMemo(() => {
-    return myJobs
-      .filter((j) => j.status === 'accepted' && j.payment_status === 'authorized')
-      .reduce((sum, j) => sum + (j.walker_earnings ?? (j.price != null ? j.price * 0.8 : 0)), 0)
-  }, [myJobs])
-
-  const totalAdjustments = useMemo(() => {
-    return balanceAdjustments.reduce((sum, adj) => sum + adj.amount, 0)
-  }, [balanceAdjustments])
-
-  const wallet = useMemo(() => {
-    const dbAvailable = walletData?.available_balance ?? 0
-    const dbPending = walletData?.pending_balance ?? 0
-    const dbTotal = walletData?.total_earned ?? 0
-
-    // Pending combines DB pending + in-flight authorized jobs not yet captured
-    const pending = dbPending + pendingFromJobs
-
-    // Deduct refund debits from available balance
-    const adjustedAvailable = Math.max(0, dbAvailable + totalAdjustments)
-
-    const completedPaidCount = myJobs.filter(
-      (j) => j.status === 'completed' && j.payment_status === 'paid'
-    ).length
-    const pendingCount = myJobs.filter(
-      (j) => j.status === 'accepted' && j.payment_status === 'authorized'
-    ).length
-
-    return {
-      availableBalance: Math.round(adjustedAvailable * 100) / 100,
-      pendingEarnings: Math.round(pending * 100) / 100,
-      totalEarnings: Math.round((dbTotal + pending + totalAdjustments) * 100) / 100,
-      completedWalks: completedPaidCount,
-      pendingCount,
-      hasDeductions: totalAdjustments < 0,
-      deductionTotal: Math.round(Math.abs(totalAdjustments) * 100) / 100,
-    }
-  }, [walletData, pendingFromJobs, myJobs, totalAdjustments])
-
-  const fetchWallet = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('walker_wallets')
-      .select('available_balance, pending_balance, total_earned')
-      .eq('walker_id', profile.id)
-      .maybeSingle()
-
-    if (error) {
-      console.error('Failed to load wallet', error.message)
-      return
-    }
-
-    // If no wallet row yet, use zeros
-    setWalletData(data ?? { available_balance: 0, pending_balance: 0, total_earned: 0 })
-  }, [profile.id])
-
-  const activeJobs = useMemo(
-    () => myJobs.filter((j) => j.status === 'accepted'),
-    [myJobs]
+  const formattedRatings = useMemo(
+    () =>
+      flow.ratingsReceived.slice(0, 4).map((r) => ({
+        id: r.id,
+        rating: r.rating,
+        review: r.review,
+        authorName: clientNameById.get(r.from_user_id) || 'Client',
+        date: formatRelativeDate(r.created_at),
+      })),
+    [flow.ratingsReceived, clientNameById],
   )
 
-  // Broadcast walker GPS to all active jobs
-  const activeJobIds = useMemo(() => activeJobs.map((j) => j.id), [activeJobs])
-  useWalkerTracking(activeJobIds)
+  useEffect(() => {
+    if (!flow.takenNotice) return
+    const id = window.setTimeout(() => flow.dismissTakenNotice(), 3000)
+    return () => window.clearTimeout(id)
+  }, [flow.takenNotice, flow.dismissTakenNotice])
 
-  const completedJobs = useMemo(
-    () => myJobs.filter((j) => j.status === 'completed' || j.status === 'cancelled'),
-    [myJobs]
-  )
+  const [countdown, setCountdown] = useState(REQUEST_TIMEOUT_SECONDS)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const trackedRequestIdRef = useRef<string | null>(null)
 
-  // ─── Data fetching ──────────────────────────────────────────
-
-  const fetchAll = async () => {
-    setLoading(true)
-    setError(null)
-
-    const selectFields =
-      'id, client_id, walker_id, status, dog_name, location, address, notes, created_at, price, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
-
-    const { data: open, error: openErr } = await supabase
-      .from('walk_requests')
-      .select(selectFields)
-      .eq('status', 'open')
-      .in('payment_status', ['authorized', 'paid'])
-      .order('created_at', { ascending: false })
-
-    if (openErr) {
-      setError(openErr.message)
-      setLoading(false)
-      return
-    }
-
-    const { data: mine, error: mineErr } = await supabase
-      .from('walk_requests')
-      .select(selectFields)
-      .eq('walker_id', profile.id)
-      .order('created_at', { ascending: false })
-
-    if (mineErr) {
-      setError(mineErr.message)
-      setLoading(false)
-      return
-    }
-
-    const normalizeRows = (rows: unknown[]) =>
-      (rows as Record<string, unknown>[]).map((row) => ({
-        ...row,
-        client: Array.isArray(row.client) ? row.client[0] || null : row.client,
-      }))
-
-    setOpenJobs(normalizeRows(open || []) as WalkRequestRow[])
-    setMyJobs(normalizeRows(mine || []) as WalkRequestRow[])
-    setLoading(false)
-  }
-
-  const fetchRatings = useCallback(async () => {
-    const { data: received } = await supabase
-      .from('ratings')
-      .select('*')
-      .eq('to_user_id', profile.id)
-
-    setRatingsReceived((received as RatingRow[]) || [])
-
-    const { data: given } = await supabase
-      .from('ratings')
-      .select('*')
-      .eq('from_user_id', profile.id)
-
-    setRatingsGiven((given as RatingRow[]) || [])
-  }, [profile.id])
-
-  const fetchPayoutRequests = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('payout_requests')
-      .select('*')
-      .eq('walker_id', profile.id)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to load payout requests', error.message)
-      return
-    }
-    setPayoutRequests((data as PayoutRequestRow[]) || [])
-  }, [profile.id])
-
-  const fetchWalkerPayouts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('walker_payouts')
-      .select('*')
-      .eq('walker_id', profile.id)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to load walker payouts', error.message)
-      return
-    }
-    setWalkerPayouts((data as WalkerPayoutRow[]) || [])
-  }, [profile.id])
-
-  const fetchBalanceAdjustments = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('walker_balance_adjustments')
-      .select('id, job_id, type, amount, description, created_at')
-      .eq('walker_id', profile.id)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Failed to load balance adjustments', error.message)
-      return
-    }
-    setBalanceAdjustments(data || [])
-  }, [profile.id])
-
-  const fetchConnectStatus = useCallback(async () => {
-    setConnectLoading(true)
-    setConnectError(null)
-
-    try {
-      const hasAuth = await prepareEdgeFunctionAuth()
-      if (!hasAuth) {
-        setConnectError('Session expired. Please log in again.')
-        setConnectLoading(false)
-        return
-      }
-
-      const { data, error } = await supabase.functions.invoke('get-connect-status')
-
-      if (error) {
-        console.error('[ConnectStatus] Edge function error:', error)
-        setConnectError(error.message || String(error))
-        setConnectLoading(false)
-        return
-      }
-
-      if (!data) {
-        setConnectError('Empty response from server.')
-        setConnectLoading(false)
-        return
-      }
-
-      setConnectStatus(data as ConnectStatus)
-      setConnectError(null)
-    } catch (err) {
-      console.error('[ConnectStatus] Unexpected error:', err)
-      setConnectError('Failed to load payout account status.')
-    } finally {
-      setConnectLoading(false)
+  const clearCountdown = useCallback(() => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current)
+      countdownRef.current = null
     }
   }, [])
 
   useEffect(() => {
-    fetchAll()
-    fetchRatings()
-    fetchPayoutRequests()
-    fetchConnectStatus()
-    fetchWallet()
-    fetchWalkerPayouts()
-    fetchBalanceAdjustments()
-
-    const channel = supabase
-      .channel(`walker-requests-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'walk_requests',
-        },
-        () => {
-          fetchAll()
-          fetchWallet()
-        }
-      )
-      .subscribe()
-
-    const ratingsChannel = supabase
-      .channel(`walker-ratings-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'ratings',
-        },
-        () => {
-          fetchRatings()
-        }
-      )
-      .subscribe()
-
-    const payoutsChannel = supabase
-      .channel(`walker-payouts-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'payout_requests',
-        },
-        () => {
-          fetchPayoutRequests()
-        }
-      )
-      .subscribe()
-
-    const walletChannel = supabase
-      .channel(`walker-wallet-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'walker_wallets',
-          filter: `walker_id=eq.${profile.id}`,
-        },
-        () => {
-          fetchWallet()
-        }
-      )
-      .subscribe()
-
-    const walkerPayoutsChannel = supabase
-      .channel(`walker-payouts-transfer-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'walker_payouts',
-          filter: `walker_id=eq.${profile.id}`,
-        },
-        () => {
-          fetchWalkerPayouts()
-        }
-      )
-      .subscribe()
-
-    const adjustmentsChannel = supabase
-      .channel(`walker-adjustments-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'walker_balance_adjustments',
-          filter: `walker_id=eq.${profile.id}`,
-        },
-        () => {
-          fetchBalanceAdjustments()
-          fetchWallet()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-      supabase.removeChannel(ratingsChannel)
-      supabase.removeChannel(payoutsChannel)
-      supabase.removeChannel(walletChannel)
-      supabase.removeChannel(walkerPayoutsChannel)
-      supabase.removeChannel(adjustmentsChannel)
-    }
-  }, [profile.id, fetchRatings, fetchPayoutRequests, fetchConnectStatus, fetchWallet, fetchWalkerPayouts, fetchBalanceAdjustments])
-
-  // Check for connect return/refresh URL params
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.has('connect_return') || params.has('connect_refresh')) {
-      const url = new URL(window.location.href)
-      url.searchParams.delete('connect_return')
-      url.searchParams.delete('connect_refresh')
-      window.history.replaceState({}, '', url.toString())
-      fetchConnectStatus()
-    }
-  }, [fetchConnectStatus])
-
-  // ─── Actions ────────────────────────────────────────────────
-
-  const handleAccept = async (id: string) => {
-    setError(null)
-    setSuccessMessage(null)
-
-    const job = openJobs.find((j) => j.id === id)
-
-    const { error } = await supabase
-      .from('walk_requests')
-      .update({
-        status: 'accepted',
-        walker_id: profile.id,
-        walker_lat: null,
-        walker_lng: null,
-        last_location_update: null,
-      })
-      .eq('id', id)
-
-    if (error) {
-      setError(error.message)
+    const isIncoming = flow.screenState === 'incoming_request' && topRequest
+    if (!isIncoming) {
+      clearCountdown()
+      trackedRequestIdRef.current = null
       return
     }
 
-    setSuccessMessage('Job accepted!')
-    fetchAll()
+    if (topRequest.id !== trackedRequestIdRef.current) {
+      clearCountdown()
+      trackedRequestIdRef.current = topRequest.id
+      setCountdown(REQUEST_TIMEOUT_SECONDS)
 
-    const dogLabel = job?.dog_name || 'a dog'
-
-    if (job?.client_id) {
-      await createNotification({
-        userId: job.client_id,
-        type: 'job_accepted',
-        title: 'Walker Accepted',
-        message: `${walkerName} accepted your walk request for ${dogLabel}.`,
-        relatedJobId: id,
-      })
-    }
-
-    await createNotification({
-      userId: profile.id,
-      type: 'job_accepted_self',
-      title: 'Job Accepted',
-      message: `You accepted a walk for ${dogLabel}. Head to the location and start the walk!`,
-      relatedJobId: id,
-    })
-  }
-
-  const [completingJobId, setCompletingJobId] = useState<string | null>(null)
-
-  // Completion success state — shows earnings overlay after completing a walk
-  const [completionSuccess, setCompletionSuccess] = useState<{
-    dogName: string
-    earnings: number | null
-    clientName: string
-  } | null>(null)
-
-  const handleComplete = async (id: string) => {
-    setError(null)
-    setSuccessMessage(null)
-    setCompletingJobId(id)
-
-    const job = myJobs.find((j) => j.id === id)
-
-    try {
-      // If the job has an authorized payment, capture it via edge function
-      if (job?.payment_status === 'authorized' && job?.stripe_payment_intent_id) {
-        const { data, error: captureErr } = await invokeEdgeFunction<{
-          success?: boolean
-          error?: string
-          details?: string
-        }>('capture-payment', { body: { jobId: id } })
-
-        if (captureErr) {
-          console.error('[handleComplete] capture-payment error:', captureErr)
-          setError(captureErr)
-          return
-        }
-
-        if (!data?.success) {
-          const msg = data?.details || data?.error || 'Failed to capture payment'
-          console.error('[handleComplete] capture-payment not successful:', msg)
-          setError(msg)
-          return
-        }
-      } else {
-        // Fallback for jobs without authorized payment (e.g. unpaid/legacy)
-        const { error } = await supabase
-          .from('walk_requests')
-          .update({ status: 'completed' })
-          .eq('id', id)
-
-        if (error) {
-          console.error('[handleComplete] DB update error:', error.message)
-          setError(error.message)
-          return
-        }
-      }
-
-      // Show completion success overlay
-      const earnings = job?.walker_earnings ?? (job?.price != null ? Math.round((job.price) * 0.8 * 100) / 100 : null)
-      setCompletionSuccess({
-        dogName: job?.dog_name || 'the dog',
-        earnings,
-        clientName: job?.client?.full_name || job?.client?.email || 'Client',
-      })
-
-      await fetchAll()
-      await fetchWallet()
-
-      const dogLabel = job?.dog_name || 'your dog'
-
-      if (job?.client_id) {
-        await createNotification({
-          userId: job.client_id,
-          type: 'job_completed',
-          title: 'Walk Completed',
-          message: `${walkerName} completed the walk for ${dogLabel}.`,
-          relatedJobId: id,
-        }).catch((err) => {
-          console.error('[handleComplete] notification failed:', err)
+      countdownRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearCountdown()
+            void flow.handleDecline(topRequest.id)
+            return 0
+          }
+          return prev - 1
         })
-      }
-
-      // Notify walker about payment received
-      const notifyEarnings = job?.walker_earnings ?? (job?.price != null ? Math.round((job?.price ?? 0) * 0.8) : null)
-      if (notifyEarnings && notifyEarnings > 0) {
-        await createNotification({
-          userId: profile.id,
-          type: 'payment_received',
-          title: 'Payment Received',
-          message: `${notifyEarnings} ILS has been added to your wallet for walking ${dogLabel}.`,
-          relatedJobId: id,
-        }).catch((err) => {
-          console.error('[handleComplete] payment_received notification failed:', err)
-        })
-      }
-    } catch (err) {
-      console.error('[handleComplete] unexpected error:', err)
-      setError(err instanceof Error ? err.message : 'Something went wrong while completing the job')
-    } finally {
-      setCompletingJobId(null)
-    }
-  }
-
-  const handleRelease = async (id: string) => {
-    setError(null)
-    setSuccessMessage(null)
-
-    const { error } = await supabase
-      .from('walk_requests')
-      .update({ status: 'open', walker_id: null })
-      .eq('id', id)
-
-    if (error) {
-      setError(error.message)
-      return
+      }, 1000)
     }
 
-    setSuccessMessage('Job released.')
-    fetchAll()
-  }
+    return () => clearCountdown()
+  }, [flow.screenState, topRequest?.id, flow.handleDecline, clearCountdown, topRequest])
 
-  const openRatingModal = (jobId: string) => {
-    setRatingJobId(jobId)
-    setRatingValue(0)
-    setRatingHover(0)
-    setRatingReview('')
-  }
+  const isActiveOrCompleted = flow.screenState === 'active' || flow.screenState === 'completed'
 
-  const closeRatingModal = () => {
-    setRatingJobId(null)
-    setRatingValue(0)
-    setRatingHover(0)
-    setRatingReview('')
-  }
-
-  const handleSubmitRating = async () => {
-    if (!ratingJobId || ratingValue < 1) return
-
-    const job = myJobs.find((j) => j.id === ratingJobId)
-    if (!job) return
-
-    setRatingSubmitting(true)
-
-    const { error } = await supabase.from('ratings').insert({
-      job_id: ratingJobId,
-      from_user_id: profile.id,
-      to_user_id: job.client_id,
-      rating: ratingValue,
-      review: ratingReview.trim() || null,
-    })
-
-    if (error) {
-      setError(error.message)
-      setRatingSubmitting(false)
-      return
-    }
-
-    await createNotification({
-      userId: job.client_id,
-      type: 'new_rating',
-      title: 'New Rating Received',
-      message: `Your walker rated you ${ratingValue} stars for the walk with ${job.dog_name || 'your dog'}.`,
-      relatedJobId: ratingJobId,
-    })
-
-    setRatingSubmitting(false)
-    closeRatingModal()
-    setSuccessMessage('Rating submitted!')
-    await fetchRatings()
-  }
-
-  const handleRequestPayout = async () => {
-    setError(null)
-    setSuccessMessage(null)
-
-    const parsed = parseFloat(payoutAmount.trim())
-    if (isNaN(parsed) || parsed <= 0) {
-      setError('Please enter a valid payout amount.')
-      return
-    }
-
-    if (parsed > wallet.availableBalance) {
-      setError(`Amount exceeds your available balance of ${wallet.availableBalance.toFixed(2)} ILS.`)
-      return
-    }
-
-    setPayoutSubmitting(true)
-
-    const { error } = await supabase.from('payout_requests').insert({
-      walker_id: profile.id,
-      amount: parsed,
-      note: payoutNote.trim() || null,
-    })
-
-    if (error) {
-      setError(error.message)
-      setPayoutSubmitting(false)
-      return
-    }
-
-    setPayoutAmount('')
-    setPayoutNote('')
-    setPayoutSubmitting(false)
-    setSuccessMessage(`Payout request of ${parsed.toFixed(2)} ILS submitted!`)
-    await fetchPayoutRequests()
-  }
-
-  const handleConnectAccount = async () => {
-    setError(null)
-    setConnectError(null)
-    setConnectLoading(true)
-
-    try {
-      const hasAuth = await prepareEdgeFunctionAuth()
-      if (!hasAuth) {
-        setConnectError('Session expired. Please log in again.')
-        setConnectLoading(false)
-        return
-      }
-
-      // Step 1: Create or reuse the connect account
-      const { data: accountData, error: accountError } = await supabase.functions.invoke('create-connect-account')
-
-      if (accountError) {
-        setConnectError(accountError.message || String(accountError))
-        setConnectLoading(false)
-        return
-      }
-
-      const acct = accountData as { accountId?: string; error?: string } | null
-      if (!acct?.accountId) {
-        setConnectError(acct?.error || 'Failed to create connect account')
-        setConnectLoading(false)
-        return
-      }
-
-      // Step 2: Get the onboarding link
-      const { data: linkData, error: linkError } = await supabase.functions.invoke('create-connect-onboarding-link')
-
-      if (linkError) {
-        setConnectError(linkError.message || String(linkError))
-        setConnectLoading(false)
-        return
-      }
-
-      const link = linkData as { url?: string; error?: string } | null
-      if (!link?.url) {
-        setConnectError(link?.error || 'Failed to get onboarding link')
-        setConnectLoading(false)
-        return
-      }
-
-      window.location.href = link.url
-    } catch (err) {
-      console.error('[ConnectAccount] Unexpected error:', err)
-      setConnectError('Failed to start onboarding')
-      setConnectLoading(false)
-    }
-  }
-
-  const handleContinueOnboarding = async () => {
-    setError(null)
-    setConnectError(null)
-    setConnectLoading(true)
-
-    try {
-      const hasAuth = await prepareEdgeFunctionAuth()
-      if (!hasAuth) {
-        setConnectError('Session expired. Please log in again.')
-        setConnectLoading(false)
-        return
-      }
-
-      const { data, error } = await supabase.functions.invoke('create-connect-onboarding-link')
-
-      if (error) {
-        setConnectError(error.message || String(error))
-        setConnectLoading(false)
-        return
-      }
-
-      const link = data as { url?: string; error?: string } | null
-      if (!link?.url) {
-        setConnectError(link?.error || 'Failed to get onboarding link')
-        setConnectLoading(false)
-        return
-      }
-
-      window.location.href = link.url
-    } catch (err) {
-      console.error('[ContinueOnboarding] Unexpected error:', err)
-      setConnectError('Failed to continue onboarding')
-      setConnectLoading(false)
-    }
-  }
-
-  // ─── Render ─────────────────────────────────────────────────
+  const hideHistoryItem = useCallback(
+    async (id: string) => {
+      const next = [...hiddenHistoryIds, id]
+      persistHiddenIds(next)
+    },
+    [hiddenHistoryIds, persistHiddenIds],
+  )
 
   return (
-    <div style={pageStyle}>
-      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-        {/* Header */}
+    <>
+      <div style={screenStyle}>
         <div style={headerStyle}>
-          <div>
-            <div style={{ fontSize: 12, opacity: 0.6, letterSpacing: 1, textTransform: 'uppercase' as const }}>
-              Regli
-            </div>
-            <h1 style={{ margin: '8px 0 0', fontSize: 28, fontWeight: 800 }}>
-              Hey, {firstName}
-            </h1>
-            {avgRating !== null && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ fontSize: 14, opacity: 0.9 }}>
-                  <span style={{ color: '#F59E0B' }}>★</span> {avgRating} avg rating ({ratingsReceived.length} review{ratingsReceived.length !== 1 ? 's' : ''})
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setProfileOpen(false)
+                setBurgerOpen((v) => !v)
+              }}
+              style={headerMenuBtnStyle}
+              aria-label="Menu"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </svg>
+            </button>
+            <div style={{ minWidth: 0 }}>
+              <h1 style={greetingStyle}>Hey, {flow.firstName}</h1>
+              {flow.avgRating !== null && (
+                <div style={ratingRowStyle}>
+                  <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
+                  {flow.ratingsReceived.length !== 1 ? 's' : ''}
                 </div>
-                {(() => {
-                  const latestWithReview = ratingsReceived.find((r) => r.review)
-                  if (!latestWithReview) return null
-                  const snippet = latestWithReview.review!.length > 60
-                    ? latestWithReview.review!.slice(0, 60) + '...'
-                    : latestWithReview.review!
-                  return (
-                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.6, fontStyle: 'italic' }}>
-                      &ldquo;{snippet}&rdquo;
-                    </div>
-                  )
-                })()}
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {!isActiveOrCompleted && !flow.onlineLoading && (
+              <div style={toggleGroupStyle}>
+                <div style={statusLabelWrapStyle}>
+                  <div
+                    style={{
+                      ...statusDotStyle,
+                      background: flow.isOnline ? '#16A34A' : '#94A3B8',
+                    }}
+                  />
+                  <span style={{ ...statusLabelStyle, color: flow.isOnline ? '#15803D' : '#94A3B8' }}>
+                    {flow.isOnline ? 'Online' : 'Offline'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={flow.toggleOnline}
+                  style={{ ...toggleBtnStyle, background: flow.isOnline ? '#16A34A' : '#CBD5E1' }}
+                >
+                  <div
+                    style={{
+                      ...toggleKnobStyle,
+                      transform: flow.isOnline ? 'translateX(18px)' : 'translateX(0)',
+                    }}
+                  />
+                </button>
               </div>
             )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <NotificationsBell variant="light" />
-            <button type="button" onClick={onSignOut} style={logoutButtonStyle}>
-              Sign out
-            </button>
-          </div>
-        </div>
 
-        {error && <MessageBox text={error} kind="error" />}
-        {successMessage && <MessageBox text={successMessage} kind="success" />}
+            <NotificationsBell />
 
-        {/* Rating Modal */}
-        {ratingJobId && (
-          <div style={overlayStyle}>
-            <div style={modalStyle}>
-              <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Rate client</h2>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <button
-                    key={star}
-                    type="button"
-                    onMouseEnter={() => setRatingHover(star)}
-                    onMouseLeave={() => setRatingHover(0)}
-                    onClick={() => setRatingValue(star)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: 32,
-                      color: star <= (ratingHover || ratingValue) ? '#F59E0B' : '#D1D5DB',
-                      padding: 2,
-                      transition: 'color 0.15s',
-                    }}
-                  >
-                    ★
-                  </button>
-                ))}
-              </div>
-              <textarea
-                value={ratingReview}
-                onChange={(e) => setRatingReview(e.target.value)}
-                placeholder="Write an optional review..."
-                rows={3}
-                style={{
-                  width: '100%',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 12,
-                  padding: '12px 14px',
-                  fontSize: 14,
-                  outline: 'none',
-                  boxSizing: 'border-box' as const,
-                  resize: 'vertical',
-                  minHeight: 80,
+            <div style={{ position: 'relative' }}>
+              <ProfileAvatar
+                url={photo.avatarUrl}
+                name={walkerName}
+                size={40}
+                borderRadius={13}
+                onClick={() => {
+                  setBurgerOpen(false)
+                  setProfileOpen((v) => !v)
                 }}
               />
-              <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                <button
-                  type="button"
-                  onClick={handleSubmitRating}
-                  disabled={ratingValue < 1 || ratingSubmitting}
-                  style={{
-                    flex: 1,
-                    border: 'none',
-                    borderRadius: 12,
-                    padding: '12px 16px',
-                    background: '#0F172A',
-                    color: '#FFFFFF',
-                    fontWeight: 700,
-                    fontSize: 14,
-                    cursor: ratingValue < 1 || ratingSubmitting ? 'not-allowed' : 'pointer',
-                    opacity: ratingValue < 1 || ratingSubmitting ? 0.6 : 1,
-                  }}
-                >
-                  {ratingSubmitting ? 'Submitting...' : 'Submit Rating'}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeRatingModal}
-                  disabled={ratingSubmitting}
-                  style={{
-                    border: '1px solid #E2E8F0',
-                    borderRadius: 12,
-                    padding: '12px 16px',
-                    background: '#FFFFFF',
-                    color: '#64748B',
-                    fontWeight: 600,
-                    fontSize: 14,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Completion Success Overlay */}
-        {completionSuccess && (
-          <div style={overlayStyle}>
-            <div
-              style={{
-                ...modalStyle,
-                textAlign: 'center' as const,
-                animation: 'completionSlideUp 0.4s ease-out',
-              }}
-            >
-              <div
-                style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: 999,
-                  background: '#DCFCE7',
-                  display: 'grid',
-                  placeItems: 'center',
-                  margin: '0 auto 20px',
-                  animation: 'checkmarkPop 0.5s ease-out 0.15s both',
-                }}
-              >
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </div>
-              <h2 style={{ margin: '0 0 6px', fontSize: 22, fontWeight: 800, color: '#0F172A' }}>
-                Walk completed
-              </h2>
-              <p style={{ margin: '0 0 20px', fontSize: 14, color: '#64748B' }}>
-                Great job walking {completionSuccess.dogName} for {completionSuccess.clientName}!
-              </p>
-              {completionSuccess.earnings != null && completionSuccess.earnings > 0 && (
-                <div
-                  style={{
-                    background: '#F0FDF4',
-                    borderRadius: 16,
-                    padding: '18px 24px',
-                    marginBottom: 20,
-                    animation: 'earningsCount 0.4s ease-out 0.3s both',
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#15803D', opacity: 0.7, textTransform: 'uppercase' as const, letterSpacing: 0.8 }}>
-                    You earned
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#15803D', marginTop: 4 }}>
-                    +{completionSuccess.earnings.toLocaleString('he-IL', {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })} ILS
-                  </div>
-                  <div style={{ fontSize: 12, color: '#16A34A', marginTop: 6, opacity: 0.7 }}>
-                    Payment is on the way to your wallet
-                  </div>
+              {flow.avgRating !== null && (
+                <div style={avatarRatingBadgeStyle}>
+                  <span style={{ color: '#F59E0B', fontSize: 8 }}>★</span> {flow.avgRating}
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => setCompletionSuccess(null)}
-                style={{
-                  border: 'none',
-                  borderRadius: 12,
-                  padding: '12px 32px',
-                  background: '#0F172A',
-                  color: '#FFFFFF',
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: 'pointer',
-                  width: '100%',
-                }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Stripe Connect Onboarding */}
-        <ConnectOnboardingCard
-          status={connectStatus}
-          loading={connectLoading}
-          error={connectError}
-          onConnect={handleConnectAccount}
-          onContinue={handleContinueOnboarding}
-          onRefresh={fetchConnectStatus}
-        />
-
-        {/* Wallet */}
-        <div style={walletGridStyle}>
-          <div style={walletCardPrimaryStyle}>
-            <div style={walletLabelStyle}>Available Balance</div>
-            <div style={walletValuePrimaryStyle}>
-              {wallet.availableBalance.toLocaleString('he-IL', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{' '}
-              <span style={{ fontSize: 18, fontWeight: 600, opacity: 0.8 }}>ILS</span>
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 10, lineHeight: 1.5 }}>
-              {wallet.availableBalance > 0
-                ? `Ready to withdraw \u00b7 ${wallet.completedWalks} paid walk${wallet.completedWalks !== 1 ? 's' : ''}`
-                : wallet.completedWalks > 0
-                  ? `${wallet.completedWalks} paid walk${wallet.completedWalks !== 1 ? 's' : ''} \u00b7 All funds withdrawn`
-                  : 'Complete walks to start earning'}
-            </div>
-            {wallet.hasDeductions && (
-              <div style={{ fontSize: 12, color: '#FCA5A5', marginTop: 8, lineHeight: 1.4 }}>
-                Includes {wallet.deductionTotal.toFixed(2)} ILS in refund deductions
-              </div>
-            )}
-          </div>
-
-          <div style={walletCardStyle}>
-            <div style={walletLabelStyle}>Pending Earnings</div>
-            <div style={{ ...walletValueStyle, color: wallet.pendingEarnings > 0 ? '#C2410C' : '#0F172A' }}>
-              {wallet.pendingEarnings.toLocaleString('he-IL', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{' '}
-              <span style={{ fontSize: 14, fontWeight: 600, color: '#64748B' }}>ILS</span>
-            </div>
-            <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 8, lineHeight: 1.5 }}>
-              {wallet.pendingCount > 0
-                ? `${wallet.pendingCount} walk${wallet.pendingCount !== 1 ? 's' : ''} in progress \u00b7 Becomes available after completion`
-                : 'No walks in progress'}
-            </div>
-          </div>
-
-          <div style={walletCardStyle}>
-            <div style={walletLabelStyle}>Total Earned</div>
-            <div style={walletValueStyle}>
-              {wallet.totalEarnings.toLocaleString('he-IL', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{' '}
-              <span style={{ fontSize: 14, fontWeight: 600, color: '#64748B' }}>ILS</span>
-            </div>
-            <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 8 }}>
-              {wallet.totalEarnings === 0
-                ? 'Accept and complete walks to earn'
-                : 'All-time earnings on Regli'}
             </div>
           </div>
         </div>
 
-        {/* Transfer Breakdown */}
-        {walkerPayouts.length > 0 && (
-          <section style={{ marginTop: 24 }}>
-            <h2 style={sectionTitleStyle}>Stripe Transfers</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-              <div style={walletCardStyle}>
-                <div style={walletLabelStyle}>Total Transferred</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#0F172A' }}>
-                  {transferBreakdown.transferred.toFixed(2)} <span style={{ fontSize: 13, fontWeight: 600, color: '#64748B' }}>ILS</span>
-                </div>
+        {burgerOpen && (
+          <>
+            <div style={menuOverlayStyle} onClick={closeAll} />
+            <div style={menuPanelStyle}>
+              <div style={menuHeaderStyle}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
+                  <line x1="4" y1="7" x2="20" y2="7" />
+                  <line x1="4" y1="12" x2="20" y2="12" />
+                  <line x1="4" y1="17" x2="20" y2="17" />
+                </svg>
+                <span style={menuHeaderTitleStyle}>Menu</span>
               </div>
-              <div style={walletCardStyle}>
-                <div style={walletLabelStyle}>In Transit</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#C2410C' }}>
-                  {transferBreakdown.inTransit.toFixed(2)} <span style={{ fontSize: 13, fontWeight: 600, color: '#64748B' }}>ILS</span>
+
+              <div style={menuDividerStyle} />
+
+              <button type="button" onClick={() => setHistoryOpen((v) => !v)} style={menuItemActionStyle}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span style={{ flex: 1 }}>Walk history</span>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#94A3B8"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ transform: historyOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {historyOpen && (
+                <div style={historyContainerStyle}>
+                  <WalkerHistoryList items={historyItems} onHide={hideHistoryItem} />
                 </div>
-              </div>
-              <div style={walletCardStyle}>
-                <div style={walletLabelStyle}>Paid Out</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#15803D' }}>
-                  {transferBreakdown.paidOut.toFixed(2)} <span style={{ fontSize: 13, fontWeight: 600, color: '#64748B' }}>ILS</span>
-                </div>
-              </div>
-              <div style={walletCardStyle}>
-                <div style={walletLabelStyle}>Failed</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: transferBreakdown.failed > 0 ? '#DC2626' : '#94A3B8' }}>
-                  {transferBreakdown.failed.toFixed(2)} <span style={{ fontSize: 13, fontWeight: 600, color: '#64748B' }}>ILS</span>
-                </div>
-              </div>
+              )}
+
+              <div style={menuDividerStyle} />
+
+              <button
+                type="button"
+                onClick={() => {
+                  closeAll()
+                  void onSignOut()
+                }}
+                style={menuSignOutBtnStyle}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                <span>Sign out</span>
+              </button>
             </div>
-          </section>
+          </>
         )}
 
-        {/* Balance Adjustments (refund debits) */}
-        {balanceAdjustments.length > 0 && (
-          <section style={{ marginTop: 24 }}>
-            <h2 style={sectionTitleStyle}>Balance Adjustments</h2>
-            <div style={{ display: 'grid', gap: 8 }}>
-              {balanceAdjustments.map((adj) => (
-                <div key={adj.id} style={{
-                  background: '#FFFFFF',
-                  borderRadius: 14,
-                  padding: '14px 18px',
-                  border: '1px solid #FEE2E2',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#991B1B' }}>
-                      {adj.amount.toFixed(2)} ILS
-                    </div>
-                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
-                      {adj.description || adj.type}
-                    </div>
+        {profileOpen && (
+          <>
+            <div style={menuOverlayStyle} onClick={closeAll} />
+            <div style={profilePanelStyle}>
+              <div style={profileSectionStyle}>
+                <div style={{ position: 'relative' }}>
+                  <ProfileAvatar
+                    url={photo.avatarUrl}
+                    name={walkerName}
+                    size={56}
+                    borderRadius={18}
+                    onClick={() => fileInputRef.current?.click()}
+                  />
+                  <div style={cameraIconStyle}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="#FFFFFF">
+                      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
+                      <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
+                    </svg>
                   </div>
-                  <div style={{ fontSize: 12, color: '#94A3B8', textAlign: 'right' as const, flexShrink: 0 }}>
-                    {formatRelativeDate(adj.created_at)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Withdraw Funds */}
-        <section style={{ marginTop: 24 }}>
-          <h2 style={sectionTitleStyle}>Withdraw Funds</h2>
-          <div style={payoutFormCardStyle}>
-            {connectStatus && !connectStatus.payouts_enabled && (
-              <div style={payoutNoticeStyle}>
-                Automatic payouts are not available yet. Connect your payout account above to enable them later. You can still submit manual withdrawal requests below.
-              </div>
-            )}
-
-            {wallet.availableBalance <= 0 ? (
-              <div style={payoutEmptyStyle}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#475569', marginBottom: 6 }}>
-                  Nothing to withdraw yet
-                </div>
-                <div style={{ fontSize: 13, color: '#94A3B8', lineHeight: 1.5 }}>
-                  {wallet.pendingCount > 0
-                    ? `You have ${wallet.pendingCount} walk${wallet.pendingCount !== 1 ? 's' : ''} in progress. Earnings will become available once ${wallet.pendingCount === 1 ? 'the walk is' : 'walks are'} completed and payment is captured.`
-                    : 'Complete paid walks and your earnings will appear here.'}
-                </div>
-              </div>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end' }}>
-                  <div>
-                    <label style={payoutLabelStyle}>Amount (ILS)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={payoutAmount}
-                      onChange={(e) => setPayoutAmount(e.target.value)}
-                      placeholder={`Up to ${wallet.availableBalance.toFixed(2)} ILS`}
-                      style={payoutInputStyle}
-                    />
-                  </div>
-                  <div>
-                    <label style={payoutLabelStyle}>Note (optional)</label>
-                    <input
-                      value={payoutNote}
-                      onChange={(e) => setPayoutNote(e.target.value)}
-                      placeholder="e.g. Bit, bank transfer"
-                      style={payoutInputStyle}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleRequestPayout}
-                    disabled={payoutSubmitting}
-                    style={{
-                      ...payoutButtonStyle,
-                      opacity: payoutSubmitting ? 0.5 : 1,
-                      cursor: payoutSubmitting ? 'not-allowed' : 'pointer',
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) photo.uploadAvatar(file)
+                      e.target.value = ''
                     }}
-                  >
-                    {payoutSubmitting ? 'Submitting...' : 'Withdraw'}
-                  </button>
+                  />
                 </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: '#94A3B8' }}>
-                  Your request will be reviewed and processed manually.
-                </div>
-              </>
-            )}
-          </div>
 
-          {/* Payout History */}
-          {payoutRequests.length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 700, color: '#475569' }}>
-                Withdrawal History
-              </h3>
-              <div style={{ display: 'grid', gap: 8 }}>
-                {payoutRequests.map((pr) => (
-                  <div key={pr.id} style={payoutRowStyle}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <span style={{ fontSize: 15, fontWeight: 700 }}>
-                          {pr.amount.toLocaleString('he-IL', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}{' '}
-                          ILS
-                        </span>
-                        <PayoutStatusBadge status={pr.status} />
-                      </div>
-                      <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                        Requested {formatRelativeDate(pr.created_at)}
-                        {pr.note && (
-                          <>
-                            <span style={{ margin: '0 6px', opacity: 0.4 }}>&middot;</span>
-                            {pr.note}
-                          </>
-                        )}
-                      </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={profileNameStyle}>{walkerName}</div>
+                  {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                  {flow.avgRating !== null && (
+                    <div style={profileRatingStyle}>
+                      <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
+                      {flow.ratingsReceived.length !== 1 ? 's' : ''}
                     </div>
-                    {pr.processed_at && (
-                      <div style={{ fontSize: 12, color: '#94A3B8', textAlign: 'right' as const, flexShrink: 0 }}>
-                        Processed<br />{formatDate(pr.processed_at)}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
+
+              {photo.uploading && <div style={uploadStatusStyle}>Uploading photo...</div>}
+              {photo.error && <div style={uploadErrorStyle}>{photo.error}</div>}
+
+              <div style={menuDividerStyle} />
+
+              <button type="button" onClick={() => fileInputRef.current?.click()} style={profileActionBtnStyle}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
+                  <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
+                </svg>
+                <span>Change photo</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        <div style={contentStyle}>
+          {flow.error && (
+            <div style={toastErrorStyle}>
+              <span>{friendlyError(flow.error)}</span>
+              <button onClick={flow.clearError} style={toastDismissStyle}>×</button>
             </div>
           )}
-        </section>
 
-        {/* Active Jobs */}
-        {activeJobs.length > 0 && (
-          <section style={{ marginTop: 24, paddingBottom: activeJobs.length === 1 ? 88 : 0 }}>
-            <h2 style={sectionTitleStyle}>Active Jobs</h2>
-            <div style={{ display: 'grid', gap: 14 }}>
-              {activeJobs.map((job) => (
-                <div key={job.id} style={jobCardStyle}>
-                  <div style={jobCardHeaderStyle}>
-                    <div>
-                      <div style={jobTitleStyle}>
-                        {job.dog_name || 'Walk'}
-                      </div>
-                      <div style={jobMetaStyle}>
-                        {job.client?.full_name || job.client?.email || 'Client'}
-                      </div>
-                    </div>
-                    <StatusBadge status={job.status} />
-                  </div>
-
-                  <div style={jobDetailsStyle}>
-                    <div>{job.location || job.address || '-'}</div>
-                    <div>Started {formatDate(job.created_at)}</div>
-                  </div>
-
-                  {/* Inline actions for multi-job case */}
-                  {activeJobs.length > 1 && (
-                    <div style={jobActionsStyle}>
-                      <button
-                        type="button"
-                        onClick={() => handleComplete(job.id)}
-                        disabled={completingJobId === job.id}
-                        style={{
-                          ...completeButtonStyle,
-                          opacity: completingJobId === job.id ? 0.6 : 1,
-                          cursor: completingJobId === job.id ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {completingJobId === job.id ? 'Completing...' : 'Complete Walk'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRelease(job.id)}
-                        style={releaseButtonStyle}
-                      >
-                        Release
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Single job: show release inline, complete is in fixed CTA */}
-                  {activeJobs.length === 1 && (
-                    <div style={{ marginTop: 16 }}>
-                      <button
-                        type="button"
-                        onClick={() => handleRelease(job.id)}
-                        style={{ ...releaseButtonStyle, width: '100%' }}
-                      >
-                        Release Job
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+          {flow.successMessage && (
+            <div style={toastSuccessStyle}>
+              <span>{flow.successMessage}</span>
+              <button onClick={flow.clearSuccess} style={toastDismissStyle}>×</button>
             </div>
-          </section>
-        )}
+          )}
 
-        {/* Fixed bottom CTA for single active job */}
-        {activeJobs.length === 1 && (
-          <div style={fixedBottomCtaContainerStyle}>
-            <div style={fixedBottomCtaInnerStyle}>
-              <div style={{ fontSize: 13, color: '#64748B', marginBottom: 6, fontWeight: 600 }}>
-                {activeJobs[0].dog_name || 'Walk'} &middot; {activeJobs[0].client?.full_name || activeJobs[0].client?.email || 'Client'}
+          {flow.screenState === 'offline' && (
+            <div className="sheet-state-enter">
+              <div style={statusHintStyle}>
+                <span>Go online to receive walk requests</span>
               </div>
+
+              <WalletCard balance={flow.wallet.availableBalance} pending={flow.wallet.pendingEarnings} />
+
+              <ConnectOnboardingCard
+                status={flow.connectStatus}
+                loading={flow.connectLoading}
+                error={flow.connectError}
+                onConnect={flow.handleConnectAccount}
+                onContinue={flow.handleContinueOnboarding}
+                onRefresh={flow.fetchConnectStatus}
+              />
+            </div>
+          )}
+
+          {flow.screenState === 'waiting' && (
+            <div className="sheet-state-enter">
+              <div style={statusHintOnlineStyle}>
+                <div style={waitingDotStyle} />
+                <span>Waiting for requests</span>
+              </div>
+
+              <WalletCard balance={flow.wallet.availableBalance} pending={flow.wallet.pendingEarnings} />
+
+              <ConnectOnboardingCard
+                status={flow.connectStatus}
+                loading={flow.connectLoading}
+                error={flow.connectError}
+                onConnect={flow.handleConnectAccount}
+                onContinue={flow.handleContinueOnboarding}
+                onRefresh={flow.fetchConnectStatus}
+              />
+            </div>
+          )}
+
+          {flow.screenState === 'active' && activeJob && (
+            <div className="sheet-state-enter" style={activeCardStyle}>
+              <div style={activeHeaderRowStyle}>
+                <div style={activeBadgeStyle}>
+                  <div style={activeBadgeDotStyle} />
+                  Active walk
+                </div>
+              </div>
+
+              <h3 style={activeDogNameStyle}>{activeJob.dog_name || 'Dog'}</h3>
+              <p style={activeClientStyle}>for {activeJob.client?.full_name || activeJob.client?.email || 'Client'}</p>
+
+              {activeJob.location && (
+                <div style={activeLocationStyle}>
+                  <span style={ellipsisStyle}>{activeJob.location}</span>
+                </div>
+              )}
+
               <button
-                type="button"
-                onClick={() => handleComplete(activeJobs[0].id)}
-                disabled={completingJobId === activeJobs[0].id}
+                onClick={async () => {
+                  await hapticSuccess()
+                  void flow.handleComplete(activeJob.id)
+                }}
+                disabled={flow.completingJobId === activeJob.id || !activeJobCanComplete}
                 style={{
-                  ...fixedCompleteButtonStyle,
-                  opacity: completingJobId === activeJobs[0].id ? 0.7 : 1,
-                  cursor: completingJobId === activeJobs[0].id ? 'not-allowed' : 'pointer',
+                  ...completeBtnStyle,
+                  opacity: flow.completingJobId === activeJob.id || !activeJobCanComplete ? 0.7 : 1,
+                  cursor: flow.completingJobId === activeJob.id || !activeJobCanComplete ? 'not-allowed' : 'pointer',
                 }}
               >
-                {completingJobId === activeJobs[0].id ? (
-                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-                    <span style={spinnerStyle} />
-                    Completing...
-                  </span>
-                ) : (
-                  'Complete Walk'
-                )}
+                {flow.completingJobId === activeJob.id
+                  ? 'Completing...'
+                  : activeJobCanComplete
+                    ? 'Complete walk'
+                    : 'Available at dispatch time'}
+              </button>
+            </div>
+          )}
+
+          {flow.screenState === 'completed' && flow.completionSuccess && (
+            <div className="sheet-state-enter" style={completionCardStyle}>
+              <div style={checkStyle}>✓</div>
+              <h3 style={completionTitleStyle}>Walk completed</h3>
+              <p style={completionSubStyle}>{flow.completionSuccess.clientName}'s dog</p>
+
+              {flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0 && (
+                <div style={earningsRowStyle}>
+                  <span style={earningsLabelStyle}>Earned</span>
+                  <span style={earningsValueStyle}>₪{flow.completionSuccess.earnings.toFixed(0)}</span>
+                </div>
+              )}
+
+              {!compRatingDone && (
+                <div style={inlineRatingContainerStyle}>
+                  <p style={ratingPromptStyle}>How was {flow.completionSuccess.clientName}?</p>
+                  <div style={starsRowStyle}>
+                    {[1, 2, 3, 4, 5].map((star) => {
+                      const isActive = star <= (compHover || compRating)
+                      const isPressed = star === compPressed
+                      return (
+                        <button
+                          key={star}
+                          type="button"
+                          onMouseEnter={() => setCompHover(star)}
+                          onMouseLeave={() => setCompHover(0)}
+                          onMouseDown={() => setCompPressed(star)}
+                          onMouseUp={() => setCompPressed(0)}
+                          onTouchStart={() => {
+                            setCompPressed(star)
+                            setCompHover(star)
+                          }}
+                          onTouchEnd={() => {
+                            setCompPressed(0)
+                            setCompHover(0)
+                          }}
+                          onClick={async () => {
+                            setCompRating(star)
+                            await hapticMedium()
+                          }}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 34,
+                            lineHeight: 1,
+                            color: isActive ? '#F59E0B' : '#D1D5DB',
+                            padding: 4,
+                            transition: 'color 0.15s ease, transform 0.15s ease',
+                            transform: isPressed ? 'scale(1.3)' : compHover === star ? 'scale(1.15)' : 'scale(1)',
+                            WebkitTapHighlightColor: 'transparent',
+                          }}
+                        >
+                          ★
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div
+                    style={{
+                      overflow: 'hidden',
+                      transition: 'max-height 0.3s ease, opacity 0.3s ease',
+                      maxHeight: compRating > 0 ? 200 : 0,
+                      opacity: compRating > 0 ? 1 : 0,
+                    }}
+                  >
+                    <textarea
+                      value={compReview}
+                      onChange={(e) => setCompReview(e.target.value)}
+                      placeholder="Share your feedback (optional)"
+                      rows={2}
+                      style={compTextareaStyle}
+                    />
+                    <button
+                      onClick={handleCompRatingSubmit}
+                      disabled={flow.completionRatingSubmitting}
+                      style={{
+                        ...submitRatingBtnStyle,
+                        opacity: flow.completionRatingSubmitting ? 0.7 : 1,
+                        cursor: flow.completionRatingSubmitting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {flow.completionRatingSubmitting ? 'Sending...' : 'Submit rating'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {compRatingDone && (
+                <div style={thanksBannerStyle}>
+                  <span style={thanksTextStyle}>Thanks for your feedback!</span>
+                </div>
+              )}
+
+              {formattedRatings.length > 0 && (
+                <div style={recentRatingsSectionStyle}>
+                  <h4 style={recentRatingsHeadingStyle}>Recent reviews</h4>
+                  <CompactRatingList ratings={formattedRatings} limit={2} onViewAll={() => {}} />
+                </div>
+              )}
+
+              <button onClick={flow.dismissCompletion} style={dismissBtnStyle}>
+                {compRatingDone ? 'Done' : 'Skip & go online'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {flow.screenState === 'incoming_request' && topRequest && (
+        <div style={overlayStyle}>
+          <div style={overlayBackdropStyle} />
+          <div style={bottomSheetStyle}>
+            <div style={sheetHeaderStyle}>
+              <span style={newRequestLabelStyle}>New request</span>
+              <span style={{ ...countdownLabelStyle, color: countdown <= 5 ? '#EF4444' : '#F59E0B' }}>
+                {countdown}s
+              </span>
+            </div>
+
+            <div style={progressTrackStyle}>
+              <div style={{ ...progressFillStyle, width: `${(countdown / REQUEST_TIMEOUT_SECONDS) * 100}%` }} />
+            </div>
+
+            <div style={dogNameStyle}>{topRequest.dog_name || 'Dog'}</div>
+
+            {topRequest.location && <div style={reqLocationStyle}><span style={ellipsisStyle}>{topRequest.location}</span></div>}
+
+            <div style={infoPillsRowStyle}>
+              <div style={infoPillStyle}><span>{requestDuration}</span></div>
+              <div style={infoPillDividerStyle} />
+              <div style={{ ...infoPillStyle, color: '#15803D', fontWeight: 800 }}><span>{requestPrice}</span></div>
+            </div>
+
+            {flow.openJobs.length > 1 && <div style={queueHintStyle}>+{flow.openJobs.length - 1} more in queue</div>}
+
+            <div style={ctaContainerStyle}>
+              <button
+                onClick={async () => {
+                    await hapticMedium()
+                    void flow.handleAccept(topRequest.id)
+                }}
+                style={acceptBtnStyle}
+                className="request-accept-btn"
+              >
+                Accept
+              </button>
+              <button
+                onClick={async () => {
+                  await hapticMedium()
+                  clearCountdown()
+                  void flow.handleDecline(topRequest.id)
+                }}
+                style={declineBtnStyle}
+              >
+                Decline
               </button>
             </div>
           </div>
-        )}
-
-        {/* Two Column: Open Jobs + History */}
-        <div style={{ ...twoColumnStyle, marginTop: 24 }}>
-          {/* Open Jobs */}
-          <section>
-            <h2 style={sectionTitleStyle}>
-              Available Jobs
-              {openJobs.length > 0 && (
-                <span style={countBadgeStyle}>{openJobs.length}</span>
-              )}
-            </h2>
-
-            {loading ? (
-              <div style={emptyStateStyle}>Loading...</div>
-            ) : openJobs.length === 0 ? (
-              <div style={emptyStateStyle}>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                  No jobs available
-                </div>
-                <div style={{ fontSize: 13 }}>
-                  New jobs will appear here in real-time
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: 12 }}>
-                {openJobs.map((job) => (
-                  <div key={job.id} style={openJobCardStyle}>
-                    <div style={jobTitleStyle}>
-                      {job.dog_name || 'Walk'}
-                    </div>
-                    <div style={jobMetaStyle}>
-                      {job.location || job.address || '-'}
-                    </div>
-                    {job.notes && (
-                      <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4 }}>
-                        {job.notes}
-                      </div>
-                    )}
-                    <div style={{ fontSize: 13, color: '#64748B', marginTop: 8 }}>
-                      {job.client?.full_name || job.client?.email || 'Client'}
-                      <span style={{ margin: '0 6px', opacity: 0.4 }}>&middot;</span>
-                      {formatRelativeDate(job.created_at)}
-                    </div>
-                    <EstimatedEarnings job={job} />
-                    <button
-                      type="button"
-                      onClick={() => handleAccept(job.id)}
-                      style={acceptButtonStyle}
-                    >
-                      Accept Job
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Earnings History */}
-          <section>
-            <h2 style={sectionTitleStyle}>
-              Earnings History
-              {completedJobs.length > 0 && (
-                <span style={countBadgeStyle}>{completedJobs.length}</span>
-              )}
-            </h2>
-
-            {loading ? (
-              <div style={emptyStateStyle}>Loading...</div>
-            ) : completedJobs.length === 0 ? (
-              <div style={emptyStateStyle}>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                  No earnings yet
-                </div>
-                <div style={{ fontSize: 13 }}>
-                  Accept and complete walks to start earning
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: 10 }}>
-                {completedJobs.map((job) => {
-                  const myRating = myRatingByJobId.get(job.id)
-                  const clientRating = clientRatingByJobId.get(job.id)
-                  const isCompleted = job.status === 'completed'
-
-                  return (
-                    <div key={job.id} style={historyCardStyle}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span style={{ fontSize: 15, fontWeight: 700 }}>
-                              {job.dog_name || 'Walk'}
-                            </span>
-                            <StatusBadge status={job.status} />
-                            {job.payment_status === 'paid' && (
-                              <PaymentBadge />
-                            )}
-                          </div>
-                          <div style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>
-                            {job.client?.full_name || job.client?.email || 'Client'}
-                            {job.paid_at && (
-                              <>
-                                <span style={{ margin: '0 6px', opacity: 0.4 }}>&middot;</span>
-                                Paid {formatRelativeDate(job.paid_at)}
-                              </>
-                            )}
-                          </div>
-
-                          {isCompleted && !ratedJobIds.has(job.id) && (
-                            <button
-                              type="button"
-                              onClick={() => openRatingModal(job.id)}
-                              style={rateClientButtonStyle}
-                            >
-                              Rate client
-                            </button>
-                          )}
-                        </div>
-
-                        <div style={{ textAlign: 'right' as const, flexShrink: 0 }}>
-                          {job.payment_status === 'paid' && job.walker_earnings != null ? (
-                            <>
-                              <div style={earningsAmountStyle}>
-                                +{job.walker_earnings.toLocaleString('he-IL', {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}{' '}
-                                ILS
-                              </div>
-                              <TransferStatusLabel payout={payoutByJobId.get(job.id)} />
-                            </>
-                          ) : job.status === 'cancelled' ? (
-                            <div style={{ fontSize: 13, color: '#991B1B', fontWeight: 600 }}>
-                              Cancelled
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 13, color: '#94A3B8' }}>
-                              Awaiting payment
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Reviews section */}
-                      {isCompleted && (myRating || clientRating) && (
-                        <div style={reviewsSectionStyle}>
-                          {myRating && (
-                            <ReviewBlock
-                              label="Your review"
-                              rating={myRating.rating}
-                              review={myRating.review}
-                            />
-                          )}
-                          {clientRating && (
-                            <ReviewBlock
-                              label="Client review"
-                              rating={clientRating.rating}
-                              review={clientRating.review}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </section>
         </div>
+      )}
+
+      {flow.takenNotice && (
+        <div style={takenToastWrapStyle}>
+          <div style={takenToastStyle}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>Request taken</div>
+              <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 1 }}>Another walker accepted this one</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function WalkerHistoryList({
+  items,
+  onHide,
+}: {
+  items: WalkerHistoryItem[]
+  onHide: (id: string) => Promise<void>
+}) {
+  const [showSwipeHint, setShowSwipeHint] = useState(false)
+
+  useEffect(() => {
+    try {
+      const dismissed = window.localStorage.getItem('regli_walker_history_swipe_hint_dismissed')
+      setShowSwipeHint(!dismissed && items.length > 0)
+    } catch {
+      setShowSwipeHint(items.length > 0)
+    }
+  }, [items.length])
+
+  const dismissHint = useCallback(() => {
+    setShowSwipeHint(false)
+    try {
+      window.localStorage.setItem('regli_walker_history_swipe_hint_dismissed', '1')
+    } catch {
+      // noop
+    }
+  }, [])
+
+  if (!items.length) {
+    return <div style={futureEmptyStyle}>No walk history yet.</div>
+  }
+
+  return (
+    <div style={historyListStyle}>
+      {showSwipeHint && (
+        <button type="button" onClick={dismissHint} style={swipeHintStyle}>
+          Swipe left to hide card
+        </button>
+      )}
+      {items.map((item) => (
+        <WalkerHistorySwipeCard key={item.id} item={item} onHide={onHide} />
+      ))}
+    </div>
+  )
+}
+
+function WalkerHistorySwipeCard({
+  item,
+  onHide,
+}: {
+  item: WalkerHistoryItem
+  onHide: (id: string) => Promise<void>
+}) {
+  const [offsetX, setOffsetX] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const startXRef = useRef(0)
+  const startYRef = useRef(0)
+  const startOffsetRef = useRef(0)
+  const isHorizontalRef = useRef(false)
+  const SWIPE_OPEN = -96
+  const SWIPE_HIDE = -164
+  const OPEN_THRESHOLD = -56
+  const HIDE_THRESHOLD = -145
+
+  const reset = useCallback(() => {
+    setOffsetX(0)
+    setDragging(false)
+    isHorizontalRef.current = false
+  }, [])
+
+  const commitHide = useCallback(async () => {
+    await hapticMedium()
+    await onHide(item.id)
+    reset()
+  }, [item.id, onHide, reset])
+
+  const applyResistance = (rawOffset: number) => {
+    if (rawOffset > 0) return rawOffset * 0.18
+    if (rawOffset < SWIPE_HIDE) return SWIPE_HIDE + (rawOffset - SWIPE_HIDE) * 0.18
+    return rawOffset
+  }
+
+  const beginDrag = (x: number, y: number) => {
+    startXRef.current = x
+    startYRef.current = y
+    startOffsetRef.current = offsetX
+    isHorizontalRef.current = false
+    setDragging(true)
+  }
+
+  const moveDrag = (x: number, y: number) => {
+    if (!dragging) return false
+    const dx = x - startXRef.current
+    const dy = y - startYRef.current
+
+    if (!isHorizontalRef.current) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return false
+      if (Math.abs(dx) <= Math.abs(dy)) {
+        setDragging(false)
+        return false
+      }
+      isHorizontalRef.current = true
+    }
+
+    const rawOffset = startOffsetRef.current + dx
+    setOffsetX(applyResistance(rawOffset))
+    return true
+  }
+
+  const endDrag = () => {
+    if (!dragging) return
+    setDragging(false)
+
+    if (offsetX <= HIDE_THRESHOLD) {
+      void commitHide()
+      return
+    }
+
+    if (offsetX <= OPEN_THRESHOLD) {
+      setOffsetX(SWIPE_OPEN)
+      return
+    }
+
+    setOffsetX(0)
+  }
+
+  const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0]
+    if (!touch) return
+    beginDrag(touch.clientX, touch.clientY)
+  }
+
+  const onTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0]
+    if (!touch) return
+    const handled = moveDrag(touch.clientX, touch.clientY)
+    if (handled) e.preventDefault()
+  }
+
+  const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => beginDrag(e.clientX, e.clientY)
+  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    moveDrag(e.clientX, e.clientY)
+  }
+
+  return (
+    <div style={historySwipeWrapStyle}>
+      <div style={historySwipeActionsStyle}>
+        <button type="button" onClick={reset} style={historyCloseActionStyle}>
+          Close
+        </button>
+      </div>
+
+      <div
+        style={{
+          ...historyCardShellStyle,
+          transform: `translateX(${offsetX}px)`,
+          transition: dragging ? 'none' : 'transform 280ms cubic-bezier(0.22, 1, 0.36, 1)',
+        }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={endDrag}
+        onTouchCancel={endDrag}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={endDrag}
+        onMouseLeave={endDrag}
+      >
+        <div style={historyCardTopRowStyle}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={historyCardTitleStyle}>{item.dogName}</div>
+            <div style={historyCardMetaStyle}>
+              {formatRelativeDate(item.createdAt)} {item.price != null ? `• ₪${item.price}` : ''}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <div style={historyStatusBadgeStyle}>{formatStatus(item.status)}</div>
+            {item.rating != null && (
+              <div style={historyRatingPillStyle}>
+                <span style={{ color: '#FDE68A' }}>★</span> {item.rating.toFixed(1)}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={historyWalkerRowStyle}>
+          <span style={historyCardLabelStyle}>Client</span>
+          <span style={historyCardWalkerNameStyle}>{item.clientName}</span>
+        </div>
+
+        {item.reviewText ? (
+          <div style={historyLocationCardStyle}>
+            <div style={historyLocationPinStyle}>❝</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={historyLocationLabelStyle}>Feedback</div>
+              <div style={historyLocationValueStyle}>{item.reviewText}</div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )
 }
 
-// ─── Sub-components ───────────────────────────────────────────
+function WalletCard({ balance, pending }: { balance: number; pending: number }) {
+  return (
+    <div style={walletCardStyle}>
+      <div style={walletHeaderStyle}>Wallet</div>
+      <div style={walletRowStyle}>
+        <div>
+          <div style={walletLabelStyle}>Available</div>
+          <div style={walletValueStyle}>₪{balance.toFixed(0)}</div>
+        </div>
+        <div>
+          <div style={walletLabelStyle}>Pending</div>
+          <div style={walletValueStyle}>₪{pending.toFixed(0)}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function ConnectOnboardingCard({
   status,
@@ -1590,851 +981,987 @@ function ConnectOnboardingCard({
   status: ConnectStatus | null
   loading: boolean
   error: string | null
-  onConnect: () => void
-  onContinue: () => void
-  onRefresh: () => void
+  onConnect: () => Promise<void> | void
+  onContinue: () => Promise<void> | void
+  onRefresh: () => Promise<void> | void
 }) {
-  // Error state
-  if (error) {
-    return (
-      <div style={{ ...connectCardStyle, borderColor: '#FCA5A5' }}>
-        <div style={{ ...connectIconStyle, background: '#FEE2E2' }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="15" y1="9" x2="9" y2="15" />
-            <line x1="9" y1="9" x2="15" y2="15" />
-          </svg>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={connectTitleStyle}>Payout account error</div>
-          <div style={{ ...connectDescStyle, color: '#DC2626' }}>{error}</div>
-        </div>
-        <button type="button" onClick={onRefresh} style={connectRefreshStyle}>
-          Retry
-        </button>
-      </div>
-    )
-  }
-
-  // Still loading initial status
-  if (loading && status === null) {
-    return (
-      <div style={connectCardStyle}>
-        <div style={{ fontSize: 14, color: '#64748B' }}>Loading payout account status...</div>
-      </div>
-    )
-  }
-
-  if (status === null) {
-    return null
-  }
-
-  // Not connected at all
-  if (!status.connected) {
-    return (
-      <div style={connectCardStyle}>
-        <div style={connectIconStyle}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366F1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-            <line x1="1" y1="10" x2="23" y2="10" />
-          </svg>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={connectTitleStyle}>Connect your payout account</div>
-          <div style={connectDescStyle}>
-            Link your bank account via Stripe to receive automatic payouts for completed walks.
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onConnect}
-          disabled={loading}
-          style={{
-            ...connectButtonStyle,
-            opacity: loading ? 0.6 : 1,
-            cursor: loading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {loading ? 'Connecting...' : 'Connect payout account'}
-        </button>
-      </div>
-    )
-  }
-
-  // Connected but onboarding incomplete
-  if (!status.stripe_connect_onboarding_complete) {
-    return (
-      <div style={{ ...connectCardStyle, borderColor: '#FDE68A' }}>
-        <div style={{ ...connectIconStyle, background: '#FEF3C7' }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={connectTitleStyle}>Onboarding incomplete</div>
-          <div style={connectDescStyle}>
-            Your payout account is linked but you need to finish the verification process.
-          </div>
-          <div style={connectStatusRowStyle}>
-            <ConnectStatusDot enabled={false} label="Onboarding incomplete" />
-            <ConnectStatusDot enabled={status.payouts_enabled} label={status.payouts_enabled ? 'Payouts enabled' : 'Payouts not enabled'} />
-            <ConnectStatusDot enabled={status.charges_enabled} label={status.charges_enabled ? 'Charges enabled' : 'Charges not enabled'} />
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 8 }}>
-          <button
-            type="button"
-            onClick={onContinue}
-            disabled={loading}
-            style={{
-              ...connectButtonStyle,
-              background: '#D97706',
-              opacity: loading ? 0.6 : 1,
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {loading ? 'Loading...' : 'Continue onboarding'}
-          </button>
-          <button type="button" onClick={onRefresh} style={connectRefreshStyle}>
-            Refresh status
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Fully connected
   return (
-    <div style={{ ...connectCardStyle, borderColor: '#BBF7D0' }}>
-      <div style={{ ...connectIconStyle, background: '#DCFCE7' }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-          <polyline points="22 4 12 14.01 9 11.01" />
-        </svg>
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={connectTitleStyle}>Payout account connected</div>
-        <div style={connectStatusRowStyle}>
-          <ConnectStatusDot enabled={true} label="Onboarding complete" />
-          <ConnectStatusDot enabled={status.payouts_enabled} label={status.payouts_enabled ? 'Payouts enabled' : 'Payouts pending verification'} />
-          <ConnectStatusDot enabled={status.charges_enabled} label={status.charges_enabled ? 'Charges enabled' : 'Charges pending'} />
-        </div>
-        {!status.payouts_enabled && (
-          <div style={{ marginTop: 8, fontSize: 13, color: '#92400E' }}>
-            Stripe is still verifying your account. Automatic payouts will be available once verification is complete.
-          </div>
-        )}
-      </div>
-      <button type="button" onClick={onRefresh} style={connectRefreshStyle}>
-        Refresh status
-      </button>
-    </div>
-  )
-}
-
-function ConnectStatusDot({ enabled, label }: { enabled: boolean; label: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-      <div
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: 999,
-          background: enabled ? '#16A34A' : '#D1D5DB',
-          flexShrink: 0,
-        }}
-      />
-      <span style={{ color: enabled ? '#166534' : '#64748B' }}>{label}</span>
-    </div>
-  )
-}
-
-const REVIEW_PREVIEW_LIMIT = 120
-
-function ReviewBlock({
-  label,
-  rating,
-  review,
-}: {
-  label: string
-  rating: number
-  review: string | null
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const isLong = review != null && review.length > REVIEW_PREVIEW_LIMIT
-
-  return (
-    <div style={reviewBlockStyle}>
-      <div style={reviewHeaderStyle}>
-        <span style={reviewLabelStyle}>{label}</span>
-        <span style={reviewStarsStyle}>
-          <span style={{ color: '#F59E0B' }}>{'★'.repeat(rating)}</span>
-          <span style={{ color: '#E2E8F0' }}>{'★'.repeat(5 - rating)}</span>
-        </span>
-      </div>
-      {review && (
-        <div style={reviewTextStyle}>
-          {isLong && !expanded ? review.slice(0, REVIEW_PREVIEW_LIMIT) + '...' : review}
-          {isLong && (
-            <button
-              type="button"
-              onClick={() => setExpanded(!expanded)}
-              style={expandButtonStyle}
-            >
-              {expanded ? 'Show less' : 'Read more'}
+    <div style={connectCardStyle}>
+      <div style={connectTitleStyle}>Payout setup</div>
+      {loading ? (
+        <div style={connectSubStyle}>Loading payout status...</div>
+      ) : error ? (
+        <div style={connectErrorStyle}>{error}</div>
+      ) : status?.connected && status.stripe_connect_onboarding_complete && status.payouts_enabled ? (
+        <div style={connectReadyStyle}>Ready to receive payouts</div>
+      ) : status?.connected ? (
+        <>
+          <div style={connectSubStyle}>Complete your Stripe onboarding to receive payouts.</div>
+          <div style={connectActionsStyle}>
+            <button type="button" onClick={() => void onContinue()} style={primaryMiniBtnStyle}>
+              Continue
             </button>
-          )}
-        </div>
+            <button type="button" onClick={() => void onRefresh()} style={secondaryMiniBtnStyle}>
+              Refresh
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={connectSubStyle}>Connect Stripe to receive your earnings.</div>
+          <div style={connectActionsStyle}>
+            <button type="button" onClick={() => void onConnect()} style={primaryMiniBtnStyle}>
+              Connect
+            </button>
+            <button type="button" onClick={() => void onRefresh()} style={secondaryMiniBtnStyle}>
+              Refresh
+            </button>
+          </div>
+        </>
       )}
     </div>
   )
 }
 
-function TransferStatusLabel({ payout }: { payout?: WalkerPayoutRow }) {
-  if (!payout) {
-    return <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>Net earnings</div>
-  }
-
-  const statusMap: Record<string, { color: string; text: string }> = {
-    pending: { color: '#92400E', text: 'Transfer pending' },
-    processing: { color: '#92400E', text: 'Processing payout' },
-    transferred: { color: '#1D4ED8', text: 'Transferred to Stripe' },
-    in_transit: { color: '#6D28D9', text: 'In transit to bank' },
-    paid_out: { color: '#15803D', text: 'Paid to bank' },
-    failed: { color: '#DC2626', text: 'Transfer failed' },
-    reversed: { color: '#DC2626', text: 'Transfer reversed' },
-    refunded: { color: '#991B1B', text: 'Payment refunded' },
-  }
-
-  const s = statusMap[payout.status] || statusMap.pending
-
-  return (
-    <div style={{ fontSize: 11, color: s.color, marginTop: 2, fontWeight: 600 }}>
-      {s.text}
-      {payout.failure_reason && (
-        <div style={{ fontWeight: 400, fontSize: 10, marginTop: 2 }}>
-          {payout.failure_reason}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function EstimatedEarnings({ job }: { job: WalkRequestRow }) {
-  const earnings = job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : null)
-
-  if (earnings == null) return null
-
-  return (
-    <div style={estimatedEarningsStyle}>
-      <span style={{ fontWeight: 800 }}>
-        You will earn: {earnings.toLocaleString('he-IL', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })} ILS
-      </span>
-      <span style={{ fontSize: 11, color: '#94A3B8', marginLeft: 8 }}>
-        After fees
-      </span>
-    </div>
-  )
-}
-
-function MessageBox({
-  text,
-  kind,
-}: {
-  text: string
-  kind: 'error' | 'success'
-}) {
-  const isError = kind === 'error'
-
-  return (
-    <div
-      style={{
-        marginTop: 16,
-        borderRadius: 14,
-        padding: '12px 16px',
-        fontSize: 14,
-        background: isError ? '#FEF2F2' : '#ECFDF3',
-        color: isError ? '#B91C1C' : '#166534',
-        border: `1px solid ${isError ? '#FECACA' : '#BBF7D0'}`,
-      }}
-    >
-      {text}
-    </div>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; color: string; text: string }> = {
-    open: { bg: '#EFF6FF', color: '#1D4ED8', text: 'Open' },
-    accepted: { bg: '#FFF7ED', color: '#C2410C', text: 'In Progress' },
-    completed: { bg: '#F0FDF4', color: '#15803D', text: 'Completed' },
-    cancelled: { bg: '#FEF2F2', color: '#B91C1C', text: 'Cancelled' },
-  }
-
-  const s = map[status] || map.open
-
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        borderRadius: 999,
-        padding: '3px 10px',
-        fontSize: 11,
-        fontWeight: 700,
-        background: s.bg,
-        color: s.color,
-        letterSpacing: 0.3,
-      }}
-    >
-      {s.text}
-    </span>
-  )
-}
-
-function PaymentBadge() {
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        borderRadius: 999,
-        padding: '3px 10px',
-        fontSize: 11,
-        fontWeight: 700,
-        background: '#F0FDF4',
-        color: '#15803D',
-        letterSpacing: 0.3,
-      }}
-    >
-      Paid
-    </span>
-  )
-}
-
-function PayoutStatusBadge({ status }: { status: 'pending' | 'approved' | 'paid' | 'rejected' }) {
-  const map: Record<string, { bg: string; color: string; text: string }> = {
-    pending: { bg: '#FEF3C7', color: '#92400E', text: 'Pending' },
-    approved: { bg: '#DBEAFE', color: '#1D4ED8', text: 'Approved' },
-    paid: { bg: '#F0FDF4', color: '#15803D', text: 'Paid' },
-    rejected: { bg: '#FEF2F2', color: '#B91C1C', text: 'Rejected' },
-  }
-
-  const s = map[status] || map.pending
-
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        borderRadius: 999,
-        padding: '3px 10px',
-        fontSize: 11,
-        fontWeight: 700,
-        background: s.bg,
-        color: s.color,
-        letterSpacing: 0.3,
-      }}
-    >
-      {s.text}
-    </span>
-  )
-}
-
-function formatDate(value: string | null) {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
-}
-
-function formatRelativeDate(value: string | null) {
-  if (!value) return ''
-  const now = Date.now()
-  const then = new Date(value).getTime()
-  const diffMs = now - then
-  const diffMin = Math.floor(diffMs / 60000)
-  const diffHrs = Math.floor(diffMin / 60)
-  const diffDays = Math.floor(diffHrs / 24)
-
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
-  if (diffHrs < 24) return `${diffHrs}h ago`
-  if (diffDays < 7) return `${diffDays}d ago`
-  return new Date(value).toLocaleDateString()
-}
-
-/* ─── Styles ──────────────────────────────────────────────── */
-
-const pageStyle: React.CSSProperties = {
-  minHeight: '100svh',
+const screenStyle: React.CSSProperties = {
+  minHeight: '100dvh',
   background: '#F8FAFC',
-  padding: '28px 20px',
-  paddingTop: 'calc(28px + env(safe-area-inset-top))',
-  paddingBottom: 'calc(28px + env(safe-area-inset-bottom))',
-  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
   color: '#0F172A',
+  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
 }
 
 const headerStyle: React.CSSProperties = {
-  background: '#0F172A',
-  color: '#FFFFFF',
-  borderRadius: 20,
-  padding: '22px 28px',
   display: 'flex',
-  justifyContent: 'space-between',
   alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: 16,
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: 'calc(18px + env(safe-area-inset-top)) 18px 12px',
+  position: 'sticky',
+  top: 0,
+  zIndex: 20,
+  background: 'rgba(248, 250, 252, 0.92)',
+  backdropFilter: 'blur(10px)',
 }
 
-const logoutButtonStyle: React.CSSProperties = {
-  border: '1px solid rgba(255,255,255,0.15)',
-  borderRadius: 12,
-  padding: '8px 16px',
-  background: 'transparent',
-  color: '#FFFFFF',
-  fontWeight: 600,
-  fontSize: 13,
+const headerMenuBtnStyle: React.CSSProperties = {
+  width: 46,
+  height: 46,
+  borderRadius: 16,
+  border: 'none',
+  background: '#FFFFFF',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
+  display: 'grid',
+  placeItems: 'center',
   cursor: 'pointer',
 }
 
-const walletGridStyle: React.CSSProperties = {
-  marginTop: 20,
+const greetingStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 24,
+  fontWeight: 800,
+  lineHeight: 1.1,
+}
+
+const ratingRowStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const toggleGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+}
+
+const statusLabelWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const statusDotStyle: React.CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: 999,
+}
+
+const statusLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+}
+
+const toggleBtnStyle: React.CSSProperties = {
+  width: 50,
+  height: 32,
+  borderRadius: 999,
+  border: 'none',
+  padding: 3,
+  position: 'relative',
+  cursor: 'pointer',
+  transition: 'background 0.2s ease',
+}
+
+const toggleKnobStyle: React.CSSProperties = {
+  width: 26,
+  height: 26,
+  borderRadius: 999,
+  background: '#FFFFFF',
+  transition: 'transform 0.2s ease',
+}
+
+const avatarRatingBadgeStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: -4,
+  bottom: -4,
+  padding: '2px 7px',
+  borderRadius: 999,
+  background: '#FFFFFF',
+  boxShadow: '0 6px 16px rgba(15,23,42,0.14)',
+  fontSize: 12,
+  fontWeight: 800,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 3,
+}
+
+const menuOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+  zIndex: 30,
+}
+
+const menuPanelStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'calc(90px + env(safe-area-inset-top))',
+  left: 18,
+  width: 'min(560px, calc(100vw - 36px))',
+  maxHeight: 'calc(100dvh - 130px)',
+  overflow: 'hidden',
+  background: '#FFFFFF',
+  borderRadius: 34,
+  boxShadow: '0 30px 80px rgba(15, 23, 42, 0.18)',
+  zIndex: 31,
+  display: 'flex',
+  flexDirection: 'column',
+}
+
+const menuHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '26px 26px 18px',
+  fontSize: 18,
+  fontWeight: 800,
+}
+
+const menuHeaderTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+}
+
+const menuDividerStyle: React.CSSProperties = {
+  height: 1,
+  background: '#E5E7EB',
+  margin: '0 24px',
+}
+
+const menuItemActionStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  width: '100%',
+  padding: '22px 24px',
+  border: 'none',
+  background: 'transparent',
+  fontSize: 17,
+  fontWeight: 800,
+  color: '#475569',
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const historyContainerStyle: React.CSSProperties = {
+  padding: '0 24px 18px',
+  overflowY: 'auto',
+}
+
+const menuSignOutBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  width: '100%',
+  padding: '26px 24px',
+  border: 'none',
+  background: 'transparent',
+  color: '#EF4444',
+  fontSize: 17,
+  fontWeight: 800,
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const profilePanelStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'calc(90px + env(safe-area-inset-top))',
+  right: 18,
+  width: 'min(320px, calc(100vw - 36px))',
+  background: '#FFFFFF',
+  borderRadius: 28,
+  boxShadow: '0 24px 70px rgba(15, 23, 42, 0.18)',
+  zIndex: 31,
+  overflow: 'hidden',
+}
+
+const profileSectionStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 14,
+  alignItems: 'center',
+  padding: '22px 20px 18px',
+}
+
+const profileNameStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const profileEmailStyle: React.CSSProperties = {
+  marginTop: 3,
+  fontSize: 12,
+  color: '#94A3B8',
+}
+
+const profileRatingStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const cameraIconStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: -2,
+  bottom: -2,
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  background: '#2563EB',
   display: 'grid',
-  gridTemplateColumns: '1.2fr 1fr 0.8fr',
+  placeItems: 'center',
+  border: '2px solid #FFFFFF',
+}
+
+const uploadStatusStyle: React.CSSProperties = {
+  padding: '0 20px 12px',
+  fontSize: 12,
+  color: '#64748B',
+}
+
+const uploadErrorStyle: React.CSSProperties = {
+  padding: '0 20px 12px',
+  fontSize: 12,
+  color: '#DC2626',
+}
+
+const profileActionBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  padding: '16px 20px',
+  border: 'none',
+  background: 'transparent',
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#475569',
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const contentStyle: React.CSSProperties = {
+  padding: '10px 18px calc(24px + env(safe-area-inset-bottom))',
+  display: 'grid',
   gap: 14,
 }
 
-const walletCardPrimaryStyle: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)',
-  color: '#FFFFFF',
-  borderRadius: 20,
-  padding: '24px 28px',
+const toastErrorStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 10,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#FEF2F2',
+  color: '#B91C1C',
+  fontSize: 14,
+  fontWeight: 700,
+}
+
+const toastSuccessStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 10,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#ECFDF5',
+  color: '#166534',
+  fontSize: 14,
+  fontWeight: 700,
+}
+
+const toastDismissStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 20,
+  cursor: 'pointer',
+}
+
+const statusHintStyle: React.CSSProperties = {
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const statusHintOnlineStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#ECFDF5',
+  color: '#166534',
+  fontWeight: 800,
+}
+
+const waitingDotStyle: React.CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: 999,
+  background: '#16A34A',
 }
 
 const walletCardStyle: React.CSSProperties = {
+  padding: '18px 18px',
+  borderRadius: 24,
   background: '#FFFFFF',
-  borderRadius: 20,
-  padding: '24px 28px',
   border: '1px solid #E2E8F0',
+}
+
+const walletHeaderStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const walletRowStyle: React.CSSProperties = {
+  marginTop: 14,
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 14,
 }
 
 const walletLabelStyle: React.CSSProperties = {
   fontSize: 12,
-  fontWeight: 600,
-  textTransform: 'uppercase' as const,
-  letterSpacing: 0.8,
-  opacity: 0.6,
-  marginBottom: 8,
-}
-
-const walletValuePrimaryStyle: React.CSSProperties = {
-  fontSize: 36,
-  fontWeight: 800,
-  lineHeight: 1.1,
+  color: '#64748B',
+  fontWeight: 700,
 }
 
 const walletValueStyle: React.CSSProperties = {
-  fontSize: 28,
+  marginTop: 4,
+  fontSize: 24,
   fontWeight: 800,
   color: '#0F172A',
-  lineHeight: 1.1,
 }
 
-const sectionTitleStyle: React.CSSProperties = {
-  margin: '0 0 16px',
-  fontSize: 18,
-  fontWeight: 700,
+const connectCardStyle: React.CSSProperties = {
+  padding: '18px',
+  borderRadius: 24,
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+}
+
+const connectTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+}
+
+const connectSubStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: '#64748B',
+  lineHeight: 1.45,
+}
+
+const connectErrorStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: '#DC2626',
+}
+
+const connectReadyStyle: React.CSSProperties = {
+  marginTop: 8,
+  fontSize: 13,
+  color: '#166534',
+  fontWeight: 800,
+}
+
+const connectActionsStyle: React.CSSProperties = {
+  marginTop: 12,
   display: 'flex',
-  alignItems: 'center',
   gap: 10,
 }
 
-const countBadgeStyle: React.CSSProperties = {
-  background: '#EFF6FF',
-  color: '#1D4ED8',
-  borderRadius: 999,
-  padding: '2px 10px',
+const primaryMiniBtnStyle: React.CSSProperties = {
+  minHeight: 40,
+  padding: '0 16px',
+  border: 'none',
+  borderRadius: 14,
+  background: '#08153B',
+  color: '#FFFFFF',
   fontSize: 13,
-  fontWeight: 700,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
-const twoColumnStyle: React.CSSProperties = {
-  marginTop: 24,
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 24,
-  alignItems: 'start',
-}
-
-const jobCardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 16,
-  padding: 20,
+const secondaryMiniBtnStyle: React.CSSProperties = {
+  minHeight: 40,
+  padding: '0 16px',
   border: '1px solid #E2E8F0',
-  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+  borderRadius: 14,
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
-const jobCardHeaderStyle: React.CSSProperties = {
+const activeCardStyle: React.CSSProperties = {
+  padding: '20px',
+  borderRadius: 28,
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
+}
+
+const activeHeaderRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  gap: 12,
 }
 
-const jobTitleStyle: React.CSSProperties = {
-  fontSize: 16,
+const activeBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 12px',
+  borderRadius: 999,
+  background: '#ECFDF5',
+  color: '#166534',
+  fontSize: 12,
+  fontWeight: 800,
+}
+
+const activeBadgeDotStyle: React.CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: '#16A34A',
+}
+
+const activeDogNameStyle: React.CSSProperties = {
+  margin: '14px 0 4px',
+  fontSize: 24,
+  fontWeight: 800,
+}
+
+const activeClientStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 15,
+  color: '#64748B',
   fontWeight: 700,
-  color: '#0F172A',
 }
 
-const jobMetaStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: '#64748B',
-  marginTop: 3,
-}
-
-const jobDetailsStyle: React.CSSProperties = {
+const activeLocationStyle: React.CSSProperties = {
   marginTop: 12,
-  fontSize: 13,
-  color: '#64748B',
-  display: 'grid',
-  gap: 3,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
 }
 
-const jobActionsStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 10,
+const ellipsisStyle: React.CSSProperties = {
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const completeBtnStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 52,
+  borderRadius: 18,
+  border: 'none',
+  background: '#08153B',
+  color: '#FFFFFF',
+  fontSize: 16,
+  fontWeight: 800,
+  cursor: 'pointer',
   marginTop: 16,
 }
 
-const openJobCardStyle: React.CSSProperties = {
+const completionCardStyle: React.CSSProperties = {
+  padding: '20px',
+  borderRadius: 28,
   background: '#FFFFFF',
-  borderRadius: 16,
-  padding: 18,
   border: '1px solid #E2E8F0',
+  boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
 }
 
-const historyCardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 14,
-  padding: '16px 20px',
-  border: '1px solid #E2E8F0',
+const checkStyle: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  borderRadius: 999,
+  display: 'grid',
+  placeItems: 'center',
+  background: '#ECFDF5',
+  color: '#15803D',
+  fontSize: 28,
+  fontWeight: 900,
+  margin: '0 auto',
 }
 
-const earningsAmountStyle: React.CSSProperties = {
-  fontSize: 16,
+const completionTitleStyle: React.CSSProperties = {
+  margin: '14px 0 4px',
+  textAlign: 'center',
+  fontSize: 22,
   fontWeight: 800,
-  color: '#15803D',
 }
 
-const estimatedEarningsStyle: React.CSSProperties = {
-  marginTop: 12,
-  padding: '10px 14px',
-  borderRadius: 10,
-  background: '#F0FDF4',
-  color: '#15803D',
-  fontSize: 14,
-  display: 'flex',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-}
-
-const acceptButtonStyle: React.CSSProperties = {
-  marginTop: 14,
-  width: '100%',
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 16px',
-  background: '#0F172A',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  cursor: 'pointer',
-}
-
-const completeButtonStyle: React.CSSProperties = {
-  flex: 1,
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 16px',
-  background: '#15803D',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  cursor: 'pointer',
-}
-
-const releaseButtonStyle: React.CSSProperties = {
-  flex: 1,
-  border: '1px solid #E2E8F0',
-  borderRadius: 12,
-  padding: '10px 16px',
-  background: '#FFFFFF',
+const completionSubStyle: React.CSSProperties = {
+  margin: 0,
+  textAlign: 'center',
   color: '#64748B',
-  fontWeight: 600,
-  fontSize: 14,
-  cursor: 'pointer',
-}
-
-const rateClientButtonStyle: React.CSSProperties = {
-  marginTop: 8,
-  border: 'none',
-  borderRadius: 10,
-  padding: '6px 14px',
-  background: '#F59E0B',
-  color: '#FFFFFF',
   fontWeight: 700,
-  fontSize: 13,
-  cursor: 'pointer',
 }
 
-const emptyStateStyle: React.CSSProperties = {
-  background: '#FFFFFF',
+const earningsRowStyle: React.CSSProperties = {
+  marginTop: 16,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#F8FAFC',
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+}
+
+const earningsLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const earningsValueStyle: React.CSSProperties = {
+  fontSize: 20,
+  color: '#0F172A',
+  fontWeight: 900,
+}
+
+const inlineRatingContainerStyle: React.CSSProperties = {
+  marginTop: 18,
+}
+
+const ratingPromptStyle: React.CSSProperties = {
+  margin: 0,
+  textAlign: 'center',
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#475569',
+}
+
+const starsRowStyle: React.CSSProperties = {
+  marginTop: 10,
+  display: 'flex',
+  justifyContent: 'center',
+  gap: 2,
+}
+
+const compTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  marginTop: 10,
   borderRadius: 16,
-  padding: 28,
-  textAlign: 'center' as const,
-  color: '#94A3B8',
-  border: '1px dashed #E2E8F0',
+  border: '1px solid #E2E8F0',
+  padding: '12px 14px',
+  fontSize: 14,
+  outline: 'none',
+  resize: 'none',
+  boxSizing: 'border-box',
+}
+
+const submitRatingBtnStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 46,
+  borderRadius: 16,
+  border: 'none',
+  background: '#08153B',
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+  marginTop: 10,
+}
+
+const thanksBannerStyle: React.CSSProperties = {
+  marginTop: 16,
+  padding: '12px 14px',
+  borderRadius: 16,
+  background: '#ECFDF5',
+  textAlign: 'center',
+}
+
+const thanksTextStyle: React.CSSProperties = {
+  color: '#166534',
+  fontWeight: 800,
+  fontSize: 14,
+}
+
+const recentRatingsSectionStyle: React.CSSProperties = {
+  marginTop: 18,
+}
+
+const recentRatingsHeadingStyle: React.CSSProperties = {
+  margin: '0 0 10px',
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const dismissBtnStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 46,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+  marginTop: 16,
 }
 
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.5)',
-  display: 'grid',
-  placeItems: 'center',
-  zIndex: 1000,
+  zIndex: 40,
 }
 
-const modalStyle: React.CSSProperties = {
+const overlayBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background: 'rgba(15,23,42,0.28)',
+}
+
+const bottomSheetStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: 0,
   background: '#FFFFFF',
-  borderRadius: 20,
-  padding: 28,
-  width: '100%',
-  maxWidth: 480,
-  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.2)',
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  padding: '18px 18px calc(18px + env(safe-area-inset-bottom))',
+  boxShadow: '0 -18px 60px rgba(15,23,42,0.16)',
 }
 
-const reviewsSectionStyle: React.CSSProperties = {
-  marginTop: 12,
-  display: 'grid',
-  gap: 8,
-}
-
-const reviewBlockStyle: React.CSSProperties = {
-  background: '#F8FAFC',
-  borderRadius: 10,
-  padding: '10px 14px',
-  border: '1px solid #E2E8F0',
-}
-
-const reviewHeaderStyle: React.CSSProperties = {
+const sheetHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 8,
 }
 
-const reviewLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#64748B',
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-}
-
-const reviewStarsStyle: React.CSSProperties = {
+const newRequestLabelStyle: React.CSSProperties = {
   fontSize: 14,
-  letterSpacing: 1,
+  fontWeight: 800,
+  color: '#0F172A',
 }
 
-const reviewTextStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 13,
-  lineHeight: 1.5,
-  color: '#334155',
+const countdownLabelStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
 }
 
-const expandButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#3B82F6',
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-  padding: 0,
-  marginLeft: 4,
+const progressTrackStyle: React.CSSProperties = {
+  marginTop: 12,
+  height: 6,
+  borderRadius: 999,
+  background: '#E2E8F0',
+  overflow: 'hidden',
 }
 
-const payoutFormCardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 16,
-  padding: 20,
-  border: '1px solid #E2E8F0',
+const progressFillStyle: React.CSSProperties = {
+  height: '100%',
+  borderRadius: 999,
+  background: '#F59E0B',
+  transition: 'width 1s linear',
 }
 
-const payoutEmptyStyle: React.CSSProperties = {
+const dogNameStyle: React.CSSProperties = {
+  marginTop: 16,
+  fontSize: 28,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const reqLocationStyle: React.CSSProperties = {
+  marginTop: 10,
+  padding: '14px 16px',
+  borderRadius: 18,
   background: '#F8FAFC',
-  borderRadius: 12,
-  padding: '24px 20px',
-  textAlign: 'center' as const,
-}
-
-const payoutLabelStyle: React.CSSProperties = {
-  display: 'block',
-  marginBottom: 6,
-  fontSize: 13,
-  fontWeight: 600,
-  color: '#475569',
-}
-
-const payoutInputStyle: React.CSSProperties = {
-  width: '100%',
   border: '1px solid #E2E8F0',
-  borderRadius: 10,
-  padding: '10px 12px',
-  fontSize: 14,
-  outline: 'none',
-  boxSizing: 'border-box' as const,
 }
 
-const payoutButtonStyle: React.CSSProperties = {
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 20px',
-  background: '#0F172A',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  whiteSpace: 'nowrap' as const,
-  height: 42,
-}
-
-const payoutRowStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 12,
-  padding: '14px 18px',
-  border: '1px solid #E2E8F0',
+const infoPillsRowStyle: React.CSSProperties = {
+  marginTop: 14,
   display: 'flex',
   alignItems: 'center',
+  gap: 10,
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#F8FAFC',
+}
+
+const infoPillStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 14,
+  color: '#475569',
+  fontWeight: 700,
+}
+
+const infoPillDividerStyle: React.CSSProperties = {
+  width: 1,
+  alignSelf: 'stretch',
+  background: '#E2E8F0',
+}
+
+const queueHintStyle: React.CSSProperties = {
+  marginTop: 12,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const ctaContainerStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+  marginTop: 18,
+}
+
+const acceptBtnStyle: React.CSSProperties = {
+  minHeight: 52,
+  borderRadius: 18,
+  border: 'none',
+  background: '#08153B',
+  color: '#FFFFFF',
+  fontSize: 16,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const declineBtnStyle: React.CSSProperties = {
+  minHeight: 52,
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 16,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const takenToastWrapStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 18,
+  right: 18,
+  bottom: 'calc(18px + env(safe-area-inset-bottom))',
+  zIndex: 45,
+}
+
+const takenToastStyle: React.CSSProperties = {
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#FFFFFF',
+  boxShadow: '0 14px 40px rgba(15,23,42,0.14)',
+}
+
+const historyListStyle: React.CSSProperties = {
+  display: 'grid',
   gap: 16,
 }
 
-const payoutNoticeStyle: React.CSSProperties = {
-  marginBottom: 14,
-  padding: '10px 14px',
-  borderRadius: 10,
-  background: '#FEF3C7',
-  color: '#92400E',
-  fontSize: 13,
-  lineHeight: 1.5,
+const swipeHintStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 36,
+  border: '1px dashed rgba(148, 163, 184, 0.45)',
+  borderRadius: 14,
+  background: 'rgba(241, 245, 249, 0.75)',
+  color: '#2563EB',
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: 'pointer',
 }
 
-const connectCardStyle: React.CSSProperties = {
-  marginTop: 20,
+const historySwipeWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  borderRadius: 28,
+  overflow: 'hidden',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const historySwipeActionsStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  justifyContent: 'flex-end',
+  padding: 14,
+  background: 'linear-gradient(135deg, rgba(8,21,59,0.14) 0%, rgba(8,21,59,0.04) 100%)',
+}
+
+const historyCloseActionStyle: React.CSSProperties = {
+  minWidth: 86,
+  borderRadius: 20,
+  border: '1px solid rgba(15, 23, 42, 0.10)',
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const historyCardShellStyle: React.CSSProperties = {
+  position: 'relative',
+  borderRadius: 28,
+  padding: '18px 18px 20px',
+  background:
+    'radial-gradient(circle at top right, rgba(29, 78, 216, 0.20) 0%, rgba(29, 78, 216, 0) 28%), linear-gradient(135deg, #06112E 0%, #08153B 55%, #030816 100%)',
+  boxShadow: '0 10px 24px rgba(2, 6, 23, 0.18)',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
+  touchAction: 'pan-y',
+  WebkitUserSelect: 'none',
+  userSelect: 'none',
+  willChange: 'transform',
+}
+
+const historyCardTopRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const historyCardTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#FFFFFF',
+  letterSpacing: -0.2,
+}
+
+const historyCardMetaStyle: React.CSSProperties = {
+  marginTop: 8,
+  fontSize: 12,
+  fontWeight: 700,
+  color: 'rgba(226, 232, 240, 0.82)',
+}
+
+const historyStatusBadgeStyle: React.CSSProperties = {
+  padding: '8px 14px',
+  borderRadius: 999,
+  background: 'rgba(34, 197, 94, 0.16)',
+  color: '#BBF7D0',
+  border: '1px solid rgba(34, 197, 94, 0.28)',
+  fontSize: 12,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+}
+
+const historyRatingPillStyle: React.CSSProperties = {
+  padding: '8px 14px',
+  borderRadius: 999,
+  background: 'rgba(234, 179, 8, 0.12)',
+  color: '#FEF3C7',
+  border: '1px solid rgba(234, 179, 8, 0.24)',
+  fontSize: 12,
+  fontWeight: 800,
   display: 'flex',
   alignItems: 'center',
-  gap: 18,
-  background: '#FFFFFF',
-  borderRadius: 20,
-  padding: '22px 28px',
-  border: '1px solid #E2E8F0',
-  flexWrap: 'wrap',
+  gap: 6,
 }
 
-const connectIconStyle: React.CSSProperties = {
-  width: 48,
-  height: 48,
-  borderRadius: 14,
-  background: '#EEF2FF',
-  display: 'grid',
-  placeItems: 'center',
-  flexShrink: 0,
-}
-
-const connectTitleStyle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 700,
-  color: '#0F172A',
-  marginBottom: 4,
-}
-
-const connectDescStyle: React.CSSProperties = {
-  fontSize: 14,
-  color: '#64748B',
-  lineHeight: 1.5,
-}
-
-const connectStatusRowStyle: React.CSSProperties = {
-  marginTop: 8,
+const historyWalkerRowStyle: React.CSSProperties = {
   display: 'flex',
-  flexWrap: 'wrap' as const,
-  gap: 14,
+  alignItems: 'baseline',
+  gap: 10,
+  marginTop: 18,
 }
 
-const connectButtonStyle: React.CSSProperties = {
-  border: 'none',
-  borderRadius: 12,
-  padding: '12px 22px',
-  background: '#6366F1',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  whiteSpace: 'nowrap' as const,
-}
-
-const connectRefreshStyle: React.CSSProperties = {
-  border: '1px solid #E2E8F0',
-  borderRadius: 10,
-  padding: '8px 14px',
-  background: '#FFFFFF',
-  color: '#64748B',
-  fontWeight: 600,
-  fontSize: 13,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap' as const,
-}
-
-const fixedBottomCtaContainerStyle: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 0,
-  left: 0,
-  right: 0,
-  zIndex: 900,
-  background: 'linear-gradient(transparent, rgba(248,250,252,0.95) 20%)',
-  padding: '24px 20px calc(20px + env(safe-area-inset-bottom))',
-  pointerEvents: 'none',
-}
-
-const fixedBottomCtaInnerStyle: React.CSSProperties = {
-  maxWidth: 1100,
-  margin: '0 auto',
-  pointerEvents: 'auto',
-  textAlign: 'center' as const,
-}
-
-const fixedCompleteButtonStyle: React.CSSProperties = {
-  width: '100%',
-  border: 'none',
-  borderRadius: 16,
-  padding: '16px 24px',
-  background: '#15803D',
-  color: '#FFFFFF',
+const historyCardLabelStyle: React.CSSProperties = {
+  fontSize: 11,
   fontWeight: 800,
-  fontSize: 16,
-  cursor: 'pointer',
-  boxShadow: '0 4px 20px rgba(21, 128, 61, 0.3)',
-  transition: 'opacity 0.15s, transform 0.15s',
+  color: 'rgba(148, 163, 184, 0.95)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.22,
 }
 
-const spinnerStyle: React.CSSProperties = {
-  display: 'inline-block',
-  width: 16,
-  height: 16,
-  border: '2px solid rgba(255,255,255,0.3)',
-  borderTopColor: '#FFFFFF',
-  borderRadius: 999,
-  animation: 'completionSpin 0.6s linear infinite',
+const historyCardWalkerNameStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#FFFFFF',
+}
+
+const historyLocationCardStyle: React.CSSProperties = {
+  marginTop: 16,
+  borderRadius: 20,
+  border: '1px solid rgba(148, 163, 184, 0.14)',
+  background: 'rgba(15, 23, 42, 0.42)',
+  padding: '14px 14px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+}
+
+const historyLocationPinStyle: React.CSSProperties = {
+  fontSize: 18,
+  lineHeight: 1,
+  color: '#FDE68A',
+}
+
+const historyLocationLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: 'rgba(148, 163, 184, 0.95)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.22,
+}
+
+const historyLocationValueStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#FFFFFF',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const futureEmptyStyle: React.CSSProperties = {
+  padding: '18px 4px 6px',
+  fontSize: 14,
+  color: '#64748B',
 }
