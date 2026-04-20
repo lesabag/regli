@@ -83,6 +83,10 @@ serve(async (req: Request) => {
         await handlePaymentIntentSucceeded(supabaseAdmin, event, logCtx)
         break
 
+      case 'payment_intent.amount_capturable_updated':
+        await handlePaymentIntentAmountCapturableUpdated(supabaseAdmin, event, logCtx)
+        break
+
       case 'payment_intent.payment_failed':
         await handlePaymentIntentFailed(supabaseAdmin, event, logCtx)
         break
@@ -137,6 +141,52 @@ serve(async (req: Request) => {
 
 type SupabaseAdmin = ReturnType<typeof createClient>
 type LogCtx = { event_id: string; event_type: string }
+
+async function handlePaymentIntentAmountCapturableUpdated(supabaseAdmin: SupabaseAdmin, event: Stripe.Event, logCtx: LogCtx) {
+  const pi = event.data.object as Stripe.PaymentIntent
+
+  const { data: job, error: findErr } = await supabaseAdmin
+    .from('walk_requests')
+    .select('id, payment_status')
+    .eq('stripe_payment_intent_id', pi.id)
+    .single()
+
+  if (findErr || !job) {
+    console.warn('[webhook] payment_intent.amount_capturable_updated: no job found', { ...logCtx, pi_id: pi.id })
+    return
+  }
+
+  const ctx = { ...logCtx, job_id: job.id, pi_id: pi.id }
+
+  if (job.payment_status === 'paid' || job.payment_status === 'refunded') {
+    console.log('[webhook] Job terminal, skipping authorization update', { ...ctx, current_status: job.payment_status })
+    return
+  }
+
+  if (pi.status !== 'requires_capture' || pi.amount_capturable <= 0) {
+    console.log('[webhook] PaymentIntent is not capturable, skipping authorization update', {
+      ...ctx,
+      pi_status: pi.status,
+      amount_capturable: pi.amount_capturable,
+    })
+    return
+  }
+
+  const { error: updateErr } = await supabaseAdmin
+    .from('walk_requests')
+    .update({
+      payment_status: 'authorized',
+      payment_authorized_at: new Date().toISOString(),
+    })
+    .eq('id', job.id)
+
+  if (updateErr) {
+    console.error('[webhook] Failed to mark job authorized:', ctx, updateErr)
+    return
+  }
+
+  console.log('[webhook] payment_intent.amount_capturable_updated: job marked authorized', ctx)
+}
 
 async function handlePaymentIntentSucceeded(supabaseAdmin: SupabaseAdmin, event: Stripe.Event, logCtx: LogCtx) {
   const pi = event.data.object as Stripe.PaymentIntent
@@ -232,7 +282,7 @@ async function handlePaymentIntentCanceled(supabaseAdmin: SupabaseAdmin, event: 
 
   const { data: job, error: findErr } = await supabaseAdmin
     .from('walk_requests')
-    .select('id, payment_status, status')
+    .select('id, payment_status, status, booking_timing, dispatch_state')
     .eq('stripe_payment_intent_id', pi.id)
     .single()
 
@@ -250,6 +300,23 @@ async function handlePaymentIntentCanceled(supabaseAdmin: SupabaseAdmin, event: 
 
   if (job.status === 'completed') {
     console.log('[webhook] Job completed, skipping cancel update', ctx)
+    return
+  }
+
+  if (job.booking_timing === 'scheduled' && job.dispatch_state !== 'dispatched') {
+    const { error: updateErr } = await supabaseAdmin
+      .from('walk_requests')
+      .update({
+        payment_status: 'failed',
+      })
+      .eq('id', job.id)
+
+    if (updateErr) {
+      console.error('[webhook] Failed to mark scheduled job payment failed:', ctx, updateErr)
+      return
+    }
+
+    console.log('[webhook] payment_intent.canceled: scheduled job kept open before dispatch', ctx)
     return
   }
 

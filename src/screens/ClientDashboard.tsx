@@ -1,18 +1,67 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { loadStripe } from '@stripe/stripe-js'
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
-import { supabase } from '../services/supabaseClient'
-import NotificationsBell, { createNotification } from '../components/NotificationsBell'
+import NotificationsBell from '../components/NotificationsBell'
 import MapView from '../components/MapView'
-import { useJobTracking } from '../hooks/useJobTracking'
-import {
-  createPaymentIntent,
-  SERVICE_LABELS,
-  SERVICE_PRICES_ILS,
-  type ServiceType,
-} from '../lib/payments'
+import DurationPicker from '../components/DurationPicker'
+import ActionButton from '../components/ActionButton'
+import SearchingSheet from '../components/SearchingSheet'
+import CompletionCard from '../components/CompletionCard'
+import CardSetupForm from '../components/CardSetupForm'
+import MessageBanner from '../components/MessageBanner'
+import IOSDateTimeSheet from '../components/IOSDateTimeSheet'
+import ProfileAvatar from '../components/ProfileAvatar'
+import GroupedHistory from '../components/GroupedHistory'
+import type { HistoryItem } from '../components/GroupedHistory'
+import type { GpsQuality } from '../hooks/useJobTracking'
+import { useClientFlow } from '../hooks/useClientFlow'
+import { useProfilePhoto } from '../hooks/useProfilePhoto'
+import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
+import { usePushNotifications } from '../hooks/usePushNotifications'
+import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY)
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function toLocalDatetimeInputValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`
+}
+
+function parseLocalDateTime(value: string | null | undefined): Date | null {
+  if (!value || typeof value !== 'string') return null
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!match) return null
+  const [, year, month, day, hour, minute, second] = match
+  const dt = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second || '0'),
+    0,
+  )
+  return Number.isNaN(dt.getTime()) ? null : dt
+}
+
+function getNowPlus15LocalInput(): string {
+  return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
+}
+
+function shouldResetScheduledValue(value: string | null | undefined): boolean {
+  const dt = parseLocalDateTime(value)
+  if (!dt) return true
+  return dt.getTime() < Date.now() + 15 * 60 * 1000
+}
+
+function dogNamesStorageKey(profileId: string): string {
+  return `regli_client_recent_dog_names_${profileId}`
+}
+
+function normalizeDogName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ')
+}
 
 type AppRole = 'client' | 'walker' | 'admin'
 
@@ -26,1698 +75,1939 @@ interface ClientDashboardProps {
   onSignOut: () => Promise<void>
 }
 
-interface WalkRequestRow {
+interface UpcomingBookingItem {
   id: string
-  client_id: string
-  walker_id: string | null
-  selected_walker_id: string | null
-  status: 'awaiting_payment' | 'open' | 'accepted' | 'completed' | 'cancelled'
-  dog_name: string | null
-  location: string | null
-  notes: string | null
-  created_at: string | null
+  dogName: string
+  location: string
+  scheduledFor: string | null
+  startsInMin: number | null
   price: number | null
-  amount: number | null
-  currency: string | null
-  platform_fee: number | null
-  walker_amount: number | null
-  payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
-  paid_at: string | null
-  stripe_payment_intent_id: string | null
-  stripe_client_secret: string | null
 }
 
-interface WalkerProfileRow {
-  id: string
-  email: string | null
-  full_name: string | null
-  role: AppRole
-  stripe_connect_account_id: string | null
-  charges_enabled: boolean
-  payouts_enabled: boolean
-}
-
-interface RatingRow {
-  id: string
-  job_id: string
-  from_user_id: string
-  to_user_id: string
-  rating: number
-  review: string | null
-  created_at: string
-}
-
-export default function ClientDashboard({
-  profile,
-  onSignOut,
-}: ClientDashboardProps) {
-  // Form state
-  const [dogName, setDogName] = useState('')
-  const [location, setLocation] = useState('')
-  const [notes, setNotes] = useState('')
-  const [serviceType, setServiceType] = useState<ServiceType>('standard')
-  const [selectedWalkerId, setSelectedWalkerId] = useState<string>('')
-
-  // Loading/feedback
-  const [loading, setLoading] = useState(false)
-  const [jobsLoading, setJobsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
-
-  // Data
-  const [requests, setRequests] = useState<WalkRequestRow[]>([])
-  const [walkers, setWalkers] = useState<WalkerProfileRow[]>([])
-
-  // Payment modal
-  const [payingJobId, setPayingJobId] = useState<string | null>(null)
-  const [clientSecret, setClientSecret] = useState<string | null>(null)
-  const [paymentLoading] = useState(false)
-
-  // Ratings
-  const [myRatings, setMyRatings] = useState<RatingRow[]>([])
-  const [walkerRatingsOfMe, setWalkerRatingsOfMe] = useState<RatingRow[]>([])
-  const [ratingJobId, setRatingJobId] = useState<string | null>(null)
-  const [ratingValue, setRatingValue] = useState(0)
-  const [ratingHover, setRatingHover] = useState(0)
-  const [ratingReview, setRatingReview] = useState('')
-  const [ratingSubmitting, setRatingSubmitting] = useState(false)
-
+export default function ClientDashboard({ profile, onSignOut }: ClientDashboardProps) {
   const clientName = profile.full_name || profile.email || 'Client'
+  const flow = useClientFlow(profile.id, clientName)
+  const photo = useProfilePhoto(profile.id)
+  usePushNotifications(profile.id)
 
-  const walkerNameById = useMemo(() => {
-    const map = new Map<string, string>()
-    walkers.forEach((w) => {
-      map.set(w.id, w.full_name || w.email || 'Unknown walker')
-    })
-    return map
-  }, [walkers])
-
-  const availableWalkers = useMemo(
-    () =>
-      walkers.filter(
-        (w) =>
-          w.role === 'walker' &&
-          !!w.stripe_connect_account_id &&
-          w.charges_enabled &&
-          w.payouts_enabled
-      ),
-    [walkers]
-  )
-
-  const ratedJobIds = useMemo(() => {
-    const set = new Set<string>()
-    myRatings.forEach((r) => set.add(r.job_id))
-    return set
-  }, [myRatings])
-
-  const myRatingByJobId = useMemo(() => {
-    const map = new Map<string, RatingRow>()
-    myRatings.forEach((r) => map.set(r.job_id, r))
-    return map
-  }, [myRatings])
-
-  const walkerRatingByJobId = useMemo(() => {
-    const map = new Map<string, RatingRow>()
-    walkerRatingsOfMe.forEach((r) => map.set(r.job_id, r))
-    return map
-  }, [walkerRatingsOfMe])
-
-  // ─── Live tracking ────────────────────────────────────────
-
-  const trackedJob = useMemo(
-    () => requests.find((r) => r.status === 'accepted' && r.walker_id),
-    [requests]
-  )
-
-  const { walkerLocation, walkerBearing, userLocation, hasUserLocation, etaMinutes, isArrived, gpsQuality, proximityLevel, routePolyline } = useJobTracking(
-    trackedJob?.id ?? null
-  )
-
-  // ─── Completion success state ────────────────────────────────
-  // Detect when the tracked job transitions to completed and show a success card
-
-  const [completionSuccess, setCompletionSuccess] = useState<{
-    jobId: string
-    walkerId: string
-    dogName: string
-    walkerName: string
-  } | null>(null)
-
-  // Inline rating state for the completion card (separate from the modal)
-  const [completionRating, setCompletionRating] = useState(0)
-  const [completionRatingHover, setCompletionRatingHover] = useState(0)
-  const [completionReview, setCompletionReview] = useState('')
-  const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
-  const [completionRatingDone, setCompletionRatingDone] = useState(false)
-
-  const lastTrackedJobIdRef = useRef<string | null>(null)
+  const [burgerOpen, setBurgerOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [walkHistoryOpen, setWalkHistoryOpen] = useState(true)
+  const [historyView, setHistoryView] = useState<'menu' | 'all'>('menu')
+  const [showScheduleSheet, setShowScheduleSheet] = useState(false)
+  const [showDogNameSheet, setShowDogNameSheet] = useState(false)
+  const [recentDogNames, setRecentDogNames] = useState<string[]>([])
+  const [dogNameDraft, setDogNameDraft] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const defaultDurationAppliedRef = useRef(false)
 
   useEffect(() => {
-    const currentId = trackedJob?.id ?? null
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [flow.screenState, flow.bookingTiming])
 
-    // If we were tracking a job and it disappeared (completed/cancelled),
-    // check if it was just completed
-    if (lastTrackedJobIdRef.current && !currentId) {
-      const finishedJob = requests.find(
-        (r) => r.id === lastTrackedJobIdRef.current && r.status === 'completed'
-      )
-      if (finishedJob && finishedJob.walker_id) {
-        const wName = walkerNameById.get(finishedJob.walker_id) || 'Your walker'
-        // Only show rating prompt if not already rated
-        const alreadyRated = ratedJobIds.has(finishedJob.id)
-        setCompletionRating(0)
-        setCompletionRatingHover(0)
-        setCompletionReview('')
-        setCompletionRatingSubmitting(false)
-        setCompletionRatingDone(alreadyRated)
-        setCompletionSuccess({
-          jobId: finishedJob.id,
-          walkerId: finishedJob.walker_id,
-          dogName: finishedJob.dog_name || 'your dog',
-          walkerName: wName,
-        })
+
+  useEffect(() => {
+    if (flow.bookingTiming === 'asap') {
+      setShowScheduleSheet(false)
+    }
+  }, [flow.bookingTiming])
+
+  useEffect(() => {
+    if (!showScheduleSheet) return
+    if (flow.bookingTiming !== 'scheduled') return
+    if (shouldResetScheduledValue(flow.scheduledFor)) {
+      flow.setScheduledFor(getNowPlus15LocalInput())
+    }
+  }, [flow.bookingTiming, flow.scheduledFor, flow.setScheduledFor, showScheduleSheet])
+
+  useEffect(() => {
+    if (defaultDurationAppliedRef.current) return
+    defaultDurationAppliedRef.current = true
+    flow.setDuration(20 as unknown as DurationType)
+  }, [flow])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(dogNamesStorageKey(profile.id))
+      if (!raw) return
+      const parsed = JSON.parse(raw) as string[]
+      if (Array.isArray(parsed)) {
+        setRecentDogNames(
+          parsed
+            .map((name) => normalizeDogName(String(name ?? '')))
+            .filter(Boolean)
+            .slice(0, 8),
+        )
       }
-    }
-
-    lastTrackedJobIdRef.current = currentId
-  }, [trackedJob?.id, requests, walkerNameById, ratedJobIds])
-
-  // ─── "Walker arrived" notification (once per job per session) ─
-
-  const arrivedNotifiedJobRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!isArrived || !trackedJob?.id || !trackedJob.walker_id) return
-    if (arrivedNotifiedJobRef.current === trackedJob.id) return
-
-    arrivedNotifiedJobRef.current = trackedJob.id
-
-    const walkerLabel = walkerNameById.get(trackedJob.walker_id) || 'Your walker'
-
-    // Check DB to prevent duplicate across page refreshes
-    supabase
-      .from('notifications')
-      .select('id')
-      .eq('user_id', profile.id)
-      .eq('type', 'walker_arrived')
-      .eq('related_job_id', trackedJob.id)
-      .limit(1)
-      .then(({ data }) => {
-        if (data && data.length > 0) return // already notified in a prior session
-
-        createNotification({
-          userId: profile.id,
-          type: 'walker_arrived',
-          title: 'Walker Arrived',
-          message: `${walkerLabel} arrived at your location.`,
-          relatedJobId: trackedJob.id,
-        })
-      })
-  }, [isArrived, trackedJob?.id, trackedJob?.walker_id, profile.id, walkerNameById])
-
-  // ─── Data loading ──────────────────────────────────────────
-
-  const loadWalkers = async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, email, full_name, role, stripe_connect_account_id, charges_enabled, payouts_enabled')
-      .eq('role', 'walker')
-
-    if (error) {
-      console.error('Failed to load walkers', error.message)
-      return
-    }
-    setWalkers((data as WalkerProfileRow[]) || [])
-  }
-
-  const loadMyRequests = async () => {
-    setJobsLoading(true)
-
-    const { data, error } = await supabase
-      .from('walk_requests')
-      .select(
-        'id, client_id, walker_id, selected_walker_id, status, dog_name, location, notes, created_at, price, amount, currency, platform_fee, walker_amount, payment_status, paid_at, stripe_payment_intent_id, stripe_client_secret'
-      )
-      .eq('client_id', profile.id)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      setError(error.message)
-      setRequests([])
-      setJobsLoading(false)
-      return
-    }
-
-    setRequests((data as WalkRequestRow[]) || [])
-    setJobsLoading(false)
-  }
-
-  const loadRatings = useCallback(async () => {
-    const { data: given, error: givenErr } = await supabase
-      .from('ratings')
-      .select('*')
-      .eq('from_user_id', profile.id)
-
-    if (givenErr) {
-      console.error('Failed to load given ratings', givenErr.message)
-    } else {
-      setMyRatings((given as RatingRow[]) || [])
-    }
-
-    const { data: received, error: receivedErr } = await supabase
-      .from('ratings')
-      .select('*')
-      .eq('to_user_id', profile.id)
-
-    if (receivedErr) {
-      console.error('Failed to load received ratings', receivedErr.message)
-    } else {
-      setWalkerRatingsOfMe((received as RatingRow[]) || [])
+    } catch {
+      // noop
     }
   }, [profile.id])
 
   useEffect(() => {
-    loadWalkers()
-    loadMyRequests()
-    loadRatings()
+    if (!showDogNameSheet) return
+    setDogNameDraft(flow.dogName || '')
+  }, [flow.dogName, showDogNameSheet])
 
-    const requestsChannel = supabase
-      .channel(`client-walk-requests-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'walk_requests',
-          filter: `client_id=eq.${profile.id}`,
-        },
-        async () => {
-          await loadMyRequests()
-        }
-      )
-      .subscribe()
-
-    const profilesChannel = supabase
-      .channel(`client-profiles-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'profiles',
-        },
-        () => {
-          loadWalkers()
-        }
-      )
-      .subscribe()
-
-    const ratingsChannel = supabase
-      .channel(`client-ratings-${profile.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'ratings',
-        },
-        () => {
-          loadRatings()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(requestsChannel)
-      supabase.removeChannel(profilesChannel)
-      supabase.removeChannel(ratingsChannel)
+  const handleSignOut = useCallback(async () => {
+    try {
+      await onSignOut()
+    } catch {
+      window.location.reload()
     }
-  }, [profile.id, loadRatings])
+  }, [onSignOut])
 
-  // ─── Actions ───────────────────────────────────────────────
+  const handleFindWalker = useCallback(() => {
+    if (!flow.dogName.trim() || !flow.location.trim() || !flow.savedCard) return
+    flow.requestWalk()
+  }, [flow.dogName, flow.location, flow.savedCard, flow.requestWalk])
 
-  const handleBookAndPay = async () => {
-    setError(null)
-    setSuccessMessage(null)
 
-    if (!dogName.trim()) {
-      setError('Please enter a dog name.')
-      return
-    }
-    if (!location.trim()) {
-      setError('Please enter a location.')
-      return
-    }
-    if (!selectedWalkerId) {
-      setError('Please select a walker.')
-      return
-    }
-
-    setLoading(true)
-
-    const { data, error: payErr } = await createPaymentIntent({
-      dogName: dogName.trim(),
-      location: location.trim(),
-      notes: notes.trim() || undefined,
-      serviceType,
-      walkerId: selectedWalkerId,
-    })
-
-    if (payErr) {
-      setError(payErr)
-      setLoading(false)
-      return
-    }
-
-    if (!data) {
-      setError('Empty response from server')
-      setLoading(false)
-      return
-    }
-
-    // Open payment modal with the client secret
-    setPayingJobId(data.jobId)
-    setClientSecret(data.clientSecret)
-    setLoading(false)
-
-    // Reset form
-    setDogName('')
-    setLocation('')
-    setNotes('')
-
-    await loadMyRequests()
-  }
-
-  const handlePayClick = async (jobId: string) => {
-    // For existing awaiting_payment jobs that already have a client secret
-    const job = requests.find((r) => r.id === jobId)
-    if (!job?.stripe_client_secret) {
-      setError('No payment information found for this job')
-      return
-    }
-
-    setPayingJobId(jobId)
-    setClientSecret(job.stripe_client_secret)
-  }
-
-  const handlePaymentSuccess = async (_paymentIntentId: string) => {
-    if (!payingJobId) return
-
-    // Update the job status in DB
-    const { error: updateErr } = await supabase
-      .from('walk_requests')
-      .update({
-        payment_status: 'authorized',
-        payment_authorized_at: new Date().toISOString(),
-        status: 'open',
-      })
-      .eq('id', payingJobId)
-
-    if (updateErr) {
-      setError('Payment succeeded but failed to update job status: ' + updateErr.message)
-    }
-
-    const paidJob = requests.find((r) => r.id === payingJobId)
-    const dogLabel = paidJob?.dog_name || 'your dog'
-    const priceIls = paidJob?.price != null ? `${paidJob.price} ILS` : ''
-
-    await createNotification({
-      userId: profile.id,
-      type: 'payment_success',
-      title: 'Payment Authorized',
-      message: `Your payment${priceIls ? ` of ${priceIls}` : ''} for ${dogLabel}'s walk has been authorized. Your job is now visible to walkers!`,
-      relatedJobId: payingJobId,
-    })
-
-    // Notify the selected walker that a new job is available for them
-    if (paidJob?.selected_walker_id) {
-      await createNotification({
-        userId: paidJob.selected_walker_id,
-        type: 'job_created',
-        title: 'New Walk Request',
-        message: `A new walk request for ${dogLabel}${priceIls ? ` (${priceIls})` : ''} is waiting for you!`,
-        relatedJobId: payingJobId,
-      }).catch((err) => console.error('job_created notification failed:', err))
-    }
-
-    setPayingJobId(null)
-    setClientSecret(null)
-    setSuccessMessage('Payment authorized! Your job is now visible to walkers.')
-    await loadMyRequests()
-  }
-
-  const handlePaymentCancel = () => {
-    setPayingJobId(null)
-    setClientSecret(null)
-  }
-
-  // ─── Inline completion rating ─────────────────────────────
-
-  const handleCompletionRatingSubmit = async () => {
-    if (!completionSuccess || completionRating < 1) return
-
-    setCompletionRatingSubmitting(true)
-
-    const { error } = await supabase.from('ratings').insert({
-      job_id: completionSuccess.jobId,
-      from_user_id: profile.id,
-      to_user_id: completionSuccess.walkerId,
-      rating: completionRating,
-      review: completionReview.trim() || null,
-    })
-
-    if (error) {
-      // If duplicate, just treat as done
-      if (error.code === '23505') {
-        setCompletionRatingDone(true)
-        setCompletionRatingSubmitting(false)
-        return
+  const persistRecentDogNames = useCallback(
+    (names: string[]) => {
+      setRecentDogNames(names)
+      try {
+        window.localStorage.setItem(dogNamesStorageKey(profile.id), JSON.stringify(names))
+      } catch {
+        // noop
       }
-      setError(error.message)
-      setCompletionRatingSubmitting(false)
-      return
-    }
+    },
+    [profile.id],
+  )
 
-    await createNotification({
-      userId: completionSuccess.walkerId,
-      type: 'new_rating',
-      title: 'New Rating Received',
-      message: `You received a ${completionRating}-star rating for walking ${completionSuccess.dogName}.`,
-      relatedJobId: completionSuccess.jobId,
-    }).catch(() => {})
+  const commitDogName = useCallback(
+    (rawValue: string) => {
+      const nextName = normalizeDogName(rawValue)
+      flow.setDogName(nextName)
+      if (!nextName) return
+      const nextNames = [nextName, ...recentDogNames.filter((name) => name !== nextName)].slice(0, 8)
+      persistRecentDogNames(nextNames)
+    },
+    [flow, persistRecentDogNames, recentDogNames],
+  )
 
-    setCompletionRatingDone(true)
-    setCompletionRatingSubmitting(false)
-    await loadRatings()
+  const openDogNameSheet = useCallback(() => {
+    setDogNameDraft(flow.dogName || '')
+    setShowDogNameSheet(true)
+  }, [flow.dogName])
+
+  const closeDogNameSheet = useCallback(() => {
+    setShowDogNameSheet(false)
+  }, [])
+
+  const submitDogNameSheet = useCallback(() => {
+    commitDogName(dogNameDraft)
+    setShowDogNameSheet(false)
+  }, [commitDogName, dogNameDraft])
+
+  const upcomingScheduledItems = useMemo<UpcomingBookingItem[]>(
+    () =>
+      flow.upcomingJobs.map((j) => ({
+        id: j.id,
+        dogName: j.dog_name || 'Walk',
+        location: j.location || '',
+        scheduledFor: j.scheduled_for,
+        startsInMin: flow.startsInMinutes(j.scheduled_for),
+        price: j.scheduled_fee_snapshot ?? j.price,
+      })),
+    [flow.upcomingJobs, flow.startsInMinutes],
+  )
+
+  const anyFlow = flow as typeof flow & {
+    completedJobs?: Array<Record<string, unknown>>
+    recentActivity?: Array<Record<string, unknown>>
+    recentJobs?: Array<Record<string, unknown>>
+    requests?: Array<Record<string, unknown>>
+    ratings?: Array<Record<string, unknown>>
+    recentRatings?: Array<Record<string, unknown>>
+    setDogName?: (value: string) => void
+    setLocation?: (value: string) => void
+    setDuration?: (value: DurationType) => void
+    setBookingTiming?: (value: 'asap' | 'scheduled') => void
+    hideHistoryItem?: (id: string) => Promise<void>
   }
 
-  // ─── Ratings ───────────────────────────────────────────────
+  const ratingsSource = (anyFlow.recentRatings ?? anyFlow.ratings ?? []) as Array<Record<string, unknown>>
 
-  const openRatingModal = (jobId: string) => {
-    setRatingJobId(jobId)
-    setRatingValue(0)
-    setRatingHover(0)
-    setRatingReview('')
-  }
+  const ratingByJobId = useMemo(() => {
+    const map = new Map<string, { rating: number | null; review: string | null }>()
 
-  const closeRatingModal = () => {
-    setRatingJobId(null)
-    setRatingValue(0)
-    setRatingHover(0)
-    setRatingReview('')
-  }
+    ratingsSource.forEach((r) => {
+      const jobId =
+        typeof r.job_id === 'string'
+          ? r.job_id
+          : typeof r.jobId === 'string'
+            ? r.jobId
+            : null
 
-  const handleSubmitRating = async () => {
-    if (!ratingJobId || ratingValue < 1) return
+      if (!jobId) return
 
-    const job = requests.find((r) => r.id === ratingJobId)
-    if (!job || !job.walker_id) return
+      const ratingRaw =
+        typeof r.rating === 'number'
+          ? r.rating
+          : typeof r.stars === 'number'
+            ? r.stars
+            : null
 
-    setRatingSubmitting(true)
+      const review =
+        typeof r.review === 'string'
+          ? r.review
+          : typeof r.comment === 'string'
+            ? r.comment
+            : typeof r.review_text === 'string'
+              ? r.review_text
+              : typeof r.reviewText === 'string'
+                ? r.reviewText
+                : null
 
-    const { error } = await supabase.from('ratings').insert({
-      job_id: ratingJobId,
-      from_user_id: profile.id,
-      to_user_id: job.walker_id,
-      rating: ratingValue,
-      review: ratingReview.trim() || null,
+      map.set(jobId, {
+        rating: ratingRaw == null ? null : Math.max(1, Math.min(5, Math.round(ratingRaw))),
+        review,
+      })
     })
 
-    if (error) {
-      setError(error.message)
-      setRatingSubmitting(false)
-      return
+    return map
+  }, [ratingsSource])
+
+  const historyItems = useMemo<HistoryItem[]>(() => {
+    const source = (
+      anyFlow.completedJobs ??
+      anyFlow.recentActivity ??
+      anyFlow.recentJobs ??
+      anyFlow.requests ??
+      []
+    ) as Array<Record<string, unknown>>
+
+    return source
+      .filter((item) => item.hidden_by_client !== true)
+      .map((item, index) => {
+        const itemId = typeof item.id === 'string' ? item.id : `history-${index}`
+
+        const walkerName =
+          typeof item.walker_name === 'string'
+            ? item.walker_name
+            : typeof item.walkerName === 'string'
+              ? item.walkerName
+              : typeof item.walker_id === 'string'
+                ? flow.walkerNameById.get(item.walker_id) || 'Walker'
+                : 'Walker'
+
+        const dogName =
+          typeof item.dog_name === 'string'
+            ? item.dog_name
+            : typeof item.dogName === 'string'
+              ? item.dogName
+              : 'Walk'
+
+        const location =
+          typeof item.location === 'string'
+            ? item.location
+            : typeof item.address === 'string'
+              ? item.address
+              : null
+
+        const createdAt =
+          typeof item.completed_at === 'string'
+            ? item.completed_at
+            : typeof item.created_at === 'string'
+              ? item.created_at
+              : typeof item.updated_at === 'string'
+                ? item.updated_at
+                : null
+
+        const durationMinutes =
+          typeof item.duration_minutes === 'number'
+            ? item.duration_minutes
+            : typeof item.durationMinutes === 'number'
+              ? item.durationMinutes
+              : typeof item.duration === 'number'
+                ? item.duration
+                : null
+
+        const price =
+          typeof item.price === 'number'
+            ? item.price
+            : typeof item.scheduled_fee_snapshot === 'number'
+              ? item.scheduled_fee_snapshot
+              : null
+
+        const ratingInfo = ratingByJobId.get(itemId)
+
+        return {
+          id: itemId,
+          status:
+            typeof item.status === 'string'
+              ? item.status
+              : typeof item.state === 'string'
+                ? item.state
+                : 'completed',
+          dog_name: dogName,
+          address: location,
+          created_at: createdAt,
+          completed_at: createdAt,
+          duration_minutes: durationMinutes,
+          price,
+          walker_name: walkerName,
+          review_text: ratingInfo?.review ?? null,
+          rating: ratingInfo?.rating ?? null,
+          client_lat: typeof item.client_lat === 'number' ? item.client_lat : null,
+          client_lng: typeof item.client_lng === 'number' ? item.client_lng : null,
+          lat: typeof item.lat === 'number' ? item.lat : null,
+          lng: typeof item.lng === 'number' ? item.lng : null,
+          latitude: typeof item.latitude === 'number' ? item.latitude : null,
+          longitude: typeof item.longitude === 'number' ? item.longitude : null,
+        }
+      })
+  }, [
+    anyFlow.completedJobs,
+    anyFlow.recentActivity,
+    anyFlow.recentJobs,
+    anyFlow.requests,
+    flow.walkerNameById,
+    ratingByJobId,
+  ])
+
+  const isSearching = flow.screenState === 'searching'
+  const isTrackingState = flow.screenState === 'tracking'
+  const isIdleState = flow.screenState === 'idle'
+  const showBanners = flow.screenState === 'idle' || flow.screenState === 'searching'
+  const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
+
+  const nearbyWalkers = useNearbyWalkers(
+    flow.hasUserLocation ? flow.userLocation : null,
+    flow.hasUserLocation && showNearbyWalkers,
+  )
+
+  const mapUserLocation: [number, number] =
+    flow.userLocation ?? flow.walkerLocation ?? ([32.0853, 34.7818] as [number, number])
+
+  const trackingGpsQuality: GpsQuality =
+    flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
+
+  const closeAll = useCallback(() => {
+    setBurgerOpen(false)
+    setProfileOpen(false)
+    setHistoryView('menu')
+  }, [])
+
+  const handleBookAgain = useCallback(
+    (item: HistoryItem) => {
+      if (typeof anyFlow.setBookingTiming === 'function') {
+        anyFlow.setBookingTiming('asap')
+      }
+
+      const dogName =
+        typeof item.dog_name === 'string'
+          ? item.dog_name
+          : typeof item.dogName === 'string'
+            ? item.dogName
+            : null
+
+      const location =
+        typeof item.address === 'string'
+          ? item.address
+          : typeof item.location === 'string'
+            ? item.location
+            : null
+
+      const durationValueRaw =
+        typeof item.duration_minutes === 'number'
+          ? item.duration_minutes
+          : typeof item.durationMinutes === 'number'
+            ? item.durationMinutes
+            : null
+
+      if (typeof anyFlow.setDogName === 'function' && dogName) {
+        anyFlow.setDogName(dogName)
+      }
+
+      if (typeof anyFlow.setLocation === 'function' && location) {
+        anyFlow.setLocation(location)
+      }
+
+      if (
+        typeof anyFlow.setDuration === 'function' &&
+        (durationValueRaw === 20 || durationValueRaw === 40 || durationValueRaw === 60)
+      ) {
+        anyFlow.setDuration(durationValueRaw as unknown as DurationType)
+      }
+
+      setBurgerOpen(false)
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+      })
+    },
+    [anyFlow],
+  )
+
+  const openScheduleSheet = useCallback(() => {
+    flow.setBookingTiming('scheduled')
+    if (shouldResetScheduledValue(flow.scheduledFor)) {
+      flow.setScheduledFor(getNowPlus15LocalInput())
     }
+    setShowScheduleSheet(true)
+  }, [flow])
 
-    await createNotification({
-      userId: job.walker_id,
-      type: 'new_rating',
-      title: 'New Rating Received',
-      message: `You received a ${ratingValue}-star rating for walking ${job.dog_name || 'a dog'}.`,
-      relatedJobId: ratingJobId,
-    })
+  const clearScheduleToAsap = useCallback(() => {
+    flow.setBookingTiming('asap')
+    setShowScheduleSheet(false)
+  }, [flow])
 
-    setRatingSubmitting(false)
-    closeRatingModal()
-    setSuccessMessage('Rating submitted!')
-    await loadRatings()
-  }
+  const currentMapStyle: React.CSSProperties = isTrackingState
+    ? trackingMapContainerStyle
+    : isSearching
+      ? searchingMapContainerStyle
+      : idleMapContainerStyle
 
-  // ─── Render ────────────────────────────────────────────────
+  const currentSheetScrollStyle: React.CSSProperties = isIdleState
+    ? idleSheetScrollStyle
+    : sheetScrollStyle
 
   return (
-    <div
-      style={{
-        minHeight: '100svh',
-        background: '#F8FAFC',
-        padding: '28px 20px',
-        paddingTop: 'calc(28px + env(safe-area-inset-top))',
-        paddingBottom: 'calc(28px + env(safe-area-inset-bottom))',
-        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-        color: '#0F172A',
-      }}
-    >
-      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-        <div
-          style={{
-            background: '#0F172A',
-            color: '#FFFFFF',
-            borderRadius: 20,
-            padding: '22px 28px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 16,
-            alignItems: 'center',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 12, opacity: 0.6, letterSpacing: 1, textTransform: 'uppercase' as const }}>
-              Regli
-            </div>
-            <h1 style={{ margin: '6px 0 0', fontSize: 28, fontWeight: 800 }}>
-              Welcome, {clientName}
-            </h1>
-            <p style={{ margin: '6px 0 0', fontSize: 14, opacity: 0.8 }}>
-              Book a walk, track your walker in real time.
-            </p>
-          </div>
+    <div style={screenStyle}>
+      <div style={topUiLayerStyle}>
+        <div style={floatingTopBarStyle}>
+          <button
+            type="button"
+            onClick={() => {
+              setProfileOpen(false)
+              setHistoryView('menu')
+              setBurgerOpen((v) => !v)
+            }}
+            style={controlBtnStyle}
+            aria-label="Menu"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#0F172A"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            >
+              <line x1="4" y1="7" x2="20" y2="7" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="17" x2="20" y2="17" />
+            </svg>
+          </button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <NotificationsBell variant="light" />
+          <div style={topRightGroupStyle}>
+            <div style={bellWrapStyle}>
+              <NotificationsBell />
+            </div>
+            <div style={{ position: 'relative' }}>
+              <ProfileAvatar
+                url={photo.avatarUrl}
+                name={clientName}
+                size={44}
+                borderRadius={14}
+                onClick={() => {
+                  setBurgerOpen(false)
+                  setProfileOpen((v) => !v)
+                }}
+              />
+              {flow.avgRating !== null && (
+                <div style={avatarRatingBadgeStyle}>
+                  <span style={{ color: '#F59E0B', fontSize: 8 }}>★</span> {flow.avgRating}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {showBanners && (flow.error || flow.successMessage) && (
+          <div style={floatingMessagesStyle}>
+            {flow.error && (
+              <MessageBanner text={flow.error} kind="error" onDismiss={flow.clearError} />
+            )}
+            {flow.successMessage && (
+              <MessageBanner
+                text={flow.successMessage}
+                kind="success"
+                onDismiss={flow.clearSuccess}
+              />
+            )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...mapContainerBaseStyle, ...currentMapStyle }}>
+        <MapView
+          userLocation={mapUserLocation}
+          showUserMarker={true}
+          isSearching={isSearching}
+          nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
+          {...(isTrackingState && flow.walkerLocation
+            ? {
+                walkerLocation: flow.walkerLocation,
+                walkerBearing: flow.walkerBearing,
+                isArrived: flow.isArrived,
+                gpsQuality: trackingGpsQuality,
+                proximityLevel: flow.proximityLevel,
+                routePolyline: flow.routePolyline ?? undefined,
+              }
+            : {})}
+        />
+      </div>
+
+      {burgerOpen && (
+        <>
+          <div style={menuOverlayStyle} onClick={closeAll} />
+          <div style={menuPanelStyle}>
+            <div style={menuHeaderRowStyle}>
+              <div style={menuHeaderLeftStyle}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (historyView === 'all') {
+                      setHistoryView('menu')
+                    } else {
+                      closeAll()
+                    }
+                  }}
+                  style={menuBackButtonStyle}
+                  aria-label={historyView === 'all' ? 'Back' : 'Close'}
+                >
+                  {historyView === 'all' ? '‹' : '☰'}
+                </button>
+                <span style={menuTitleStyle}>{historyView === 'all' ? 'All history' : 'Menu'}</span>
+              </div>
+            </div>
+
+            <div style={menuScrollAreaStyle}>
+              {historyView === 'all' ? (
+                <BurgerSection title="All history" subtitle="Your previous orders and reviews.">
+                  <GroupedHistory
+                    items={historyItems}
+                    role="client"
+                    onBookAgain={handleBookAgain}
+                    onHide={anyFlow.hideHistoryItem}
+                    emptyTitle="No walk history yet"
+                    emptySubtitle="Your completed walks and reviews will appear here."
+                    maxMonths={12}
+                  />
+                </BurgerSection>
+              ) : (
+                <>
+                  <BurgerSection
+                    title="Future orders"
+                    subtitle="Scheduled walks waiting to be dispatched."
+                  >
+                    <BurgerUpcomingList
+                      items={upcomingScheduledItems}
+                      onCancel={flow.cancelScheduledJob}
+                    />
+                  </BurgerSection>
+
+                  <section style={burgerSectionStyle}>
+                    <button
+                      type="button"
+                      onClick={() => setWalkHistoryOpen((v) => !v)}
+                      style={accordionButtonStyle}
+                    >
+                      <div>
+                        <div style={burgerSectionTitleStyle}>Walk history</div>
+                        <div style={burgerSectionSubtitleStyle}>Recent completed orders.</div>
+                      </div>
+                      <div style={accordionChevronStyle}>{walkHistoryOpen ? '−' : '+'}</div>
+                    </button>
+
+                    {walkHistoryOpen && (
+                      <div style={{ marginTop: 10 }}>
+                        <GroupedHistory
+                          items={historyItems}
+                          role="client"
+                          onBookAgain={handleBookAgain}
+                          onHide={anyFlow.hideHistoryItem}
+                          emptyTitle="No walk history yet"
+                          emptySubtitle="Your completed walks and reviews will appear here."
+                          maxMonths={3}
+                        />
+                        {historyItems.length > 6 && (
+                          <div style={{ marginTop: 10, textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => setHistoryView('all')}
+                              style={viewAllButtonStyle}
+                            >
+                              View all
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                </>
+              )}
+            </div>
+
+            <div style={menuDividerStyle} />
+
             <button
               type="button"
-              onClick={onSignOut}
-              style={logoutButtonStyle}
+              onClick={() => {
+                closeAll()
+                void handleSignOut()
+              }}
+              style={menuActionStyle}
             >
               Sign out
             </button>
           </div>
-        </div>
+        </>
+      )}
 
-        {error && <MessageBox text={error} kind="error" />}
-        {successMessage && <MessageBox text={successMessage} kind="success" />}
+      {profileOpen && (
+        <>
+          <div style={menuOverlayStyle} onClick={closeAll} />
+          <div style={profilePanelStyle}>
+            <div style={profileSectionStyle}>
+              <div style={{ position: 'relative' }}>
+                <ProfileAvatar
+                  url={photo.avatarUrl}
+                  name={clientName}
+                  size={56}
+                  borderRadius={18}
+                  onClick={() => fileInputRef.current?.click()}
+                />
+                <div style={cameraIconStyle}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="#FFFFFF">
+                    <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
+                    <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
+                  </svg>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) photo.uploadAvatar(file)
+                    e.target.value = ''
+                  }}
+                />
+              </div>
 
-        {/* Payment Modal */}
-        {payingJobId && clientSecret && (
-          <div style={paymentOverlayStyle} onClick={handlePaymentCancel}>
-            <div style={paymentSheetStyle} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: '24px 28px', paddingBottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
-                <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Complete Payment</h2>
-                <Elements stripe={stripePromise} options={{ clientSecret }}>
-                  <CheckoutForm
-                    onSuccess={handlePaymentSuccess}
-                    onCancel={handlePaymentCancel}
-                  />
-                </Elements>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={profileNameStyle}>{clientName}</div>
+                {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
               </div>
             </div>
           </div>
-        )}
+        </>
+      )}
 
-        {/* Rating Modal */}
-        {ratingJobId && (
-          <div style={overlayStyle}>
-            <div style={modalStyle}>
-              <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Rate your walker</h2>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-                {[1, 2, 3, 4, 5].map((star) => (
+      <div style={sheetStyle}>
+        <div style={sheetHandleStyle} />
+
+        <div ref={scrollRef} style={currentSheetScrollStyle}>
+          {isIdleState && (
+            <div style={idleSheetContentStyle}>
+              <div style={bookingCardStyle}>
+                <div style={sheetHeaderRowStyle}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <span style={sheetGreetingStyle}>Hi, {clientName.split(' ')[0]}</span>
+                  </div>
+                </div>
+
+                <div style={compactFormGridStyle}>
+                  <div style={compactFieldStyle}>
+                    <button
+                      type="button"
+                      onClick={openDogNameSheet}
+                      style={dogInputButtonStyle}
+                    >
+                      <div style={dogInputShellStyle}>
+                        <div style={dogThumbStyle}>🐶</div>
+                        <div style={dogInputButtonContentStyle}>
+                          <div
+                            style={
+                              flow.dogName.trim()
+                                ? dogInputValueTextStyle
+                                : dogInputPlaceholderTextStyle
+                            }
+                          >
+                            {flow.dogName.trim() || "Dog's name"}
+                          </div>
+                        </div>
+                        <div style={dogInputChevronStyle}>›</div>
+                      </div>
+                    </button>
+                  </div>
+
+                  <div style={compactFieldStyle}>
+                    <div style={compactFieldLabelStyle}>Pickup</div>
+                    <input
+                      value={flow.location}
+                      onChange={(e) => flow.setLocation(e.target.value)}
+                      placeholder={
+                        flow.locationLoading ? 'Finding your location...' : 'Pickup location'
+                      }
+                      style={inputStyle}
+                    />
+                  </div>
+
+                  <div style={compactFieldStyle}>
+                    <div style={scheduledHeaderRowStyle}>
+                      <label style={scheduledLabelStyle}>BOOK</label>
+                      {flow.bookingTiming === 'scheduled' ? (
+                        <div style={scheduledActionsStyle}>
+                          <button
+                            type="button"
+                            onClick={clearScheduleToAsap}
+                            style={scheduledAsapBtnStyle}
+                          >
+                            BOOK NOW
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openScheduleSheet}
+                            style={scheduledEditBtnStyle}
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={openScheduleSheet}
+                          style={scheduledEditBtnStyle}
+                        >
+                          Schedule
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={openScheduleSheet}
+                      style={{
+                        ...scheduledSummaryCardStyle,
+                        ...(flow.bookingTiming === 'scheduled'
+                          ? scheduledSummaryCardActiveStyle
+                          : null),
+                      }}
+                    >
+                      <div style={scheduledSummaryMainStyle}>
+                        {flow.bookingTiming === 'scheduled'
+                          ? formatScheduledDate(flow.scheduledFor)
+                          : 'NOW'}
+                      </div>
+                      <div style={scheduledSummarySubStyle}>
+                        {flow.bookingTiming === 'scheduled'
+                          ? 'Dispatch starts automatically about 15 min before the walk.'
+                          : 'We’ll start finding a walker right away.'}
+                      </div>
+                    </button>
+                  </div>
+
+                  <div style={compactFieldStyle}>
+                    <div style={compactDurationWrapStyle}>
+                      <DurationPicker
+                        options={DURATION_OPTIONS}
+                        selected={flow.duration}
+                        onSelect={(v) => flow.setDuration(v as DurationType)}
+                        surgeMultiplier={flow.surgeMultiplier}
+                        surgeLevel={flow.surgeLevel}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={compactFieldStyle}>
+                    <div style={compactPaymentWrapStyle}>
+                      <CardSetupForm
+                        savedCard={flow.savedCard}
+                        setupClientSecret={flow.setupClientSecret}
+                        loadingCard={flow.cardLoading}
+                        loadError={flow.cardError}
+                        onRequestSetup={flow.requestCardSetup}
+                        onChangeCard={flow.changeCard}
+                        onSetupComplete={flow.onCardSetupComplete}
+                        onCancelSetup={flow.cancelCardSetup}
+                        onRetry={flow.retryLoadCard}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div style={feeLabelStyle}>
+                  {flow.bookingTiming === 'scheduled'
+                    ? 'Price locked now · payment visible · auto dispatch later'
+                    : 'Service fee included · charged after walk'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isSearching && (
+            <div style={sheetContentStyle}>
+              <SearchingSheet
+                elapsedSeconds={flow.elapsedSeconds}
+                durationLabel={flow.selectedDuration.label}
+                priceLabel={`₪${flow.adjustedPriceILS}`}
+                onCancel={flow.cancelSearch}
+              />
+            </div>
+          )}
+
+          {flow.screenState === 'tracking' && flow.activeJob && (
+            <div style={sheetContentStyle}>
+              <TrackingCard
+                walkerName={
+                  flow.activeJob.walker_id
+                    ? flow.walkerNameById.get(flow.activeJob.walker_id) || 'Walker'
+                    : 'Walker'
+                }
+                dogName={flow.activeJob.dog_name}
+                isArrived={flow.isArrived}
+                etaMinutes={flow.etaMinutes}
+                displayEtaSeconds={flow.displayEtaSeconds}
+                distanceMeters={flow.distanceMeters}
+                gpsQuality={trackingGpsQuality}
+              />
+            </div>
+          )}
+
+          {flow.completionJob && (
+            <div style={sheetContentStyle}>
+              <CompletionCard
+                title="Walk completed"
+                subtitle={`${flow.completionJob.walkerName} walked your dog`}
+                onRate={flow.submitCompletionRating}
+                ratingSubmitting={flow.completionRatingSubmitting}
+                alreadyRated={flow.ratedJobIds.has(flow.completionJob.jobId)}
+                onDismiss={flow.dismissCompletion}
+              />
+            </div>
+          )}
+        </div>
+
+        {isIdleState && (
+          <div style={stickyCtaWrapStyle}>
+            <div style={stickyMainActionStyle}>
+              <ActionButton
+                label={
+                  flow.loading
+                    ? flow.bookingTiming === 'scheduled'
+                      ? 'Scheduling...'
+                      : 'Requesting...'
+                    : flow.cardLoading
+                      ? 'Loading payment...'
+                      : !flow.savedCard
+                        ? 'Add a card'
+                        : flow.bookingTiming === 'scheduled'
+                          ? 'Schedule walk'
+                          : 'Find walker'
+                }
+                onClick={handleFindWalker}
+                loading={flow.loading || flow.cardLoading}
+                disabled={
+                  !flow.dogName.trim() ||
+                  !flow.location.trim() ||
+                  !flow.savedCard ||
+                  (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
+                }
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showDogNameSheet && (
+        <>
+          <div style={bottomSheetOverlayStyle} onClick={closeDogNameSheet} />
+          <div style={dogNameSheetStyle}>
+            <div style={bottomSheetHandleStyle} />
+            <div style={dogNameSheetHeaderStyle}>
+              <div style={dogNameSheetTitleStyle}>Dog name</div>
+              <div style={dogNameSheetSubtitleStyle}>
+                Pick a previous name quickly or type a new one.
+              </div>
+            </div>
+
+            {!!recentDogNames.length && (
+              <div style={dogNameSuggestionsWrapStyle}>
+                {recentDogNames.map((name) => (
                   <button
-                    key={star}
+                    key={name}
                     type="button"
-                    onMouseEnter={() => setRatingHover(star)}
-                    onMouseLeave={() => setRatingHover(0)}
-                    onClick={() => setRatingValue(star)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: 32,
-                      color: star <= (ratingHover || ratingValue) ? '#F59E0B' : '#D1D5DB',
-                      padding: 2,
-                      transition: 'color 0.15s',
+                    onClick={() => {
+                      setDogNameDraft(name)
+                      commitDogName(name)
+                      setShowDogNameSheet(false)
                     }}
+                    style={dogNameChipStyle}
                   >
-                    ★
+                    <span>🐶</span>
+                    <span>{name}</span>
                   </button>
                 ))}
               </div>
-              <textarea
-                value={ratingReview}
-                onChange={(e) => setRatingReview(e.target.value)}
-                placeholder="Write an optional review..."
-                rows={3}
-                style={{
-                  ...inputStyle,
-                  resize: 'vertical',
-                  minHeight: 80,
-                }}
-              />
-              <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                <button
-                  type="button"
-                  onClick={handleSubmitRating}
-                  disabled={ratingValue < 1 || ratingSubmitting}
-                  style={{
-                    ...primaryButtonStyle,
-                    flex: 1,
-                    opacity: ratingValue < 1 || ratingSubmitting ? 0.6 : 1,
-                    cursor: ratingValue < 1 || ratingSubmitting ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {ratingSubmitting ? 'Submitting...' : 'Submit Rating'}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeRatingModal}
-                  disabled={ratingSubmitting}
-                  style={cancelButtonStyle}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Completion Success Card with Inline Rating */}
-        {completionSuccess && (
-          <div
-            style={{
-              marginTop: 20,
-              background: '#FFFFFF',
-              borderRadius: 20,
-              padding: 28,
-              border: '1px solid #BBF7D0',
-              textAlign: 'center' as const,
-              animation: 'completionSlideUp 0.4s ease-out',
-            }}
-          >
-            <div
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: 999,
-                background: '#DCFCE7',
-                display: 'grid',
-                placeItems: 'center',
-                margin: '0 auto 16px',
-                animation: 'checkmarkPop 0.5s ease-out 0.15s both',
-              }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            </div>
-            <h2 style={{ margin: '0 0 6px', fontSize: 20, fontWeight: 800, color: '#0F172A' }}>
-              Walk completed successfully
-            </h2>
-            <p style={{ margin: '0 0 20px', fontSize: 14, color: '#64748B' }}>
-              {completionSuccess.walkerName} finished walking {completionSuccess.dogName}.
-            </p>
-
-            {/* Inline rating */}
-            {!completionRatingDone ? (
-              <div
-                style={{
-                  background: '#F8FAFC',
-                  borderRadius: 16,
-                  padding: '20px 24px',
-                  marginBottom: 16,
-                  textAlign: 'center' as const,
-                  animation: 'earningsCount 0.3s ease-out 0.35s both',
-                }}
-              >
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', marginBottom: 12 }}>
-                  How was your walk?
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 14 }}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                      type="button"
-                      onMouseEnter={() => setCompletionRatingHover(star)}
-                      onMouseLeave={() => setCompletionRatingHover(0)}
-                      onClick={() => setCompletionRating(star)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: 36,
-                        color: star <= (completionRatingHover || completionRating) ? '#F59E0B' : '#D1D5DB',
-                        padding: '0 2px',
-                        transition: 'color 0.15s, transform 0.15s',
-                        transform: star <= (completionRatingHover || completionRating) ? 'scale(1.1)' : 'scale(1)',
-                      }}
-                    >
-                      ★
-                    </button>
-                  ))}
-                </div>
-                {completionRating > 0 && (
-                  <div style={{ animation: 'completionFadeIn 0.2s ease-out' }}>
-                    <textarea
-                      value={completionReview}
-                      onChange={(e) => setCompletionReview(e.target.value)}
-                      placeholder="Add a note (optional)"
-                      rows={2}
-                      style={{
-                        ...inputStyle,
-                        resize: 'vertical',
-                        minHeight: 56,
-                        marginBottom: 12,
-                        textAlign: 'left' as const,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={handleCompletionRatingSubmit}
-                      disabled={completionRatingSubmitting}
-                      style={{
-                        ...primaryButtonStyle,
-                        width: '100%',
-                        opacity: completionRatingSubmitting ? 0.7 : 1,
-                        cursor: completionRatingSubmitting ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {completionRatingSubmitting ? 'Submitting...' : 'Submit Rating'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div
-                style={{
-                  background: '#F0FDF4',
-                  borderRadius: 16,
-                  padding: '14px 24px',
-                  marginBottom: 16,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: '#166534',
-                  animation: 'completionFadeIn 0.3s ease-out',
-                }}
-              >
-                Thank you for your feedback!
-              </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => setCompletionSuccess(null)}
-              style={{
-                border: completionRatingDone || completionRating === 0 ? 'none' : '1px solid #E2E8F0',
-                borderRadius: 12,
-                padding: '10px 28px',
-                background: completionRatingDone || completionRating === 0 ? '#0F172A' : '#FFFFFF',
-                color: completionRatingDone || completionRating === 0 ? '#FFFFFF' : '#64748B',
-                fontWeight: 700,
-                fontSize: 14,
-                cursor: 'pointer',
-              }}
-            >
-              {completionRatingDone ? 'Done' : completionRating === 0 ? 'Skip' : 'Skip Rating'}
-            </button>
-          </div>
-        )}
-
-        {/* Live Tracking */}
-        {trackedJob && (
-          <div
-            style={{
-              ...trackingCardStyle,
-              ...(proximityLevel === 'arrived'
-                ? { borderColor: '#BBF7D0', background: '#FAFFFE' }
-                : {}),
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
-                    {proximityLevel === 'arrived' ? 'Walker Arrived' : 'Live Tracking'}
-                  </h2>
-                  {proximityLevel !== 'arrived' && (
-                    <span style={trackingPulseDotStyle} />
-                  )}
-                  {proximityLevel === 'arrived' && (
-                    <span style={{ fontSize: 18 }}>🐾</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 14, color: '#64748B', marginTop: 6 }}>
-                  <span style={{ fontWeight: 600, color: '#0F172A' }}>
-                    {trackedJob.dog_name || 'Walk'}
-                  </span>
-                  {' '}&mdash;{' '}
-                  {walkerNameById.get(trackedJob.walker_id!) || 'Walker'}{' '}
-                  {proximityLevel === 'arrived'
-                    ? 'has arrived!'
-                    : proximityLevel === 'arriving'
-                    ? 'is arriving now!'
-                    : proximityLevel === 'very_near'
-                    ? 'is almost there!'
-                    : proximityLevel === 'near'
-                    ? 'is nearby'
-                    : 'is on the way'}
-                </div>
-              </div>
-              {proximityLevel === 'arrived' ? (
-                <div style={{ ...etaBadgeStyle, background: '#DCFCE7', color: '#166534' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 2 }}>
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <span style={{ fontSize: 12, fontWeight: 800 }}>Arrived</span>
-                </div>
-              ) : proximityLevel === 'arriving' ? (
-                <div style={{ ...etaBadgeStyle, background: '#FEF3C7', color: '#92400E' }}>
-                  <span style={{ fontSize: 13, fontWeight: 800 }}>Arriving now</span>
-                </div>
-              ) : proximityLevel === 'very_near' ? (
-                <div style={{ ...etaBadgeStyle, background: '#EFF6FF', color: '#1D4ED8' }}>
-                  <span style={{ fontSize: 13, fontWeight: 800 }}>Almost there</span>
-                </div>
-              ) : proximityLevel === 'near' && etaMinutes != null && gpsQuality === 'live' ? (
-                <div style={etaBadgeStyle}>
-                  <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>
-                    {etaMinutes}
-                  </span>
-                  <span style={{ fontSize: 10, fontWeight: 600, opacity: 0.7 }}>
-                    min &middot; nearby
-                  </span>
-                </div>
-              ) : etaMinutes != null && gpsQuality === 'live' ? (
-                <div style={etaBadgeStyle}>
-                  <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>
-                    {etaMinutes}
-                  </span>
-                  <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.7 }}>
-                    min ETA
-                  </span>
-                </div>
-              ) : (
-                <div style={{
-                  ...etaBadgeStyle,
-                  background: gpsQuality === 'offline' ? '#FEE2E2'
-                    : gpsQuality === 'delayed' ? '#FEF3C7'
-                    : '#F1F5F9',
-                  color: gpsQuality === 'offline' ? '#991B1B'
-                    : gpsQuality === 'delayed' ? '#92400E'
-                    : '#64748B',
-                }}>
-                  <span style={{ fontSize: 12, fontWeight: 700 }}>
-                    {gpsQuality === 'none' && !hasUserLocation && 'Requesting location...'}
-                    {gpsQuality === 'none' && hasUserLocation && 'Waiting for walker location'}
-                    {gpsQuality === 'live' && 'Calculating ETA...'}
-                    {gpsQuality === 'last_known' && 'Using last known location'}
-                    {gpsQuality === 'delayed' && 'GPS signal delayed'}
-                    {gpsQuality === 'offline' && 'Walker temporarily offline'}
-                  </span>
-                </div>
-              )}
-            </div>
-            <div
-              style={{
-                borderRadius: 16,
-                overflow: 'hidden',
-                height: 320,
-                transition: 'opacity 0.5s ease',
-                ...(proximityLevel === 'arrived' ? { opacity: 0.85 } : {}),
-              }}
-            >
-              <MapView
-                userLocation={userLocation}
-                walkerLocation={walkerLocation ?? undefined}
-                walkerBearing={walkerBearing}
-                isArrived={isArrived}
-                gpsQuality={gpsQuality}
-                proximityLevel={proximityLevel}
-                routePolyline={proximityLevel === 'arrived' ? [] : routePolyline}
+            <div style={dogNameInputCardStyle}>
+              <div style={dogNameInputLabelStyle}>Add new</div>
+              <input
+                autoFocus
+                value={dogNameDraft}
+                onChange={(e) => setDogNameDraft(e.target.value)}
+                placeholder="Type dog name"
+                style={dogNameSheetInputStyle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    submitDogNameSheet()
+                  }
+                }}
               />
             </div>
-          </div>
-        )}
 
-        <div
-          style={{
-            marginTop: 20,
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 20,
-            alignItems: 'start',
-          }}
-        >
-          {/* Book a Walk form */}
-          <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>Book a Walk</h2>
-
-            <div style={{ display: 'grid', gap: 14 }}>
-              <div>
-                <label style={labelStyle}>Dog name</label>
-                <input
-                  value={dogName}
-                  onChange={(e) => setDogName(e.target.value)}
-                  placeholder="e.g. Rocky"
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Location</label>
-                <input
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. Tel Aviv, Dizengoff 20"
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Notes (optional)</label>
-                <input
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Needs water, friendly dog"
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={labelStyle}>Service type</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                  {(['quick', 'standard', 'energy'] as ServiceType[]).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setServiceType(st)}
-                      style={{
-                        border: serviceType === st ? '2px solid #0F172A' : '1px solid #E2E8F0',
-                        borderRadius: 12,
-                        padding: '10px 8px',
-                        background: serviceType === st ? '#EFF6FF' : '#FFFFFF',
-                        cursor: 'pointer',
-                        textAlign: 'center' as const,
-                        transition: 'border-color 0.15s',
-                      }}
-                    >
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>
-                        {SERVICE_LABELS[st]}
-                      </div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: '#15803D', marginTop: 2 }}>
-                        {SERVICE_PRICES_ILS[st]} ILS
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label style={labelStyle}>Select walker</label>
-                {availableWalkers.length === 0 ? (
-                  <div style={{ fontSize: 13, color: '#94A3B8', padding: '10px 0' }}>
-                    No walkers available for payment right now.
-                  </div>
-                ) : (
-                  <select
-                    value={selectedWalkerId}
-                    onChange={(e) => setSelectedWalkerId(e.target.value)}
-                    style={{
-                      ...inputStyle,
-                      appearance: 'auto' as React.CSSProperties['appearance'],
-                    }}
-                  >
-                    <option value="">Choose a walker...</option>
-                    {availableWalkers.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.full_name || w.email || w.id}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              {/* Price summary */}
-              {selectedWalkerId && (
-                <div style={priceSummaryStyle}>
-                  <div style={priceSummaryRow}>
-                    <span>Walk price</span>
-                    <span style={{ fontWeight: 600 }}>{SERVICE_PRICES_ILS[serviceType]} ILS</span>
-                  </div>
-                  <div style={priceSummaryRow}>
-                    <span style={{ color: '#64748B' }}>Platform fee (20%)</span>
-                    <span style={{ color: '#64748B' }}>{(SERVICE_PRICES_ILS[serviceType] * 0.2).toFixed(2)} ILS</span>
-                  </div>
-                  <div style={{ ...priceSummaryRow, borderTop: '1px solid #E2E8F0', paddingTop: 8, marginTop: 4 }}>
-                    <span style={{ fontWeight: 600 }}>Walker receives</span>
-                    <span style={{ fontWeight: 700, color: '#15803D' }}>
-                      {(SERVICE_PRICES_ILS[serviceType] * 0.8).toFixed(2)} ILS
-                    </span>
-                  </div>
-                </div>
-              )}
-
+            <div style={dogNameSheetActionsStyle}>
+              <button type="button" onClick={closeDogNameSheet} style={dogNameSecondaryBtnStyle}>
+                Cancel
+              </button>
               <button
                 type="button"
-                onClick={handleBookAndPay}
-                disabled={loading || !selectedWalkerId || availableWalkers.length === 0}
-                style={{
-                  ...primaryButtonStyle,
-                  opacity: loading || !selectedWalkerId ? 0.7 : 1,
-                  cursor: loading || !selectedWalkerId ? 'not-allowed' : 'pointer',
-                }}
+                onClick={submitDogNameSheet}
+                style={dogNamePrimaryBtnStyle}
+                disabled={!normalizeDogName(dogNameDraft)}
               >
-                {loading ? 'Creating order...' : `Book & Pay ${SERVICE_PRICES_ILS[serviceType]} ILS`}
+                Save
               </button>
             </div>
           </div>
+        </>
+      )}
 
-          {/* My Requests */}
-          <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>
-              My Requests
-              {requests.length > 0 && (
-                <span style={countBadgeStyle}>{requests.length}</span>
+      <IOSDateTimeSheet
+        open={showScheduleSheet}
+        value={flow.scheduledFor || getNowPlus15LocalInput()}
+        minValue={getNowPlus15LocalInput()}
+        title="Choose date & time"
+        subtitle=""
+        onChange={flow.setScheduledFor}
+        onClose={() => setShowScheduleSheet(false)}
+        onConfirm={(val) => {
+          flow.setBookingTiming('scheduled')
+          flow.setScheduledFor(val)
+          setShowScheduleSheet(false)
+        }}
+        onBackToNow={() => {
+          flow.setBookingTiming('asap')
+          setShowScheduleSheet(false)
+        }}
+      />
+    </div>
+  )
+}
+
+function BurgerSection({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  children: React.ReactNode
+}) {
+  return (
+    <section style={burgerSectionStyle}>
+      <div style={burgerSectionHeaderStyle}>
+        <div style={burgerSectionTitleStyle}>{title}</div>
+      </div>
+      {subtitle && <div style={burgerSectionSubtitleStyle}>{subtitle}</div>}
+      <div style={{ marginTop: 10 }}>{children}</div>
+    </section>
+  )
+}
+
+function BurgerUpcomingList({
+  items,
+  onCancel,
+}: {
+  items: UpcomingBookingItem[]
+  onCancel?: (id: string) => void
+}) {
+  if (items.length === 0) {
+    return <div style={burgerEmptyStateStyle}>No future orders.</div>
+  }
+
+  return (
+    <div style={burgerListStyle}>
+      {items.slice(0, 3).map((item) => (
+        <div key={item.id} style={burgerListCardStyle}>
+          <div style={burgerListCardHeaderStyle}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={burgerListTitleStyle}>{item.dogName}</div>
+              <div style={burgerListSubtitleStyle}>{item.location || 'Scheduled walk'}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {item.price != null && <div style={burgerListPriceStyle}>₪{item.price}</div>}
+              {onCancel && (
+                <button
+                  type="button"
+                  onClick={() => onCancel(item.id)}
+                  style={clientUpcomingCancelBtnStyle}
+                >
+                  Cancel
+                </button>
               )}
-            </h2>
-
-            {jobsLoading ? (
-              <div style={emptyStateStyle}>Loading requests...</div>
-            ) : requests.length === 0 ? (
-              <div style={emptyStateStyle}>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
-                  No requests yet
-                </div>
-                <div style={{ fontSize: 13 }}>
-                  Book your first walk and it will appear here
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gap: 14 }}>
-                {requests.map((request) => {
-                  const myRating = myRatingByJobId.get(request.id)
-                  const walkerRating = walkerRatingByJobId.get(request.id)
-                  const isCompleted = request.status === 'completed'
-                  const isPaid = request.payment_status === 'paid' || request.payment_status === 'authorized'
-                  const displayWalkerId = request.walker_id || request.selected_walker_id
-
-                  return (
-                    <div key={request.id} style={listCardStyle}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 12,
-                          alignItems: 'flex-start',
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontSize: 16, fontWeight: 700 }}>
-                            {request.dog_name || 'Walk'}
-                          </div>
-                          <div style={{ fontSize: 13, color: '#64748B', marginTop: 3 }}>
-                            {request.location || 'No location'}
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <StatusBadge status={request.status} />
-                          <PaymentStatusBadge status={request.payment_status} />
-                        </div>
-                      </div>
-
-                      <div style={{ marginTop: 10, fontSize: 13, color: '#64748B', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-                        <span>
-                          {displayWalkerId
-                            ? walkerNameById.get(displayWalkerId) || 'Walker'
-                            : 'Unassigned'}
-                        </span>
-                        {request.price != null && (
-                          <>
-                            <span style={{ opacity: 0.4 }}>&middot;</span>
-                            <span style={{ fontWeight: 600 }}>{request.price} ILS</span>
-                          </>
-                        )}
-                        <span style={{ opacity: 0.4 }}>&middot;</span>
-                        <span>{formatRelativeDate(request.created_at)}</span>
-                      </div>
-
-                      {/* Pay button for jobs that have a client secret but are still unpaid */}
-                      {request.payment_status === 'unpaid' &&
-                        request.stripe_client_secret && (
-                          <button
-                            type="button"
-                            onClick={() => handlePayClick(request.id)}
-                            disabled={paymentLoading && payingJobId === request.id}
-                            style={{
-                              ...payButtonStyle,
-                              opacity:
-                                paymentLoading && payingJobId === request.id
-                                  ? 0.7
-                                  : 1,
-                              cursor:
-                                paymentLoading && payingJobId === request.id
-                                  ? 'not-allowed'
-                                  : 'pointer',
-                            }}
-                          >
-                            {paymentLoading && payingJobId === request.id
-                              ? 'Loading...'
-                              : `Pay ${request.price != null ? request.price + ' ILS' : ''}`}
-                          </button>
-                        )}
-
-                      {isCompleted &&
-                        isPaid &&
-                        request.walker_id &&
-                        !ratedJobIds.has(request.id) && (
-                          <button
-                            type="button"
-                            onClick={() => openRatingModal(request.id)}
-                            style={rateButtonStyle}
-                          >
-                            Rate your walker
-                          </button>
-                        )}
-
-                      {/* Reviews section for completed jobs */}
-                      {isCompleted && (myRating || walkerRating) && (
-                        <div style={reviewsSectionStyle}>
-                          {myRating && (
-                            <ReviewBlock
-                              label="Your review"
-                              rating={myRating.rating}
-                              review={myRating.review}
-                            />
-                          )}
-                          {walkerRating && (
-                            <ReviewBlock
-                              label="Walker review"
-                              rating={walkerRating.rating}
-                              review={walkerRating.review}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+            </div>
+          </div>
+          <div style={burgerListMetaRowStyle}>
+            <div style={burgerListMetaStyle}>{formatScheduledDate(item.scheduledFor)}</div>
+            {item.startsInMin != null && item.startsInMin >= 0 && item.startsInMin <= 60 && (
+              <div style={clientUpcomingBadgeStyle}>starts in {item.startsInMin} min</div>
             )}
           </div>
         </div>
-      </div>
+      ))}
     </div>
   )
 }
 
-// ─── Sub-components ─────────────────────────────────────────
-
-const REVIEW_PREVIEW_LIMIT = 120
-
-function ReviewBlock({
-  label,
-  rating,
-  review,
+function TrackingCard({
+  walkerName,
+  dogName,
+  isArrived,
+  etaMinutes,
+  displayEtaSeconds,
+  distanceMeters,
+  gpsQuality,
 }: {
-  label: string
-  rating: number
-  review: string | null
+  walkerName: string
+  dogName: string | null
+  isArrived: boolean
+  etaMinutes: number | null
+  displayEtaSeconds: number | null
+  distanceMeters: number | null
+  gpsQuality: GpsQuality
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const isLong = review != null && review.length > REVIEW_PREVIEW_LIMIT
-
   return (
-    <div style={reviewBlockStyle}>
-      <div style={reviewHeaderStyle}>
-        <span style={reviewLabelStyle}>{label}</span>
-        <span style={reviewStarsStyle}>
-          <span style={{ color: '#F59E0B' }}>{'★'.repeat(rating)}</span>
-          <span style={{ color: '#E2E8F0' }}>{'★'.repeat(5 - rating)}</span>
-        </span>
+    <div style={trackingCardStyle}>
+      <div style={trackingTopBadgeStyle}>{isArrived ? 'Walker arrived' : 'Walker on the way'}</div>
+      <div style={trackingTitleStyle}>{walkerName}</div>
+      <div style={trackingSubtitleStyle}>
+        {dogName ? `${walkerName} is heading to ${dogName}` : `${walkerName} is heading to you`}
       </div>
-      {review && (
-        <div style={reviewTextStyle}>
-          {isLong && !expanded ? review.slice(0, REVIEW_PREVIEW_LIMIT) + '...' : review}
-          {isLong && (
-            <button
-              type="button"
-              onClick={() => setExpanded(!expanded)}
-              style={expandButtonStyle}
-            >
-              {expanded ? 'Show less' : 'Read more'}
-            </button>
-          )}
+
+      <div style={trackingStatsGridStyle}>
+        <div style={trackingStatCardStyle}>
+          <div style={trackingStatLabelStyle}>ETA</div>
+          <div style={trackingStatValueStyle}>
+            {formatEta(etaMinutes, displayEtaSeconds, isArrived)}
+          </div>
         </div>
-      )}
-    </div>
-  )
-}
-
-function CheckoutForm({
-  onSuccess,
-  onCancel,
-}: {
-  onSuccess: (paymentIntentId: string) => void
-  onCancel: () => void
-}) {
-  const stripe = useStripe()
-  const elements = useElements()
-  const [processing, setProcessing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!stripe || !elements) return
-
-    setProcessing(true)
-    setError(null)
-
-    const { error: submitError, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: window.location.href,
-      },
-      redirect: 'if_required',
-    })
-
-    if (submitError) {
-      setError(submitError.message || 'Payment failed')
-      setProcessing(false)
-      return
-    }
-
-    if (paymentIntent && (paymentIntent.status === 'requires_capture' || paymentIntent.status === 'succeeded')) {
-      onSuccess(paymentIntent.id)
-    } else {
-      setError('Payment was not completed')
-    }
-
-    setProcessing(false)
-  }
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <PaymentElement />
-      {error && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 10,
-            borderRadius: 10,
-            background: '#FEF2F2',
-            color: '#B91C1C',
-            fontSize: 14,
-          }}
-        >
-          {error}
+        <div style={trackingStatCardStyle}>
+          <div style={trackingStatLabelStyle}>Distance</div>
+          <div style={trackingStatValueStyle}>{formatDistance(distanceMeters, isArrived)}</div>
         </div>
-      )}
-      <div style={{
-        display: 'flex',
-        gap: 12,
-        marginTop: 18,
-        position: 'sticky',
-        bottom: 0,
-        background: '#FFFFFF',
-        paddingTop: 16,
-        paddingBottom: 8,
-        borderTop: '1px solid #F1F5F9',
-        zIndex: 1,
-      }}>
-        <button
-          type="submit"
-          disabled={!stripe || processing}
-          style={{
-            ...primaryButtonStyle,
-            flex: 1,
-            cursor: processing ? 'not-allowed' : 'pointer',
-            opacity: processing ? 0.7 : 1,
-          }}
-        >
-          {processing ? 'Processing...' : 'Pay Now'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={processing}
-          style={{
-            ...cancelButtonStyle,
-            cursor: processing ? 'not-allowed' : 'pointer',
-          }}
-        >
-          Cancel
-        </button>
+        <div style={trackingStatCardStyle}>
+          <div style={trackingStatLabelStyle}>GPS</div>
+          <div style={trackingStatValueStyle}>{formatGpsQuality(gpsQuality)}</div>
+        </div>
       </div>
-    </form>
-  )
-}
-
-function MessageBox({
-  text,
-  kind,
-}: {
-  text: string
-  kind: 'error' | 'success'
-}) {
-  const isError = kind === 'error'
-
-  return (
-    <div
-      style={{
-        marginTop: 16,
-        borderRadius: 14,
-        padding: '12px 16px',
-        fontSize: 14,
-        background: isError ? '#FEF2F2' : '#ECFDF3',
-        color: isError ? '#B91C1C' : '#166534',
-        border: `1px solid ${isError ? '#FECACA' : '#BBF7D0'}`,
-      }}
-    >
-      {text}
     </div>
   )
 }
 
-function StatusBadge({
-  status,
-}: {
-  status: 'awaiting_payment' | 'open' | 'accepted' | 'completed' | 'cancelled'
-}) {
-  const map: Record<string, { bg: string; color: string; text: string }> = {
-    awaiting_payment: { bg: '#FFF7ED', color: '#C2410C', text: 'Awaiting Payment' },
-    open: { bg: '#EFF6FF', color: '#1D4ED8', text: 'Finding Walker' },
-    accepted: { bg: '#FFF7ED', color: '#C2410C', text: 'In Progress' },
-    completed: { bg: '#F0FDF4', color: '#15803D', text: 'Completed' },
-    cancelled: { bg: '#FEF2F2', color: '#991B1B', text: 'Cancelled' },
+function parseDateTimeFlexible(value: string | null | undefined): Date | null {
+  if (!value || typeof value !== 'string') return null
+
+  const normalized = value.trim().replace(' ', 'T')
+  const hasExplicitTimezone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(normalized)
+
+  if (hasExplicitTimezone) {
+    const isoLike = normalized.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')
+    const dt = new Date(isoLike)
+    return Number.isNaN(dt.getTime()) ? null : dt
   }
 
-  const styles = map[status] || map.open
-
-  return (
-    <span style={badgeBaseStyle(styles.bg, styles.color)}>
-      {styles.text}
-    </span>
+  const match = normalized.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/,
   )
-}
 
-function PaymentStatusBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; color: string; text: string }> = {
-    unpaid: { bg: '#F1F5F9', color: '#64748B', text: 'Unpaid' },
-    authorized: { bg: '#EFF6FF', color: '#1D4ED8', text: 'Authorized' },
-    paid: { bg: '#F0FDF4', color: '#15803D', text: 'Paid' },
-    failed: { bg: '#FEF2F2', color: '#991B1B', text: 'Failed' },
-    refunded: { bg: '#FEF3C7', color: '#92400E', text: 'Refunded' },
-  }
+  if (!match) return null
 
-  const styles = map[status] || map.unpaid
-
-  return (
-    <span style={badgeBaseStyle(styles.bg, styles.color)}>
-      {styles.text}
-    </span>
+  const [, year, month, day, hour, minute, second] = match
+  const dt = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second || '0'),
+    0,
   )
+
+  return Number.isNaN(dt.getTime()) ? null : dt
 }
 
-function badgeBaseStyle(bg: string, color: string): React.CSSProperties {
-  return {
-    display: 'inline-block',
-    borderRadius: 999,
-    padding: '4px 10px',
-    fontSize: 11,
-    fontWeight: 700,
-    background: bg,
-    color,
-    letterSpacing: 0.3,
+function formatScheduledDate(value: string | null | undefined): string {
+  const dt = parseDateTimeFlexible(value)
+  if (!dt) return 'Scheduled walk'
+  return dt.toLocaleString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function formatEta(
+  etaMinutes: number | null,
+  displayEtaSeconds: number | null,
+  isArrived: boolean,
+): string {
+  if (isArrived) return 'Arrived'
+  if (displayEtaSeconds != null && displayEtaSeconds >= 0 && displayEtaSeconds < 60) {
+    return `${displayEtaSeconds}s`
+  }
+  if (etaMinutes != null && etaMinutes >= 0) return `${etaMinutes} min`
+  return '—'
+}
+
+function formatDistance(distanceMeters: number | null, isArrived: boolean): string {
+  if (isArrived) return 'Here'
+  if (distanceMeters == null || Number.isNaN(distanceMeters)) return '—'
+  if (distanceMeters < 1000) return `${Math.round(distanceMeters)} m`
+  return `${(distanceMeters / 1000).toFixed(1)} km`
+}
+
+function formatGpsQuality(gpsQuality: GpsQuality): string {
+  switch (gpsQuality) {
+    case 'live':
+      return 'Live'
+    case 'delayed':
+      return 'Delayed'
+    case 'offline':
+      return 'Offline'
+    default:
+      return 'Live'
   }
 }
 
-function formatRelativeDate(value: string | null) {
-  if (!value) return ''
-  const now = Date.now()
-  const then = new Date(value).getTime()
-  const diffMs = now - then
-  const diffMin = Math.floor(diffMs / 60000)
-  const diffHrs = Math.floor(diffMin / 60)
-  const diffDays = Math.floor(diffHrs / 24)
-
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
-  if (diffHrs < 24) return `${diffHrs}h ago`
-  if (diffDays < 7) return `${diffDays}d ago`
-  return new Date(value).toLocaleDateString()
+const screenStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: '#F8FAFC',
+  overflow: 'hidden',
+  display: 'flex',
+  flexDirection: 'column',
+  isolation: 'isolate',
 }
 
-// ─── Styles ─────────────────────────────────────────────────
+const topUiLayerStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  pointerEvents: 'none',
+  zIndex: 5000,
+}
 
-const cardStyle: React.CSSProperties = {
+const mapContainerBaseStyle: React.CSSProperties = {
+  position: 'relative',
+  flexShrink: 0,
+  minHeight: 220,
+  overflow: 'hidden',
+}
+
+const idleMapContainerStyle: React.CSSProperties = {
+  height: '40dvh',
+}
+
+const searchingMapContainerStyle: React.CSSProperties = {
+  height: '40dvh',
+}
+
+const trackingMapContainerStyle: React.CSSProperties = {
+  height: '40dvh',
+}
+
+const floatingTopBarStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'calc(16px + env(safe-area-inset-top))',
+  left: 14,
+  right: 14,
+  zIndex: 3001,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  pointerEvents: 'none',
+}
+
+const controlBtnStyle: React.CSSProperties = {
+  width: 44,
+  height: 44,
+  borderRadius: 16,
+  border: '1px solid rgba(255,255,255,0.9)',
+  background: 'rgba(255,255,255,0.96)',
+  boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+  backdropFilter: 'blur(10px)',
+}
+
+const topRightGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  pointerEvents: 'auto',
+}
+
+const bellWrapStyle: React.CSSProperties = {
+  transform: 'scale(0.96)',
+  transformOrigin: 'center',
+}
+
+const avatarRatingBadgeStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: -6,
+  bottom: -6,
+  padding: '2px 7px',
+  borderRadius: 999,
   background: '#FFFFFF',
-  borderRadius: 20,
-  padding: 24,
-  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
-  border: '1px solid #E2E8F0',
+  color: '#0F172A',
+  fontSize: 10,
+  fontWeight: 800,
+  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.16)',
+  border: '1px solid rgba(255,255,255,0.95)',
+  whiteSpace: 'nowrap',
 }
 
-const listCardStyle: React.CSSProperties = {
-  borderRadius: 14,
-  padding: 16,
-  background: '#FAFBFC',
-  border: '1px solid #E2E8F0',
+const floatingMessagesStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 14,
+  right: 14,
+  top: 'calc(74px + env(safe-area-inset-top))',
+  zIndex: 3000,
+  display: 'grid',
+  gap: 8,
+  pointerEvents: 'none',
 }
 
-const sectionTitleStyle: React.CSSProperties = {
-  margin: '0 0 16px',
-  fontSize: 18,
+const sheetStyle: React.CSSProperties = {
+  position: 'relative',
+  marginTop: -18,
+  flex: 1,
+  minHeight: 0,
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  background: '#FFFFFF',
+  boxShadow: '0 -10px 30px rgba(15, 23, 42, 0.10)',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  zIndex: 1,
+}
+
+const sheetHandleStyle: React.CSSProperties = {
+  width: 40,
+  height: 4,
+  borderRadius: 999,
+  background: '#CBD5E1',
+  margin: '8px auto 6px',
+  flexShrink: 0,
+}
+
+const sheetScrollStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '0 14px 12px',
+  WebkitOverflowScrolling: 'touch',
+}
+
+const idleSheetScrollStyle: React.CSSProperties = {
+  ...sheetScrollStyle,
+  overflowY: 'auto',
+  paddingBottom: 6,
+}
+
+const sheetContentStyle: React.CSSProperties = {
+  paddingBottom: 12,
+}
+
+const idleSheetContentStyle: React.CSSProperties = {
+  paddingBottom: 6,
+}
+
+const bookingCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
+const sheetHeaderRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+const sheetGreetingStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 12,
   fontWeight: 700,
+  color: '#94A3B8',
+  marginBottom: 0,
+}
+
+const compactFormGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
+const compactFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const compactFieldLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 0.6,
+  textTransform: 'uppercase',
+  color: '#64748B',
+}
+
+const dogInputShellStyle: React.CSSProperties = {
+  height: 48,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  display: 'flex',
+  alignItems: 'center',
+  overflow: 'hidden',
+}
+
+const dogThumbStyle: React.CSSProperties = {
+  width: 42,
+  height: 42,
+  borderRadius: 12,
+  marginLeft: 4,
+  marginRight: 2,
+  background: 'linear-gradient(180deg, #FEF3C7 0%, #FDE68A 100%)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 20,
+  flexShrink: 0,
+}
+
+const dogInputButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
+const dogInputButtonContentStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  height: '100%',
+}
+
+const dogInputValueTextStyle: React.CSSProperties = {
+  fontSize: 17,
+  color: '#0F172A',
+  fontWeight: 700,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const dogInputPlaceholderTextStyle: React.CSSProperties = {
+  fontSize: 17,
+  color: '#94A3B8',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const dogInputChevronStyle: React.CSSProperties = {
+  paddingRight: 14,
+  color: '#94A3B8',
+  fontSize: 24,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
+const bottomSheetOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+  zIndex: 120,
+}
+
+const dogNameSheetStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 121,
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  background: '#FFFFFF',
+  boxShadow: '0 -16px 44px rgba(15, 23, 42, 0.20)',
+  padding: '10px 16px calc(18px + env(safe-area-inset-bottom))',
+  display: 'grid',
+  gap: 14,
+}
+
+const bottomSheetHandleStyle: React.CSSProperties = {
+  width: 42,
+  height: 4,
+  borderRadius: 999,
+  background: '#CBD5E1',
+  margin: '0 auto 2px',
+}
+
+const dogNameSheetHeaderStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const dogNameSheetTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const dogNameSheetSubtitleStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const dogNameSuggestionsWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+}
+
+const dogNameChipStyle: React.CSSProperties = {
+  height: 40,
+  borderRadius: 999,
+  border: '1px solid #DBEAFE',
+  background: '#EFF6FF',
+  color: '#1D4ED8',
+  fontSize: 14,
+  fontWeight: 800,
+  padding: '0 14px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  cursor: 'pointer',
+}
+
+const dogNameInputCardStyle: React.CSSProperties = {
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 12,
+  display: 'grid',
+  gap: 8,
+}
+
+const dogNameInputLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: 0.4,
+  textTransform: 'uppercase',
+  color: '#64748B',
+}
+
+const dogNameSheetInputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 48,
+  borderRadius: 14,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  outline: 'none',
+  padding: '0 14px',
+  fontSize: 17,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+}
+
+const dogNameSheetActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+}
+
+const dogNameSecondaryBtnStyle: React.CSSProperties = {
+  height: 48,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const dogNamePrimaryBtnStyle: React.CSSProperties = {
+  height: 48,
+  borderRadius: 16,
+  border: 'none',
+  background: '#2563EB',
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 48,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  outline: 'none',
+  padding: '0 14px',
+  fontSize: 17,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+}
+
+const scheduledHeaderRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  marginBottom: 0,
+}
+
+const scheduledLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 0.6,
+  textTransform: 'uppercase',
+  color: '#64748B',
+}
+
+const scheduledActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+}
+
+const scheduledAsapBtnStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  color: '#0F172A',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  padding: 0,
+}
+
+const scheduledEditBtnStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  color: '#2563EB',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  padding: 0,
+}
+
+const scheduledSummaryCardStyle: React.CSSProperties = {
+  width: '100%',
+  textAlign: 'left',
+  border: '1px solid #E2E8F0',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  borderRadius: 16,
+  padding: '10px 12px',
+  cursor: 'pointer',
+  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.04)',
+}
+
+const scheduledSummaryCardActiveStyle: React.CSSProperties = {
+  border: '1px solid rgba(37, 99, 235, 0.28)',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #EFF6FF 100%)',
+}
+
+const scheduledSummaryMainStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#0F172A',
+  lineHeight: 1.3,
+}
+
+const scheduledSummarySubStyle: React.CSSProperties = {
+  marginTop: 3,
+  fontSize: 11,
+  color: '#64748B',
+  lineHeight: 1.35,
+}
+
+const compactDurationWrapStyle: React.CSSProperties = {
+  marginTop: 0,
+}
+
+const compactPaymentWrapStyle: React.CSSProperties = {
+  marginTop: 0,
+}
+
+const feeLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#64748B',
+  lineHeight: 1.3,
+  textAlign: 'center',
+  paddingTop: 0,
+}
+
+const stickyCtaWrapStyle: React.CSSProperties = {
+  padding: '8px 14px calc(10px + env(safe-area-inset-bottom))',
+  borderTop: '1px solid rgba(226, 232, 240, 0.9)',
+  background: 'rgba(255,255,255,0.96)',
+  backdropFilter: 'blur(10px)',
+  flexShrink: 0,
+}
+
+const stickyMainActionStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+}
+
+const trackingCardStyle: React.CSSProperties = {
+  borderRadius: 22,
+  border: '1px solid #E2E8F0',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  padding: 16,
+  display: 'grid',
+  gap: 12,
+}
+
+const trackingTopBadgeStyle: React.CSSProperties = {
+  justifySelf: 'start',
+  padding: '6px 10px',
+  borderRadius: 999,
+  background: 'rgba(37, 99, 235, 0.10)',
+  color: '#1D4ED8',
+  fontSize: 12,
+  fontWeight: 800,
+}
+
+const trackingTitleStyle: React.CSSProperties = {
+  fontSize: 24,
+  fontWeight: 900,
+  color: '#0F172A',
+  lineHeight: 1.05,
+}
+
+const trackingSubtitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  color: '#475569',
+  lineHeight: 1.45,
+}
+
+const trackingStatsGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 10,
+}
+
+const trackingStatCardStyle: React.CSSProperties = {
+  borderRadius: 16,
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  padding: '12px 10px',
+  display: 'grid',
+  gap: 6,
+  justifyItems: 'center',
+}
+
+const trackingStatLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#64748B',
+  textTransform: 'uppercase',
+  letterSpacing: 0.6,
+}
+
+const trackingStatValueStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+  textAlign: 'center',
+}
+
+const menuOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+  zIndex: 40000,
+}
+
+const menuPanelStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'calc(16px + env(safe-area-inset-top))',
+  left: 12,
+  bottom: 'calc(16px + env(safe-area-inset-bottom))',
+  width: 'min(360px, calc(100vw - 24px))',
+  borderRadius: 28,
+  background: '#FFFFFF',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
+  zIndex: 40001,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+}
+
+const menuHeaderRowStyle: React.CSSProperties = {
+  padding: '16px 16px 10px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+}
+
+const menuHeaderLeftStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 10,
 }
 
-const countBadgeStyle: React.CSSProperties = {
-  background: '#EFF6FF',
-  color: '#1D4ED8',
-  borderRadius: 999,
-  padding: '2px 10px',
-  fontSize: 13,
-  fontWeight: 700,
+const menuBackButtonStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 18,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  marginBottom: 6,
-  fontWeight: 600,
-  fontSize: 13,
+const menuTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const menuScrollAreaStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '0 16px 14px',
+}
+
+const menuDividerStyle: React.CSSProperties = {
+  height: 1,
+  background: '#E2E8F0',
+}
+
+const menuActionStyle: React.CSSProperties = {
+  height: 52,
+  border: 'none',
+  background: '#FFFFFF',
+  color: '#DC2626',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const burgerSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  paddingBottom: 18,
+}
+
+const burgerSectionHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const burgerSectionTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const burgerSectionSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#64748B',
+  lineHeight: 1.45,
+}
+
+const viewAllButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  color: '#2563EB',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  padding: 0,
+}
+
+const accordionButtonStyle: React.CSSProperties = {
+  width: '100%',
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const accordionChevronStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#0F172A',
+  fontSize: 18,
+  fontWeight: 800,
+  flexShrink: 0,
+}
+
+const burgerListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const burgerListCardStyle: React.CSSProperties = {
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 12,
+}
+
+const burgerListCardHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const burgerListTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const burgerListSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#64748B',
+  lineHeight: 1.4,
+  marginTop: 3,
+}
+
+const burgerListPriceStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const burgerListMetaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  marginTop: 6,
+}
+
+const burgerListMetaStyle: React.CSSProperties = {
+  fontSize: 12,
   color: '#475569',
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  border: '1px solid #E2E8F0',
-  borderRadius: 12,
-  padding: '10px 14px',
-  fontSize: 14,
-  outline: 'none',
-  boxSizing: 'border-box',
-}
-
-const primaryButtonStyle: React.CSSProperties = {
-  border: 'none',
-  borderRadius: 12,
-  padding: '12px 16px',
-  background: '#0F172A',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-}
-
-const payButtonStyle: React.CSSProperties = {
-  marginTop: 12,
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 16px',
-  background: '#15803D',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  width: '100%',
-  cursor: 'pointer',
-}
-
-const rateButtonStyle: React.CSSProperties = {
-  marginTop: 12,
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 16px',
-  background: '#F59E0B',
-  color: '#FFFFFF',
-  fontWeight: 700,
-  fontSize: 14,
-  width: '100%',
-  cursor: 'pointer',
-}
-
-const cancelButtonStyle: React.CSSProperties = {
-  border: '1px solid #E2E8F0',
-  borderRadius: 12,
-  padding: '12px 16px',
-  background: '#FFFFFF',
-  color: '#64748B',
-  fontWeight: 600,
-  fontSize: 14,
-}
-
-const logoutButtonStyle: React.CSSProperties = {
-  border: '1px solid rgba(255,255,255,0.15)',
-  borderRadius: 12,
-  padding: '8px 16px',
-  background: 'transparent',
-  color: '#FFFFFF',
-  fontWeight: 600,
-  fontSize: 13,
-  cursor: 'pointer',
-}
-
-const emptyStateStyle: React.CSSProperties = {
-  background: '#FAFBFC',
-  borderRadius: 14,
-  padding: 28,
-  textAlign: 'center' as const,
-  color: '#94A3B8',
-  border: '1px dashed #E2E8F0',
-}
-
-const overlayStyle: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(15, 23, 42, 0.5)',
-  display: 'grid',
-  placeItems: 'center',
-  zIndex: 1000,
-}
-
-const modalStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 20,
-  padding: 28,
-  width: '100%',
-  maxWidth: 480,
-  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.2)',
-}
-
-const paymentOverlayStyle: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(15, 23, 42, 0.5)',
-  zIndex: 1000,
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'flex-end',
-}
-
-const paymentSheetStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: '20px 20px 0 0',
-  width: '100%',
-  maxWidth: 480,
-  maxHeight: '85vh',
-  margin: '0 auto',
-  boxShadow: '0 -8px 40px rgba(15, 23, 42, 0.2)',
-  overflowY: 'auto',
-  WebkitOverflowScrolling: 'touch',
-}
-
-const priceSummaryStyle: React.CSSProperties = {
-  background: '#F8FAFC',
-  borderRadius: 12,
-  padding: '14px 16px',
-  border: '1px solid #E2E8F0',
-  display: 'grid',
-  gap: 6,
-}
-
-const priceSummaryRow: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  fontSize: 14,
-}
-
-const reviewsSectionStyle: React.CSSProperties = {
-  marginTop: 12,
-  display: 'grid',
-  gap: 8,
-}
-
-const reviewBlockStyle: React.CSSProperties = {
-  background: '#FAFBFC',
-  borderRadius: 10,
-  padding: '10px 14px',
-  border: '1px solid #E2E8F0',
-}
-
-const reviewHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-}
-
-const reviewLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#64748B',
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-}
-
-const reviewStarsStyle: React.CSSProperties = {
-  fontSize: 14,
-  letterSpacing: 1,
-}
-
-const reviewTextStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 13,
-  lineHeight: 1.5,
-  color: '#334155',
-}
-
-const expandButtonStyle: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  color: '#3B82F6',
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-  padding: 0,
-  marginLeft: 4,
-}
-
-const trackingCardStyle: React.CSSProperties = {
-  marginTop: 20,
-  background: '#FFFFFF',
-  borderRadius: 20,
-  padding: 24,
-  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
-  border: '1px solid #E2E8F0',
-}
-
-const etaBadgeStyle: React.CSSProperties = {
-  background: '#0F172A',
-  color: '#FFFFFF',
-  borderRadius: 14,
-  padding: '10px 18px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  minWidth: 60,
-  flexShrink: 0,
-}
-
-const trackingPulseDotStyle: React.CSSProperties = {
-  width: 10,
-  height: 10,
+const clientUpcomingBadgeStyle: React.CSSProperties = {
+  padding: '4px 8px',
   borderRadius: 999,
-  background: '#16A34A',
-  boxShadow: '0 0 0 3px rgba(22, 163, 74, 0.25)',
-  flexShrink: 0,
+  background: 'rgba(37, 99, 235, 0.10)',
+  color: '#1D4ED8',
+  fontSize: 11,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+}
+
+const clientUpcomingCancelBtnStyle: React.CSSProperties = {
+  height: 30,
+  padding: '0 10px',
+  borderRadius: 999,
+  border: '1px solid rgba(239, 68, 68, 0.25)',
+  background: '#FFFFFF',
+  color: '#DC2626',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+const burgerEmptyStateStyle: React.CSSProperties = {
+  borderRadius: 18,
+  border: '1px dashed #CBD5E1',
+  background: '#F8FAFC',
+  padding: 14,
+  fontSize: 13,
+  color: '#64748B',
+}
+
+const profilePanelStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'calc(72px + env(safe-area-inset-top))',
+  right: 14,
+  width: 'min(320px, calc(100vw - 28px))',
+  borderRadius: 24,
+  background: '#FFFFFF',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
+  zIndex: 40001,
+  overflow: 'hidden',
+}
+
+const profileSectionStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  padding: 16,
+}
+
+const cameraIconStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: -2,
+  bottom: -2,
+  width: 18,
+  height: 18,
+  borderRadius: 999,
+  background: '#2563EB',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)',
+}
+
+const profileNameStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const profileEmailStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: '#64748B',
+  wordBreak: 'break-word',
 }

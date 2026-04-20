@@ -1,3 +1,18 @@
+[functions.start-dispatch]
+verify_jwt = false
+
+[functions.advance-dispatch]
+verify_jwt = false
+
+[functions.accept-dispatch]
+verify_jwt = false
+
+[functions.decline-dispatch]
+verify_jwt = false
+
+[functions.run-scheduled-dispatch]
+verify_jwt = false
+
 [functions.get-connect-status]
 verify_jwt = false
 
@@ -23,4 +38,10 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.recover-stuck-payouts]
+verify_jwt = false
+
+[functions.manage-payment-method]
+verify_jwt = false
+
+[functions.send-push-notification]
 verify_jwt = false
