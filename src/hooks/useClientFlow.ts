@@ -18,6 +18,7 @@ type SavedCard = {
 type CompletionJob = {
   jobId: string
   walkerName: string
+  walkerId: string | null
 } | null
 
 type WalkRequestRow = {
@@ -53,6 +54,11 @@ type RatingRow = {
   rating: number
   review: string | null
   created_at: string
+}
+
+type QueryResult<T> = {
+  data: T | null
+  error: { message: string } | null
 }
 
 const JOB_SELECT =
@@ -116,6 +122,17 @@ function formatScheduledSummaryValue(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function settledQuery<T>(
+  result: PromiseSettledResult<QueryResult<T>>,
+  label: string,
+): QueryResult<T> {
+  if (result.status === 'fulfilled') return result.value
+
+  const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
+  console.warn(`[useClientFlow] ${label} query failed:`, message)
+  return { data: null, error: { message } }
 }
 
 
@@ -188,11 +205,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [upcomingJobs, setUpcomingJobs] = useState<WalkRequestRow[]>([])
   const [completedJobs, setCompletedJobs] = useState<Array<WalkRequestRow & { hidden_by_client?: boolean }>>([])
   const [ratings, setRatings] = useState<RatingRow[]>([])
+  const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
   const arriveNotifiedRef = useRef<Set<string>>(new Set())
   const completeNotifiedRef = useRef<Set<string>>(new Set())
+  const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     try {
@@ -310,7 +329,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }
 
   const hasUserLocationBase = !!userLocationBase
-  const avgRating: number | null = null
+  const avgRating = useMemo(() => {
+    if (ratingsReceived.length === 0) return null
+    const sum = ratingsReceived.reduce((acc, r) => acc + r.rating, 0)
+    return Math.round((sum / ratingsReceived.length) * 10) / 10
+  }, [ratingsReceived])
   const scheduledSummary = formatScheduledSummaryValue(scheduledFor)
 
   const surgeMultiplier = 1
@@ -432,7 +455,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
       : null
 
   const fetchCurrentAndLists = useCallback(async () => {
-    const [currentRes, upcomingRes, completedRes, ratingsRes] = await Promise.all([
+    const [
+      currentResult,
+      upcomingResult,
+      completedResult,
+      ratingsResult,
+      ratingsReceivedResult,
+    ] = await Promise.allSettled([
       supabase
         .from('walk_requests')
         .select(JOB_SELECT)
@@ -461,9 +490,38 @@ export function useClientFlow(profileId: string, _profileName: string) {
         .select('*')
         .eq('from_user_id', profileId)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('ratings')
+        .select('*')
+        .eq('to_user_id', profileId)
+        .order('created_at', { ascending: false }),
     ])
 
-    if (currentRes.data && isCurrentClientJob(currentRes.data as WalkRequestRow)) {
+    const currentRes = settledQuery<WalkRequestRow>(currentResult, 'current request')
+    const upcomingRes = settledQuery<WalkRequestRow[]>(upcomingResult, 'upcoming requests')
+    const completedRes = settledQuery<WalkRequestRow[]>(completedResult, 'completed requests')
+    const ratingsRes = settledQuery<RatingRow[]>(ratingsResult, 'ratings given')
+    const ratingsReceivedRes = settledQuery<RatingRow[]>(ratingsReceivedResult, 'ratings received')
+
+    if (currentRes.error) {
+      console.warn('[useClientFlow] current request unavailable:', currentRes.error.message)
+    }
+    if (upcomingRes.error) {
+      console.warn('[useClientFlow] upcoming requests unavailable:', upcomingRes.error.message)
+    }
+    if (completedRes.error) {
+      console.warn('[useClientFlow] completed requests unavailable:', completedRes.error.message)
+    }
+    if (ratingsRes.error) {
+      console.warn('[useClientFlow] ratings given unavailable:', ratingsRes.error.message)
+    }
+    if (ratingsReceivedRes.error) {
+      console.warn('[useClientFlow] ratings received unavailable:', ratingsReceivedRes.error.message)
+    }
+
+    if (currentRes.error) {
+      // Preserve the current UI state on transient read failures.
+    } else if (currentRes.data && isCurrentClientJob(currentRes.data as WalkRequestRow)) {
       const row = currentRes.data as WalkRequestRow
       setCurrentJob(row)
       setCurrentJobId(row.id)
@@ -488,7 +546,30 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }))
     setCompletedJobs(completed)
 
-    setRatings((ratingsRes.data as RatingRow[] | null) ?? [])
+    const nextRatings = (ratingsRes.data as RatingRow[] | null) ?? []
+    setRatings(nextRatings)
+    setRatingsReceived((ratingsReceivedRes.data as RatingRow[] | null) ?? [])
+
+    const nextRatedJobIds = new Set(nextRatings.map((r) => r.job_id))
+    const pendingCompletion = completed.find(
+      (job) =>
+        job.status === 'completed' &&
+        !!job.walker_id &&
+        !nextRatedJobIds.has(job.id) &&
+        !dismissedCompletionIdsRef.current.has(job.id),
+    )
+    if (pendingCompletion) {
+      const walkerLabel = pendingCompletion.walker_id
+        ? walkerNameById.get(pendingCompletion.walker_id) || 'Walker'
+        : 'Walker'
+      setCompletionJob((prev) =>
+        prev ?? {
+          jobId: pendingCompletion.id,
+          walkerId: pendingCompletion.walker_id,
+          walkerName: walkerLabel,
+        },
+      )
+    }
 
     const walkerIds = new Set<string>()
     for (const row of [
@@ -586,6 +667,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
             setCompletionJob({
               jobId: updated.id,
+              walkerId: updated.walker_id,
               walkerName: walkerLabel,
             })
             setScreenState('idle')
@@ -620,6 +702,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'ratings', filter: `from_user_id=eq.${profileId}` },
+        () => {
+          void fetchCurrentAndLists()
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ratings', filter: `to_user_id=eq.${profileId}` },
         () => {
           void fetchCurrentAndLists()
         },
@@ -706,7 +795,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
       if (!completionJob || !rating || rating < 1) return
 
       const job = completedJobs.find((row) => row.id === completionJob.jobId)
-      if (!job?.walker_id) {
+      let walkerId = completionJob.walkerId ?? job?.walker_id ?? null
+
+      if (!walkerId) {
+        const { data: completionRow } = await supabase
+          .from('walk_requests')
+          .select('walker_id')
+          .eq('id', completionJob.jobId)
+          .eq('client_id', profileId)
+          .maybeSingle()
+
+        walkerId = completionRow?.walker_id ?? null
+      }
+
+      if (!walkerId) {
         setError('Unable to find assigned walker for rating')
         return
       }
@@ -716,7 +818,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const { error: insertError } = await supabase.from('ratings').insert({
         job_id: completionJob.jobId,
         from_user_id: profileId,
-        to_user_id: job.walker_id,
+        to_user_id: walkerId,
         rating,
         review: review?.trim() || null,
       })
@@ -727,13 +829,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
         return
       }
 
-      const walkerLabel = walkerNameById.get(job.walker_id) || 'Walker'
+      const walkerLabel = walkerNameById.get(walkerId) || completionJob.walkerName || 'Walker'
       try {
         await createNotification({
           userId: profileId,
           type: 'rating_submitted',
           title: 'Thanks for rating',
           message: `You rated ${walkerLabel} ${rating} stars.`,
+          relatedJobId: completionJob.jobId,
+        })
+        await createNotification({
+          userId: walkerId,
+          type: 'new_rating',
+          title: 'New Rating Received',
+          message: `You received a ${rating}-star rating!`,
           relatedJobId: completionJob.jobId,
         })
       } catch {
@@ -746,7 +855,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
     [completionJob, completedJobs, profileId, walkerNameById, fetchCurrentAndLists],
   )
 
-  const dismissCompletion = useCallback(() => setCompletionJob(null), [])
+  const dismissCompletion = useCallback(() => {
+    setCompletionJob((current) => {
+      if (current) dismissedCompletionIdsRef.current.add(current.jobId)
+      return null
+    })
+  }, [])
 
   const requestWalk = useCallback(async () => {
     if (!dogName.trim()) {
@@ -921,6 +1035,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     upcomingJobs,
     completedJobs,
     ratings,
+    ratingsReceived,
     recentRatings: ratings.slice(0, 8),
     walkerNameById,
     completionJob,

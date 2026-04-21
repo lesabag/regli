@@ -259,17 +259,25 @@ export default function NotificationsBell({
   }
 
   const markAllAsRead = async () => {
+    if (!authUserId) return
+
     const unreadIds = notifications.filter((n) => !n.is_read).map((n) => n.id)
     if (unreadIds.length === 0) return
+
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+
     const { error } = await supabase
       .from('notifications')
       .update({ is_read: true })
+      .eq('user_id', authUserId)
       .in('id', unreadIds)
+      .eq('is_read', false)
+
     if (error) {
       console.error('NotificationsBell: markAllAsRead error', error.message)
+      void fetchNotifications(authUserId)
       return
     }
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
   }
 
   const isLight = variant === 'light'

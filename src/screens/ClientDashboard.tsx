@@ -497,23 +497,6 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
             <div style={bellWrapStyle}>
               <NotificationsBell />
             </div>
-            <div style={{ position: 'relative' }}>
-              <ProfileAvatar
-                url={photo.avatarUrl}
-                name={clientName}
-                size={44}
-                borderRadius={14}
-                onClick={() => {
-                  setBurgerOpen(false)
-                  setProfileOpen((v) => !v)
-                }}
-              />
-              {flow.avgRating !== null && (
-                <div style={avatarRatingBadgeStyle}>
-                  <span style={{ color: '#F59E0B', fontSize: 8 }}>★</span> {flow.avgRating}
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -591,6 +574,29 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                 </BurgerSection>
               ) : (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBurgerOpen(false)
+                      setProfileOpen(true)
+                    }}
+                    style={menuProfileButtonStyle}
+                  >
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <ProfileAvatar url={photo.avatarUrl} name={clientName} size={48} borderRadius={16} />
+                    </div>
+                    <div style={menuProfileTextStyle}>
+                      <div style={profileNameStyle}>{clientName}</div>
+                      {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                      {flow.avgRating !== null && (
+                        <div style={profileRatingStyle}>
+                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · review score
+                        </div>
+                      )}
+                    </div>
+                    <div style={menuProfileChevronStyle}>›</div>
+                  </button>
+
                   <BurgerSection
                     title="Future orders"
                     subtitle="Scheduled walks waiting to be dispatched."
@@ -694,6 +700,11 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={profileNameStyle}>{clientName}</div>
                 {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                {flow.avgRating !== null && (
+                  <div style={profileRatingStyle}>
+                    <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · review score
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1267,21 +1278,6 @@ const bellWrapStyle: React.CSSProperties = {
   transformOrigin: 'center',
 }
 
-const avatarRatingBadgeStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: -6,
-  bottom: -6,
-  padding: '2px 7px',
-  borderRadius: 999,
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 10,
-  fontWeight: 800,
-  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.16)',
-  border: '1px solid rgba(255,255,255,0.95)',
-  whiteSpace: 'nowrap',
-}
-
 const floatingMessagesStyle: React.CSSProperties = {
   position: 'fixed',
   left: 14,
@@ -1805,6 +1801,32 @@ const menuScrollAreaStyle: React.CSSProperties = {
   padding: '0 16px 14px',
 }
 
+const menuProfileButtonStyle: React.CSSProperties = {
+  width: '100%',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 20,
+  padding: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  cursor: 'pointer',
+  textAlign: 'left',
+  marginBottom: 16,
+}
+
+const menuProfileTextStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+}
+
+const menuProfileChevronStyle: React.CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 24,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
 const menuDividerStyle: React.CSSProperties = {
   height: 1,
   background: '#E2E8F0',
@@ -2010,4 +2032,11 @@ const profileEmailStyle: React.CSSProperties = {
   fontSize: 12,
   color: '#64748B',
   wordBreak: 'break-word',
+}
+
+const profileRatingStyle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 800,
 }

@@ -20,69 +20,81 @@ export function useAuth() {
 
   // ✅ יצירה/טעינה של פרופיל
   const loadProfile = useCallback(async (currentUser: User) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', currentUser.id)
-      .maybeSingle()
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', currentUser.id)
+        .maybeSingle()
 
-    if (!error && data) {
-      setProfile(data as Profile)
-      return
-    }
+      if (!error && data) {
+        setProfile(data as Profile)
+        setAuthError(null)
+        return
+      }
 
-    // 🔥 יצירה אוטומטית אם לא קיים
-    const fallbackProfile: Profile = {
-      id: currentUser.id,
-      email: currentUser.email ?? null,
-      full_name:
-        (currentUser.user_metadata?.full_name as string | undefined) ?? null,
-      role:
-        (currentUser.user_metadata?.role as AppRole | undefined) ?? 'client',
-    }
+      // 🔥 יצירה אוטומטית אם לא קיים
+      const fallbackProfile: Profile = {
+        id: currentUser.id,
+        email: currentUser.email ?? null,
+        full_name:
+          (currentUser.user_metadata?.full_name as string | undefined) ?? null,
+        role:
+          (currentUser.user_metadata?.role as AppRole | undefined) ?? 'client',
+      }
 
-    const { data: insertedProfile, error: insertError } = await supabase
-      .from('profiles')
-      .upsert(fallbackProfile, { onConflict: 'id' })
-      .select()
-      .single()
+      const { data: insertedProfile, error: insertError } = await supabase
+        .from('profiles')
+        .upsert(fallbackProfile, { onConflict: 'id' })
+        .select()
+        .single()
 
-    if (insertError) {
-      setAuthError(insertError.message)
+      if (insertError) {
+        setAuthError(insertError.message)
+        setProfile(null)
+        return
+      }
+
+      setProfile(insertedProfile as Profile)
+      setAuthError(null)
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Failed to load profile')
       setProfile(null)
-      return
     }
-
-    setProfile(insertedProfile as Profile)
   }, [])
 
   useEffect(() => {
     let mounted = true
 
     const init = async () => {
-      const { data, error } = await supabase.auth.getSession()
+      try {
+        const { data, error } = await supabase.auth.getSession()
 
-      if (!mounted) return
+        if (!mounted) return
 
-      if (error) {
-        setAuthError(error.message)
-        setLoading(false)
-        return
-      }
+        if (error) {
+          setAuthError(error.message)
+          return
+        }
 
-      const currentSession = data.session
-      const currentUser = currentSession?.user ?? null
+        const currentSession = data.session
+        const currentUser = currentSession?.user ?? null
 
-      setSession(currentSession)
-      setUser(currentUser)
+        setSession(currentSession)
+        setUser(currentUser)
 
-      if (currentUser) {
-        await loadProfile(currentUser) // פה מותר await
-      } else {
+        if (currentUser) {
+          await loadProfile(currentUser) // פה מותר await
+        } else {
+          setProfile(null)
+        }
+      } catch (err) {
+        if (!mounted) return
+        setAuthError(err instanceof Error ? err.message : 'Failed to initialize session')
         setProfile(null)
+      } finally {
+        if (mounted) setLoading(false)
       }
-
-      setLoading(false)
     }
 
     init()

@@ -1,5 +1,5 @@
 import { hapticLight } from '../utils/haptics'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 interface CompletionCardProps {
   title: string
@@ -25,6 +25,14 @@ export default function CompletionCard({
   const [pressedStar, setPressedStar] = useState(0)
   const [review, setReview] = useState('')
   const [ratingDone, setRatingDone] = useState(alreadyRated ?? false)
+
+  useEffect(() => {
+    setRating(0)
+    setHoverRating(0)
+    setPressedStar(0)
+    setReview('')
+    setRatingDone(alreadyRated ?? false)
+  }, [alreadyRated, subtitle, title])
 
   const handleSubmitRating = () => {
     if (rating < 1 || !onRate) return

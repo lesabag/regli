@@ -296,12 +296,6 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             </button>
             <div style={{ minWidth: 0 }}>
               <h1 style={greetingStyle}>Hey, {flow.firstName}</h1>
-              {flow.avgRating !== null && (
-                <div style={ratingRowStyle}>
-                  <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
-                  {flow.ratingsReceived.length !== 1 ? 's' : ''}
-                </div>
-              )}
             </div>
           </div>
 
@@ -335,24 +329,6 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             )}
 
             <NotificationsBell />
-
-            <div style={{ position: 'relative' }}>
-              <ProfileAvatar
-                url={photo.avatarUrl}
-                name={walkerName}
-                size={40}
-                borderRadius={13}
-                onClick={() => {
-                  setBurgerOpen(false)
-                  setProfileOpen((v) => !v)
-                }}
-              />
-              {flow.avgRating !== null && (
-                <div style={avatarRatingBadgeStyle}>
-                  <span style={{ color: '#F59E0B', fontSize: 8 }}>★</span> {flow.avgRating}
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -368,6 +344,30 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 </svg>
                 <span style={menuHeaderTitleStyle}>Menu</span>
               </div>
+
+              <div style={menuDividerStyle} />
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBurgerOpen(false)
+                  setProfileOpen(true)
+                }}
+                style={menuProfileButtonStyle}
+              >
+                <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={48} borderRadius={16} />
+                <div style={menuProfileTextStyle}>
+                  <div style={profileNameStyle}>{walkerName}</div>
+                  {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                  {flow.avgRating !== null && (
+                    <div style={profileRatingStyle}>
+                      <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
+                      {flow.ratingsReceived.length !== 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+                <div style={menuProfileChevronStyle}>›</div>
+              </button>
 
               <div style={menuDividerStyle} />
 
@@ -1057,16 +1057,12 @@ const headerMenuBtnStyle: React.CSSProperties = {
 
 const greetingStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 800,
   lineHeight: 1.1,
-}
-
-const ratingRowStyle: React.CSSProperties = {
-  marginTop: 4,
-  fontSize: 12,
-  color: '#64748B',
-  fontWeight: 700,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const toggleGroupStyle: React.CSSProperties = {
@@ -1111,21 +1107,6 @@ const toggleKnobStyle: React.CSSProperties = {
   transition: 'transform 0.2s ease',
 }
 
-const avatarRatingBadgeStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: -4,
-  bottom: -4,
-  padding: '2px 7px',
-  borderRadius: 999,
-  background: '#FFFFFF',
-  boxShadow: '0 6px 16px rgba(15,23,42,0.14)',
-  fontSize: 12,
-  fontWeight: 800,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 3,
-}
-
 const menuOverlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1166,6 +1147,31 @@ const menuDividerStyle: React.CSSProperties = {
   height: 1,
   background: '#E5E7EB',
   margin: '0 24px',
+}
+
+const menuProfileButtonStyle: React.CSSProperties = {
+  margin: '18px 24px',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 20,
+  padding: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const menuProfileTextStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+}
+
+const menuProfileChevronStyle: React.CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 24,
+  lineHeight: 1,
+  flexShrink: 0,
 }
 
 const menuItemActionStyle: React.CSSProperties = {

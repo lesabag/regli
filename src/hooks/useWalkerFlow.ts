@@ -222,6 +222,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const prevFutureIdsRef = useRef<Set<string>>(new Set())
   const transitionInitRef = useRef(false)
   const autoDispatchInFlightRef = useRef<Set<string>>(new Set())
+  const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
 
   const firstName = (profileName || '').split(' ')[0] || profileName
 
@@ -491,6 +492,30 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (isOnline) return 'waiting'
     return 'offline'
   }, [completionSuccess, assignedJobs, isOnline, visibleOpenJobs])
+
+  useEffect(() => {
+    if (completionSuccess) return
+
+    const pendingCompletion = completedJobs.find(
+      (job) =>
+        job.status === 'completed' &&
+        !!job.client_id &&
+        !ratedJobIds.has(job.id) &&
+        !dismissedCompletionIdsRef.current.has(job.id),
+    )
+
+    if (!pendingCompletion) return
+
+    setCompletionSuccess({
+      jobId: pendingCompletion.id,
+      clientId: pendingCompletion.client_id,
+      dogName: pendingCompletion.dog_name || 'the dog',
+      earnings:
+        pendingCompletion.walker_earnings ??
+        (pendingCompletion.price != null ? Math.round(pendingCompletion.price * 0.8 * 100) / 100 : null),
+      clientName: pendingCompletion.client?.full_name || pendingCompletion.client?.email || 'Client',
+    })
+  }, [completedJobs, completionSuccess, ratedJobIds])
 
   useEffect(() => {
     const futureIds = new Set(futureJobs.map((j) => j.id))
@@ -1517,7 +1542,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const openRatingModal = useCallback((jobId: string) => setRatingJobId(jobId), [])
   const closeRatingModal = useCallback(() => setRatingJobId(null), [])
-  const dismissCompletion = useCallback(() => setCompletionSuccess(null), [])
+  const dismissCompletion = useCallback(() => {
+    setCompletionSuccess((current) => {
+      if (current) dismissedCompletionIdsRef.current.add(current.jobId)
+      return null
+    })
+  }, [])
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const dismissTakenNotice = useCallback(() => setTakenNotice(false), [])

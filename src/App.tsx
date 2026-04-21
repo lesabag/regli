@@ -41,8 +41,9 @@ export default function App() {
     }
   }, [profile, session])
 
-  // Auth is still resolving OR profile is still loading for a logged-in user
-  const isInitializing = loading || (!!session && !profile)
+  // Auth is still resolving OR profile is still loading for a logged-in user.
+  // If profile bootstrap failed, let the splash exit so the error/fallback UI can render.
+  const isInitializing = loading
 
   // Resolve dashboard component as soon as profile is available —
   // this lets the map mount BEHIND the splash for a seamless morph transition
@@ -104,7 +105,12 @@ export default function App() {
             color: '#94A3B8',
           }}
         >
-          Setting up your profile...
+          <div style={{ padding: 24, textAlign: 'center' }}>
+            <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
+              Setting up your profile...
+            </div>
+            {authError && <div style={{ fontSize: 13 }}>{authError}</div>}
+          </div>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 const MIN_DISPLAY_MS = 900
 const EXIT_DURATION_MS = 400
@@ -17,6 +17,13 @@ export default function SplashScreen({ ready, authResolved = false, onDone }: Sp
   const [progress, setProgress] = useState(0)
   const targetRef = useRef(0)
   const rafRef = useRef(0)
+  const doneFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const completeSplash = useCallback(() => {
+    if (calledRef.current) return
+    calledRef.current = true
+    onDone()
+  }, [onDone])
 
   // ── Derive target from real loading milestones ──────────
   useEffect(() => {
@@ -74,24 +81,38 @@ export default function SplashScreen({ ready, authResolved = false, onDone }: Sp
 
   // Exit trigger: when ready + min time elapsed
   useEffect(() => {
-    if (!ready || calledRef.current || phase === 'exit') return
+    if (!ready || calledRef.current) return
     const elapsed = Date.now() - mountTimeRef.current
     const remaining = Math.max(0, MIN_DISPLAY_MS - elapsed)
-    const id = setTimeout(() => setPhase('exit'), remaining)
-    return () => clearTimeout(id)
-  }, [ready, phase])
+    const id = setTimeout(() => {
+      setPhase('exit')
+
+      if (doneFallbackRef.current) clearTimeout(doneFallbackRef.current)
+      doneFallbackRef.current = setTimeout(completeSplash, EXIT_DURATION_MS + 80)
+    }, remaining)
+    return () => {
+      clearTimeout(id)
+      if (doneFallbackRef.current) {
+        clearTimeout(doneFallbackRef.current)
+        doneFallbackRef.current = null
+      }
+    }
+  }, [ready, completeSplash])
+
+  useEffect(() => {
+    return () => {
+      if (doneFallbackRef.current) {
+        clearTimeout(doneFallbackRef.current)
+      }
+    }
+  }, [])
 
   // After exit animation, call onDone exactly once
   useEffect(() => {
     if (phase !== 'exit') return
-    const id = setTimeout(() => {
-      if (!calledRef.current) {
-        calledRef.current = true
-        onDone()
-      }
-    }, EXIT_DURATION_MS)
+    const id = setTimeout(completeSplash, EXIT_DURATION_MS)
     return () => clearTimeout(id)
-  }, [phase, onDone])
+  }, [phase, completeSplash])
 
   // ── Derived visual values ───────────────────────────────
 
