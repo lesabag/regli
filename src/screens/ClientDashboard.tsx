@@ -101,7 +101,6 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   const [dogNameDraft, setDogNameDraft] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const defaultDurationAppliedRef = useRef(false)
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -182,12 +181,6 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   }, [flow.bookingTiming, flow.scheduledFor, flow.setScheduledFor, showScheduleSheet])
 
   useEffect(() => {
-    if (defaultDurationAppliedRef.current) return
-    defaultDurationAppliedRef.current = true
-    flow.setDuration(20 as unknown as DurationType)
-  }, [flow])
-
-  useEffect(() => {
     try {
       const raw = window.localStorage.getItem(dogNamesStorageKey(profile.id))
       if (!raw) return
@@ -219,9 +212,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   }, [onSignOut])
 
   const handleFindWalker = useCallback(() => {
-    if (!flow.dogName.trim() || !flow.location.trim() || !flow.savedCard) return
+    if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
     flow.requestWalk()
-  }, [flow.dogName, flow.location, flow.savedCard, flow.requestWalk])
+  }, [flow.dogName, flow.duration, flow.location, flow.savedCard, flow.requestWalk])
 
 
   const persistRecentDogNames = useCallback(
@@ -285,7 +278,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     recentRatingsReceived?: Array<Record<string, unknown>>
     setDogName?: (value: string) => void
     setLocation?: (value: string) => void
-    setDuration?: (value: DurationType) => void
+    setDuration?: (value: DurationType | null) => void
     setBookingTiming?: (value: 'asap' | 'scheduled') => void
     hideHistoryItem?: (id: string) => Promise<void>
   }
@@ -332,7 +325,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     return map
   }, [ratingsSource])
 
-  const historyItems = useMemo<HistoryItem[]>(() => {
+  const allHistoryItems = useMemo<HistoryItem[]>(() => {
     const source = (
       anyFlow.completedJobs ??
       anyFlow.recentActivity ??
@@ -342,7 +335,6 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     ) as Array<Record<string, unknown>>
 
     return source
-      .filter((item) => item.hidden_by_client !== true)
       .map((item, index) => {
         const itemId = typeof item.id === 'string' ? item.id : `history-${index}`
 
@@ -393,6 +385,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
             : typeof item.scheduled_fee_snapshot === 'number'
               ? item.scheduled_fee_snapshot
               : null
+        const tipAmount = typeof item.tip_amount === 'number' ? item.tip_amount : null
 
         const ratingInfo = ratingByJobId.get(itemId)
 
@@ -409,8 +402,11 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           created_at: createdAt,
           completed_at: createdAt,
           duration_minutes: durationMinutes,
+          tip_amount: tipAmount,
           price,
+          walker_id: typeof item.walker_id === 'string' ? item.walker_id : null,
           walker_name: walkerName,
+          hidden_by_client: item.hidden_by_client === true,
           review: ratingInfo?.review ?? null,
           rating: ratingInfo?.rating ?? null,
           client_lat: typeof item.client_lat === 'number' ? item.client_lat : null,
@@ -430,7 +426,22 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     ratingByJobId,
   ])
 
+  const visibleHistoryItems = useMemo(
+    () => allHistoryItems.filter((item) => item.hidden_by_client !== true).slice(0, 7),
+    [allHistoryItems],
+  )
+
   const hasCompletionPrompt = !!flow.completionJob
+  const preferredWalkers = flow.favoriteWalkers
+  const favoriteIndicatorLabel =
+    preferredWalkers.length === 1
+      ? `Favorite walker: ${
+          preferredWalkers[0]?.walker?.full_name ||
+          preferredWalkers[0]?.walker?.email ||
+          flow.walkerNameById.get(preferredWalkers[0]?.walker_id ?? '') ||
+          'Walker'
+        }`
+      : `Favorite walkers (${preferredWalkers.length})`
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const isIdleState = flow.screenState === 'idle' && !hasCompletionPrompt
@@ -451,6 +462,16 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
 
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
+
+  const requestDurationLabel = formatDurationLabelFromMinutes(flow.currentJob?.duration_minutes) ||
+    flow.selectedDuration.label ||
+    'Walk'
+  const requestPriceLabel =
+    flow.currentJob?.price != null && flow.currentJob.price > 0
+      ? `₪${flow.currentJob.price}`
+      : flow.adjustedPriceILS > 0
+        ? `₪${flow.adjustedPriceILS}`
+        : '₪0'
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -520,6 +541,18 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     flow.setBookingTiming('asap')
     setShowScheduleSheet(false)
   }, [flow])
+
+  const openFavoritesMenu = useCallback(() => {
+    setProfileOpen(false)
+    setHistoryView('menu')
+    setBurgerOpen(true)
+    requestAnimationFrame(() => {
+      document.getElementById('client-favorites-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    })
+  }, [])
 
   const currentMapStyle: React.CSSProperties = isTrackingState
     ? trackingMapContainerStyle
@@ -630,13 +663,14 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
               {historyView === 'all' ? (
                 <BurgerSection title="All history" subtitle="Your previous orders and reviews.">
                   <GroupedHistory
-                    items={historyItems}
+                    items={allHistoryItems}
                     role="client"
                     onBookAgain={handleBookAgain}
                     onHide={anyFlow.hideHistoryItem}
+                    favoriteWalkerIds={flow.favoriteWalkerIds}
+                    onToggleFavoriteWalker={flow.toggleFavoriteWalker}
                     emptyTitle="No walk history yet"
                     emptySubtitle="Your completed walks and reviews will appear here."
-                    maxMonths={12}
                   />
                 </BurgerSection>
               ) : (
@@ -674,6 +708,18 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     />
                   </BurgerSection>
 
+                  <BurgerSection
+                    id="client-favorites-section"
+                    title="Preferred walkers"
+                    subtitle="Saved walkers for quick reference."
+                  >
+                    <FavoriteWalkerMenuList
+                      favorites={flow.favoriteWalkers}
+                      fallbackNames={flow.walkerNameById}
+                      onToggleFavorite={flow.toggleFavoriteWalker}
+                    />
+                  </BurgerSection>
+
                   <section style={burgerSectionStyle}>
                     <button
                       type="button"
@@ -690,15 +736,16 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     {walkHistoryOpen && (
                       <div style={{ marginTop: 10 }}>
                         <GroupedHistory
-                          items={historyItems}
+                          items={visibleHistoryItems}
                           role="client"
                           onBookAgain={handleBookAgain}
                           onHide={anyFlow.hideHistoryItem}
+                          favoriteWalkerIds={flow.favoriteWalkerIds}
+                          onToggleFavoriteWalker={flow.toggleFavoriteWalker}
                           emptyTitle="No walk history yet"
                           emptySubtitle="Your completed walks and reviews will appear here."
-                          maxMonths={3}
                         />
-                        {historyItems.length > 6 && (
+                        {allHistoryItems.length > 7 && (
                           <div style={{ marginTop: 10, textAlign: 'center' }}>
                             <button
                               type="button"
@@ -816,6 +863,25 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     </button>
                   </div>
 
+                  {preferredWalkers.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={openFavoritesMenu}
+                      style={preferredWalkerIndicatorStyle}
+                    >
+                      {preferredWalkers.length === 1 && (
+                        <ProfileAvatar
+                          url={preferredWalkers[0]?.walker?.avatar_url ?? null}
+                          name={favoriteIndicatorLabel}
+                          size={18}
+                          borderRadius={999}
+                        />
+                      )}
+                      <span>♥</span>
+                      <span style={preferredWalkerIndicatorTextStyle}>{favoriteIndicatorLabel}</span>
+                    </button>
+                  )}
+
                   <div style={compactFieldStyle}>
                     <div style={compactFieldLabelStyle}>Pickup</div>
                     <input
@@ -886,7 +952,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     <div style={compactDurationWrapStyle}>
                       <DurationPicker
                         options={DURATION_OPTIONS}
-                        selected={flow.duration}
+                        selected={flow.duration ?? ''}
                         onSelect={(v) => flow.setDuration(v as DurationType)}
                         surgeMultiplier={flow.surgeMultiplier}
                         surgeLevel={flow.surgeLevel}
@@ -924,8 +990,8 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
             <div style={sheetContentStyle}>
               <SearchingSheet
                 elapsedSeconds={flow.elapsedSeconds}
-                durationLabel={flow.selectedDuration.label}
-                priceLabel={`₪${flow.adjustedPriceILS}`}
+                durationLabel={requestDurationLabel}
+                priceLabel={requestPriceLabel}
                 onCancel={flow.cancelSearch}
               />
             </div>
@@ -974,6 +1040,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                 disabled={
                   !flow.dogName.trim() ||
                   !flow.location.trim() ||
+                  !flow.duration ||
                   !flow.savedCard ||
                   (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
                 }
@@ -994,7 +1061,34 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
               onRate={flow.submitCompletionRating}
               ratingSubmitting={flow.completionRatingSubmitting}
               alreadyRated={flow.ratedJobIds.has(flow.completionJob.jobId)}
+              favoriteLabel={flow.completionJob.walkerName}
+              favoriteActive={
+                flow.completionJob.walkerId
+                  ? flow.favoriteWalkerIds.has(flow.completionJob.walkerId)
+                  : false
+              }
+              onToggleFavorite={
+                flow.completionJob.walkerId
+                  ? () => {
+                      void flow.toggleFavoriteWalker(flow.completionJob!.walkerId!)
+                    }
+                  : undefined
+              }
               onDismiss={flow.dismissCompletion}
+            />
+          </div>
+        </div>
+      )}
+
+      {!hasCompletionPrompt && flow.tipJob && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <TipPromptCard
+              walkerName={flow.tipJob.walkerName}
+              submitting={flow.tipSubmitting}
+              onSubmit={flow.submitTip}
+              onDismiss={flow.dismissTip}
             />
           </div>
         </div>
@@ -1089,22 +1183,148 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
 }
 
 function BurgerSection({
+  id,
   title,
   subtitle,
   children,
 }: {
+  id?: string
   title: string
   subtitle?: string
   children: React.ReactNode
 }) {
   return (
-    <section style={burgerSectionStyle}>
+    <section id={id} style={burgerSectionStyle}>
       <div style={burgerSectionHeaderStyle}>
         <div style={burgerSectionTitleStyle}>{title}</div>
       </div>
       {subtitle && <div style={burgerSectionSubtitleStyle}>{subtitle}</div>}
       <div style={{ marginTop: 10 }}>{children}</div>
     </section>
+  )
+}
+
+function FavoriteWalkerMenuList({
+  favorites,
+  fallbackNames,
+  onToggleFavorite,
+}: {
+  favorites: ReturnType<typeof useClientFlow>['favoriteWalkers']
+  fallbackNames: Map<string, string>
+  onToggleFavorite: (walkerId: string) => Promise<void>
+}) {
+  if (favorites.length === 0) {
+    return <div style={burgerEmptyStateStyle}>No preferred walkers yet.</div>
+  }
+
+  return (
+    <div style={favoriteMenuListStyle}>
+      {favorites.map((favorite) => {
+        const walkerName =
+          favorite.walker?.full_name ||
+          favorite.walker?.email ||
+          fallbackNames.get(favorite.walker_id) ||
+          'Walker'
+
+        return (
+          <div key={favorite.walker_id} style={favoriteMenuItemStyle}>
+            <ProfileAvatar
+              url={favorite.walker?.avatar_url ?? null}
+              name={walkerName}
+              size={34}
+              borderRadius={12}
+            />
+            <div style={favoriteMenuTextStyle}>
+              <div style={favoriteMenuNameStyle}>{walkerName}</div>
+              <div style={favoriteMenuSubStyle}>Preferred walker</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                void onToggleFavorite(favorite.walker_id)
+              }}
+              style={favoriteMenuRemoveStyle}
+            >
+              Remove
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function TipPromptCard({
+  walkerName,
+  submitting,
+  onSubmit,
+  onDismiss,
+}: {
+  walkerName: string
+  submitting: boolean
+  onSubmit: (amount: number) => Promise<void>
+  onDismiss: () => void
+}) {
+  const [customOpen, setCustomOpen] = useState(false)
+  const [customAmount, setCustomAmount] = useState('')
+
+  const parsedCustomAmount = Math.max(0, Math.round(Number(customAmount)))
+
+  return (
+    <div style={tipCardStyle}>
+      <div style={tipIconStyle}>₪</div>
+      <h3 style={tipTitleStyle}>Add a tip for {walkerName}?</h3>
+      <p style={tipSubtitleStyle}>Optional, separate from the walk payment.</p>
+
+      <div style={tipPresetRowStyle}>
+        {[5, 10, 15].map((amount) => (
+          <button
+            key={amount}
+            type="button"
+            disabled={submitting}
+            onClick={() => {
+              void onSubmit(amount)
+            }}
+            style={tipPresetButtonStyle}
+          >
+            ₪{amount}
+          </button>
+        ))}
+      </div>
+
+      {customOpen ? (
+        <div style={tipCustomRowStyle}>
+          <input
+            value={customAmount}
+            onChange={(event) => setCustomAmount(event.target.value.replace(/[^\d]/g, ''))}
+            inputMode="numeric"
+            placeholder="Custom"
+            style={tipCustomInputStyle}
+          />
+          <button
+            type="button"
+            disabled={submitting || parsedCustomAmount <= 0}
+            onClick={() => {
+              if (parsedCustomAmount > 0) void onSubmit(parsedCustomAmount)
+            }}
+            style={{
+              ...tipCustomSubmitStyle,
+              opacity: submitting || parsedCustomAmount <= 0 ? 0.55 : 1,
+            }}
+          >
+            Send
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setCustomOpen(true)} style={tipCustomToggleStyle}>
+          Custom amount
+        </button>
+      )}
+
+      <button type="button" onClick={onDismiss} disabled={submitting} style={tipSkipButtonStyle}>
+        No tip
+      </button>
+    </div>
   )
 }
 
@@ -1249,6 +1469,11 @@ function formatScheduledDate(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function formatDurationLabelFromMinutes(minutes: number | null | undefined): string {
+  if (minutes === 20 || minutes === 40 || minutes === 60) return `${minutes} min`
+  return ''
 }
 
 function formatEta(
@@ -1476,6 +1701,33 @@ const sheetGreetingStyle: React.CSSProperties = {
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 8,
+}
+
+const preferredWalkerIndicatorStyle: React.CSSProperties = {
+  justifySelf: 'flex-start',
+  maxWidth: '100%',
+  border: '1px solid #FDE68A',
+  background: '#FFFBEB',
+  color: '#92400E',
+  borderRadius: 999,
+  padding: '5px 9px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 12,
+  fontWeight: 800,
+  lineHeight: 1,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  WebkitTapHighlightColor: 'transparent',
+  overflow: 'hidden',
+}
+
+const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const compactFieldStyle: React.CSSProperties = {
@@ -1831,6 +2083,115 @@ const completionOverlayCardStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
+const tipCardStyle: React.CSSProperties = {
+  position: 'relative',
+  borderRadius: 24,
+  background: '#FFFFFF',
+  boxShadow: '0 24px 70px rgba(15, 23, 42, 0.20)',
+  padding: 22,
+  display: 'grid',
+  gap: 12,
+  textAlign: 'center',
+}
+
+const tipIconStyle: React.CSSProperties = {
+  width: 48,
+  height: 48,
+  borderRadius: 16,
+  background: '#FFFBEB',
+  color: '#B45309',
+  display: 'grid',
+  placeItems: 'center',
+  justifySelf: 'center',
+  fontSize: 24,
+  fontWeight: 900,
+}
+
+const tipTitleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 20,
+  fontWeight: 900,
+  color: '#0F172A',
+  lineHeight: 1.18,
+}
+
+const tipSubtitleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  color: '#64748B',
+  lineHeight: 1.4,
+}
+
+const tipPresetRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 8,
+}
+
+const tipPresetButtonStyle: React.CSSProperties = {
+  height: 46,
+  borderRadius: 16,
+  border: '1px solid #FDE68A',
+  background: '#FFFBEB',
+  color: '#92400E',
+  fontSize: 16,
+  fontWeight: 900,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const tipCustomToggleStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: '#2563EB',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const tipCustomRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr auto',
+  gap: 8,
+}
+
+const tipCustomInputStyle: React.CSSProperties = {
+  height: 44,
+  borderRadius: 14,
+  border: '1px solid #E2E8F0',
+  padding: '0 12px',
+  fontSize: 15,
+  fontWeight: 800,
+  outline: 'none',
+  boxSizing: 'border-box',
+}
+
+const tipCustomSubmitStyle: React.CSSProperties = {
+  height: 44,
+  borderRadius: 14,
+  border: 'none',
+  background: '#0F172A',
+  color: '#FFFFFF',
+  padding: '0 16px',
+  fontSize: 14,
+  fontWeight: 900,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const tipSkipButtonStyle: React.CSSProperties = {
+  height: 44,
+  borderRadius: 14,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#64748B',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
 const trackingCardStyle: React.CSSProperties = {
   width: '100%',
   maxWidth: '100%',
@@ -2079,6 +2440,60 @@ const accordionChevronStyle: React.CSSProperties = {
 const burgerListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
+}
+
+const favoriteMenuListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  maxHeight: 220,
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
+  paddingRight: 2,
+}
+
+const favoriteMenuItemStyle: React.CSSProperties = {
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 10,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+}
+
+const favoriteMenuTextStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+}
+
+const favoriteMenuNameStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: '#0F172A',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const favoriteMenuSubStyle: React.CSSProperties = {
+  marginTop: 2,
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#94A3B8',
+}
+
+const favoriteMenuRemoveStyle: React.CSSProperties = {
+  border: 'none',
+  background: '#FEF2F2',
+  color: '#B91C1C',
+  borderRadius: 999,
+  padding: '7px 10px',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  flexShrink: 0,
 }
 
 const burgerListCardStyle: React.CSSProperties = {
