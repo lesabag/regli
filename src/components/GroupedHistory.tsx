@@ -23,7 +23,7 @@ export type HistoryItem = {
   walkerName?: string | null
   client_name?: string | null
   clientName?: string | null
-  review_text?: string | null
+  review?: string | null
   reviewText?: string | null
   rating?: number | null
   walker_lat?: number | null
@@ -223,6 +223,7 @@ function SwipeHistoryRow({
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [hideLoading, setHideLoading] = useState(false)
+  const [reviewExpanded, setReviewExpanded] = useState(false)
 
   const dragStateRef = useRef<{
     startX: number
@@ -320,6 +321,7 @@ function SwipeHistoryRow({
 
   const status = formatStatus(item.status)
   const title = getTitle(item)
+  const itemId = getItemId(item)
   const dateLabel = getDisplayDate(item)
   const durationLabel = getDuration(item)
   const priceLabel = getPrice(item)
@@ -329,6 +331,16 @@ function SwipeHistoryRow({
   const locationText = getLocationText(item)
   const coords = getCoordinates(item)
   const hasPreview = Boolean(locationText || coords)
+  const isLongReview = reviewText.length > 92
+
+  useEffect(() => {
+    setReviewExpanded(false)
+  }, [itemId])
+
+  const toggleReview = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    setReviewExpanded((current) => !current)
+  }, [])
 
   return (
     <div
@@ -380,7 +392,18 @@ function SwipeHistoryRow({
           transition: dragging ? 'none' : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
       >
-        <button type="button" style={styles.cardButton} onClick={handleCardClick}>
+        <div
+          role="button"
+          tabIndex={0}
+          style={styles.cardButton}
+          onClick={handleCardClick}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              handleCardClick()
+            }
+          }}
+        >
           <div style={styles.card}>
             <div style={styles.cardTopRow}>
               <div style={styles.titleCluster}>
@@ -419,12 +442,37 @@ function SwipeHistoryRow({
 
             {reviewText ? (
               <div style={styles.reviewBlock}>
-                <div style={styles.reviewQuoteMark}>“</div>
-                <div style={styles.reviewText}>{reviewText}</div>
+                <div style={styles.reviewHeaderRow}>
+                  {rating ? (
+                    <div style={styles.reviewRatingInline}>
+                      <span style={styles.star}>★</span>
+                      <span>{rating.toFixed(1)}</span>
+                    </div>
+                  ) : null}
+                  <div style={styles.reviewLabel}>Review</div>
+                </div>
+                <div
+                  style={{
+                    ...styles.reviewText,
+                    ...(reviewExpanded ? styles.reviewTextExpanded : styles.reviewTextCollapsed),
+                  }}
+                >
+                  {reviewText}
+                </div>
+                {isLongReview ? (
+                  <button
+                    type="button"
+                    onClick={toggleReview}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    style={styles.reviewToggleButton}
+                  >
+                    {reviewExpanded ? 'Show less' : 'Read more'}
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
-        </button>
+        </div>
       </div>
     </div>
   )
@@ -508,7 +556,7 @@ function getCounterpart(item: HistoryItem, role: Role): string {
 }
 
 function getReviewText(item: HistoryItem): string {
-  return sanitizeString(item.review_text) ?? sanitizeString(item.reviewText) ?? ''
+  return sanitizeString(item.review) ?? sanitizeString(item.reviewText) ?? ''
 }
 
 function getRating(item: HistoryItem): number | null {
@@ -1051,27 +1099,70 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   reviewBlock: {
-    display: 'flex',
-    gap: 8,
-    alignItems: 'flex-start',
-    padding: '12px 12px 12px 10px',
+    display: 'grid',
+    gap: 7,
+    padding: '11px 12px',
     borderRadius: 16,
     background:
       'linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.02) 100%)',
     border: '1px solid rgba(255,255,255,0.05)',
   },
-  reviewQuoteMark: {
-    fontSize: 22,
+  reviewHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  reviewRatingInline: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '5px 8px',
+    borderRadius: 999,
+    color: '#FFF5CC',
+    fontSize: 12,
     lineHeight: 1,
-    color: 'rgba(255, 213, 92, 0.9)',
     fontWeight: 800,
-    transform: 'translateY(-1px)',
+    background: 'rgba(255, 213, 92, 0.10)',
+    border: '1px solid rgba(255, 213, 92, 0.14)',
+    flexShrink: 0,
+  },
+  reviewLabel: {
+    fontSize: 11,
+    lineHeight: 1,
+    textTransform: 'uppercase',
+    letterSpacing: '0.12em',
+    color: 'rgba(189, 202, 224, 0.62)',
+    fontWeight: 800,
   },
   reviewText: {
     fontSize: 13.5,
     lineHeight: 1.45,
     color: '#E7EEF9',
     fontWeight: 500,
+    overflow: 'hidden',
+  },
+  reviewTextCollapsed: {
+    textOverflow: 'ellipsis',
+    display: '-webkit-box',
+    WebkitLineClamp: 1,
+    WebkitBoxOrient: 'vertical',
+  },
+  reviewTextExpanded: {
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+  },
+  reviewToggleButton: {
+    justifySelf: 'flex-start',
+    appearance: 'none',
+    border: 'none',
+    background: 'transparent',
+    padding: '2px 0 0',
+    color: '#FDE68A',
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
   },
   emptyCard: {
     borderRadius: 22,
