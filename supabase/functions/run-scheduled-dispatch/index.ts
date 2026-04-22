@@ -47,10 +47,14 @@ serve(async (req) => {
         dispatch_state,
         smart_dispatch_state,
         smart_dispatch_expires_at,
-        walker_id
+        walker_id,
+        payment_status,
+        stripe_payment_intent_id
       `)
       .eq('booking_timing', 'scheduled')
       .eq('status', 'open')
+      .eq('payment_status', 'authorized')
+      .not('stripe_payment_intent_id', 'is', null)
       .is('walker_id', null)
       .not('scheduled_for', 'is', null)
       .lte('scheduled_for', leadTime.toISOString())

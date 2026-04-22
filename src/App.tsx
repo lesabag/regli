@@ -41,8 +41,9 @@ export default function App() {
     }
   }, [profile, session])
 
-  // Auth is still resolving OR profile is still loading for a logged-in user
-  const isInitializing = loading || (!!session && !profile)
+  // Auth is still resolving OR profile is still loading for a logged-in user.
+  // If profile bootstrap failed, let the splash exit so the error/fallback UI can render.
+  const isInitializing = loading
 
   // Resolve dashboard component as soon as profile is available —
   // this lets the map mount BEHIND the splash for a seamless morph transition
@@ -92,8 +93,8 @@ export default function App() {
         />
       )}
 
-      {/* Session but no profile yet — very rare edge */}
-      {splashDone && session && !profile && (
+      {/* Session but no profile yet — bounded fallback for delayed/failed bootstrap */}
+      {splashDone && session && !profile && !authError && (
         <div
           style={{
             minHeight: '100svh',
@@ -104,7 +105,54 @@ export default function App() {
             color: '#94A3B8',
           }}
         >
-          Setting up your profile...
+          <div style={{ padding: 24, textAlign: 'center' }}>
+            <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
+              Setting up your profile...
+            </div>
+            <div style={{ fontSize: 13 }}>
+              This should only take a moment.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {splashDone && session && !profile && authError && (
+        <div
+          style={{
+            minHeight: '100svh',
+            display: 'grid',
+            placeItems: 'center',
+            background: '#FAFAF8',
+            fontFamily: 'Inter, system-ui, sans-serif',
+            color: '#64748B',
+            padding: 24,
+          }}
+        >
+          <div style={{ width: 'min(100%, 360px)', textAlign: 'center' }}>
+            <div style={{ fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+              We could not finish setting up your profile.
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 18 }}>
+              {authError}
+            </div>
+            <button
+              type="button"
+              onClick={signOut}
+              style={{
+                width: '100%',
+                minHeight: 48,
+                border: 0,
+                borderRadius: 12,
+                background: '#0F172A',
+                color: '#FFFFFF',
+                fontWeight: 800,
+                fontFamily: 'Inter, system-ui, sans-serif',
+                cursor: 'pointer',
+              }}
+            >
+              Return to sign in
+            </button>
+          </div>
         </div>
       )}
 

@@ -8,7 +8,7 @@ import {
   Marker,
   useMap,
 } from 'react-leaflet'
-import { Fragment, useEffect, useMemo, useRef } from 'react'
+import { Fragment, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpsQuality, ProximityLevel } from '../hooks/useJobTracking'
@@ -571,12 +571,12 @@ export default function MapView({
     : 'walker-none'
 
   return (
-    <div style={{ height: '100%', overflow: 'hidden' }}>
+    <div style={mapShellStyle}>
       <MapContainer
         center={userLocation}
         zoom={15}
         zoomControl={false}
-        style={{ height: '100%', width: '100%' }}
+        style={mapContainerStyle}
       >
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -696,4 +696,26 @@ export default function MapView({
       </MapContainer>
     </div>
   )
+}
+
+const mapShellStyle: CSSProperties = {
+  position: 'relative',
+  height: '100%',
+  width: '100%',
+  minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+  contain: 'layout paint size',
+}
+
+const mapContainerStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  height: '100%',
+  width: '100%',
+  minWidth: 0,
+  maxWidth: '100%',
+  boxSizing: 'border-box',
+  overflow: 'hidden',
 }

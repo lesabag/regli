@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../services/supabaseClient'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -23,6 +24,11 @@ interface Toast {
 }
 
 const TOAST_DURATION = 4000
+const CLIENT_TRANSIENT_LIVE_ORDER_TYPES = new Set([
+  'job_accepted',
+  'walker_arrived',
+  'job_completed',
+])
 
 // ─── Notification type config ───────────────────────────────────
 
@@ -68,6 +74,10 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
     bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
     iconPath: 'M20 6L9 17l-5-5',
   },
+  job_completed_self: {
+    bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
+    iconPath: 'M22 11.08V12a10 10 0 11-5.93-9.14 M22 4L12 14.01l-3-3',
+  },
 }
 
 const DEFAULT_CONFIG: TypeConfig = {
@@ -77,6 +87,14 @@ const DEFAULT_CONFIG: TypeConfig = {
 
 function getTypeConfig(type: string): TypeConfig {
   return TYPE_CONFIG[type] || DEFAULT_CONFIG
+}
+
+function isBellVisibleNotification(notification: Notification): boolean {
+  if (CLIENT_TRANSIENT_LIVE_ORDER_TYPES.has(notification.type)) return false
+  if (notification.type === 'dispatch_started' && notification.title === 'Your walk is starting') {
+    return false
+  }
+  return true
 }
 
 // ─── Time grouping ──────────────────────────────────────────────
@@ -112,6 +130,7 @@ export default function NotificationsBell({
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const ref = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null)
 
@@ -172,7 +191,7 @@ export default function NotificationsBell({
       console.error('NotificationsBell: fetch error', error.message)
       return
     }
-    if (data) setNotifications(data as Notification[])
+    if (data) setNotifications((data as Notification[]).filter(isBellVisibleNotification))
   }, [])
 
   useEffect(() => {
@@ -210,7 +229,7 @@ export default function NotificationsBell({
         (payload) => {
           fetchNotifications(authUserId)
           const row = payload.new as Notification | undefined
-          if (row) {
+          if (row && isBellVisibleNotification(row)) {
             addToast(row.title, row.message, row.type)
           }
         }
@@ -225,12 +244,22 @@ export default function NotificationsBell({
   useEffect(() => {
     if (!open) return
     const handler = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as Node
+      if (
+        ref.current &&
+        !ref.current.contains(target) &&
+        panelRef.current &&
+        !panelRef.current.contains(target)
+      ) {
         setOpen(false)
       }
     }
     document.addEventListener('pointerdown', handler)
     return () => document.removeEventListener('pointerdown', handler)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setDropdownPos(null)
   }, [open])
 
   const handleToggle = useCallback(() => {
@@ -259,20 +288,29 @@ export default function NotificationsBell({
   }
 
   const markAllAsRead = async () => {
+    if (!authUserId) return
+
     const unreadIds = notifications.filter((n) => !n.is_read).map((n) => n.id)
     if (unreadIds.length === 0) return
+
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+
     const { error } = await supabase
       .from('notifications')
       .update({ is_read: true })
+      .eq('user_id', authUserId)
       .in('id', unreadIds)
+      .eq('is_read', false)
+
     if (error) {
       console.error('NotificationsBell: markAllAsRead error', error.message)
+      void fetchNotifications(authUserId)
       return
     }
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
   }
 
   const isLight = variant === 'light'
+  const portalRoot = typeof document === 'undefined' ? null : document.body
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -316,14 +354,16 @@ export default function NotificationsBell({
       </button>
 
       {/* Dropdown panel */}
-      {open && dropdownPos && (
+      {portalRoot && open && dropdownPos && createPortal(
         <div
+          ref={panelRef}
           className="notif-panel-enter"
           style={{
             position: 'fixed',
             top: dropdownPos.top,
             right: dropdownPos.right,
-            width: 'min(340px, calc(100vw - 24px))',
+            width: 'min(340px, calc(100% - 24px))',
+            maxWidth: 'calc(100% - 24px)',
             maxHeight: 440,
             background: '#FFFFFF',
             borderRadius: 18,
@@ -332,6 +372,7 @@ export default function NotificationsBell({
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
+            boxSizing: 'border-box',
           }}
         >
           {/* Header */}
@@ -438,10 +479,12 @@ export default function NotificationsBell({
             )}
           </div>
         </div>
+        ,
+        portalRoot,
       )}
 
       {/* Toast popups */}
-      {toasts.length > 0 && (
+      {portalRoot && toasts.length > 0 && createPortal(
         <div style={toastContainerStyle}>
           {toasts.map((t) => {
             const cfg = getTypeConfig(t.type)
@@ -487,6 +530,8 @@ export default function NotificationsBell({
             )
           })}
         </div>
+        ,
+        portalRoot,
       )}
     </div>
   )
@@ -676,6 +721,8 @@ const messageStyle: React.CSSProperties = {
   color: '#64748B',
   marginTop: 2,
   lineHeight: 1.45,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 
 const timeStyle: React.CSSProperties = {
@@ -688,18 +735,21 @@ const timeStyle: React.CSSProperties = {
 const toastContainerStyle: React.CSSProperties = {
   position: 'fixed',
   top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-  left: '50%',
-  transform: 'translateX(-50%)',
+  left: 'max(12px, env(safe-area-inset-left, 0px))',
+  right: 'max(12px, env(safe-area-inset-right, 0px))',
   zIndex: 99999,
   display: 'flex',
   flexDirection: 'column',
+  alignItems: 'center',
   gap: 8,
   pointerEvents: 'none',
-  width: 'min(360px, calc(100vw - 24px))',
+  maxWidth: 'calc(100% - 24px)',
+  boxSizing: 'border-box',
 }
 
 const toastStyle: React.CSSProperties = {
   pointerEvents: 'auto',
+  width: 'min(360px, 100%)',
   background: '#FFFFFF',
   borderRadius: 16,
   padding: '13px 16px',
@@ -710,6 +760,7 @@ const toastStyle: React.CSSProperties = {
   alignItems: 'flex-start',
   position: 'relative',
   overflow: 'hidden',
+  boxSizing: 'border-box',
 }
 
 const toastIconStyle: React.CSSProperties = {
@@ -726,7 +777,8 @@ const toastTitleStyle: React.CSSProperties = {
   fontSize: 13,
   color: '#0F172A',
   lineHeight: 1.3,
-  letterSpacing: -0.1,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 
 const toastMessageStyle: React.CSSProperties = {
@@ -734,6 +786,8 @@ const toastMessageStyle: React.CSSProperties = {
   color: '#64748B',
   lineHeight: 1.4,
   marginTop: 2,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 
 const toastProgressTrackStyle: React.CSSProperties = {

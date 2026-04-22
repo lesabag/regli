@@ -23,31 +23,31 @@ function formatElapsed(seconds: number): string {
 function getStage(elapsedSeconds: number): SearchStage {
   if (elapsedSeconds < 4) {
     return {
-      title: 'Searching nearby walkers',
-      subtitle: 'Checking who is online and closest to you right now.',
+      title: 'Finding a walker',
+      subtitle: 'Looking for someone nearby...',
       state: 'searching',
     }
   }
 
   if (elapsedSeconds < 9) {
     return {
-      title: 'Offering to a top match',
-      subtitle: 'Your request is being offered to one of the best nearby walkers.',
+      title: 'Finding a walker',
+      subtitle: 'Offering your request to a nearby walker.',
       state: 'offering',
     }
   }
 
   if (elapsedSeconds < 16) {
     return {
-      title: 'Trying the next best walker',
-      subtitle: 'No worries, we are moving through top nearby matches automatically.',
+      title: 'Finding a walker',
+      subtitle: 'Looking for someone nearby...',
       state: 'retrying',
     }
   }
 
   return {
-    title: 'Still looking for the best match',
-    subtitle: 'Dispatch is continuing in the background until a walker accepts.',
+    title: 'Finding a walker',
+    subtitle: 'Looking for someone nearby...',
     state: 'retrying',
   }
 }

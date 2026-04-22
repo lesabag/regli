@@ -8,6 +8,7 @@ export type WalkerScreenState =
   | 'offline'
   | 'waiting'
   | 'incoming_request'
+  | 'on_the_way'
   | 'active'
   | 'completed'
 
@@ -149,6 +150,85 @@ function startsInMinutes(value: string | null | undefined): number | null {
 
 const AUTO_DISPATCH_LEAD_MINUTES = 15
 const AUTO_DISPATCH_POLL_MS = 20_000
+const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
+
+function completionDismissStorageKey(profileId: string): string {
+  return `regli_walker_completion_dismissed_${profileId}`
+}
+
+function startedWalkStorageKey(profileId: string): string {
+  return `regli_walker_started_walks_${profileId}`
+}
+
+function sendClientLiveOrderEvent(params: {
+  clientId: string | null | undefined
+  jobId: string
+  type: 'accepted' | 'start_walk' | 'complete'
+  message: string
+  walkerId?: string | null
+  walkerName?: string | null
+}) {
+  if (!params.clientId) return
+
+  const channel = supabase.channel(`client-flow-${params.clientId}`)
+  const timeout = window.setTimeout(() => {
+    void supabase.removeChannel(channel)
+  }, 3000)
+
+  channel.subscribe((status) => {
+    if (status !== 'SUBSCRIBED') return
+
+    void channel
+      .send({
+        type: 'broadcast',
+        event: 'live_order_event',
+        payload: {
+          jobId: params.jobId,
+          type: params.type,
+          message: params.message,
+          walkerId: params.walkerId,
+          walkerName: params.walkerName,
+        },
+      })
+      .finally(() => {
+        window.clearTimeout(timeout)
+        void supabase.removeChannel(channel)
+      })
+  })
+}
+
+function getJobEventTime(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>): number {
+  const value = job.paid_at ?? job.created_at ?? null
+  if (!value) return 0
+  const ts = new Date(value).getTime()
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function isRecentCompletion(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>): boolean {
+  const ts = getJobEventTime(job)
+  if (!ts) return false
+  return Date.now() - ts <= COMPLETION_PROMPT_RECENT_MS
+}
+
+function getCompletionPromptJob(
+  completedJobs: WalkRequestRow[],
+  ratedJobIds: Set<string>,
+  dismissedJobIds: Set<string>,
+  flowCompletedJobIds: Set<string>,
+): WalkRequestRow | null {
+  return (
+    completedJobs
+      .filter(
+        (job) =>
+          job.status === 'completed' &&
+          !!job.client_id &&
+          (isRecentCompletion(job) || flowCompletedJobIds.has(job.id)) &&
+          !ratedJobIds.has(job.id) &&
+          !dismissedJobIds.has(job.id),
+      )
+      .sort((a, b) => getJobEventTime(b) - getJobEventTime(a))[0] ?? null
+  )
+}
 
 function shouldAutoDispatch(job: {
   booking_timing?: 'asap' | 'scheduled'
@@ -165,6 +245,22 @@ function shouldAutoDispatch(job: {
   const startTs = new Date(job.scheduled_for).getTime()
   if (Number.isNaN(startTs)) return false
   return startTs - Date.now() <= AUTO_DISPATCH_LEAD_MINUTES * 60 * 1000
+}
+
+function isPaymentAuthorizationFailure(message: string | null | undefined): boolean {
+  if (!message) return false
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('payment_not_authorized') ||
+    normalized.includes('payment was never authorized') ||
+    normalized.includes('requires_payment_method') ||
+    normalized.includes('requires_confirmation') ||
+    normalized.includes('card was never charged')
+  )
+}
+
+function paymentAuthorizationFailureMessage(): string {
+  return "Payment is not authorized for this walk, so it can't be completed yet. The job is still here; ask the client to update their payment method, then try again."
 }
 
 export function useWalkerFlow(profileId: string, profileName: string) {
@@ -211,6 +307,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     earnings: number | null
     clientName: string
   } | null>(null)
+  const [completionBlockedJob, setCompletionBlockedJob] = useState<WalkRequestRow | null>(null)
+  const [completionPaymentError, setCompletionPaymentError] = useState<{
+    jobId: string
+    message: string
+  } | null>(null)
 
   const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
 
@@ -222,8 +323,40 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const prevFutureIdsRef = useRef<Set<string>>(new Set())
   const transitionInitRef = useRef(false)
   const autoDispatchInFlightRef = useRef<Set<string>>(new Set())
+  const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
+  const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
+  const shownStateMessagesRef = useRef<Set<string>>(new Set())
+  const lastAcceptedJobIdRef = useRef<string | null>(null)
+  const [startedWalkIds, setStartedWalkIds] = useState<Set<string>>(new Set())
 
   const firstName = (profileName || '').split(' ')[0] || profileName
+
+  const showStateMessage = useCallback((jobId: string, event: string, message: string) => {
+    const key = `${event}:${jobId}`
+    if (shownStateMessagesRef.current.has(key)) return
+    shownStateMessagesRef.current.add(key)
+    setSuccessMessage(message)
+  }, [])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(completionDismissStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      dismissedCompletionIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
+    } catch {
+      dismissedCompletionIdsRef.current = new Set()
+    }
+  }, [profileId])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(startedWalkStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      setStartedWalkIds(new Set(Array.isArray(parsed) ? parsed : []))
+    } catch {
+      setStartedWalkIds(new Set())
+    }
+  }, [profileId])
 
   const avgRating = useMemo(() => {
     if (ratingsReceived.length === 0) return null
@@ -237,21 +370,44 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     return set
   }, [ratingsGiven])
 
-  const futureJobs = useMemo(() => myJobs.filter((j) => isFutureJob(j)), [myJobs])
+  const visibleMyJobs = useMemo(() => {
+    if (!completionBlockedJob) return myJobs
+    const withoutBlocked = myJobs.filter((job) => job.id !== completionBlockedJob.id)
+    return [completionBlockedJob, ...withoutBlocked]
+  }, [myJobs, completionBlockedJob])
 
-  const activeJobs = useMemo(
-    () => myJobs.filter((j) => j.status === 'accepted' && isDispatchedScheduledJob(j) && !isFutureJob(j)),
-    [myJobs],
+  const futureJobs = useMemo(() => visibleMyJobs.filter((j) => isFutureJob(j)), [visibleMyJobs])
+
+  const onTheWayJobs = useMemo(
+    () => visibleMyJobs.filter((j) => j.status === 'accepted' && isDispatchedScheduledJob(j) && !isFutureJob(j)),
+    [visibleMyJobs],
   )
 
-  const assignedJobs = useMemo(() => [...activeJobs, ...futureJobs], [activeJobs, futureJobs])
+  const activeJobs = useMemo(
+    () => onTheWayJobs.filter((j) => startedWalkIds.has(j.id)),
+    [onTheWayJobs, startedWalkIds],
+  )
+
+  useEffect(() => {
+    const current = activeJobs[0] ?? onTheWayJobs[0] ?? null
+    if (current) lastAcceptedJobIdRef.current = current.id
+  }, [activeJobs, onTheWayJobs])
 
   const completedJobs = useMemo(
     () => myJobs.filter((j) => j.status === 'completed' || j.status === 'cancelled'),
     [myJobs],
   )
 
-  const activeJobIds = useMemo(() => activeJobs.map((j) => j.id), [activeJobs])
+  useEffect(() => {
+    const completedLastAccepted = completedJobs.find(
+      (job) => job.status === 'completed' && job.id === lastAcceptedJobIdRef.current,
+    )
+    if (completedLastAccepted) {
+      flowCompletedJobIdsRef.current.add(completedLastAccepted.id)
+    }
+  }, [completedJobs])
+
+  const activeJobIds = useMemo(() => onTheWayJobs.map((j) => j.id), [onTheWayJobs])
   useWalkerTracking(activeJobIds)
 
   const [walkerPosition, setWalkerPosition] = useState<[number, number] | null>(null)
@@ -345,7 +501,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
         const dogLabel = data.dog_name || 'the walk'
 
-        setSuccessMessage('Walk is now active')
+        showStateMessage(job.id, 'accepted', 'Head to the client')
         track(AnalyticsEvent.SERVICE_STARTED, {
           request_id: job.id,
           provider_id: profileId,
@@ -353,29 +509,19 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           source_screen: 'walker_dashboard',
         })
 
-        if (data.client_id) {
-          await createNotification({
-            userId: data.client_id,
-            type: 'dispatch_started',
-            title: 'Your walk is starting',
-            message: `${profileName} is on the way for ${dogLabel}.`,
-            relatedJobId: job.id,
-          })
-        }
-
         await createNotification({
           userId: profileId,
           type: 'dispatch_started',
-          title: 'Walk is now active',
-          message: `Head to ${dogLabel}'s pickup. Tracking is live now.`,
+          title: 'Head to the client',
+          message: `Head to ${dogLabel}'s pickup. Start the walk when you're ready.`,
           relatedJobId: job.id,
         })
 
         if (data.client_id) {
           invokeEdgeFunction('send-push-notification', {
             body: {
-              title: 'Your walk is starting',
-              body: `${profileName} is on the way for ${dogLabel}.`,
+              title: 'Walker on the way',
+              body: `${profileName} is heading to you for ${dogLabel}.`,
               targetUserId: data.client_id,
               data: { jobId: job.id },
             },
@@ -384,8 +530,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
         invokeEdgeFunction('send-push-notification', {
           body: {
-            title: 'Walk is now active',
-            body: `Tracking is live for ${dogLabel}.`,
+              title: 'Head to the client',
+              body: `Head to ${dogLabel}'s pickup.`,
             targetUserId: profileId,
             data: { jobId: job.id },
           },
@@ -396,7 +542,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         autoDispatchInFlightRef.current.delete(job.id)
       }
     },
-    [profileId, profileName, walkerPosition],
+    [profileId, profileName, walkerPosition, showStateMessage],
   )
 
   useEffect(() => {
@@ -415,7 +561,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   }, [isOnline, myJobs, autoDispatchScheduledJob])
 
   useEffect(() => {
-    if (!walkerPosition || activeJobs.length === 0) return
+    if (!walkerPosition || onTheWayJobs.length === 0) return
 
     let cancelled = false
 
@@ -424,7 +570,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       const pos = walkerPosRef.current
       if (!pos) return
 
-      const activeTrackingIds = activeJobs
+      const activeTrackingIds = onTheWayJobs
         .filter((j) => isDispatchedScheduledJob(j))
         .map((j) => j.id)
 
@@ -455,7 +601,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       cancelled = true
       clearInterval(id)
     }
-  }, [activeJobs, profileId, walkerPosition])
+  }, [onTheWayJobs, profileId, walkerPosition])
 
   const pendingFromJobs = useMemo(() => {
     return myJobs
@@ -486,11 +632,60 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const screenState: WalkerScreenState = useMemo(() => {
     if (completionSuccess) return 'completed'
-    if (assignedJobs.length > 0) return 'active'
+    if (activeJobs.length > 0) return 'active'
+    if (onTheWayJobs.some((j) => !startedWalkIds.has(j.id))) return 'on_the_way'
     if (isOnline && visibleOpenJobs.length > 0) return 'incoming_request'
     if (isOnline) return 'waiting'
     return 'offline'
-  }, [completionSuccess, assignedJobs, isOnline, visibleOpenJobs])
+  }, [completionSuccess, activeJobs, onTheWayJobs, startedWalkIds, isOnline, visibleOpenJobs])
+
+  useEffect(() => {
+    const pendingCompletion = getCompletionPromptJob(
+      completedJobs,
+      ratedJobIds,
+      dismissedCompletionIdsRef.current,
+      flowCompletedJobIdsRef.current,
+    )
+
+    if (!pendingCompletion) {
+      setCompletionSuccess((prev) => {
+        if (
+          prev &&
+          flowCompletedJobIdsRef.current.has(prev.jobId) &&
+          !ratedJobIds.has(prev.jobId) &&
+          !dismissedCompletionIdsRef.current.has(prev.jobId)
+        ) {
+          return prev
+        }
+        return null
+      })
+      return
+    }
+
+    setCompletionSuccess((prev) => {
+      const next = {
+        jobId: pendingCompletion.id,
+        clientId: pendingCompletion.client_id,
+        dogName: pendingCompletion.dog_name || 'the dog',
+        earnings:
+          pendingCompletion.walker_earnings ??
+          (pendingCompletion.price != null ? Math.round(pendingCompletion.price * 0.8 * 100) / 100 : null),
+        clientName: pendingCompletion.client?.full_name || pendingCompletion.client?.email || 'Client',
+      }
+
+      if (
+        prev?.jobId === next.jobId &&
+        prev.clientId === next.clientId &&
+        prev.dogName === next.dogName &&
+        prev.earnings === next.earnings &&
+        prev.clientName === next.clientName
+      ) {
+        return prev
+      }
+
+      return next
+    })
+  }, [completedJobs, ratedJobIds])
 
   useEffect(() => {
     const futureIds = new Set(futureJobs.map((j) => j.id))
@@ -501,13 +696,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return
     }
 
-    const becameActive = activeJobs.find((j) => prevFutureIdsRef.current.has(j.id))
+    const becameDispatched = onTheWayJobs.find((j) => prevFutureIdsRef.current.has(j.id))
     prevFutureIdsRef.current = futureIds
 
-    if (becameActive) {
-      setSuccessMessage('Walk is now active')
+    if (becameDispatched) {
+      showStateMessage(becameDispatched.id, 'accepted', 'Head to the client')
     }
-  }, [futureJobs, activeJobs])
+  }, [futureJobs, onTheWayJobs, showStateMessage])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -1079,30 +1274,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         })
       }
 
-      setSuccessMessage(dispatchNow ? 'Walk is now active' : 'Job accepted!')
-      await fetchAll()
+      showStateMessage(requestId, 'accepted', dispatchNow ? 'Head to the client' : 'Job accepted')
+        await fetchAll()
 
       const dogLabel = job.dog_name || 'a dog'
 
       if (job.client_id) {
         const isScheduled = job.booking_timing === 'scheduled'
-        await createNotification({
-          userId: job.client_id,
-          type: dispatchNow ? 'dispatch_started' : 'job_accepted',
-          title: dispatchNow ? 'Your walk is starting' : 'Walker Accepted',
-          message: dispatchNow
-            ? `${profileName} is on the way for ${dogLabel}.`
-            : isScheduled
-              ? `${profileName} accepted your scheduled walk for ${dogLabel}. Dispatch will start at the booked time.`
-              : `${profileName} accepted your walk request for ${dogLabel}.`,
-          relatedJobId: requestId,
-        })
-
         invokeEdgeFunction('send-push-notification', {
           body: {
-            title: dispatchNow ? 'Your walk is starting' : 'Walker Accepted',
+            title: dispatchNow ? 'Walker on the way' : 'Walker Accepted',
             body: dispatchNow
-              ? `${profileName} is on the way for ${dogLabel}.`
+              ? `${profileName} is heading to you for ${dogLabel}.`
               : isScheduled
                 ? `${profileName} confirmed ${dogLabel}'s scheduled walk.`
                 : `${profileName} is on the way for ${dogLabel}'s walk!`,
@@ -1115,16 +1298,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       await createNotification({
         userId: profileId,
         type: dispatchNow ? 'dispatch_started' : 'job_accepted_self',
-        title: dispatchNow ? 'Walk is now active' : 'Job Accepted',
+        title: dispatchNow ? 'Head to the client' : 'Job Accepted',
         message: dispatchNow
-          ? `Tracking is live for ${dogLabel}.`
+          ? `Head to the pickup for ${dogLabel}. Start the walk when you're ready.`
           : job.booking_timing === 'scheduled'
-            ? `You accepted a scheduled walk for ${dogLabel}. It will move to active only when dispatch starts.`
+            ? `You accepted a scheduled walk for ${dogLabel}. Head to the client when dispatch starts.`
             : `You accepted a walk for ${dogLabel}. Head to the location and start the walk!`,
         relatedJobId: requestId,
       })
     },
-    [activeOffers, openJobs, profileId, profileName, fetchAll, walkerPosition],
+    [activeOffers, openJobs, profileId, profileName, fetchAll, walkerPosition, showStateMessage],
   )
 
   const unassignFutureJob = useCallback(
@@ -1213,14 +1396,44 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     [profileId, activeOffers, fetchAll],
   )
 
+  const startWalk = useCallback((jobId: string) => {
+    const job = myJobs.find((item) => item.id === jobId)
+    const dogLabel = job?.dog_name || 'the walk'
+
+    setStartedWalkIds((prev) => {
+      const next = new Set(prev)
+      next.add(jobId)
+      try {
+        window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
+      } catch {
+        // noop
+      }
+      return next
+    })
+    showStateMessage(jobId, 'active', 'Walk has started')
+    sendClientLiveOrderEvent({
+      clientId: job?.client_id,
+      jobId,
+      type: 'start_walk',
+      message: `Walk has started${job?.dog_name ? ` for ${job.dog_name}` : ''}.`,
+    })
+    void createNotification({
+      userId: profileId,
+      type: 'dispatch_started',
+      title: 'Active walk',
+      message: `The walk with ${dogLabel} has started. Complete it when the walk is done.`,
+      relatedJobId: jobId,
+    })
+  }, [myJobs, profileId, showStateMessage])
+
   const handleComplete = useCallback(
     async (id: string) => {
       setError(null)
       setSuccessMessage(null)
 
-      const job = myJobs.find((j) => j.id === id)
+      const job = myJobs.find((j) => j.id === id) ?? completionBlockedJob
       if (job?.booking_timing === 'scheduled' && job.dispatch_state !== 'dispatched') {
-        setError('This future order is not active yet. Completion is available only after dispatch starts.')
+        setError('This future order is not ready yet. Completion is available only after dispatch starts.')
         return
       }
 
@@ -1238,6 +1451,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
           if (captureErr) {
             console.error('[handleComplete] Edge function error:', captureErr)
+            if (isPaymentAuthorizationFailure(captureErr)) {
+              const message = paymentAuthorizationFailureMessage()
+              if (job) setCompletionBlockedJob({ ...job, status: 'accepted', payment_status: 'failed' })
+              setCompletionPaymentError({ jobId: id, message })
+              setError(message)
+              return
+            }
+
             await fetchAll()
             const refreshedJob = myJobs.find((j) => j.id === id)
             if (refreshedJob?.status !== 'completed') {
@@ -1249,18 +1470,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             const details = data?.details || ''
 
             if (details.includes('requires_payment_method') || details.includes('requires_confirmation')) {
-              console.error('[handleComplete] Upstream payment failure — releasing job', id)
-              setError("This walk cannot be completed because the client's payment was never authorized. The job has been released.")
-              await supabase
-                .from('walk_requests')
-                .update({
-                  status: 'cancelled',
-                  walker_lat: null,
-                  walker_lng: null,
-                  last_location_update: null,
-                })
-                .eq('id', id)
-              await fetchAll()
+              console.error('[handleComplete] Upstream payment authorization failure for job', id)
+              const message = paymentAuthorizationFailureMessage()
+              if (job) setCompletionBlockedJob({ ...job, status: 'accepted', payment_status: 'failed' })
+              setCompletionPaymentError({ jobId: id, message })
+              setError(message)
               return
             }
 
@@ -1309,6 +1523,21 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           source_screen: 'walker_dashboard',
         })
 
+        setCompletionBlockedJob(null)
+        setCompletionPaymentError(null)
+        flowCompletedJobIdsRef.current.add(id)
+        setStartedWalkIds((prev) => {
+          if (!prev.has(id)) return prev
+          const next = new Set(prev)
+          next.delete(id)
+          try {
+            window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
+          } catch {
+            // noop
+          }
+          return next
+        })
+        showStateMessage(id, 'completed', 'Walk completed')
         setCompletionSuccess({
           jobId: id,
           clientId: job?.client_id || '',
@@ -1317,19 +1546,17 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           clientName: job?.client?.full_name || job?.client?.email || 'Client',
         })
 
-        await fetchAll()
-        await fetchWallet()
-
         const dogLabel = job?.dog_name || 'your dog'
 
         if (job?.client_id) {
-          await createNotification({
-            userId: job.client_id,
-            type: 'job_completed',
-            title: 'Walk Completed',
-            message: `${profileName} completed the walk for ${dogLabel}.`,
-            relatedJobId: id,
-          }).catch(() => {})
+          sendClientLiveOrderEvent({
+            clientId: job.client_id,
+            jobId: id,
+            type: 'complete',
+            message: `Walk completed${job.dog_name ? ` for ${job.dog_name}` : ''}.`,
+            walkerId: profileId,
+            walkerName: profileName,
+          })
 
           invokeEdgeFunction('send-push-notification', {
             body: {
@@ -1341,9 +1568,20 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           }).catch((err) => console.error('[Push] Failed to notify client (completed):', err))
         }
 
+        await fetchAll()
+        await fetchWallet()
+
         const notifyEarnings =
           job?.walker_earnings ??
           (job?.price != null ? Math.round((job.price ?? 0) * 0.8) : null)
+
+        await createNotification({
+          userId: profileId,
+          type: 'job_completed_self',
+          title: 'Walk completed',
+          message: `You completed the walk for ${dogLabel}.`,
+          relatedJobId: id,
+        }).catch(() => {})
 
         if (notifyEarnings && notifyEarnings > 0) {
           await createNotification({
@@ -1375,7 +1613,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setCompletingJobId(null)
       }
     },
-    [myJobs, profileId, profileName, fetchAll, fetchWallet],
+    [myJobs, completionBlockedJob, profileId, profileName, fetchAll, fetchWallet, showStateMessage],
   )
 
   const handleRelease = useCallback(
@@ -1414,13 +1652,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (!job) return
 
       setRatingSubmitting(true)
+      const trimmedReview = review.trim()
 
       const { error } = await supabase.from('ratings').insert({
         job_id: ratingJobId,
         from_user_id: profileId,
         to_user_id: job.client_id,
         rating,
-        review: review || null,
+        review: trimmedReview || null,
       })
 
       if (error) {
@@ -1434,7 +1673,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         provider_id: profileId,
         client_id: job.client_id,
         rating_value: rating,
-        has_review: !!review,
+        has_review: !!trimmedReview,
         actor_role: 'provider',
         source_screen: 'walker_dashboard',
       })
@@ -1443,14 +1682,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         userId: job.client_id,
         type: 'new_rating',
         title: 'New Rating Received',
-        message: `Your walker rated you ${rating} stars for the walk with ${job.dog_name || 'your dog'}.`,
+        message: trimmedReview
+          ? `Your walker rated you ${rating} stars: "${trimmedReview}"`
+          : `Your walker rated you ${rating} stars for the walk with ${job.dog_name || 'your dog'}.`,
         relatedJobId: ratingJobId,
       })
 
       invokeEdgeFunction('send-push-notification', {
         body: {
           title: 'New Rating Received',
-          body: `You received a ${rating}-star rating!`,
+          body: trimmedReview
+            ? `You received a ${rating}-star rating: "${trimmedReview}"`
+            : `You received a ${rating}-star rating!`,
           targetUserId: job.client_id,
           data: { jobId: ratingJobId },
         },
@@ -1469,13 +1712,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (!completionSuccess || rating < 1 || !completionSuccess.clientId) return
 
       setCompletionRatingSubmitting(true)
+      const trimmedReview = review.trim()
 
       const { error } = await supabase.from('ratings').insert({
         job_id: completionSuccess.jobId,
         from_user_id: profileId,
         to_user_id: completionSuccess.clientId,
         rating,
-        review: review || null,
+        review: trimmedReview || null,
       })
 
       if (error && error.code !== '23505') {
@@ -1486,7 +1730,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           provider_id: profileId,
           client_id: completionSuccess.clientId,
           rating_value: rating,
-          has_review: !!review,
+          has_review: !!trimmedReview,
           actor_role: 'provider',
           source_screen: 'walker_dashboard',
         })
@@ -1495,14 +1739,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           userId: completionSuccess.clientId,
           type: 'new_rating',
           title: 'New Rating Received',
-          message: `Your walker rated you ${rating} stars for the walk with ${completionSuccess.dogName}.`,
+          message: trimmedReview
+            ? `Your walker rated you ${rating} stars: "${trimmedReview}"`
+            : `Your walker rated you ${rating} stars for the walk with ${completionSuccess.dogName}.`,
           relatedJobId: completionSuccess.jobId,
         }).catch(() => {})
 
         invokeEdgeFunction('send-push-notification', {
           body: {
             title: 'New Rating Received',
-            body: `You received a ${rating}-star rating!`,
+            body: trimmedReview
+              ? `You received a ${rating}-star rating: "${trimmedReview}"`
+              : `You received a ${rating}-star rating!`,
             targetUserId: completionSuccess.clientId,
             data: { jobId: completionSuccess.jobId },
           },
@@ -1510,6 +1758,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }
 
       setCompletionRatingSubmitting(false)
+      flowCompletedJobIdsRef.current.delete(completionSuccess.jobId)
+      setCompletionSuccess(null)
       await fetchRatings()
     },
     [completionSuccess, profileId, fetchRatings],
@@ -1517,7 +1767,23 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const openRatingModal = useCallback((jobId: string) => setRatingJobId(jobId), [])
   const closeRatingModal = useCallback(() => setRatingJobId(null), [])
-  const dismissCompletion = useCallback(() => setCompletionSuccess(null), [])
+  const dismissCompletion = useCallback(() => {
+    setCompletionSuccess((current) => {
+      if (current) {
+        dismissedCompletionIdsRef.current.add(current.jobId)
+        flowCompletedJobIdsRef.current.delete(current.jobId)
+        try {
+          window.localStorage.setItem(
+            completionDismissStorageKey(profileId),
+            JSON.stringify(Array.from(dismissedCompletionIdsRef.current)),
+          )
+        } catch {
+          // noop
+        }
+      }
+      return null
+    })
+  }, [profileId])
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const dismissTakenNotice = useCallback(() => setTakenNotice(false), [])
@@ -1608,8 +1874,9 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     ratingsGiven,
 
     openJobs: visibleOpenJobs,
-    activeJob: assignedJobs[0] ?? null,
-    activeJobs: assignedJobs,
+    activeJob: activeJobs[0] ?? null,
+    activeJobs,
+    onTheWayJobs: onTheWayJobs.filter((j) => !startedWalkIds.has(j.id)),
     futureJobs,
     completedJobs,
     recentJobs,
@@ -1633,6 +1900,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
     completingJobId,
     completionSuccess,
+    completionPaymentError,
     completionRatingSubmitting,
     dismissCompletion,
     submitCompletionRating,
@@ -1656,6 +1924,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
     handleAccept,
     handleDecline,
+    startWalk,
     unassignFutureJob,
     handleComplete,
     handleRelease,

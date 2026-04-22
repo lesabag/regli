@@ -3,8 +3,9 @@ import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { startDispatch } from '../lib/startDispatch'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
+import { formatShortAddress } from '../utils/addressFormat'
 
-type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking'
+type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
 type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
 type ProximityLevel = 'far' | 'near' | 'arrived' | 'very_near' | 'arriving'
 type SurgeLevel = 'normal' | 'busy' | 'very_busy'
@@ -13,12 +14,35 @@ type SavedCard = {
   id: string
   brand: string
   last4: string
+  expMonth?: number
+  expYear?: number
 } | null
+
+type PaymentMethodsResponse = {
+  customerId?: string
+  cards?: Array<{
+    id: string
+    brand: string
+    last4: string
+    expMonth?: number
+    expYear?: number
+  }>
+  clientSecret?: string
+}
 
 type CompletionJob = {
   jobId: string
   walkerName: string
+  walkerId: string | null
 } | null
+
+type LiveOrderEventPayload = {
+  jobId?: string
+  type?: 'accepted' | 'started' | 'start_walk' | 'complete' | 'completed'
+  message?: string
+  walkerId?: string | null
+  walkerName?: string | null
+}
 
 type WalkRequestRow = {
   id: string
@@ -41,6 +65,7 @@ type WalkRequestRow = {
   walker_lng: number | null
   last_location_update: string | null
   payment_status?: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded' | string | null
+  paid_at?: string | null
   created_at?: string | null
   completed_at?: string | null
 }
@@ -55,8 +80,16 @@ type RatingRow = {
   created_at: string
 }
 
+type QueryResult<T> = {
+  data: T | null
+  error: { message: string } | null
+}
+
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, walker_lat, walker_lng, last_location_update, payment_status, created_at'
+  'id, client_id, walker_id, selected_walker_id, status, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at'
+
+const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
+const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
 
 
 function pad(n: number): string {
@@ -116,6 +149,98 @@ function formatScheduledSummaryValue(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function settledQuery<T>(
+  result: PromiseSettledResult<QueryResult<T>>,
+  label: string,
+): QueryResult<T> {
+  if (result.status === 'fulfilled') return result.value
+
+  const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
+  console.warn(`[useClientFlow] ${label} query failed:`, message)
+  return { data: null, error: { message } }
+}
+
+function completionDismissStorageKey(profileId: string): string {
+  return `regli_client_completion_dismissed_${profileId}`
+}
+
+function startedWalkStorageKey(profileId: string): string {
+  return `regli_client_started_walks_${profileId}`
+}
+
+function getLifecycleEventRank(type: 'accepted' | 'start_walk' | 'complete'): number {
+  if (type === 'complete') return 3
+  if (type === 'start_walk') return 2
+  return 1
+}
+
+function getJobEventTime(job: WalkRequestRow): number {
+  const value = job.paid_at ?? job.created_at ?? null
+  if (!value) return 0
+  const ts = new Date(value).getTime()
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function getCreatedTime(job: Pick<WalkRequestRow, 'created_at'>): number {
+  if (!job.created_at) return 0
+  const ts = new Date(job.created_at).getTime()
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function isActiveUiCandidate(job: WalkRequestRow): boolean {
+  if (!isCurrentClientJob(job)) return false
+  if (job.status !== 'awaiting_payment' && job.status !== 'open' && job.status !== 'accepted') return false
+  if (job.dispatch_state === 'cancelled' || job.dispatch_state === 'expired') return false
+  if (job.smart_dispatch_state === 'cancelled' || job.smart_dispatch_state === 'exhausted') return false
+  if (job.payment_status === 'failed' || job.payment_status === 'refunded') return false
+  return true
+}
+
+function getNewestActiveRequest(
+  rows: WalkRequestRow[],
+  suppressedIds: Map<string, number>,
+  staleCutoff: number,
+): WalkRequestRow | null {
+  const now = Date.now()
+  const candidates = rows
+    .filter(isActiveUiCandidate)
+    .filter((job) => {
+      const suppressedAt = suppressedIds.get(job.id)
+      if (suppressedAt && now - suppressedAt < CANCEL_SUPPRESS_MS) return false
+      if (getCreatedTime(job) <= staleCutoff) return false
+      return true
+    })
+    .sort((a, b) => getCreatedTime(b) - getCreatedTime(a))
+
+  return candidates[0] ?? null
+}
+
+function isRecentCompletion(job: WalkRequestRow): boolean {
+  const ts = getJobEventTime(job)
+  if (!ts) return false
+  return Date.now() - ts <= COMPLETION_PROMPT_RECENT_MS
+}
+
+function getCompletionPromptJob(
+  completed: WalkRequestRow[],
+  ratedJobIds: Set<string>,
+  dismissedJobIds: Set<string>,
+  flowCompletedJobIds: Set<string>,
+): WalkRequestRow | null {
+  return (
+    completed
+      .filter(
+        (job) =>
+          job.status === 'completed' &&
+          !!job.walker_id &&
+          (isRecentCompletion(job) || flowCompletedJobIds.has(job.id)) &&
+          !ratedJobIds.has(job.id) &&
+          !dismissedJobIds.has(job.id),
+      )
+      .sort((a, b) => getJobEventTime(b) - getJobEventTime(a))[0] ?? null
+  )
 }
 
 
@@ -188,11 +313,40 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [upcomingJobs, setUpcomingJobs] = useState<WalkRequestRow[]>([])
   const [completedJobs, setCompletedJobs] = useState<Array<WalkRequestRow & { hidden_by_client?: boolean }>>([])
   const [ratings, setRatings] = useState<RatingRow[]>([])
+  const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
   const arriveNotifiedRef = useRef<Set<string>>(new Set())
   const completeNotifiedRef = useRef<Set<string>>(new Set())
+  const liveEventNotifiedRef = useRef<Set<string>>(new Set())
+  const lifecycleEventRankRef = useRef<Map<string, number>>(new Map())
+  const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
+  const suppressedActiveRequestIdsRef = useRef<Map<string, number>>(new Map())
+  const staleActiveCutoffRef = useRef(0)
+  const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
+  const startedWalkIdsRef = useRef<Set<string>>(new Set())
+  const lastActiveJobIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(completionDismissStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      dismissedCompletionIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
+    } catch {
+      dismissedCompletionIdsRef.current = new Set()
+    }
+  }, [profileId])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(startedWalkStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      startedWalkIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
+    } catch {
+      startedWalkIdsRef.current = new Set()
+    }
+  }, [profileId])
 
   useEffect(() => {
     try {
@@ -222,10 +376,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         try {
           const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+            `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}`,
           )
           const data = await res.json()
-          const address = data?.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+          const address =
+            formatShortAddress(data?.display_name, data?.address) ||
+            data?.display_name ||
+            `${lat.toFixed(4)}, ${lng.toFixed(4)}`
           _setLocation((prev) => prev || address)
         } catch {
           _setLocation((prev) => prev || `${lat.toFixed(4)}, ${lng.toFixed(4)}`)
@@ -243,6 +400,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
+
+  const showLifecycleBanner = useCallback(
+    (jobId: string, type: 'accepted' | 'start_walk' | 'complete', message: string) => {
+      const nextRank = getLifecycleEventRank(type)
+      const currentRank = lifecycleEventRankRef.current.get(jobId) ?? 0
+      if (nextRank < currentRank) return
+
+      lifecycleEventRankRef.current.set(jobId, nextRank)
+      setSuccessMessage(null)
+      window.setTimeout(() => {
+        setSuccessMessage(message)
+      }, 0)
+    },
+    [],
+  )
 
 
   const persistBookingDraft = useCallback(
@@ -303,22 +475,22 @@ export function useClientFlow(profileId: string, _profileName: string) {
     [persistBookingDraft],
   )
 
-  const savedCard: SavedCard = {
-    id: 'mock-card',
-    brand: 'Visa',
-    last4: '4242',
-  }
+  const [savedCard, setSavedCard] = useState<SavedCard>(null)
+  const [stripeCustomerId, setStripeCustomerId] = useState<string | null>(null)
+  const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null)
+  const [cardLoading, setCardLoading] = useState(true)
+  const [cardError, setCardError] = useState(false)
 
   const hasUserLocationBase = !!userLocationBase
-  const avgRating: number | null = null
+  const avgRating = useMemo(() => {
+    if (ratingsReceived.length === 0) return null
+    const sum = ratingsReceived.reduce((acc, r) => acc + r.rating, 0)
+    return Math.round((sum / ratingsReceived.length) * 10) / 10
+  }, [ratingsReceived])
   const scheduledSummary = formatScheduledSummaryValue(scheduledFor)
 
   const surgeMultiplier = 1
   const surgeLevel: SurgeLevel = 'normal'
-
-  const setupClientSecret = null
-  const cardLoading = false
-  const cardError = false
 
   const elapsedSeconds = searchStartTime ? Math.floor((Date.now() - searchStartTime) / 1000) : 0
 
@@ -354,6 +526,35 @@ export function useClientFlow(profileId: string, _profileName: string) {
     [profileId],
   )
 
+  const loadPaymentMethods = useCallback(async () => {
+    setCardLoading(true)
+    setCardError(false)
+    try {
+      const { data, error: paymentError } = await invokeEdgeFunction<PaymentMethodsResponse>(
+        'manage-payment-method',
+        { body: { action: 'get-or-create-customer' } },
+      )
+
+      if (paymentError) {
+        throw new Error(paymentError)
+      }
+
+      const firstCard = data?.cards?.[0] ?? null
+      setStripeCustomerId(data?.customerId ?? null)
+      setSavedCard(firstCard)
+    } catch (err) {
+      console.warn('[useClientFlow] payment method load failed:', err instanceof Error ? err.message : err)
+      setCardError(true)
+      setSavedCard(null)
+    } finally {
+      setCardLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadPaymentMethods()
+  }, [loadPaymentMethods])
+
   const hideHistoryItem = useCallback(
     async (id: string) => {
       const next = new Set(hiddenHistoryIds)
@@ -388,7 +589,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
   )
 
   const trackingJobId =
-    currentJob && currentJob.status === 'accepted' && screenState === 'tracking'
+    currentJob &&
+    currentJob.status === 'accepted' &&
+    (screenState === 'tracking' || screenState === 'active')
       ? currentJob.id
       : null
 
@@ -427,12 +630,39 @@ export function useClientFlow(profileId: string, _profileName: string) {
       : (trackingProximityLevel as ProximityLevel)
 
   const activeJob =
-    currentJob && currentJob.status === 'accepted' && (screenState === 'accepted' || screenState === 'tracking')
+    currentJob &&
+    currentJob.status === 'accepted' &&
+    (screenState === 'accepted' || screenState === 'tracking' || screenState === 'active')
       ? currentJob
       : null
 
+  const persistStartedWalkIds = useCallback(
+    (next: Set<string>) => {
+      startedWalkIdsRef.current = next
+      try {
+        window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
+      } catch {
+        // noop
+      }
+    },
+    [profileId],
+  )
+
+  const clearActiveState = useCallback(() => {
+    setScreenState('idle')
+    setCurrentJob(null)
+    setCurrentJobId(null)
+    setSearchStartTime(null)
+  }, [])
+
   const fetchCurrentAndLists = useCallback(async () => {
-    const [currentRes, upcomingRes, completedRes, ratingsRes] = await Promise.all([
+    const [
+      currentResult,
+      upcomingResult,
+      completedResult,
+      ratingsResult,
+      ratingsReceivedResult,
+    ] = await Promise.allSettled([
       supabase
         .from('walk_requests')
         .select(JOB_SELECT)
@@ -440,8 +670,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         .in('status', ['awaiting_payment', 'open', 'accepted'])
         .or('booking_timing.is.null,booking_timing.eq.asap,dispatch_state.eq.dispatched')
         .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+        .limit(10),
       supabase
         .from('walk_requests')
         .select(JOB_SELECT)
@@ -461,22 +690,63 @@ export function useClientFlow(profileId: string, _profileName: string) {
         .select('*')
         .eq('from_user_id', profileId)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('ratings')
+        .select('*')
+        .eq('to_user_id', profileId)
+        .order('created_at', { ascending: false }),
     ])
 
-    if (currentRes.data && isCurrentClientJob(currentRes.data as WalkRequestRow)) {
-      const row = currentRes.data as WalkRequestRow
-      setCurrentJob(row)
-      setCurrentJobId(row.id)
-      if (row.walker_id) void loadWalkerName(row.walker_id)
-      setScreenState(normalizeClientScreen(row))
-      if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
-        setSearchStartTime((prev) => prev ?? Date.now())
-      }
+    const currentRes = settledQuery<WalkRequestRow[]>(currentResult, 'current request')
+    const upcomingRes = settledQuery<WalkRequestRow[]>(upcomingResult, 'upcoming requests')
+    const completedRes = settledQuery<WalkRequestRow[]>(completedResult, 'completed requests')
+    const ratingsRes = settledQuery<RatingRow[]>(ratingsResult, 'ratings given')
+    const ratingsReceivedRes = settledQuery<RatingRow[]>(ratingsReceivedResult, 'ratings received')
+
+    if (currentRes.error) {
+      console.warn('[useClientFlow] current request unavailable:', currentRes.error.message)
+    }
+    if (upcomingRes.error) {
+      console.warn('[useClientFlow] upcoming requests unavailable:', upcomingRes.error.message)
+    }
+    if (completedRes.error) {
+      console.warn('[useClientFlow] completed requests unavailable:', completedRes.error.message)
+    }
+    if (ratingsRes.error) {
+      console.warn('[useClientFlow] ratings given unavailable:', ratingsRes.error.message)
+    }
+    if (ratingsReceivedRes.error) {
+      console.warn('[useClientFlow] ratings received unavailable:', ratingsReceivedRes.error.message)
+    }
+
+    if (currentRes.error) {
+      // Preserve the current UI state on transient read failures.
     } else {
-      setCurrentJob(null)
-      setCurrentJobId(null)
-      setScreenState('idle')
-      setSearchStartTime(null)
+      const currentRows = (currentRes.data as WalkRequestRow[] | null) ?? []
+      const row = getNewestActiveRequest(
+        currentRows,
+        suppressedActiveRequestIdsRef.current,
+        staleActiveCutoffRef.current,
+      )
+
+      if (!row) {
+        clearActiveState()
+      } else {
+        setCurrentJob(row)
+        setCurrentJobId(row.id)
+        lastActiveJobIdRef.current = row.id
+        if (row.walker_id) void loadWalkerName(row.walker_id)
+        setScreenState(
+          row.status === 'accepted' && startedWalkIdsRef.current.has(row.id)
+            ? 'active'
+            : normalizeClientScreen(row),
+        )
+        if (row.status === 'accepted') {
+          setSearchStartTime(null)
+        } else if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
+          setSearchStartTime((prev) => prev ?? Date.now())
+        }
+      }
     }
 
     const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
@@ -486,22 +756,71 @@ export function useClientFlow(profileId: string, _profileName: string) {
       ...job,
       hidden_by_client: hiddenHistoryIds.has(job.id),
     }))
+    const lastActiveCompleted = completed.find(
+      (job) => job.status === 'completed' && job.id === lastActiveJobIdRef.current,
+    )
+    if (lastActiveCompleted) {
+      flowCompletedJobIdsRef.current.add(lastActiveCompleted.id)
+    }
     setCompletedJobs(completed)
 
-    setRatings((ratingsRes.data as RatingRow[] | null) ?? [])
+    const nextRatings = (ratingsRes.data as RatingRow[] | null) ?? []
+    setRatings(nextRatings)
+    setRatingsReceived((ratingsReceivedRes.data as RatingRow[] | null) ?? [])
+
+    const nextRatedJobIds = new Set(nextRatings.map((r) => r.job_id))
+    const pendingCompletion = getCompletionPromptJob(
+      completed,
+      nextRatedJobIds,
+      dismissedCompletionIdsRef.current,
+      flowCompletedJobIdsRef.current,
+    )
+
+    if (pendingCompletion) {
+      const walkerLabel = pendingCompletion.walker_id
+        ? walkerNameById.get(pendingCompletion.walker_id) || 'Walker'
+        : 'Walker'
+      setCompletionJob((prev) => {
+        const next = {
+          jobId: pendingCompletion.id,
+          walkerId: pendingCompletion.walker_id,
+          walkerName: walkerLabel,
+        }
+        if (
+          prev?.jobId === next.jobId &&
+          prev.walkerId === next.walkerId &&
+          prev.walkerName === next.walkerName
+        ) {
+          return prev
+        }
+        return next
+      })
+    } else {
+      setCompletionJob((prev) => {
+        if (
+          prev &&
+          flowCompletedJobIdsRef.current.has(prev.jobId) &&
+          !nextRatedJobIds.has(prev.jobId) &&
+          !dismissedCompletionIdsRef.current.has(prev.jobId)
+        ) {
+          return prev
+        }
+        return null
+      })
+    }
 
     const walkerIds = new Set<string>()
     for (const row of [
       ...upcoming,
       ...completed,
-      ...(currentRes.data ? [currentRes.data as WalkRequestRow] : []),
+      ...(((currentRes.data as WalkRequestRow[] | null) ?? [])),
     ]) {
       if (row.walker_id) walkerIds.add(row.walker_id)
     }
     walkerIds.forEach((id) => {
       void loadWalkerName(id)
     })
-  }, [profileId, loadWalkerName, hiddenHistoryIds])
+  }, [profileId, loadWalkerName, hiddenHistoryIds, clearActiveState])
 
   useEffect(() => {
     void fetchCurrentAndLists()
@@ -544,77 +863,136 @@ export function useClientFlow(profileId: string, _profileName: string) {
             void loadWalkerName(updated.walker_id)
           }
 
+          const isSuppressed =
+            !!suppressedActiveRequestIdsRef.current.get(updated.id) ||
+            getCreatedTime(updated) <= staleActiveCutoffRef.current
           const nextState = normalizeClientScreen(updated)
 
           if (
             (updated.status === 'open' || updated.status === 'awaiting_payment') &&
             isCurrentClientJob(updated) &&
-            (!currentJobId || updated.id === currentJobId)
+            !isSuppressed &&
+            currentJobId === updated.id
           ) {
             setCurrentJob(updated)
             setCurrentJobId(updated.id)
+            lastActiveJobIdRef.current = updated.id
             setSearchStartTime((prev) => prev ?? Date.now())
             setScreenState(nextState)
           }
 
-          if (updated.status === 'accepted') {
+          if (updated.status === 'accepted' && !isSuppressed && currentJobId === updated.id) {
             setCurrentJob(updated)
             setCurrentJobId(updated.id)
+            lastActiveJobIdRef.current = updated.id
             setSearchStartTime(null)
-            setScreenState(nextState)
+            setScreenState(startedWalkIdsRef.current.has(updated.id) ? 'active' : nextState)
 
             if (!acceptNotifiedRef.current.has(updated.id)) {
               acceptNotifiedRef.current.add(updated.id)
               const walkerLabel = updated.walker_id
                 ? walkerNameById.get(updated.walker_id) || 'Walker'
                 : 'Walker'
-              setSuccessMessage('Walker accepted your request')
-              void createNotification({
-                userId: profileId,
-                type: 'job_accepted',
-                title: 'Walker accepted',
-                message: `${walkerLabel} accepted your request${updated.dog_name ? ` for ${updated.dog_name}` : ''}.`,
-                relatedJobId: updated.id,
-              })
+              showLifecycleBanner(
+                updated.id,
+                'accepted',
+                `${walkerLabel} accepted your request and is heading to you${updated.dog_name ? ` for ${updated.dog_name}` : ''}.`,
+              )
             }
           }
 
           if (updated.status === 'completed') {
-            const walkerLabel = updated.walker_id
-              ? walkerNameById.get(updated.walker_id) || 'Walker'
-              : 'Walker'
+            const belongsToCurrentFlow =
+              updated.id === currentJobId || updated.id === lastActiveJobIdRef.current
 
-            setCompletionJob({
-              jobId: updated.id,
-              walkerName: walkerLabel,
-            })
-            setScreenState('idle')
-            setCurrentJob(null)
-            setCurrentJobId(null)
-            setSearchStartTime(null)
+            if (belongsToCurrentFlow) {
+              flowCompletedJobIdsRef.current.add(updated.id)
+              const nextStarted = new Set(startedWalkIdsRef.current)
+              nextStarted.delete(updated.id)
+              persistStartedWalkIds(nextStarted)
+              clearActiveState()
+            }
 
             if (!completeNotifiedRef.current.has(updated.id)) {
               completeNotifiedRef.current.add(updated.id)
-              void createNotification({
-                userId: profileId,
-                type: 'job_completed',
-                title: 'Walk completed',
-                message: `${walkerLabel} completed the walk${updated.dog_name ? ` with ${updated.dog_name}` : ''}.`,
-                relatedJobId: updated.id,
+              showLifecycleBanner(
+                updated.id,
+                'complete',
+                `Walk completed${updated.dog_name ? ` for ${updated.dog_name}` : ''}.`,
+              )
+            }
+
+            if (
+              belongsToCurrentFlow &&
+              updated.walker_id &&
+              !ratedJobIds.has(updated.id) &&
+              !dismissedCompletionIdsRef.current.has(updated.id)
+            ) {
+              const walkerLabel = walkerNameById.get(updated.walker_id) || 'Walker'
+              setCompletionJob({
+                jobId: updated.id,
+                walkerId: updated.walker_id,
+                walkerName: walkerLabel,
               })
             }
           }
 
           if (updated.status === 'cancelled') {
             if (updated.id === currentJobId) {
-              setScreenState('idle')
-              setCurrentJob(null)
-              setCurrentJobId(null)
-              setSearchStartTime(null)
+              clearActiveState()
             }
           }
 
           void fetchCurrentAndLists()
+        },
+      )
+      .on(
+        'broadcast',
+        { event: 'live_order_event' },
+        (payload) => {
+          const event = payload.payload as LiveOrderEventPayload | null
+          if (!event?.jobId || !event.type) return
+
+          const key = `${event.type}:${event.jobId}`
+          if (liveEventNotifiedRef.current.has(key)) return
+          liveEventNotifiedRef.current.add(key)
+
+          if (event.type === 'started' || event.type === 'start_walk') {
+            const nextStarted = new Set(startedWalkIdsRef.current)
+            nextStarted.add(event.jobId)
+            persistStartedWalkIds(nextStarted)
+            if (event.jobId === currentJobId || event.jobId === lastActiveJobIdRef.current) {
+              setScreenState('active')
+            }
+            showLifecycleBanner(event.jobId, 'start_walk', event.message || 'Walk has started.')
+          } else if (event.type === 'accepted') {
+            showLifecycleBanner(
+              event.jobId,
+              'accepted',
+              event.message || 'Walker accepted your request and is heading to you.',
+            )
+          } else if (event.type === 'complete' || event.type === 'completed') {
+            flowCompletedJobIdsRef.current.add(event.jobId)
+            const nextStarted = new Set(startedWalkIdsRef.current)
+            nextStarted.delete(event.jobId)
+            persistStartedWalkIds(nextStarted)
+            if (!completeNotifiedRef.current.has(event.jobId)) {
+              completeNotifiedRef.current.add(event.jobId)
+              showLifecycleBanner(event.jobId, 'complete', event.message || 'Walk completed.')
+            }
+            if (
+              event.walkerId &&
+              !ratedJobIds.has(event.jobId) &&
+              !dismissedCompletionIdsRef.current.has(event.jobId)
+            ) {
+              setCompletionJob({
+                jobId: event.jobId,
+                walkerId: event.walkerId,
+                walkerName: event.walkerName || walkerNameById.get(event.walkerId) || 'Walker',
+              })
+            }
+            void fetchCurrentAndLists()
+          }
         },
       )
       .on(
@@ -624,12 +1002,29 @@ export function useClientFlow(profileId: string, _profileName: string) {
           void fetchCurrentAndLists()
         },
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ratings', filter: `to_user_id=eq.${profileId}` },
+        () => {
+          void fetchCurrentAndLists()
+        },
+      )
       .subscribe()
 
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [profileId, currentJobId, walkerNameById, fetchCurrentAndLists, loadWalkerName])
+  }, [
+    profileId,
+    currentJobId,
+    walkerNameById,
+    fetchCurrentAndLists,
+    loadWalkerName,
+    clearActiveState,
+    ratedJobIds,
+    persistStartedWalkIds,
+    showLifecycleBanner,
+  ])
 
   useEffect(() => {
     if (!currentJob || currentJob.status !== 'accepted' || screenState !== 'tracking') return
@@ -641,42 +1036,40 @@ export function useClientFlow(profileId: string, _profileName: string) {
       ? walkerNameById.get(currentJob.walker_id) || 'Walker'
       : 'Walker'
 
-    void createNotification({
-      userId: profileId,
-      type: 'walker_arrived',
-      title: 'Walker arrived',
-      message: `${walkerLabel} has arrived${currentJob.dog_name ? ` for ${currentJob.dog_name}` : ''}.`,
-      relatedJobId: currentJob.id,
-    })
+    setSuccessMessage(`${walkerLabel} has arrived${currentJob.dog_name ? ` for ${currentJob.dog_name}` : ''}.`)
   }, [currentJob, isArrived, profileId, screenState, walkerNameById])
 
   const cancelSearch = useCallback(async () => {
     if (!currentJobId) {
-      setScreenState('idle')
-      setCurrentJob(null)
-      setSearchStartTime(null)
+      staleActiveCutoffRef.current = Date.now()
+      clearActiveState()
       return
     }
+
+    const cancelledJobId = currentJobId
+    const previousCutoff = staleActiveCutoffRef.current
+    const cancelStartedAt = Date.now()
+    suppressedActiveRequestIdsRef.current.set(cancelledJobId, cancelStartedAt)
+    staleActiveCutoffRef.current = Math.max(staleActiveCutoffRef.current, cancelStartedAt)
+    clearActiveState()
 
     const { error: cancelError } = await supabase
       .from('walk_requests')
       .update({ status: 'cancelled', smart_dispatch_state: 'cancelled', dispatch_state: 'cancelled' })
-      .eq('id', currentJobId)
+      .eq('id', cancelledJobId)
       .eq('client_id', profileId)
       .in('status', ['awaiting_payment', 'open'])
 
     if (cancelError) {
+      suppressedActiveRequestIdsRef.current.delete(cancelledJobId)
+      staleActiveCutoffRef.current = previousCutoff
       setError(cancelError.message)
       return
     }
 
-    setScreenState('idle')
-    setCurrentJob(null)
-    setCurrentJobId(null)
-    setSearchStartTime(null)
     setSuccessMessage('Request cancelled')
     void fetchCurrentAndLists()
-  }, [currentJobId, profileId, fetchCurrentAndLists])
+  }, [currentJobId, profileId, fetchCurrentAndLists, clearActiveState])
 
   const cancelScheduledJob = useCallback(async (id: string) => {
     const { error: cancelError } = await supabase
@@ -695,30 +1088,75 @@ export function useClientFlow(profileId: string, _profileName: string) {
     void fetchCurrentAndLists()
   }, [profileId, fetchCurrentAndLists])
 
-  const requestCardSetup = useCallback(() => {}, [])
-  const changeCard = useCallback(() => {}, [])
-  const onCardSetupComplete = useCallback(() => {}, [])
-  const cancelCardSetup = useCallback(() => {}, [])
-  const retryLoadCard = useCallback(() => {}, [])
+  const requestCardSetup = useCallback(async () => {
+    setCardLoading(true)
+    setCardError(false)
+    try {
+      const { data, error: setupError } = await invokeEdgeFunction<PaymentMethodsResponse>(
+        'manage-payment-method',
+        { body: { action: 'create-setup-intent' } },
+      )
+
+      if (setupError) throw new Error(setupError)
+      if (!data?.clientSecret) throw new Error('Failed to start card setup')
+      setSetupClientSecret(data.clientSecret)
+    } catch (err) {
+      setCardError(true)
+      setError(err instanceof Error ? err.message : 'Failed to start card setup')
+    } finally {
+      setCardLoading(false)
+    }
+  }, [])
+
+  const changeCard = useCallback(() => {
+    void requestCardSetup()
+  }, [requestCardSetup])
+
+  const onCardSetupComplete = useCallback(() => {
+    setSetupClientSecret(null)
+    void loadPaymentMethods()
+  }, [loadPaymentMethods])
+
+  const cancelCardSetup = useCallback(() => {
+    setSetupClientSecret(null)
+  }, [])
+
+  const retryLoadCard = useCallback(() => {
+    void loadPaymentMethods()
+  }, [loadPaymentMethods])
 
   const submitCompletionRating = useCallback(
     async (rating?: number, review?: string) => {
       if (!completionJob || !rating || rating < 1) return
 
       const job = completedJobs.find((row) => row.id === completionJob.jobId)
-      if (!job?.walker_id) {
+      let walkerId = completionJob.walkerId ?? job?.walker_id ?? null
+
+      if (!walkerId) {
+        const { data: completionRow } = await supabase
+          .from('walk_requests')
+          .select('walker_id')
+          .eq('id', completionJob.jobId)
+          .eq('client_id', profileId)
+          .maybeSingle()
+
+        walkerId = completionRow?.walker_id ?? null
+      }
+
+      if (!walkerId) {
         setError('Unable to find assigned walker for rating')
         return
       }
 
       setCompletionRatingSubmitting(true)
+      const trimmedReview = review?.trim() || null
 
       const { error: insertError } = await supabase.from('ratings').insert({
         job_id: completionJob.jobId,
         from_user_id: profileId,
-        to_user_id: job.walker_id,
+        to_user_id: walkerId,
         rating,
-        review: review?.trim() || null,
+        review: trimmedReview,
       })
 
       if (insertError && insertError.code !== '23505') {
@@ -727,7 +1165,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         return
       }
 
-      const walkerLabel = walkerNameById.get(job.walker_id) || 'Walker'
+      const walkerLabel = walkerNameById.get(walkerId) || completionJob.walkerName || 'Walker'
       try {
         await createNotification({
           userId: profileId,
@@ -736,17 +1174,44 @@ export function useClientFlow(profileId: string, _profileName: string) {
           message: `You rated ${walkerLabel} ${rating} stars.`,
           relatedJobId: completionJob.jobId,
         })
+        await createNotification({
+          userId: walkerId,
+          type: 'new_rating',
+          title: 'New Rating Received',
+          message: trimmedReview
+            ? `You received a ${rating}-star rating: "${trimmedReview}"`
+            : `You received a ${rating}-star rating!`,
+          relatedJobId: completionJob.jobId,
+        })
       } catch {
         // noop
       }
 
       setCompletionRatingSubmitting(false)
+      flowCompletedJobIdsRef.current.delete(completionJob.jobId)
+      setCompletionJob(null)
       void fetchCurrentAndLists()
     },
     [completionJob, completedJobs, profileId, walkerNameById, fetchCurrentAndLists],
   )
 
-  const dismissCompletion = useCallback(() => setCompletionJob(null), [])
+  const dismissCompletion = useCallback(() => {
+    setCompletionJob((current) => {
+      if (current) {
+        dismissedCompletionIdsRef.current.add(current.jobId)
+        flowCompletedJobIdsRef.current.delete(current.jobId)
+        try {
+          window.localStorage.setItem(
+            completionDismissStorageKey(profileId),
+            JSON.stringify(Array.from(dismissedCompletionIdsRef.current)),
+          )
+        } catch {
+          // noop
+        }
+      }
+      return null
+    })
+  }, [profileId])
 
   const requestWalk = useCallback(async () => {
     if (!dogName.trim()) {
@@ -757,11 +1222,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setError('Enter location')
       return
     }
+    if (!savedCard || !stripeCustomerId) {
+      setError('Add a valid payment method before booking')
+      return
+    }
+
+    const bookingLocation = formatShortAddress(location) || location.trim()
 
     try {
       setLoading(true)
       setError(null)
       setSuccessMessage(null)
+      if (bookingLocation !== location) {
+        _setLocation(bookingLocation)
+        persistBookingDraft({ location: bookingLocation })
+      }
 
       const response = await invokeEdgeFunction<{
         jobId?: string
@@ -774,13 +1249,23 @@ export function useClientFlow(profileId: string, _profileName: string) {
           timing: bookingTiming,
           serviceType: duration === '20min' ? 'quick' : duration === '40min' ? 'standard' : 'energy',
           dogName,
-          location,
+          location: bookingLocation,
+          customerId: stripeCustomerId,
+          paymentMethodId: savedCard.id,
           scheduledFor: bookingTiming === 'scheduled' ? scheduledFor : null,
         },
       })
 
       if (response.error) throw new Error(response.error)
       if (!response.data?.jobId) throw new Error('Failed to create walk request')
+      if (
+        response.data.paymentStatus !== 'requires_capture' &&
+        response.data.paymentStatus !== 'authorized' &&
+        response.data.paymentStatus !== 'succeeded' &&
+        response.data.paymentStatus !== 'paid'
+      ) {
+        throw new Error('Payment was not authorized. Please update your card and try again.')
+      }
 
       const jobId = response.data.jobId
       const durationMinutes = durationToMinutes(duration)
@@ -820,6 +1305,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const createdJob = job as WalkRequestRow
       setCurrentJobId(createdJob.id)
       setCurrentJob(createdJob)
+      lastActiveJobIdRef.current = createdJob.id
 
       if (shouldSearchNow) {
         const { data: walkers, error: walkersError } = await supabase
@@ -857,6 +1343,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setScreenState('searching')
         setSuccessMessage('Searching for a walker...')
       } else {
+        setBookingTiming('asap')
+        setScheduledFor(getNowPlus15LocalInput())
         setSearchStartTime(null)
         setScreenState('idle')
         setSuccessMessage('Scheduled walk saved')
@@ -880,8 +1368,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
     duration,
     fetchCurrentAndLists,
     location,
+    persistBookingDraft,
     profileId,
+    savedCard,
     scheduledFor,
+    stripeCustomerId,
   ])
 
   return {
@@ -921,11 +1412,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
     upcomingJobs,
     completedJobs,
     ratings,
+    ratingsReceived,
     recentRatings: ratings.slice(0, 8),
+    recentRatingsReceived: ratingsReceived.slice(0, 8),
     walkerNameById,
     completionJob,
 
     activeJob,
+    isWalkActive: screenState === 'active',
     currentJob,
     walkerLocation,
     walkerBearing,

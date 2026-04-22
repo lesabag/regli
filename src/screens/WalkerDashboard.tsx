@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompactRatingList from '../components/CompactRatingList'
+import CompletionCard from '../components/CompletionCard'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { usePushNotifications } from '../hooks/usePushNotifications'
+import { formatShortAddress } from '../utils/addressFormat'
 
 const REQUEST_TIMEOUT_SECONDS = 20
 
@@ -160,6 +162,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
   const topRequest = flow.openJobs[0] ?? null
   const activeJob = flow.activeJobs[0] ?? null
+  const onTheWayJob = flow.onTheWayJobs[0] ?? null
   const activeJobCanComplete =
     !!activeJob &&
     (activeJob.booking_timing !== 'scheduled' || activeJob.dispatch_state === 'dispatched')
@@ -176,7 +179,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
   const historyItems: WalkerHistoryItem[] = useMemo(() => {
     const ratingByJobId = new Map<string, { rating: number; review: string | null }>()
-    flow.ratingsGiven.forEach((r) => {
+    flow.ratingsReceived.forEach((r) => {
       ratingByJobId.set(r.job_id, { rating: r.rating, review: r.review })
     })
 
@@ -195,7 +198,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
         }
       })
       .filter((item) => !hiddenHistoryIds.includes(item.id))
-  }, [flow.completedJobs, flow.ratingsGiven, hiddenHistoryIds])
+  }, [flow.completedJobs, flow.ratingsReceived, hiddenHistoryIds])
 
   const clientNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -264,7 +267,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
     return () => clearCountdown()
   }, [flow.screenState, topRequest?.id, flow.handleDecline, clearCountdown, topRequest])
 
-  const isActiveOrCompleted = flow.screenState === 'active' || flow.screenState === 'completed'
+  const isActiveOrCompleted = flow.screenState === 'on_the_way' || flow.screenState === 'active' || flow.screenState === 'completed'
 
   const hideHistoryItem = useCallback(
     async (id: string) => {
@@ -296,12 +299,6 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             </button>
             <div style={{ minWidth: 0 }}>
               <h1 style={greetingStyle}>Hey, {flow.firstName}</h1>
-              {flow.avgRating !== null && (
-                <div style={ratingRowStyle}>
-                  <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
-                  {flow.ratingsReceived.length !== 1 ? 's' : ''}
-                </div>
-              )}
             </div>
           </div>
 
@@ -335,24 +332,6 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             )}
 
             <NotificationsBell />
-
-            <div style={{ position: 'relative' }}>
-              <ProfileAvatar
-                url={photo.avatarUrl}
-                name={walkerName}
-                size={40}
-                borderRadius={13}
-                onClick={() => {
-                  setBurgerOpen(false)
-                  setProfileOpen((v) => !v)
-                }}
-              />
-              {flow.avgRating !== null && (
-                <div style={avatarRatingBadgeStyle}>
-                  <span style={{ color: '#F59E0B', fontSize: 8 }}>★</span> {flow.avgRating}
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -368,6 +347,30 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 </svg>
                 <span style={menuHeaderTitleStyle}>Menu</span>
               </div>
+
+              <div style={menuDividerStyle} />
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBurgerOpen(false)
+                  setProfileOpen(true)
+                }}
+                style={menuProfileButtonStyle}
+              >
+                <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={48} borderRadius={16} />
+                <div style={menuProfileTextStyle}>
+                  <div style={profileNameStyle}>{walkerName}</div>
+                  {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                  {flow.avgRating !== null && (
+                    <div style={profileRatingStyle}>
+                      <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
+                      {flow.ratingsReceived.length !== 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+                <div style={menuProfileChevronStyle}>›</div>
+              </button>
 
               <div style={menuDividerStyle} />
 
@@ -487,7 +490,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             </div>
           )}
 
-          {flow.successMessage && (
+          {flow.successMessage && flow.screenState !== 'completed' && (
             <div style={toastSuccessStyle}>
               <span>{flow.successMessage}</span>
               <button onClick={flow.clearSuccess} style={toastDismissStyle}>×</button>
@@ -533,6 +536,36 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             </div>
           )}
 
+          {flow.screenState === 'on_the_way' && onTheWayJob && (
+            <div className="sheet-state-enter" style={activeCardStyle}>
+              <div style={activeHeaderRowStyle}>
+                <div style={onTheWayBadgeStyle}>
+                  <div style={onTheWayBadgeDotStyle} />
+                  Head to the client
+                </div>
+              </div>
+
+              <h3 style={activeDogNameStyle}>{onTheWayJob.dog_name || 'Dog'}</h3>
+              <p style={activeClientStyle}>for {onTheWayJob.client?.full_name || onTheWayJob.client?.email || 'Client'}</p>
+
+              {onTheWayJob.location && (
+                <div style={activeLocationStyle}>
+                  <span style={ellipsisStyle}>{formatShortAddress(onTheWayJob.address || onTheWayJob.location)}</span>
+                </div>
+              )}
+
+              <button
+                onClick={async () => {
+                  await hapticSuccess()
+                  flow.startWalk(onTheWayJob.id)
+                }}
+                style={completeBtnStyle}
+              >
+                Start walk
+              </button>
+            </div>
+          )}
+
           {flow.screenState === 'active' && activeJob && (
             <div className="sheet-state-enter" style={activeCardStyle}>
               <div style={activeHeaderRowStyle}>
@@ -547,7 +580,13 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
               {activeJob.location && (
                 <div style={activeLocationStyle}>
-                  <span style={ellipsisStyle}>{activeJob.location}</span>
+                  <span style={ellipsisStyle}>{formatShortAddress(activeJob.address || activeJob.location)}</span>
+                </div>
+              )}
+
+              {flow.completionPaymentError?.jobId === activeJob.id && (
+                <div style={completionPaymentErrorStyle}>
+                  {flow.completionPaymentError.message}
                 </div>
               )}
 
@@ -699,7 +738,11 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
             <div style={dogNameStyle}>{topRequest.dog_name || 'Dog'}</div>
 
-            {topRequest.location && <div style={reqLocationStyle}><span style={ellipsisStyle}>{topRequest.location}</span></div>}
+            {topRequest.location && (
+              <div style={reqLocationStyle}>
+                <span style={ellipsisStyle}>{formatShortAddress(topRequest.address || topRequest.location)}</span>
+              </div>
+            )}
 
             <div style={infoPillsRowStyle}>
               <div style={infoPillStyle}><span>{requestDuration}</span></div>
@@ -742,6 +785,28 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
               <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>Request taken</div>
               <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 1 }}>Another walker accepted this one</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {flow.completionSuccess && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <CompletionCard
+              promptKey={flow.completionSuccess.jobId}
+              title="Walk completed"
+              subtitle={`Rate ${flow.completionSuccess.clientName}`}
+              earnings={
+                flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0
+                  ? `₪${flow.completionSuccess.earnings.toFixed(0)}`
+                  : undefined
+              }
+              onRate={flow.submitCompletionRating}
+              ratingSubmitting={flow.completionRatingSubmitting}
+              alreadyRated={flow.ratedJobIds.has(flow.completionSuccess.jobId)}
+              onDismiss={flow.dismissCompletion}
+            />
           </div>
         </div>
       )}
@@ -1028,6 +1093,8 @@ const screenStyle: React.CSSProperties = {
   background: '#F8FAFC',
   color: '#0F172A',
   fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
 }
 
 const headerStyle: React.CSSProperties = {
@@ -1057,16 +1124,12 @@ const headerMenuBtnStyle: React.CSSProperties = {
 
 const greetingStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 800,
   lineHeight: 1.1,
-}
-
-const ratingRowStyle: React.CSSProperties = {
-  marginTop: 4,
-  fontSize: 12,
-  color: '#64748B',
-  fontWeight: 700,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const toggleGroupStyle: React.CSSProperties = {
@@ -1111,21 +1174,6 @@ const toggleKnobStyle: React.CSSProperties = {
   transition: 'transform 0.2s ease',
 }
 
-const avatarRatingBadgeStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: -4,
-  bottom: -4,
-  padding: '2px 7px',
-  borderRadius: 999,
-  background: '#FFFFFF',
-  boxShadow: '0 6px 16px rgba(15,23,42,0.14)',
-  fontSize: 12,
-  fontWeight: 800,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 3,
-}
-
 const menuOverlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1166,6 +1214,31 @@ const menuDividerStyle: React.CSSProperties = {
   height: 1,
   background: '#E5E7EB',
   margin: '0 24px',
+}
+
+const menuProfileButtonStyle: React.CSSProperties = {
+  margin: '18px 24px',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 20,
+  padding: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  cursor: 'pointer',
+  textAlign: 'left',
+}
+
+const menuProfileTextStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+}
+
+const menuProfileChevronStyle: React.CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 24,
+  lineHeight: 1,
+  flexShrink: 0,
 }
 
 const menuItemActionStyle: React.CSSProperties = {
@@ -1282,9 +1355,10 @@ const profileActionBtnStyle: React.CSSProperties = {
 }
 
 const contentStyle: React.CSSProperties = {
-  padding: '10px 18px calc(24px + env(safe-area-inset-bottom))',
+  padding: '10px 18px calc(32px + env(safe-area-inset-bottom))',
   display: 'grid',
   gap: 14,
+  boxSizing: 'border-box',
 }
 
 const toastErrorStyle: React.CSSProperties = {
@@ -1449,6 +1523,10 @@ const activeCardStyle: React.CSSProperties = {
   background: '#FFFFFF',
   border: '1px solid #E2E8F0',
   boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
+  display: 'flex',
+  flexDirection: 'column',
+  boxSizing: 'border-box',
+  marginBottom: 'calc(10px + env(safe-area-inset-bottom))',
 }
 
 const activeHeaderRowStyle: React.CSSProperties = {
@@ -1475,6 +1553,25 @@ const activeBadgeDotStyle: React.CSSProperties = {
   background: '#16A34A',
 }
 
+const onTheWayBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 12px',
+  borderRadius: 999,
+  background: '#EFF6FF',
+  color: '#1D4ED8',
+  fontSize: 12,
+  fontWeight: 800,
+}
+
+const onTheWayBadgeDotStyle: React.CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: '#2563EB',
+}
+
 const activeDogNameStyle: React.CSSProperties = {
   margin: '14px 0 4px',
   fontSize: 24,
@@ -1496,6 +1593,18 @@ const activeLocationStyle: React.CSSProperties = {
   border: '1px solid #E2E8F0',
 }
 
+const completionPaymentErrorStyle: React.CSSProperties = {
+  marginTop: 12,
+  padding: '12px 14px',
+  borderRadius: 16,
+  background: '#FEF2F2',
+  border: '1px solid #FECACA',
+  color: '#991B1B',
+  fontSize: 13,
+  fontWeight: 700,
+  lineHeight: 1.45,
+}
+
 const ellipsisStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -1503,16 +1612,22 @@ const ellipsisStyle: React.CSSProperties = {
 }
 
 const completeBtnStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 52,
-  borderRadius: 18,
+  width: 'min(100%, 224px)',
+  minHeight: 48,
+  alignSelf: 'center',
+  flexShrink: 0,
+  borderRadius: 16,
   border: 'none',
   background: '#08153B',
   color: '#FFFFFF',
-  fontSize: 16,
+  fontSize: 15,
   fontWeight: 800,
   cursor: 'pointer',
   marginTop: 16,
+  padding: '12px 18px',
+  lineHeight: 1.2,
+  boxSizing: 'border-box',
+  WebkitTapHighlightColor: 'transparent',
 }
 
 const completionCardStyle: React.CSSProperties = {
@@ -1799,6 +1914,31 @@ const takenToastStyle: React.CSSProperties = {
   borderRadius: 18,
   background: '#FFFFFF',
   boxShadow: '0 14px 40px rgba(15,23,42,0.14)',
+}
+
+const completionOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 50,
+  display: 'flex',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  padding: '18px 14px calc(18px + env(safe-area-inset-bottom))',
+  boxSizing: 'border-box',
+  pointerEvents: 'auto',
+}
+
+const completionOverlayBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+}
+
+const completionOverlayCardStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 'min(420px, 100%)',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const historyListStyle: React.CSSProperties = {
