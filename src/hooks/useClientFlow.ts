@@ -360,6 +360,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [profileId])
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(bookingDraftStorageKey(profileId))
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Partial<LastBookingDraft>
+      const lastName = typeof parsed.dogName === 'string' ? parsed.dogName.trim() : ''
+      if (lastName) {
+        _setDogName((current) => current || lastName)
+      }
+    } catch {
+      // noop
+    }
+  }, [profileId])
+
+  useEffect(() => {
     if (!navigator.geolocation) {
       setGpsQualityBase('offline')
       setLocationLoading(false)
@@ -1344,7 +1358,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setSuccessMessage('Searching for a walker...')
       } else {
         setBookingTiming('asap')
-        setScheduledFor(getNowPlus15LocalInput())
+        setScheduledFor(null)
         setSearchStartTime(null)
         setScreenState('idle')
         setSuccessMessage('Scheduled walk saved')

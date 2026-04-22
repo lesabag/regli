@@ -319,11 +319,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           ? r.review
           : typeof r.comment === 'string'
             ? r.comment
-            : typeof r.review_text === 'string'
-              ? r.review_text
-              : typeof r.reviewText === 'string'
-                ? r.reviewText
-                : null
+            : typeof r.reviewText === 'string'
+              ? r.reviewText
+              : null
 
       map.set(jobId, {
         rating: ratingRaw == null ? null : Math.max(1, Math.min(5, Math.round(ratingRaw))),
@@ -413,7 +411,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           duration_minutes: durationMinutes,
           price,
           walker_name: walkerName,
-          review_text: ratingInfo?.review ?? null,
+          review: ratingInfo?.review ?? null,
           rating: ratingInfo?.rating ?? null,
           client_lat: typeof item.client_lat === 'number' ? item.client_lat : null,
           client_lng: typeof item.client_lng === 'number' ? item.client_lng : null,

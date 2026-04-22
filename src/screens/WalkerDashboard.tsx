@@ -868,6 +868,7 @@ function WalkerHistorySwipeCard({
 }) {
   const [offsetX, setOffsetX] = useState(0)
   const [dragging, setDragging] = useState(false)
+  const [reviewExpanded, setReviewExpanded] = useState(false)
   const startXRef = useRef(0)
   const startYRef = useRef(0)
   const startOffsetRef = useRef(0)
@@ -876,6 +877,11 @@ function WalkerHistorySwipeCard({
   const SWIPE_HIDE = -164
   const OPEN_THRESHOLD = -56
   const HIDE_THRESHOLD = -145
+  const isLongReview = (item.reviewText?.length ?? 0) > 92
+
+  useEffect(() => {
+    setReviewExpanded(false)
+  }, [item.id])
 
   const reset = useCallback(() => {
     setOffsetX(0)
@@ -1005,10 +1011,37 @@ function WalkerHistorySwipeCard({
 
         {item.reviewText ? (
           <div style={historyLocationCardStyle}>
-            <div style={historyLocationPinStyle}>❝</div>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={historyLocationLabelStyle}>Feedback</div>
-              <div style={historyLocationValueStyle}>{item.reviewText}</div>
+              <div style={historyReviewTopRowStyle}>
+                {item.rating != null && (
+                  <div style={historyReviewRatingInlineStyle}>
+                    <span style={{ color: '#FDE68A' }}>★</span> {item.rating.toFixed(1)}
+                  </div>
+                )}
+                <div style={historyLocationLabelStyle}>Feedback</div>
+              </div>
+              <div
+                style={{
+                  ...historyLocationValueStyle,
+                  ...(reviewExpanded ? historyReviewExpandedStyle : historyReviewCollapsedStyle),
+                }}
+              >
+                {item.reviewText}
+              </div>
+              {isLongReview ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setReviewExpanded((current) => !current)
+                  }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onTouchStart={(event) => event.stopPropagation()}
+                  style={historyReviewToggleStyle}
+                >
+                  {reviewExpanded ? 'Show less' : 'Read more'}
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -2070,16 +2103,28 @@ const historyLocationCardStyle: React.CSSProperties = {
   borderRadius: 20,
   border: '1px solid rgba(148, 163, 184, 0.14)',
   background: 'rgba(15, 23, 42, 0.42)',
-  padding: '14px 14px',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
+  padding: '12px 14px',
+  display: 'grid',
+  gap: 8,
 }
 
-const historyLocationPinStyle: React.CSSProperties = {
-  fontSize: 18,
-  lineHeight: 1,
-  color: '#FDE68A',
+const historyReviewTopRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+}
+
+const historyReviewRatingInlineStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '5px 8px',
+  borderRadius: 999,
+  background: 'rgba(234, 179, 8, 0.12)',
+  border: '1px solid rgba(234, 179, 8, 0.18)',
+  color: '#FEF3C7',
+  fontSize: 12,
+  fontWeight: 800,
 }
 
 const historyLocationLabelStyle: React.CSSProperties = {
@@ -2091,13 +2136,37 @@ const historyLocationLabelStyle: React.CSSProperties = {
 }
 
 const historyLocationValueStyle: React.CSSProperties = {
-  marginTop: 4,
+  marginTop: 0,
   fontSize: 15,
-  fontWeight: 800,
+  fontWeight: 700,
+  lineHeight: 1.45,
   color: '#FFFFFF',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
+}
+
+const historyReviewCollapsedStyle: React.CSSProperties = {
+  display: '-webkit-box',
+  WebkitLineClamp: 1,
+  WebkitBoxOrient: 'vertical',
+}
+
+const historyReviewExpandedStyle: React.CSSProperties = {
+  overflowWrap: 'anywhere',
+  whiteSpace: 'normal',
+}
+
+const historyReviewToggleStyle: React.CSSProperties = {
+  marginTop: 2,
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  color: '#FDE68A',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const futureEmptyStyle: React.CSSProperties = {
