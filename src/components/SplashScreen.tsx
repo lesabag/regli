@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const MIN_DISPLAY_MS = 900
+const MAX_DISPLAY_MS = 12000
 const EXIT_DURATION_MS = 400
 const EXIT_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
@@ -98,6 +99,20 @@ export default function SplashScreen({ ready, authResolved = false, onDone }: Sp
       }
     }
   }, [ready, completeSplash])
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if (calledRef.current) return
+
+      targetRef.current = 1
+      setPhase('exit')
+
+      if (doneFallbackRef.current) clearTimeout(doneFallbackRef.current)
+      doneFallbackRef.current = setTimeout(completeSplash, EXIT_DURATION_MS + 80)
+    }, MAX_DISPLAY_MS)
+
+    return () => clearTimeout(id)
+  }, [completeSplash])
 
   useEffect(() => {
     return () => {
@@ -235,7 +250,7 @@ export default function SplashScreen({ ready, authResolved = false, onDone }: Sp
                 margin: 0,
                 fontSize: 34,
                 fontWeight: 800,
-                letterSpacing: -0.8,
+                letterSpacing: 0,
                 color: '#0B1A2B',
                 fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
                 opacity: isVisible ? 1 : 0,

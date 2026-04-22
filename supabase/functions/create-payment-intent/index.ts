@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v3_tz_fix_2026_04_19'
+const FUNCTION_VERSION = 'v4_require_authorized_pi_2026_04_22'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -337,6 +337,59 @@ serve(async (req: Request) => {
     const platformFee = Math.round((amount * PLATFORM_FEE_PERCENT) / 100)
     const walkerAmount = amount - platformFee
 
+    if (!customerId || !paymentMethodId) {
+      console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing saved payment method`, {
+        hasCustomerId: !!customerId,
+        hasPaymentMethodId: !!paymentMethodId,
+        clientId: user.id,
+      })
+      return new Response(
+        JSON.stringify({
+          error: 'Payment method required',
+          details: 'Add or select a saved card before booking.',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
+
+    try {
+      const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId)
+      const attachedCustomer =
+        typeof paymentMethod.customer === 'string'
+          ? paymentMethod.customer
+          : paymentMethod.customer?.id ?? null
+
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] Payment method check:`, {
+        paymentMethodId,
+        customerId,
+        attachedCustomer,
+        hasCard: !!paymentMethod.card,
+      })
+
+      if (attachedCustomer !== customerId) {
+        return new Response(
+          JSON.stringify({
+            error: 'Payment method does not belong to customer',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    } catch (err) {
+      console.error(`[create-payment-intent][${FUNCTION_VERSION}] Payment method retrieve failed:`, err)
+      return new Response(
+        JSON.stringify({
+          error: 'Payment method unavailable',
+          details: err instanceof Error ? err.message : 'Could not verify payment method',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
     const sixtySecondsAgo = new Date(Date.now() - 60_000).toISOString()
     let dupQuery = supabaseAdmin
       .from('walk_requests')
@@ -367,6 +420,7 @@ serve(async (req: Request) => {
             jobId: existingJob.id,
             piId: pi.id,
             actualStatus: pi.status,
+            paymentMethodAttached: !!pi.payment_method,
           })
         } catch (err) {
           console.error(
@@ -376,23 +430,42 @@ serve(async (req: Request) => {
         }
       }
 
-      return new Response(
-        JSON.stringify({
+      if (actualPaymentStatus !== 'requires_capture' && actualPaymentStatus !== 'succeeded') {
+        console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Existing duplicate is not authorized; cancelling stale job`, {
           jobId: existingJob.id,
           paymentIntentId: existingJob.stripe_payment_intent_id,
-          clientSecret: existingJob.stripe_client_secret,
-          amount,
-          platformFee,
-          walkerAmount,
-          paymentStatus: actualPaymentStatus,
-          duplicate: true,
-          _v: FUNCTION_VERSION,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
-    }
+          actualPaymentStatus,
+        })
 
-    const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
+        await supabaseAdmin
+          .from('walk_requests')
+          .update({ status: 'cancelled', payment_status: 'failed' })
+          .eq('id', existingJob.id)
+
+        if (existingJob.stripe_payment_intent_id) {
+          try {
+            await stripe.paymentIntents.cancel(existingJob.stripe_payment_intent_id)
+          } catch (cancelErr) {
+            console.error(`[create-payment-intent][${FUNCTION_VERSION}] Failed to cancel stale PI:`, cancelErr)
+          }
+        }
+      } else {
+        return new Response(
+          JSON.stringify({
+            jobId: existingJob.id,
+            paymentIntentId: existingJob.stripe_payment_intent_id,
+            clientSecret: existingJob.stripe_client_secret,
+            amount,
+            platformFee,
+            walkerAmount,
+            paymentStatus: actualPaymentStatus,
+            duplicate: true,
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
 
     const metadata: Record<string, string> = {
       client_id: user.id,
@@ -418,14 +491,10 @@ serve(async (req: Request) => {
       metadata,
     }
 
-    if (customerId && paymentMethodId) {
-      piParams.customer = customerId
-      piParams.payment_method = paymentMethodId
-      piParams.confirm = true
-      piParams.off_session = true
-    } else if (customerId) {
-      piParams.customer = customerId
-    }
+    piParams.customer = customerId
+    piParams.payment_method = paymentMethodId
+    piParams.confirm = true
+    piParams.off_session = true
 
     let paymentIntent: Stripe.PaymentIntent
 
@@ -446,11 +515,40 @@ serve(async (req: Request) => {
       id: paymentIntent.id,
       status: paymentIntent.status,
       amount: paymentIntent.amount,
-      confirmRequested: !!(customerId && paymentMethodId),
+      confirmRequested: true,
+      paymentMethodAttached: !!paymentIntent.payment_method,
+      paymentMethodId,
+      customerId,
       scheduledForInput: scheduledFor ?? null,
       normalizedScheduledFor,
       scheduleTimezone: SCHEDULE_TIMEZONE,
     })
+
+    if (paymentIntent.status !== 'requires_capture' && paymentIntent.status !== 'succeeded') {
+      console.error(`[create-payment-intent][${FUNCTION_VERSION}] PI authorization failed after confirmation`, {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+        paymentMethodAttached: !!paymentIntent.payment_method,
+        customerId,
+        paymentMethodId,
+      })
+
+      try {
+        await stripe.paymentIntents.cancel(paymentIntent.id)
+      } catch (cancelErr) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Failed to cancel unauthorized PI:`, cancelErr)
+      }
+
+      return new Response(
+        JSON.stringify({
+          error: 'Payment authorization failed',
+          details: `PaymentIntent status is '${paymentIntent.status}'. Expected 'requires_capture'.`,
+          paymentIntentStatus: paymentIntent.status,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
 
     const initialPaymentStatus = paymentStatusFromIntent(paymentIntent.status)
     const paymentAuthorizedAt =
@@ -503,6 +601,14 @@ serve(async (req: Request) => {
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
+
+    console.log(`[create-payment-intent][${FUNCTION_VERSION}] Walk request saved with authorized PI:`, {
+      jobId: job.id,
+      paymentIntentId: paymentIntent.id,
+      paymentIntentStatus: paymentIntent.status,
+      paymentStatus: initialPaymentStatus,
+      paymentMethodAttached: !!paymentIntent.payment_method,
+    })
 
     try {
       await stripe.paymentIntents.update(paymentIntent.id, {

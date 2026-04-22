@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v2_fix_2026_04_04'
+const FUNCTION_VERSION = 'v3_payment_auth_failure_no_cancel_2026_04_22'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -243,20 +243,22 @@ serve(async (req: Request) => {
     }
 
     if (pi.status === 'requires_payment_method' || pi.status === 'requires_confirmation') {
-      // Payment was never authorized — this job should never have reached 'accepted'.
-      // Auto-cancel the job to unblock the walker.
-      console.error(`[capture-payment][${FUNCTION_VERSION}] PI in '${pi.status}' — payment was never authorized. Cancelling job ${jobId}`)
+      // Payment was never authorized. Do not mark the walk completed, and do not
+      // auto-cancel here; the app keeps the active job visible with a clear error.
+      console.error(`[capture-payment][${FUNCTION_VERSION}] PI in '${pi.status}' — payment was never authorized. Leaving job ${jobId} active`)
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'cancelled', payment_status: 'failed' })
+        .update({ payment_status: 'failed' })
         .eq('id', jobId)
       return new Response(
         JSON.stringify({
+          code: 'payment_not_authorized',
           error: 'Payment was never authorized',
-          details: `PaymentIntent status is '${pi.status}'. The client's card was never charged. Job has been cancelled.`,
+          paymentIntentStatus: pi.status,
+          details: `PaymentIntent status is '${pi.status}'. The client's card was never charged. The walk was not completed.`,
           _v: FUNCTION_VERSION,
         }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 

@@ -93,8 +93,8 @@ export default function App() {
         />
       )}
 
-      {/* Session but no profile yet — very rare edge */}
-      {splashDone && session && !profile && (
+      {/* Session but no profile yet — bounded fallback for delayed/failed bootstrap */}
+      {splashDone && session && !profile && !authError && (
         <div
           style={{
             minHeight: '100svh',
@@ -109,7 +109,49 @@ export default function App() {
             <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
               Setting up your profile...
             </div>
-            {authError && <div style={{ fontSize: 13 }}>{authError}</div>}
+            <div style={{ fontSize: 13 }}>
+              This should only take a moment.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {splashDone && session && !profile && authError && (
+        <div
+          style={{
+            minHeight: '100svh',
+            display: 'grid',
+            placeItems: 'center',
+            background: '#FAFAF8',
+            fontFamily: 'Inter, system-ui, sans-serif',
+            color: '#64748B',
+            padding: 24,
+          }}
+        >
+          <div style={{ width: 'min(100%, 360px)', textAlign: 'center' }}>
+            <div style={{ fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+              We could not finish setting up your profile.
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 18 }}>
+              {authError}
+            </div>
+            <button
+              type="button"
+              onClick={signOut}
+              style={{
+                width: '100%',
+                minHeight: 48,
+                border: 0,
+                borderRadius: 12,
+                background: '#0F172A',
+                color: '#FFFFFF',
+                fontWeight: 800,
+                fontFamily: 'Inter, system-ui, sans-serif',
+                cursor: 'pointer',
+              }}
+            >
+              Return to sign in
+            </button>
           </div>
         </div>
       )}

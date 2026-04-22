@@ -16,7 +16,7 @@ type StartDispatchBody = {
 }
 
 const SCHEDULED_DISPATCH_LEAD_MINUTES = 15
-const START_DISPATCH_VERSION = '2026-04-20-debug-01'
+const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -68,7 +68,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state')
+      .select('id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id')
       .eq('id', requestId)
       .single()
 
@@ -90,6 +90,40 @@ serve(async (req) => {
         status: requestRow.status,
       })
       return jsonResponse(409, { ok: false, error: 'request is not open' }, corsHeaders)
+    }
+
+    if (
+      requestRow.payment_status !== 'authorized' ||
+      !requestRow.stripe_payment_intent_id
+    ) {
+      console.warn('[start-dispatch] request payment is not authorized', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        paymentStatus: requestRow.payment_status,
+        hasPaymentIntent: !!requestRow.stripe_payment_intent_id,
+      })
+
+      await supabase
+        .from('walk_requests')
+        .update({
+          status: 'cancelled',
+          dispatch_state: 'cancelled',
+          smart_dispatch_state: 'cancelled',
+          smart_dispatch_last_error: 'payment authorization missing',
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .neq('payment_status', 'authorized')
+
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: 'payment authorization required before dispatch',
+          paymentStatus: requestRow.payment_status,
+        },
+        corsHeaders,
+      )
     }
 
     if (requestRow.walker_id) {

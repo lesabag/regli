@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { formatShortAddress } from '../utils/addressFormat'
 
 type Role = 'client' | 'walker'
 
@@ -494,7 +495,8 @@ function getTitle(item: HistoryItem): string {
 }
 
 function getLocationText(item: HistoryItem): string {
-  return sanitizeString(item.address) ?? sanitizeString(item.location) ?? ''
+  const address = sanitizeString(item.address) ?? sanitizeString(item.location) ?? ''
+  return formatShortAddress(address)
 }
 
 function getCounterpart(item: HistoryItem, role: Role): string {

@@ -1,3 +1,5 @@
+import { formatShortAddress } from '../utils/addressFormat'
+
 interface RequestCardProps {
   clientName: string
   dogName: string
@@ -43,7 +45,17 @@ export default function RequestCard({
       {location && (
         <div style={locationRow}>
           <span style={{ flexShrink: 0 }}>📍</span>
-          <span style={{ color: '#64748B' }}>{shortenAddress(location)}</span>
+          <span
+            style={{
+              color: '#64748B',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {shortenAddress(formatShortAddress(location))}
+          </span>
         </div>
       )}
 
@@ -101,6 +113,7 @@ const locationRow: React.CSSProperties = {
   marginTop: 12,
   fontSize: 13,
   color: '#94A3B8',
+  minWidth: 0,
 }
 
 const acceptButtonStyle: React.CSSProperties = {

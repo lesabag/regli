@@ -17,6 +17,7 @@ import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
+import { formatShortAddress } from '../utils/addressFormat'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -103,8 +104,67 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   const defaultDurationAppliedRef = useRef(false)
 
   useEffect(() => {
+    const style = document.createElement('style')
+    style.setAttribute('data-regli-client-overflow-guard', 'true')
+    style.textContent = `
+      html,
+      body,
+      #root {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        margin: 0;
+        overflow-x: hidden;
+        background: #F8FAFC;
+      }
+
+      body {
+        position: relative;
+      }
+
+      #root {
+        min-height: 100dvh;
+      }
+
+      .leaflet-container,
+      .leaflet-pane,
+      .leaflet-map-pane {
+        max-width: 100%;
+      }
+
+      .regli-client-screen {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        box-sizing: border-box;
+      }
+
+      .regli-client-screen > * {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+    `
+    document.head.appendChild(style)
+
+    const previousBodyOverflowX = document.body.style.overflowX
+    const previousDocumentOverflowX = document.documentElement.style.overflowX
+    document.body.style.overflowX = 'hidden'
+    document.documentElement.style.overflowX = 'hidden'
+
+    return () => {
+      document.head.removeChild(style)
+      document.body.style.overflowX = previousBodyOverflowX
+      document.documentElement.style.overflowX = previousDocumentOverflowX
+    }
+  }, [])
+
+  useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [flow.screenState, flow.bookingTiming])
+
+  useEffect(() => {
+    if (scrollRef.current && flow.completionJob) scrollRef.current.scrollTop = 0
+  }, [flow.completionJob?.jobId])
 
 
   useEffect(() => {
@@ -206,7 +266,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       flow.upcomingJobs.map((j) => ({
         id: j.id,
         dogName: j.dog_name || 'Walk',
-        location: j.location || '',
+        location: formatShortAddress(j.address || j.location),
         scheduledFor: j.scheduled_for,
         startsInMin: flow.startsInMinutes(j.scheduled_for),
         price: j.scheduled_fee_snapshot ?? j.price,
@@ -220,7 +280,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     recentJobs?: Array<Record<string, unknown>>
     requests?: Array<Record<string, unknown>>
     ratings?: Array<Record<string, unknown>>
+    ratingsReceived?: Array<Record<string, unknown>>
     recentRatings?: Array<Record<string, unknown>>
+    recentRatingsReceived?: Array<Record<string, unknown>>
     setDogName?: (value: string) => void
     setLocation?: (value: string) => void
     setDuration?: (value: DurationType) => void
@@ -228,7 +290,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     hideHistoryItem?: (id: string) => Promise<void>
   }
 
-  const ratingsSource = (anyFlow.recentRatings ?? anyFlow.ratings ?? []) as Array<Record<string, unknown>>
+  const ratingsSource = (anyFlow.recentRatingsReceived ??
+    anyFlow.ratingsReceived ??
+    []) as Array<Record<string, unknown>>
 
   const ratingByJobId = useMemo(() => {
     const map = new Map<string, { rating: number | null; review: string | null }>()
@@ -343,7 +407,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                 ? item.state
                 : 'completed',
           dog_name: dogName,
-          address: location,
+          address: formatShortAddress(location),
           created_at: createdAt,
           completed_at: createdAt,
           duration_minutes: durationMinutes,
@@ -368,10 +432,15 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     ratingByJobId,
   ])
 
+  const hasCompletionPrompt = !!flow.completionJob
   const isSearching = flow.screenState === 'searching'
-  const isTrackingState = flow.screenState === 'tracking'
-  const isIdleState = flow.screenState === 'idle'
-  const showBanners = flow.screenState === 'idle' || flow.screenState === 'searching'
+  const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
+  const isIdleState = flow.screenState === 'idle' && !hasCompletionPrompt
+  const showBanners =
+    flow.screenState === 'idle' ||
+    flow.screenState === 'searching' ||
+    flow.screenState === 'tracking' ||
+    flow.screenState === 'active'
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
 
   const nearbyWalkers = useNearbyWalkers(
@@ -423,7 +492,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       }
 
       if (typeof anyFlow.setLocation === 'function' && location) {
-        anyFlow.setLocation(location)
+        anyFlow.setLocation(formatShortAddress(location))
       }
 
       if (
@@ -465,7 +534,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     : sheetScrollStyle
 
   return (
-    <div style={screenStyle}>
+    <div className="regli-client-screen" style={screenStyle}>
       <div style={topUiLayerStyle}>
         <div style={floatingTopBarStyle}>
           <button
@@ -864,7 +933,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
             </div>
           )}
 
-          {flow.screenState === 'tracking' && flow.activeJob && (
+          {(flow.screenState === 'tracking' || flow.screenState === 'active') && flow.activeJob && (
             <div style={sheetContentStyle}>
               <TrackingCard
                 walkerName={
@@ -873,6 +942,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     : 'Walker'
                 }
                 dogName={flow.activeJob.dog_name}
+                phase={flow.isWalkActive ? 'active' : 'on_the_way'}
                 isArrived={flow.isArrived}
                 etaMinutes={flow.etaMinutes}
                 displayEtaSeconds={flow.displayEtaSeconds}
@@ -882,18 +952,6 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
             </div>
           )}
 
-          {flow.completionJob && (
-            <div style={sheetContentStyle}>
-              <CompletionCard
-                title="Walk completed"
-                subtitle={`${flow.completionJob.walkerName} walked your dog`}
-                onRate={flow.submitCompletionRating}
-                ratingSubmitting={flow.completionRatingSubmitting}
-                alreadyRated={flow.ratedJobIds.has(flow.completionJob.jobId)}
-                onDismiss={flow.dismissCompletion}
-              />
-            </div>
-          )}
         </div>
 
         {isIdleState && (
@@ -926,6 +984,23 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           </div>
         )}
       </div>
+
+      {hasCompletionPrompt && flow.completionJob && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <CompletionCard
+              promptKey={flow.completionJob.jobId}
+              title="Walk completed"
+              subtitle={`${flow.completionJob.walkerName} walked your dog`}
+              onRate={flow.submitCompletionRating}
+              ratingSubmitting={flow.completionRatingSubmitting}
+              alreadyRated={flow.ratedJobIds.has(flow.completionJob.jobId)}
+              onDismiss={flow.dismissCompletion}
+            />
+          </div>
+        </div>
+      )}
 
       {showDogNameSheet && (
         <>
@@ -1053,7 +1128,7 @@ function BurgerUpcomingList({
           <div style={burgerListCardHeaderStyle}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={burgerListTitleStyle}>{item.dogName}</div>
-              <div style={burgerListSubtitleStyle}>{item.location || 'Scheduled walk'}</div>
+              <div style={burgerListSubtitleStyle}>{formatShortAddress(item.location) || 'Scheduled walk'}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               {item.price != null && <div style={burgerListPriceStyle}>₪{item.price}</div>}
@@ -1083,6 +1158,7 @@ function BurgerUpcomingList({
 function TrackingCard({
   walkerName,
   dogName,
+  phase,
   isArrived,
   etaMinutes,
   displayEtaSeconds,
@@ -1091,6 +1167,7 @@ function TrackingCard({
 }: {
   walkerName: string
   dogName: string | null
+  phase: 'on_the_way' | 'active'
   isArrived: boolean
   etaMinutes: number | null
   displayEtaSeconds: number | null
@@ -1099,10 +1176,16 @@ function TrackingCard({
 }) {
   return (
     <div style={trackingCardStyle}>
-      <div style={trackingTopBadgeStyle}>{isArrived ? 'Walker arrived' : 'Walker on the way'}</div>
-      <div style={trackingTitleStyle}>{walkerName}</div>
+      <div style={trackingTopBadgeStyle}>
+        {phase === 'active' ? 'Active walk' : isArrived ? 'Walker arrived' : 'On the way'}
+      </div>
+      <div style={trackingTitleStyle}>{phase === 'active' ? 'Active walk' : 'On the way'}</div>
       <div style={trackingSubtitleStyle}>
-        {dogName ? `${walkerName} is heading to ${dogName}` : `${walkerName} is heading to you`}
+        {phase === 'active'
+          ? dogName
+            ? `${dogName} is out for a walk`
+            : 'Your dog is out for a walk'
+          : `${walkerName} is heading to you`}
       </div>
 
       <div style={trackingStatsGridStyle}>
@@ -1206,11 +1289,20 @@ function formatGpsQuality(gpsQuality: GpsQuality): string {
 const screenStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
+  left: 0,
+  right: 0,
   background: '#F8FAFC',
   overflow: 'hidden',
+  overflowX: 'hidden',
   display: 'flex',
   flexDirection: 'column',
   isolation: 'isolate',
+  width: '100%',
+  minWidth: 0,
+  maxWidth: '100%',
+  maxInlineSize: '100dvw',
+  boxSizing: 'border-box',
+  contain: 'layout paint',
 }
 
 const topUiLayerStyle: React.CSSProperties = {
@@ -1218,6 +1310,10 @@ const topUiLayerStyle: React.CSSProperties = {
   inset: 0,
   pointerEvents: 'none',
   zIndex: 5000,
+  overflow: 'hidden',
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const mapContainerBaseStyle: React.CSSProperties = {
@@ -1225,6 +1321,9 @@ const mapContainerBaseStyle: React.CSSProperties = {
   flexShrink: 0,
   minHeight: 220,
   overflow: 'hidden',
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const idleMapContainerStyle: React.CSSProperties = {
@@ -1242,13 +1341,16 @@ const trackingMapContainerStyle: React.CSSProperties = {
 const floatingTopBarStyle: React.CSSProperties = {
   position: 'fixed',
   top: 'calc(16px + env(safe-area-inset-top))',
-  left: 14,
-  right: 14,
+  left: 'max(14px, env(safe-area-inset-left, 0px))',
+  right: 'max(14px, env(safe-area-inset-right, 0px))',
   zIndex: 3001,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   pointerEvents: 'none',
+  boxSizing: 'border-box',
+  maxWidth: 'none',
+  minWidth: 0,
 }
 
 const controlBtnStyle: React.CSSProperties = {
@@ -1274,26 +1376,34 @@ const topRightGroupStyle: React.CSSProperties = {
 }
 
 const bellWrapStyle: React.CSSProperties = {
-  transform: 'scale(0.96)',
-  transformOrigin: 'center',
+  width: 38,
+  height: 38,
+  display: 'grid',
+  placeItems: 'center',
 }
 
 const floatingMessagesStyle: React.CSSProperties = {
   position: 'fixed',
-  left: 14,
-  right: 14,
+  left: 'max(14px, env(safe-area-inset-left, 0px))',
+  right: 'max(14px, env(safe-area-inset-right, 0px))',
   top: 'calc(74px + env(safe-area-inset-top))',
   zIndex: 3000,
   display: 'grid',
   gap: 8,
   pointerEvents: 'none',
+  boxSizing: 'border-box',
+  minWidth: 0,
+  maxWidth: 'none',
 }
 
 const sheetStyle: React.CSSProperties = {
   position: 'relative',
   marginTop: -18,
+  alignSelf: 'stretch',
   flex: 1,
   minHeight: 0,
+  width: '100%',
+  maxWidth: '100%',
   borderTopLeftRadius: 28,
   borderTopRightRadius: 28,
   background: '#FFFFFF',
@@ -1302,6 +1412,9 @@ const sheetStyle: React.CSSProperties = {
   flexDirection: 'column',
   overflow: 'hidden',
   zIndex: 1,
+  boxSizing: 'border-box',
+  marginLeft: 0,
+  marginRight: 0,
 }
 
 const sheetHandleStyle: React.CSSProperties = {
@@ -1317,8 +1430,12 @@ const sheetScrollStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: 'auto',
+  overflowX: 'hidden',
   padding: '0 14px 12px',
   WebkitOverflowScrolling: 'touch',
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const idleSheetScrollStyle: React.CSSProperties = {
@@ -1329,6 +1446,9 @@ const idleSheetScrollStyle: React.CSSProperties = {
 
 const sheetContentStyle: React.CSSProperties = {
   paddingBottom: 12,
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const idleSheetContentStyle: React.CSSProperties = {
@@ -1447,8 +1567,8 @@ const bottomSheetOverlayStyle: React.CSSProperties = {
 
 const dogNameSheetStyle: React.CSSProperties = {
   position: 'fixed',
-  left: 0,
-  right: 0,
+  left: 'env(safe-area-inset-left, 0px)',
+  right: 'env(safe-area-inset-right, 0px)',
   bottom: 0,
   zIndex: 121,
   borderTopLeftRadius: 28,
@@ -1458,6 +1578,9 @@ const dogNameSheetStyle: React.CSSProperties = {
   padding: '10px 16px calc(18px + env(safe-area-inset-bottom))',
   display: 'grid',
   gap: 14,
+  boxSizing: 'border-box',
+  maxWidth: '100%',
+  overflowX: 'hidden',
 }
 
 const bottomSheetHandleStyle: React.CSSProperties = {
@@ -1678,13 +1801,49 @@ const stickyMainActionStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+const completionOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  zIndex: 4000,
+  display: 'flex',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  padding: '18px 14px calc(18px + env(safe-area-inset-bottom))',
+  boxSizing: 'border-box',
+  pointerEvents: 'auto',
+  overflow: 'hidden',
+  width: '100%',
+  maxWidth: '100%',
+  maxInlineSize: '100dvw',
+}
+
+const completionOverlayBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+}
+
+const completionOverlayCardStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 'min(420px, 100%)',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
+}
+
 const trackingCardStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: '100%',
   borderRadius: 22,
   border: '1px solid #E2E8F0',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
   padding: 16,
   display: 'grid',
   gap: 12,
+  boxSizing: 'border-box',
+  overflow: 'hidden',
 }
 
 const trackingTopBadgeStyle: React.CSSProperties = {
@@ -1702,21 +1861,27 @@ const trackingTitleStyle: React.CSSProperties = {
   fontWeight: 900,
   color: '#0F172A',
   lineHeight: 1.05,
+  minWidth: 0,
+  overflowWrap: 'anywhere',
 }
 
 const trackingSubtitleStyle: React.CSSProperties = {
   fontSize: 14,
   color: '#475569',
   lineHeight: 1.45,
+  minWidth: 0,
+  overflowWrap: 'anywhere',
 }
 
 const trackingStatsGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   gap: 10,
+  minWidth: 0,
 }
 
 const trackingStatCardStyle: React.CSSProperties = {
+  minWidth: 0,
   borderRadius: 16,
   background: '#FFFFFF',
   border: '1px solid #E2E8F0',
@@ -1724,6 +1889,7 @@ const trackingStatCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
   justifyItems: 'center',
+  boxSizing: 'border-box',
 }
 
 const trackingStatLabelStyle: React.CSSProperties = {
@@ -1739,6 +1905,10 @@ const trackingStatValueStyle: React.CSSProperties = {
   fontWeight: 900,
   color: '#0F172A',
   textAlign: 'center',
+  minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const menuOverlayStyle: React.CSSProperties = {
@@ -1746,14 +1916,16 @@ const menuOverlayStyle: React.CSSProperties = {
   inset: 0,
   background: 'rgba(15, 23, 42, 0.26)',
   zIndex: 40000,
+  overflow: 'hidden',
 }
 
 const menuPanelStyle: React.CSSProperties = {
   position: 'fixed',
   top: 'calc(16px + env(safe-area-inset-top))',
-  left: 12,
+  left: 'max(12px, env(safe-area-inset-left, 0px))',
   bottom: 'calc(16px + env(safe-area-inset-bottom))',
-  width: 'min(360px, calc(100vw - 24px))',
+  width: 'min(360px, calc(100% - 24px))',
+  maxWidth: 'calc(100% - 24px)',
   borderRadius: 28,
   background: '#FFFFFF',
   boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
@@ -1761,6 +1933,7 @@ const menuPanelStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
+  boxSizing: 'border-box',
 }
 
 const menuHeaderRowStyle: React.CSSProperties = {
@@ -1991,13 +2164,15 @@ const burgerEmptyStateStyle: React.CSSProperties = {
 const profilePanelStyle: React.CSSProperties = {
   position: 'fixed',
   top: 'calc(72px + env(safe-area-inset-top))',
-  right: 14,
-  width: 'min(320px, calc(100vw - 28px))',
+  right: 'max(14px, env(safe-area-inset-right, 0px))',
+  width: 'min(320px, calc(100% - 28px))',
+  maxWidth: 'calc(100% - 28px)',
   borderRadius: 24,
   background: '#FFFFFF',
   boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
   zIndex: 40001,
   overflow: 'hidden',
+  boxSizing: 'border-box',
 }
 
 const profileSectionStyle: React.CSSProperties = {

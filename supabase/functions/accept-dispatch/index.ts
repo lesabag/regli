@@ -43,6 +43,58 @@ serve(async (req) => {
 
     const supabase = createAdminClient()
 
+    const { data: requestRow, error: requestError } = await supabase
+      .from('walk_requests')
+      .select('id, status, payment_status, stripe_payment_intent_id')
+      .eq('id', requestId)
+      .single()
+
+    if (requestError || !requestRow) {
+      return jsonResponse(
+        404,
+        {
+          ok: false,
+          error: 'walk_request not found',
+          details: requestError?.message,
+        },
+        corsHeaders,
+      )
+    }
+
+    if (
+      requestRow.status !== 'open' ||
+      requestRow.payment_status !== 'authorized' ||
+      !requestRow.stripe_payment_intent_id
+    ) {
+      if (requestRow.payment_status === 'failed' || requestRow.payment_status === 'refunded') {
+        await supabase
+          .from('walk_requests')
+          .update({
+            status: 'cancelled',
+            dispatch_state: 'cancelled',
+            smart_dispatch_state: 'cancelled',
+            smart_dispatch_last_error: 'payment authorization missing',
+          })
+          .eq('id', requestId)
+          .in('status', ['open', 'accepted'])
+      }
+
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: 'payment authorization required before accepting',
+          result: {
+            ok: false,
+            code: 'payment_not_authorized',
+            status: requestRow.status,
+            payment_status: requestRow.payment_status,
+          },
+        },
+        corsHeaders,
+      )
+    }
+
     const { data, error } = await supabase.rpc('accept_dispatch_attempt', {
       p_request_id: requestId,
       p_attempt_id: attemptId,
