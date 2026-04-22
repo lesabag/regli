@@ -36,6 +36,12 @@ type CompletionJob = {
   walkerId: string | null
 } | null
 
+type TipJob = {
+  jobId: string
+  walkerName: string
+  walkerId: string
+} | null
+
 type LiveOrderEventPayload = {
   jobId?: string
   type?: 'accepted' | 'started' | 'start_walk' | 'complete' | 'completed'
@@ -77,6 +83,38 @@ type RatingRow = {
   to_user_id: string
   rating: number
   review: string | null
+  created_at: string
+}
+
+type FavoriteWalkerRow = {
+  id: string
+  client_id: string
+  walker_id: string
+  created_at: string
+  walker?: {
+    id: string
+    full_name: string | null
+    email: string | null
+    avatar_url?: string | null
+  } | null
+}
+
+type FavoriteWalkerQueryRow = Omit<FavoriteWalkerRow, 'walker'> & {
+  walker?:
+    | FavoriteWalkerRow['walker']
+    | Array<NonNullable<FavoriteWalkerRow['walker']>>
+    | null
+}
+
+type TipRow = {
+  id: string
+  walk_request_id: string
+  client_id: string
+  walker_id: string
+  amount: number
+  currency: string
+  status: string
+  stripe_payment_intent_id: string | null
   created_at: string
 }
 
@@ -247,7 +285,7 @@ function getCompletionPromptJob(
 type LastBookingDraft = {
   dogName: string
   location: string
-  duration: '20min' | '40min' | '60min'
+  duration?: '20min' | '40min' | '60min'
 }
 
 function bookingDraftStorageKey(profileId: string): string {
@@ -293,7 +331,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const [dogName, _setDogName] = useState('')
   const [location, _setLocation] = useState('')
-  const [duration, _setDuration] = useState<'20min' | '40min' | '60min'>('20min')
+  const [duration, _setDuration] = useState<'20min' | '40min' | '60min' | null>(null)
 
   const [bookingTiming, setBookingTiming] = useState<'asap' | 'scheduled'>('asap')
   const [scheduledFor, setScheduledFor] = useState<string | null>(getNowPlus15LocalInput())
@@ -306,14 +344,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [gpsQualityBase, setGpsQualityBase] = useState<GpsQuality>('live')
   const [completionJob, setCompletionJob] = useState<CompletionJob>(null)
   const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
+  const [tipJob, setTipJob] = useState<TipJob>(null)
+  const [tipSubmitting, setTipSubmitting] = useState(false)
 
   const [userLocationBase, setUserLocationBase] = useState<[number, number] | null>(null)
   const [locationLoading, setLocationLoading] = useState(true)
   const [walkerNameById, setWalkerNameById] = useState<Map<string, string>>(new Map())
   const [upcomingJobs, setUpcomingJobs] = useState<WalkRequestRow[]>([])
-  const [completedJobs, setCompletedJobs] = useState<Array<WalkRequestRow & { hidden_by_client?: boolean }>>([])
+  const [completedJobs, setCompletedJobs] = useState<Array<WalkRequestRow & { hidden_by_client?: boolean; tip_amount?: number | null }>>([])
   const [ratings, setRatings] = useState<RatingRow[]>([])
   const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
+  const [favoriteWalkers, setFavoriteWalkers] = useState<FavoriteWalkerRow[]>([])
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
@@ -482,9 +523,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
   )
 
   const setDuration = useCallback(
-    (value: '20min' | '40min' | '60min') => {
+    (value: '20min' | '40min' | '60min' | null) => {
       _setDuration(value)
-      persistBookingDraft({ duration: value })
+      if (value) {
+        persistBookingDraft({ duration: value })
+      }
     },
     [persistBookingDraft],
   )
@@ -508,10 +551,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const elapsedSeconds = searchStartTime ? Math.floor((Date.now() - searchStartTime) / 1000) : 0
 
-  const selectedDuration = { label: duration }
-  const adjustedPriceILS = duration === '20min' ? 36 : duration === '40min' ? 60 : 80
+  const selectedDuration = { label: duration ?? '' }
+  const adjustedPriceILS = duration === '20min' ? 36 : duration === '40min' ? 60 : duration === '60min' ? 80 : 0
 
   const ratedJobIds = useMemo(() => new Set(ratings.map((r) => r.job_id)), [ratings])
+  const favoriteWalkerIds = useMemo(
+    () => new Set(favoriteWalkers.map((favorite) => favorite.walker_id)),
+    [favoriteWalkers],
+  )
 
   function durationToMinutes(value: '20min' | '40min' | '60min'): number {
     if (value === '20min') return 20
@@ -568,6 +615,79 @@ export function useClientFlow(profileId: string, _profileName: string) {
   useEffect(() => {
     void loadPaymentMethods()
   }, [loadPaymentMethods])
+
+  const fetchFavoriteWalkers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('favorite_walkers')
+      .select('id, client_id, walker_id, created_at, walker:profiles!favorite_walkers_walker_id_fkey(id, full_name, email, avatar_url)')
+      .eq('client_id', profileId)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('[useClientFlow] favorite walkers unavailable:', error.message)
+      setFavoriteWalkers([])
+      return
+    }
+
+    const rows = ((data as unknown as FavoriteWalkerQueryRow[] | null) ?? []).map((row) => ({
+      ...row,
+      walker: Array.isArray(row.walker) ? row.walker[0] ?? null : row.walker ?? null,
+    }))
+    setFavoriteWalkers(rows)
+  }, [profileId])
+
+  useEffect(() => {
+    void fetchFavoriteWalkers()
+  }, [fetchFavoriteWalkers])
+
+  const toggleFavoriteWalker = useCallback(
+    async (walkerId: string) => {
+      if (!walkerId) return
+
+      const isFavorite = favoriteWalkerIds.has(walkerId)
+      if (isFavorite) {
+        setFavoriteWalkers((prev) => prev.filter((favorite) => favorite.walker_id !== walkerId))
+        const { error } = await supabase
+          .from('favorite_walkers')
+          .delete()
+          .eq('client_id', profileId)
+          .eq('walker_id', walkerId)
+
+        if (error) {
+          setError(error.message)
+          void fetchFavoriteWalkers()
+          return
+        }
+      } else {
+        const optimistic: FavoriteWalkerRow = {
+          id: `optimistic-${walkerId}`,
+          client_id: profileId,
+          walker_id: walkerId,
+          created_at: new Date().toISOString(),
+          walker: {
+            id: walkerId,
+            full_name: walkerNameById.get(walkerId) ?? 'Walker',
+            email: null,
+            avatar_url: null,
+          },
+        }
+        setFavoriteWalkers((prev) => [optimistic, ...prev])
+        const { error } = await supabase.from('favorite_walkers').insert({
+          client_id: profileId,
+          walker_id: walkerId,
+        })
+
+        if (error && error.code !== '23505') {
+          setError(error.message)
+          void fetchFavoriteWalkers()
+          return
+        }
+      }
+
+      void fetchFavoriteWalkers()
+    },
+    [favoriteWalkerIds, fetchFavoriteWalkers, profileId, walkerNameById],
+  )
 
   const hideHistoryItem = useCallback(
     async (id: string) => {
@@ -676,6 +796,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       completedResult,
       ratingsResult,
       ratingsReceivedResult,
+      tipsResult,
     ] = await Promise.allSettled([
       supabase
         .from('walk_requests')
@@ -709,6 +830,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
         .select('*')
         .eq('to_user_id', profileId)
         .order('created_at', { ascending: false }),
+      supabase
+        .from('walker_tips')
+        .select('*')
+        .eq('client_id', profileId)
+        .order('created_at', { ascending: false }),
     ])
 
     const currentRes = settledQuery<WalkRequestRow[]>(currentResult, 'current request')
@@ -716,6 +842,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const completedRes = settledQuery<WalkRequestRow[]>(completedResult, 'completed requests')
     const ratingsRes = settledQuery<RatingRow[]>(ratingsResult, 'ratings given')
     const ratingsReceivedRes = settledQuery<RatingRow[]>(ratingsReceivedResult, 'ratings received')
+    const tipsRes = settledQuery<TipRow[]>(tipsResult, 'walker tips')
 
     if (currentRes.error) {
       console.warn('[useClientFlow] current request unavailable:', currentRes.error.message)
@@ -731,6 +858,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
     if (ratingsReceivedRes.error) {
       console.warn('[useClientFlow] ratings received unavailable:', ratingsReceivedRes.error.message)
+    }
+    if (tipsRes.error) {
+      console.warn('[useClientFlow] walker tips unavailable:', tipsRes.error.message)
     }
 
     if (currentRes.error) {
@@ -766,9 +896,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
     setUpcomingJobs(upcoming)
 
+    const tipByJobId = new Map<string, number>()
+    for (const tip of (tipsRes.data as TipRow[] | null) ?? []) {
+      if (!tipByJobId.has(tip.walk_request_id)) {
+        tipByJobId.set(tip.walk_request_id, tip.amount)
+      }
+    }
+
     const completed = ((completedRes.data as WalkRequestRow[] | null) ?? []).map((job) => ({
       ...job,
       hidden_by_client: hiddenHistoryIds.has(job.id),
+      tip_amount: tipByJobId.get(job.id) ?? null,
     }))
     const lastActiveCompleted = completed.find(
       (job) => job.status === 'completed' && job.id === lastActiveJobIdRef.current,
@@ -1203,6 +1341,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
       setCompletionRatingSubmitting(false)
       flowCompletedJobIdsRef.current.delete(completionJob.jobId)
+      setTipJob({
+        jobId: completionJob.jobId,
+        walkerId,
+        walkerName: walkerLabel,
+      })
       setCompletionJob(null)
       void fetchCurrentAndLists()
     },
@@ -1212,6 +1355,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const dismissCompletion = useCallback(() => {
     setCompletionJob((current) => {
       if (current) {
+        if (current.walkerId) {
+          setTipJob({
+            jobId: current.jobId,
+            walkerId: current.walkerId,
+            walkerName: current.walkerName,
+          })
+        }
         dismissedCompletionIdsRef.current.add(current.jobId)
         flowCompletedJobIdsRef.current.delete(current.jobId)
         try {
@@ -1227,6 +1377,40 @@ export function useClientFlow(profileId: string, _profileName: string) {
     })
   }, [profileId])
 
+  const submitTip = useCallback(
+    async (amount: number) => {
+      if (!tipJob || amount <= 0) return
+
+      setTipSubmitting(true)
+      const { error: tipError } = await supabase.from('walker_tips').insert({
+        walk_request_id: tipJob.jobId,
+        client_id: profileId,
+        walker_id: tipJob.walkerId,
+        amount,
+        currency: 'ILS',
+        status: 'pending_payment',
+      })
+
+      if (tipError && tipError.code !== '23505') {
+        setError(tipError.message)
+        setTipSubmitting(false)
+        return
+      }
+
+      setTipSubmitting(false)
+      setTipJob(null)
+      _setDuration(null)
+      setSuccessMessage('Tip saved')
+      void fetchCurrentAndLists()
+    },
+    [fetchCurrentAndLists, profileId, tipJob],
+  )
+
+  const dismissTip = useCallback(() => {
+    setTipJob(null)
+    _setDuration(null)
+  }, [])
+
   const requestWalk = useCallback(async () => {
     if (!dogName.trim()) {
       setError('Enter name')
@@ -1234,6 +1418,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
     if (!location.trim()) {
       setError('Enter location')
+      return
+    }
+    if (!duration) {
+      setError('Choose duration')
       return
     }
     if (!savedCard || !stripeCustomerId) {
@@ -1356,12 +1544,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setSearchStartTime(Date.now())
         setScreenState('searching')
         setSuccessMessage('Searching for a walker...')
+        _setDuration(null)
       } else {
         setBookingTiming('asap')
         setScheduledFor(null)
         setSearchStartTime(null)
         setScreenState('idle')
         setSuccessMessage('Scheduled walk saved')
+        _setDuration(null)
       }
 
       void fetchCurrentAndLists()
@@ -1427,10 +1617,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
     completedJobs,
     ratings,
     ratingsReceived,
+    favoriteWalkers,
+    favoriteWalkerIds,
     recentRatings: ratings.slice(0, 8),
     recentRatingsReceived: ratingsReceived.slice(0, 8),
     walkerNameById,
     completionJob,
+    tipJob,
 
     activeJob,
     isWalkActive: screenState === 'active',
@@ -1459,6 +1652,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     distanceMeters,
 
     completionRatingSubmitting,
+    tipSubmitting,
     ratedJobIds,
 
     startsInMinutes,
@@ -1470,8 +1664,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
     onCardSetupComplete,
     cancelCardSetup,
     retryLoadCard,
+    toggleFavoriteWalker,
     submitCompletionRating,
     dismissCompletion,
+    submitTip,
+    dismissTip,
 
     requestWalk,
   }

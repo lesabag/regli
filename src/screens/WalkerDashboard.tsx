@@ -4,6 +4,8 @@ import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompactRatingList from '../components/CompactRatingList'
 import CompletionCard from '../components/CompletionCard'
+import GroupedHistory from '../components/GroupedHistory'
+import type { HistoryItem } from '../components/GroupedHistory'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { usePushNotifications } from '../hooks/usePushNotifications'
@@ -29,17 +31,6 @@ interface ConnectStatus {
   stripe_connect_onboarding_complete: boolean
   payouts_enabled: boolean
   charges_enabled: boolean
-}
-
-interface WalkerHistoryItem {
-  id: string
-  dogName: string
-  clientName: string
-  rating: number | null
-  reviewText: string | null
-  price: number | null
-  status: string | null
-  createdAt: string | null
 }
 
 function friendlyError(raw: string): string {
@@ -89,13 +80,6 @@ function formatRelativeDate(value: string | null | undefined): string {
   })
 }
 
-function formatStatus(status: string | null | undefined): string {
-  const normalized = (status || 'completed').toLowerCase()
-  if (normalized === 'completed') return 'Completed'
-  if (normalized === 'cancelled') return 'Cancelled'
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
-}
-
 export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardProps) {
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
@@ -104,6 +88,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
   const [burgerOpen, setBurgerOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [historyView, setHistoryView] = useState<'menu' | 'all'>('menu')
   const [historyOpen, setHistoryOpen] = useState(true)
   const [compRating, setCompRating] = useState(0)
   const [compHover, setCompHover] = useState(0)
@@ -116,6 +101,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
     setProfileOpen(false)
+    setHistoryView('menu')
   }, [])
 
   useEffect(() => {
@@ -177,7 +163,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
   const requestDuration = topRequest?.price ? durationFromPrice(topRequest.price) : '—'
 
-  const historyItems: WalkerHistoryItem[] = useMemo(() => {
+  const allHistoryItems = useMemo<HistoryItem[]>(() => {
     const ratingByJobId = new Map<string, { rating: number; review: string | null }>()
     flow.ratingsReceived.forEach((r) => {
       ratingByJobId.set(r.job_id, { rating: r.rating, review: r.review })
@@ -188,17 +174,24 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
         const ratingInfo = ratingByJobId.get(j.id)
         return {
           id: j.id,
-          dogName: j.dog_name || 'Walk',
-          clientName: j.client?.full_name || j.client?.email || 'Client',
+          dog_name: j.dog_name || 'Walk',
+          client_name: j.client?.full_name || j.client?.email || 'Client',
+          address: formatShortAddress(j.location),
           rating: ratingInfo?.rating ?? null,
-          reviewText: ratingInfo?.review ?? null,
+          review: ratingInfo?.review ?? null,
           price: j.walker_earnings ?? (j.price != null ? Math.round(j.price * 0.8) : null),
           status: j.status,
-          createdAt: j.created_at,
+          created_at: j.created_at,
+          completed_at: j.created_at,
+          hidden_by_walker: hiddenHistoryIds.includes(j.id),
         }
       })
-      .filter((item) => !hiddenHistoryIds.includes(item.id))
   }, [flow.completedJobs, flow.ratingsReceived, hiddenHistoryIds])
+
+  const visibleHistoryItems = useMemo(
+    () => allHistoryItems.filter((item) => item.hidden_by_walker !== true).slice(0, 7),
+    [allHistoryItems],
+  )
 
   const clientNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -340,84 +333,128 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             <div style={menuOverlayStyle} onClick={closeAll} />
             <div style={menuPanelStyle}>
               <div style={menuHeaderStyle}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
-                  <line x1="4" y1="7" x2="20" y2="7" />
-                  <line x1="4" y1="12" x2="20" y2="12" />
-                  <line x1="4" y1="17" x2="20" y2="17" />
-                </svg>
-                <span style={menuHeaderTitleStyle}>Menu</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (historyView === 'all') {
+                      setHistoryView('menu')
+                    } else {
+                      closeAll()
+                    }
+                  }}
+                  style={menuHeaderIconButtonStyle}
+                  aria-label={historyView === 'all' ? 'Back' : 'Close'}
+                >
+                  {historyView === 'all' ? (
+                    <span style={menuBackGlyphStyle}>‹</span>
+                  ) : (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
+                      <line x1="4" y1="7" x2="20" y2="7" />
+                      <line x1="4" y1="12" x2="20" y2="12" />
+                      <line x1="4" y1="17" x2="20" y2="17" />
+                    </svg>
+                  )}
+                </button>
+                <span style={menuHeaderTitleStyle}>{historyView === 'all' ? 'All history' : 'Menu'}</span>
               </div>
 
               <div style={menuDividerStyle} />
 
-              <button
-                type="button"
-                onClick={() => {
-                  setBurgerOpen(false)
-                  setProfileOpen(true)
-                }}
-                style={menuProfileButtonStyle}
-              >
-                <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={48} borderRadius={16} />
-                <div style={menuProfileTextStyle}>
-                  <div style={profileNameStyle}>{walkerName}</div>
-                  {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
-                  {flow.avgRating !== null && (
-                    <div style={profileRatingStyle}>
-                      <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
-                      {flow.ratingsReceived.length !== 1 ? 's' : ''}
+              {historyView === 'all' ? (
+                <div style={historyContainerStyle}>
+                  <GroupedHistory
+                    items={allHistoryItems}
+                    role="walker"
+                    onHide={hideHistoryItem}
+                    emptyTitle="No walk history yet"
+                    emptySubtitle="Completed jobs and client feedback will appear here."
+                  />
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBurgerOpen(false)
+                      setProfileOpen(true)
+                    }}
+                    style={menuProfileButtonStyle}
+                  >
+                    <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={48} borderRadius={16} />
+                    <div style={menuProfileTextStyle}>
+                      <div style={profileNameStyle}>{walkerName}</div>
+                      {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                      {flow.avgRating !== null && (
+                        <div style={profileRatingStyle}>
+                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
+                          {flow.ratingsReceived.length !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                    <div style={menuProfileChevronStyle}>›</div>
+                  </button>
+
+                  <div style={menuDividerStyle} />
+
+                  <button type="button" onClick={() => setHistoryOpen((v) => !v)} style={menuItemActionStyle}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    <span style={{ flex: 1 }}>Walk history</span>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="#94A3B8"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ transform: historyOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }}
+                    >
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+
+                  {historyOpen && (
+                    <div style={historyContainerStyle}>
+                      <GroupedHistory
+                        items={visibleHistoryItems}
+                        role="walker"
+                        onHide={hideHistoryItem}
+                        emptyTitle="No walk history yet"
+                        emptySubtitle="Completed jobs and client feedback will appear here."
+                      />
+                      {allHistoryItems.length > 7 && (
+                        <div style={viewAllWrapStyle}>
+                          <button type="button" onClick={() => setHistoryView('all')} style={viewAllButtonStyle}>
+                            View all
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
-                <div style={menuProfileChevronStyle}>›</div>
-              </button>
 
-              <div style={menuDividerStyle} />
+                  <div style={menuDividerStyle} />
 
-              <button type="button" onClick={() => setHistoryOpen((v) => !v)} style={menuItemActionStyle}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <polyline points="12 6 12 12 16 14" />
-                </svg>
-                <span style={{ flex: 1 }}>Walk history</span>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#94A3B8"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{ transform: historyOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }}
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
-
-              {historyOpen && (
-                <div style={historyContainerStyle}>
-                  <WalkerHistoryList items={historyItems} onHide={hideHistoryItem} />
-                </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeAll()
+                      void onSignOut()
+                    }}
+                    style={menuSignOutBtnStyle}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    <span>Sign out</span>
+                  </button>
+                </>
               )}
-
-              <div style={menuDividerStyle} />
-
-              <button
-                type="button"
-                onClick={() => {
-                  closeAll()
-                  void onSignOut()
-                }}
-                style={menuSignOutBtnStyle}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                  <polyline points="16 17 21 12 16 7" />
-                  <line x1="21" y1="12" x2="9" y2="12" />
-                </svg>
-                <span>Sign out</span>
-              </button>
             </div>
           </>
         )}
@@ -814,242 +851,6 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
   )
 }
 
-function WalkerHistoryList({
-  items,
-  onHide,
-}: {
-  items: WalkerHistoryItem[]
-  onHide: (id: string) => Promise<void>
-}) {
-  const [showSwipeHint, setShowSwipeHint] = useState(false)
-
-  useEffect(() => {
-    try {
-      const dismissed = window.localStorage.getItem('regli_walker_history_swipe_hint_dismissed')
-      setShowSwipeHint(!dismissed && items.length > 0)
-    } catch {
-      setShowSwipeHint(items.length > 0)
-    }
-  }, [items.length])
-
-  const dismissHint = useCallback(() => {
-    setShowSwipeHint(false)
-    try {
-      window.localStorage.setItem('regli_walker_history_swipe_hint_dismissed', '1')
-    } catch {
-      // noop
-    }
-  }, [])
-
-  if (!items.length) {
-    return <div style={futureEmptyStyle}>No walk history yet.</div>
-  }
-
-  return (
-    <div style={historyListStyle}>
-      {showSwipeHint && (
-        <button type="button" onClick={dismissHint} style={swipeHintStyle}>
-          Swipe left to hide card
-        </button>
-      )}
-      {items.map((item) => (
-        <WalkerHistorySwipeCard key={item.id} item={item} onHide={onHide} />
-      ))}
-    </div>
-  )
-}
-
-function WalkerHistorySwipeCard({
-  item,
-  onHide,
-}: {
-  item: WalkerHistoryItem
-  onHide: (id: string) => Promise<void>
-}) {
-  const [offsetX, setOffsetX] = useState(0)
-  const [dragging, setDragging] = useState(false)
-  const [reviewExpanded, setReviewExpanded] = useState(false)
-  const startXRef = useRef(0)
-  const startYRef = useRef(0)
-  const startOffsetRef = useRef(0)
-  const isHorizontalRef = useRef(false)
-  const SWIPE_OPEN = -96
-  const SWIPE_HIDE = -164
-  const OPEN_THRESHOLD = -56
-  const HIDE_THRESHOLD = -145
-  const isLongReview = (item.reviewText?.length ?? 0) > 92
-
-  useEffect(() => {
-    setReviewExpanded(false)
-  }, [item.id])
-
-  const reset = useCallback(() => {
-    setOffsetX(0)
-    setDragging(false)
-    isHorizontalRef.current = false
-  }, [])
-
-  const commitHide = useCallback(async () => {
-    await hapticMedium()
-    await onHide(item.id)
-    reset()
-  }, [item.id, onHide, reset])
-
-  const applyResistance = (rawOffset: number) => {
-    if (rawOffset > 0) return rawOffset * 0.18
-    if (rawOffset < SWIPE_HIDE) return SWIPE_HIDE + (rawOffset - SWIPE_HIDE) * 0.18
-    return rawOffset
-  }
-
-  const beginDrag = (x: number, y: number) => {
-    startXRef.current = x
-    startYRef.current = y
-    startOffsetRef.current = offsetX
-    isHorizontalRef.current = false
-    setDragging(true)
-  }
-
-  const moveDrag = (x: number, y: number) => {
-    if (!dragging) return false
-    const dx = x - startXRef.current
-    const dy = y - startYRef.current
-
-    if (!isHorizontalRef.current) {
-      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return false
-      if (Math.abs(dx) <= Math.abs(dy)) {
-        setDragging(false)
-        return false
-      }
-      isHorizontalRef.current = true
-    }
-
-    const rawOffset = startOffsetRef.current + dx
-    setOffsetX(applyResistance(rawOffset))
-    return true
-  }
-
-  const endDrag = () => {
-    if (!dragging) return
-    setDragging(false)
-
-    if (offsetX <= HIDE_THRESHOLD) {
-      void commitHide()
-      return
-    }
-
-    if (offsetX <= OPEN_THRESHOLD) {
-      setOffsetX(SWIPE_OPEN)
-      return
-    }
-
-    setOffsetX(0)
-  }
-
-  const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    const touch = e.touches[0]
-    if (!touch) return
-    beginDrag(touch.clientX, touch.clientY)
-  }
-
-  const onTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    const touch = e.touches[0]
-    if (!touch) return
-    const handled = moveDrag(touch.clientX, touch.clientY)
-    if (handled) e.preventDefault()
-  }
-
-  const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => beginDrag(e.clientX, e.clientY)
-  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    moveDrag(e.clientX, e.clientY)
-  }
-
-  return (
-    <div style={historySwipeWrapStyle}>
-      <div style={historySwipeActionsStyle}>
-        <button type="button" onClick={reset} style={historyCloseActionStyle}>
-          Close
-        </button>
-      </div>
-
-      <div
-        style={{
-          ...historyCardShellStyle,
-          transform: `translateX(${offsetX}px)`,
-          transition: dragging ? 'none' : 'transform 280ms cubic-bezier(0.22, 1, 0.36, 1)',
-        }}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={endDrag}
-        onTouchCancel={endDrag}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={endDrag}
-        onMouseLeave={endDrag}
-      >
-        <div style={historyCardTopRowStyle}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={historyCardTitleStyle}>{item.dogName}</div>
-            <div style={historyCardMetaStyle}>
-              {formatRelativeDate(item.createdAt)} {item.price != null ? `• ₪${item.price}` : ''}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <div style={historyStatusBadgeStyle}>{formatStatus(item.status)}</div>
-            {item.rating != null && (
-              <div style={historyRatingPillStyle}>
-                <span style={{ color: '#FDE68A' }}>★</span> {item.rating.toFixed(1)}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div style={historyWalkerRowStyle}>
-          <span style={historyCardLabelStyle}>Client</span>
-          <span style={historyCardWalkerNameStyle}>{item.clientName}</span>
-        </div>
-
-        {item.reviewText ? (
-          <div style={historyLocationCardStyle}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={historyReviewTopRowStyle}>
-                {item.rating != null && (
-                  <div style={historyReviewRatingInlineStyle}>
-                    <span style={{ color: '#FDE68A' }}>★</span> {item.rating.toFixed(1)}
-                  </div>
-                )}
-                <div style={historyLocationLabelStyle}>Feedback</div>
-              </div>
-              <div
-                style={{
-                  ...historyLocationValueStyle,
-                  ...(reviewExpanded ? historyReviewExpandedStyle : historyReviewCollapsedStyle),
-                }}
-              >
-                {item.reviewText}
-              </div>
-              {isLongReview ? (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    setReviewExpanded((current) => !current)
-                  }}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onTouchStart={(event) => event.stopPropagation()}
-                  style={historyReviewToggleStyle}
-                >
-                  {reviewExpanded ? 'Show less' : 'Read more'}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
 function WalletCard({ balance, pending }: { balance: number; pending: number }) {
   return (
     <div style={walletCardStyle}>
@@ -1238,6 +1039,27 @@ const menuHeaderStyle: React.CSSProperties = {
   fontWeight: 800,
 }
 
+const menuHeaderIconButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  width: 32,
+  height: 32,
+  padding: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  color: '#0F172A',
+}
+
+const menuBackGlyphStyle: React.CSSProperties = {
+  fontSize: 32,
+  lineHeight: 1,
+  fontWeight: 700,
+  marginTop: -2,
+}
+
 const menuHeaderTitleStyle: React.CSSProperties = {
   fontSize: 18,
   fontWeight: 800,
@@ -1292,6 +1114,23 @@ const menuItemActionStyle: React.CSSProperties = {
 const historyContainerStyle: React.CSSProperties = {
   padding: '0 24px 18px',
   overflowY: 'auto',
+}
+
+const viewAllWrapStyle: React.CSSProperties = {
+  marginTop: 10,
+  textAlign: 'center',
+}
+
+const viewAllButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  borderRadius: 999,
+  padding: '9px 16px',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
 const menuSignOutBtnStyle: React.CSSProperties = {
@@ -1972,205 +1811,4 @@ const completionOverlayCardStyle: React.CSSProperties = {
   width: 'min(420px, 100%)',
   maxWidth: '100%',
   boxSizing: 'border-box',
-}
-
-const historyListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 16,
-}
-
-const swipeHintStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 36,
-  border: '1px dashed rgba(148, 163, 184, 0.45)',
-  borderRadius: 14,
-  background: 'rgba(241, 245, 249, 0.75)',
-  color: '#2563EB',
-  fontSize: 12,
-  fontWeight: 700,
-  cursor: 'pointer',
-}
-
-const historySwipeWrapStyle: React.CSSProperties = {
-  position: 'relative',
-  borderRadius: 28,
-  overflow: 'hidden',
-  WebkitTapHighlightColor: 'transparent',
-}
-
-const historySwipeActionsStyle: React.CSSProperties = {
-  position: 'absolute',
-  inset: 0,
-  display: 'flex',
-  justifyContent: 'flex-end',
-  padding: 14,
-  background: 'linear-gradient(135deg, rgba(8,21,59,0.14) 0%, rgba(8,21,59,0.04) 100%)',
-}
-
-const historyCloseActionStyle: React.CSSProperties = {
-  minWidth: 86,
-  borderRadius: 20,
-  border: '1px solid rgba(15, 23, 42, 0.10)',
-  background: '#FFFFFF',
-  color: '#334155',
-  fontSize: 13,
-  fontWeight: 800,
-  cursor: 'pointer',
-}
-
-const historyCardShellStyle: React.CSSProperties = {
-  position: 'relative',
-  borderRadius: 28,
-  padding: '18px 18px 20px',
-  background:
-    'radial-gradient(circle at top right, rgba(29, 78, 216, 0.20) 0%, rgba(29, 78, 216, 0) 28%), linear-gradient(135deg, #06112E 0%, #08153B 55%, #030816 100%)',
-  boxShadow: '0 10px 24px rgba(2, 6, 23, 0.18)',
-  border: '1px solid rgba(148, 163, 184, 0.10)',
-  touchAction: 'pan-y',
-  WebkitUserSelect: 'none',
-  userSelect: 'none',
-  willChange: 'transform',
-}
-
-const historyCardTopRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 10,
-}
-
-const historyCardTitleStyle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  color: '#FFFFFF',
-  letterSpacing: -0.2,
-}
-
-const historyCardMetaStyle: React.CSSProperties = {
-  marginTop: 8,
-  fontSize: 12,
-  fontWeight: 700,
-  color: 'rgba(226, 232, 240, 0.82)',
-}
-
-const historyStatusBadgeStyle: React.CSSProperties = {
-  padding: '8px 14px',
-  borderRadius: 999,
-  background: 'rgba(34, 197, 94, 0.16)',
-  color: '#BBF7D0',
-  border: '1px solid rgba(34, 197, 94, 0.28)',
-  fontSize: 12,
-  fontWeight: 800,
-  whiteSpace: 'nowrap',
-}
-
-const historyRatingPillStyle: React.CSSProperties = {
-  padding: '8px 14px',
-  borderRadius: 999,
-  background: 'rgba(234, 179, 8, 0.12)',
-  color: '#FEF3C7',
-  border: '1px solid rgba(234, 179, 8, 0.24)',
-  fontSize: 12,
-  fontWeight: 800,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-}
-
-const historyWalkerRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: 10,
-  marginTop: 18,
-}
-
-const historyCardLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  color: 'rgba(148, 163, 184, 0.95)',
-  textTransform: 'uppercase',
-  letterSpacing: 0.22,
-}
-
-const historyCardWalkerNameStyle: React.CSSProperties = {
-  fontSize: 15,
-  fontWeight: 800,
-  color: '#FFFFFF',
-}
-
-const historyLocationCardStyle: React.CSSProperties = {
-  marginTop: 16,
-  borderRadius: 20,
-  border: '1px solid rgba(148, 163, 184, 0.14)',
-  background: 'rgba(15, 23, 42, 0.42)',
-  padding: '12px 14px',
-  display: 'grid',
-  gap: 8,
-}
-
-const historyReviewTopRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-}
-
-const historyReviewRatingInlineStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: '5px 8px',
-  borderRadius: 999,
-  background: 'rgba(234, 179, 8, 0.12)',
-  border: '1px solid rgba(234, 179, 8, 0.18)',
-  color: '#FEF3C7',
-  fontSize: 12,
-  fontWeight: 800,
-}
-
-const historyLocationLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  color: 'rgba(148, 163, 184, 0.95)',
-  textTransform: 'uppercase',
-  letterSpacing: 0.22,
-}
-
-const historyLocationValueStyle: React.CSSProperties = {
-  marginTop: 0,
-  fontSize: 15,
-  fontWeight: 700,
-  lineHeight: 1.45,
-  color: '#FFFFFF',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-}
-
-const historyReviewCollapsedStyle: React.CSSProperties = {
-  display: '-webkit-box',
-  WebkitLineClamp: 1,
-  WebkitBoxOrient: 'vertical',
-}
-
-const historyReviewExpandedStyle: React.CSSProperties = {
-  overflowWrap: 'anywhere',
-  whiteSpace: 'normal',
-}
-
-const historyReviewToggleStyle: React.CSSProperties = {
-  marginTop: 2,
-  appearance: 'none',
-  border: 'none',
-  background: 'transparent',
-  padding: 0,
-  color: '#FDE68A',
-  fontSize: 12,
-  fontWeight: 800,
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-}
-
-const futureEmptyStyle: React.CSSProperties = {
-  padding: '18px 4px 6px',
-  fontSize: 14,
-  color: '#64748B',
 }

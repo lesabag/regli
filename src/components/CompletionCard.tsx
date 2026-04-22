@@ -9,6 +9,9 @@ interface CompletionCardProps {
   onRate?: (rating: number, review: string) => void
   ratingSubmitting?: boolean
   alreadyRated?: boolean
+  favoriteLabel?: string
+  favoriteActive?: boolean
+  onToggleFavorite?: () => void
   onDismiss: () => void
 }
 
@@ -20,6 +23,9 @@ export default function CompletionCard({
   onRate,
   ratingSubmitting,
   alreadyRated,
+  favoriteLabel,
+  favoriteActive,
+  onToggleFavorite,
   onDismiss,
 }: CompletionCardProps) {
   const [rating, setRating] = useState(0)
@@ -63,6 +69,20 @@ export default function CompletionCard({
 
       <h3 style={titleStyle}>{title}</h3>
       <p style={subtitleStyle}>{subtitle}</p>
+
+      {onToggleFavorite && favoriteLabel && (
+        <button
+          type="button"
+          onClick={onToggleFavorite}
+          style={{
+            ...favoriteButtonStyle,
+            ...(favoriteActive ? favoriteButtonActiveStyle : null),
+          }}
+        >
+          <span style={favoriteIconStyle}>{favoriteActive ? '♥' : '♡'}</span>
+          <span>{favoriteActive ? 'Preferred walker' : `Save ${favoriteLabel}`}</span>
+        </button>
+      )}
 
       {earnings && (
         <div style={earningsStyle}>
@@ -230,6 +250,35 @@ const earningsStyle: React.CSSProperties = {
   borderRadius: 14,
   border: '1px solid #DCFCE7',
   marginBottom: 8,
+}
+
+const favoriteButtonStyle: React.CSSProperties = {
+  margin: '10px auto 0',
+  border: '1px solid #FDE68A',
+  borderRadius: 999,
+  background: '#FFFBEB',
+  color: '#92400E',
+  padding: '10px 14px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const favoriteButtonActiveStyle: React.CSSProperties = {
+  background: '#FEF3C7',
+  border: '1px solid #F59E0B',
+  color: '#78350F',
+}
+
+const favoriteIconStyle: React.CSSProperties = {
+  fontSize: 17,
+  lineHeight: 1,
 }
 
 const ratingContainerStyle: React.CSSProperties = {
