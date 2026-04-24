@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 
 interface MessageBannerProps {
   text: string
-  kind: 'error' | 'success'
+  kind: 'error' | 'success' | 'info'
   onDismiss?: () => void
   durationMs?: number
+  title?: string
+  subtitle?: string
+  icon?: React.ReactNode
 }
 
 export default function MessageBanner({
@@ -12,11 +15,19 @@ export default function MessageBanner({
   kind,
   onDismiss,
   durationMs = 3600,
+  title,
+  subtitle,
+  icon,
 }: MessageBannerProps) {
   const isError = kind === 'error'
+  const isInfo = kind === 'info'
   const [progress, setProgress] = useState(100)
 
-  const accent = useMemo(() => (isError ? '#DC2626' : '#16A34A'), [isError])
+  const accent = useMemo(() => {
+    if (isError) return '#DC2626'
+    if (isInfo) return '#5B7CFA'
+    return '#16A34A'
+  }, [isError, isInfo])
 
   useEffect(() => {
     setProgress(100)
@@ -43,11 +54,11 @@ export default function MessageBanner({
       style={{
         position: 'relative',
         overflow: 'hidden',
-        padding: '10px 14px 12px',
-        borderRadius: 12,
+        padding: subtitle ? '12px 14px 12px' : '10px 14px 12px',
+        borderRadius: 14,
         marginBottom: 8,
-        background: isError ? '#FEE2E2' : '#F0FDF4',
-        color: isError ? '#B91C1C' : '#15803D',
+        background: isError ? '#FEE2E2' : isInfo ? '#EEF4FF' : '#F0FDF4',
+        color: isError ? '#B91C1C' : isInfo ? '#3152C8' : '#15803D',
         fontSize: 13,
         fontWeight: 600,
         display: 'flex',
@@ -62,21 +73,41 @@ export default function MessageBanner({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          {isError ? (
+        <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          {icon ?? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              {isError ? (
+                <>
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="15" y1="9" x2="9" y2="15" />
+                  <line x1="9" y1="9" x2="15" y2="15" />
+                </>
+              ) : isInfo ? (
+                <>
+                  <circle cx="11" cy="11" r="7" />
+                  <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                </>
+              ) : (
+                <>
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="16 10 11 15 8 12" />
+                </>
+              )}
+            </svg>
+          )}
+        </span>
+        <span style={{ flex: 1, minWidth: 0, display: 'grid', gap: subtitle ? 2 : 0 }}>
+          {(title || subtitle) ? (
             <>
-              <circle cx="12" cy="12" r="10" />
-              <line x1="15" y1="9" x2="9" y2="15" />
-              <line x1="9" y1="9" x2="15" y2="15" />
+              <span style={{ fontSize: 14, fontWeight: 800, color: 'inherit' }}>{title || text}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 500, lineHeight: 1.4, color: isError ? '#B91C1C' : isInfo ? '#4C67C7' : '#15803D' }}>
+                {subtitle || text}
+              </span>
             </>
           ) : (
-            <>
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="16 10 11 15 8 12" />
-            </>
+            <span style={{ flex: 1, minWidth: 0 }}>{text}</span>
           )}
-        </svg>
-        <span style={{ flex: 1, minWidth: 0 }}>{text}</span>
+        </span>
       </div>
       {onDismiss && (
         <button

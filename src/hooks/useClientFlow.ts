@@ -4,6 +4,7 @@ import { startDispatch } from '../lib/startDispatch'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
+import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 
 type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
 type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
@@ -42,9 +43,14 @@ type TipJob = {
   walkerId: string
 } | null
 
+type AvailabilityNotice = {
+  title: string
+  subtitle: string
+} | null
+
 type LiveOrderEventPayload = {
   jobId?: string
-  type?: 'accepted' | 'started' | 'start_walk' | 'complete' | 'completed'
+  type?: 'accepted' | 'arrived' | 'started' | 'start_walk' | 'complete' | 'completed'
   message?: string
   walkerId?: string | null
   walkerName?: string | null
@@ -56,6 +62,7 @@ type WalkRequestRow = {
   walker_id: string | null
   selected_walker_id: string | null
   status: 'awaiting_payment' | 'open' | 'accepted' | 'completed' | 'cancelled' | string
+  service_type?: string | null
   dog_name: string | null
   location: string | null
   address?: string | null
@@ -74,6 +81,10 @@ type WalkRequestRow = {
   paid_at?: string | null
   created_at?: string | null
   completed_at?: string | null
+  provider_arrived_at?: string | null
+  client_arrival_confirmed_at?: string | null
+  service_started_at?: string | null
+  service_completed_at?: string | null
 }
 
 type RatingRow = {
@@ -124,10 +135,11 @@ type QueryResult<T> = {
 }
 
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at'
+  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
+const LOCATION_REFRESH_METERS = 75
 
 
 function pad(n: number): string {
@@ -204,18 +216,15 @@ function completionDismissStorageKey(profileId: string): string {
   return `regli_client_completion_dismissed_${profileId}`
 }
 
-function startedWalkStorageKey(profileId: string): string {
-  return `regli_client_started_walks_${profileId}`
-}
-
-function getLifecycleEventRank(type: 'accepted' | 'start_walk' | 'complete'): number {
-  if (type === 'complete') return 3
-  if (type === 'start_walk') return 2
+function getLifecycleEventRank(type: 'accepted' | 'arrived' | 'start_walk' | 'complete'): number {
+  if (type === 'complete') return 4
+  if (type === 'start_walk') return 3
+  if (type === 'arrived') return 2
   return 1
 }
 
 function getJobEventTime(job: WalkRequestRow): number {
-  const value = job.paid_at ?? job.created_at ?? null
+  const value = job.service_completed_at ?? job.paid_at ?? job.created_at ?? null
   if (!value) return 0
   const ts = new Date(value).getTime()
   return Number.isNaN(ts) ? 0 : ts
@@ -236,6 +245,12 @@ function isActiveUiCandidate(job: WalkRequestRow): boolean {
   return true
 }
 
+function isExhaustedUiCandidate(job: WalkRequestRow): boolean {
+  if (!isCurrentClientJob(job)) return false
+  if (job.status !== 'awaiting_payment' && job.status !== 'open' && job.status !== 'accepted') return false
+  return job.smart_dispatch_state === 'exhausted'
+}
+
 function getNewestActiveRequest(
   rows: WalkRequestRow[],
   suppressedIds: Map<string, number>,
@@ -244,6 +259,25 @@ function getNewestActiveRequest(
   const now = Date.now()
   const candidates = rows
     .filter(isActiveUiCandidate)
+    .filter((job) => {
+      const suppressedAt = suppressedIds.get(job.id)
+      if (suppressedAt && now - suppressedAt < CANCEL_SUPPRESS_MS) return false
+      if (getCreatedTime(job) <= staleCutoff) return false
+      return true
+    })
+    .sort((a, b) => getCreatedTime(b) - getCreatedTime(a))
+
+  return candidates[0] ?? null
+}
+
+function getNewestExhaustedRequest(
+  rows: WalkRequestRow[],
+  suppressedIds: Map<string, number>,
+  staleCutoff: number,
+): WalkRequestRow | null {
+  const now = Date.now()
+  const candidates = rows
+    .filter(isExhaustedUiCandidate)
     .filter((job) => {
       const suppressedAt = suppressedIds.get(job.id)
       if (suppressedAt && now - suppressedAt < CANCEL_SUPPRESS_MS) return false
@@ -303,28 +337,57 @@ function isCurrentClientJob(job: WalkRequestRow): boolean {
   return job.dispatch_state === 'dispatched'
 }
 
-function normalizeClientScreen(job: WalkRequestRow | null): ScreenState {
-  if (!job) return 'idle'
-
-  if (job.status === 'accepted') {
-    if (job.booking_timing === 'scheduled' && job.dispatch_state !== 'dispatched') {
-      return 'idle'
-    }
+function mapScreenStateFromPhase(phase: ServicePhase): ScreenState {
+  if (phase === 'searching') return 'searching'
+  if (
+    phase === 'on_the_way' ||
+    phase === 'arrived_pending_confirmation' ||
+    phase === 'arrival_confirmed'
+  ) {
     return 'tracking'
   }
-
-  if (job.status === 'open' || job.status === 'awaiting_payment') {
-    if (job.booking_timing === 'scheduled' && job.dispatch_state !== 'dispatched') {
-      return 'idle'
-    }
-    return 'searching'
-  }
-
+  if (phase === 'in_progress') return 'active'
   return 'idle'
+}
+
+function mergeWalkRequest(prev: WalkRequestRow | null, next: WalkRequestRow): WalkRequestRow {
+  if (!prev || prev.id !== next.id) return next
+
+  const merged = { ...prev } as WalkRequestRow
+  const mergedRecord = merged as Record<string, unknown>
+  const prevRecord = prev as unknown as Record<string, unknown>
+  const entries = Object.entries(next) as Array<[keyof WalkRequestRow, WalkRequestRow[keyof WalkRequestRow]]>
+
+  entries.forEach(([key, value]) => {
+    if (value !== null && value !== undefined) {
+      mergedRecord[key as string] = value
+      return
+    }
+
+    if (
+      key === 'provider_arrived_at' ||
+      key === 'client_arrival_confirmed_at' ||
+      key === 'service_started_at' ||
+      key === 'service_completed_at' ||
+      key === 'walker_lat' ||
+      key === 'walker_lng' ||
+      key === 'last_location_update'
+    ) {
+      if (prevRecord[key as string] != null) {
+        mergedRecord[key as string] = prevRecord[key as string]
+      }
+      return
+    }
+
+    mergedRecord[key as string] = value
+  })
+
+  return merged
 }
 
 export function useClientFlow(profileId: string, _profileName: string) {
   const [screenState, setScreenState] = useState<ScreenState>('idle')
+  const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const [currentJob, setCurrentJob] = useState<WalkRequestRow | null>(null)
@@ -340,10 +403,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [availabilityNotice, setAvailabilityNotice] = useState<AvailabilityNotice>(null)
 
   const [gpsQualityBase, setGpsQualityBase] = useState<GpsQuality>('live')
   const [completionJob, setCompletionJob] = useState<CompletionJob>(null)
   const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
+  const [arrivalConfirming, setArrivalConfirming] = useState(false)
   const [tipJob, setTipJob] = useState<TipJob>(null)
   const [tipSubmitting, setTipSubmitting] = useState(false)
 
@@ -359,15 +424,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
   const arriveNotifiedRef = useRef<Set<string>>(new Set())
+  const startNotifiedRef = useRef<Set<string>>(new Set())
   const completeNotifiedRef = useRef<Set<string>>(new Set())
   const liveEventNotifiedRef = useRef<Set<string>>(new Set())
   const lifecycleEventRankRef = useRef<Map<string, number>>(new Map())
+  const lifecyclePhaseRef = useRef<Map<string, ServicePhase>>(new Map())
+  const exhaustedDispatchNotifiedRef = useRef<Set<string>>(new Set())
   const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
   const suppressedActiveRequestIdsRef = useRef<Map<string, number>>(new Map())
   const staleActiveCutoffRef = useRef(0)
   const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
-  const startedWalkIdsRef = useRef<Set<string>>(new Set())
   const lastActiveJobIdRef = useRef<string | null>(null)
+  const lastAutoLocationRef = useRef<string>('')
+  const lastGeocodeCoordsRef = useRef<[number, number] | null>(null)
+  const latestResolvedLocationRef = useRef<string>('')
 
   useEffect(() => {
     try {
@@ -376,16 +446,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
       dismissedCompletionIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
     } catch {
       dismissedCompletionIdsRef.current = new Set()
-    }
-  }, [profileId])
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(startedWalkStorageKey(profileId))
-      const parsed = raw ? (JSON.parse(raw) as string[]) : []
-      startedWalkIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
-    } catch {
-      startedWalkIdsRef.current = new Set()
     }
   }, [profileId])
 
@@ -406,8 +466,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
       if (!raw) return
       const parsed = JSON.parse(raw) as Partial<LastBookingDraft>
       const lastName = typeof parsed.dogName === 'string' ? parsed.dogName.trim() : ''
+      const lastLocation = typeof parsed.location === 'string' ? parsed.location.trim() : ''
       if (lastName) {
         _setDogName((current) => current || lastName)
+      }
+      if (lastLocation) {
+        lastAutoLocationRef.current = lastLocation
+        latestResolvedLocationRef.current = lastLocation
+        _setLocation((current) => current || lastLocation)
       }
     } catch {
       // noop
@@ -421,43 +487,116 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude
-        const lng = pos.coords.longitude
+    let cancelled = false
+    let watchId: number | null = null
 
-        setUserLocationBase([lat, lng])
-        setGpsQualityBase('live')
+    const distanceMeters = (from: [number, number], to: [number, number]) => {
+      const toRad = (deg: number) => (deg * Math.PI) / 180
+      const earthRadius = 6371000
+      const dLat = toRad(to[0] - from[0])
+      const dLng = toRad(to[1] - from[1])
+      const lat1 = toRad(from[0])
+      const lat2 = toRad(to[0])
+      const h =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
+      return 2 * earthRadius * Math.asin(Math.sqrt(h))
+    }
 
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}`,
-          )
-          const data = await res.json()
-          const address =
-            formatShortAddress(data?.display_name, data?.address) ||
-            data?.display_name ||
-            `${lat.toFixed(4)}, ${lng.toFixed(4)}`
-          _setLocation((prev) => prev || address)
-        } catch {
-          _setLocation((prev) => prev || `${lat.toFixed(4)}, ${lng.toFixed(4)}`)
-        }
+    const maybeReverseGeocode = async (lat: number, lng: number) => {
+      const nextCoords: [number, number] = [lat, lng]
+      const lastCoords = lastGeocodeCoordsRef.current
+      if (lastCoords && distanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
+        return
+      }
 
-        setLocationLoading(false)
-      },
-      () => {
-        setGpsQualityBase('offline')
-        setLocationLoading(false)
-      },
-      { enableHighAccuracy: true },
-    )
+      lastGeocodeCoordsRef.current = nextCoords
+
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}`,
+        )
+        const data = await res.json()
+        if (cancelled) return
+
+        const address =
+          formatShortAddress(data?.display_name, data?.address) ||
+          data?.display_name ||
+          `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+
+        _setLocation((prev) => {
+          const trimmedPrev = prev.trim()
+          if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
+            lastAutoLocationRef.current = address
+            latestResolvedLocationRef.current = address
+            return address
+          }
+          return prev
+        })
+      } catch {
+        if (cancelled) return
+        _setLocation((prev) => {
+          const fallback = `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+          const trimmedPrev = prev.trim()
+          if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
+            lastAutoLocationRef.current = fallback
+            latestResolvedLocationRef.current = fallback
+            return fallback
+          }
+          return prev
+        })
+      }
+    }
+
+    const onSuccess = (pos: GeolocationPosition) => {
+      if (cancelled) return
+      const lat = pos.coords.latitude
+      const lng = pos.coords.longitude
+      setUserLocationBase([lat, lng])
+      setGpsQualityBase('live')
+      setLocationLoading(false)
+      void maybeReverseGeocode(lat, lng)
+    }
+
+    const onError = () => {
+      if (cancelled) return
+      setGpsQualityBase('offline')
+      setLocationLoading(false)
+    }
+
+    navigator.geolocation.getCurrentPosition(onSuccess, onError, {
+      enableHighAccuracy: true,
+      maximumAge: 60_000,
+      timeout: 8_000,
+    })
+
+    watchId = navigator.geolocation.watchPosition(onSuccess, onError, {
+      enableHighAccuracy: true,
+      maximumAge: 15_000,
+      timeout: 15_000,
+    })
+
+    return () => {
+      cancelled = true
+      if (watchId != null) navigator.geolocation.clearWatch(watchId)
+    }
   }, [])
 
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
+  const clearAvailabilityNotice = useCallback(() => setAvailabilityNotice(null), [])
+
+  const showDispatchExhaustedMessage = useCallback((jobId: string) => {
+    if (exhaustedDispatchNotifiedRef.current.has(jobId)) return
+    exhaustedDispatchNotifiedRef.current.add(jobId)
+    setAvailabilityNotice({
+      title: 'No providers available right now',
+      subtitle: 'Please try again soon or schedule for later.',
+    })
+  }, [])
 
   const showLifecycleBanner = useCallback(
-    (jobId: string, type: 'accepted' | 'start_walk' | 'complete', message: string) => {
+    (jobId: string, type: 'accepted' | 'arrived' | 'start_walk' | 'complete', message: string) => {
       const nextRank = getLifecycleEventRank(type)
       const currentRank = lifecycleEventRankRef.current.get(jobId) ?? 0
       if (nextRank < currentRank) return
@@ -516,6 +655,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const setLocation = useCallback(
     (value: string) => {
+      lastAutoLocationRef.current = ''
       _setLocation(value)
       persistBookingDraft({ location: value })
     },
@@ -615,6 +755,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
   useEffect(() => {
     void loadPaymentMethods()
   }, [loadPaymentMethods])
+
+  useEffect(() => {
+    if (screenState !== 'idle') return
+    if (!latestResolvedLocationRef.current) return
+
+    _setLocation((prev) => {
+      const trimmedPrev = prev.trim()
+      if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
+        lastAutoLocationRef.current = latestResolvedLocationRef.current
+        return latestResolvedLocationRef.current
+      }
+      return prev
+    })
+  }, [screenState])
 
   const fetchFavoriteWalkers = useCallback(async () => {
     const { data, error } = await supabase
@@ -766,24 +920,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const activeJob =
     currentJob &&
     currentJob.status === 'accepted' &&
-    (screenState === 'accepted' || screenState === 'tracking' || screenState === 'active')
+    (
+      screenPhase === 'on_the_way' ||
+      screenPhase === 'arrived_pending_confirmation' ||
+      screenPhase === 'arrival_confirmed' ||
+      screenPhase === 'in_progress'
+    )
       ? currentJob
       : null
 
-  const persistStartedWalkIds = useCallback(
-    (next: Set<string>) => {
-      startedWalkIdsRef.current = next
-      try {
-        window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
-      } catch {
-        // noop
-      }
-    },
-    [profileId],
-  )
-
   const clearActiveState = useCallback(() => {
     setScreenState('idle')
+    setScreenPhase('idle')
     setCurrentJob(null)
     setCurrentJobId(null)
     setSearchStartTime(null)
@@ -872,19 +1020,34 @@ export function useClientFlow(profileId: string, _profileName: string) {
         suppressedActiveRequestIdsRef.current,
         staleActiveCutoffRef.current,
       )
+      const exhaustedRow = getNewestExhaustedRequest(
+        currentRows,
+        suppressedActiveRequestIdsRef.current,
+        staleActiveCutoffRef.current,
+      )
 
       if (!row) {
+        if (exhaustedRow) {
+          const belongsToCurrentFlow =
+            exhaustedRow.id === currentJobId ||
+            exhaustedRow.id === lastActiveJobIdRef.current ||
+            screenState === 'searching'
+
+          if (belongsToCurrentFlow) {
+            showDispatchExhaustedMessage(exhaustedRow.id)
+          }
+        }
         clearActiveState()
       } else {
-        setCurrentJob(row)
+        setAvailabilityNotice(null)
+        const nextPhase = getServicePhase(row)
+        lifecyclePhaseRef.current.set(row.id, nextPhase)
+        setCurrentJob((prev) => mergeWalkRequest(prev, row))
         setCurrentJobId(row.id)
         lastActiveJobIdRef.current = row.id
         if (row.walker_id) void loadWalkerName(row.walker_id)
-        setScreenState(
-          row.status === 'accepted' && startedWalkIdsRef.current.has(row.id)
-            ? 'active'
-            : normalizeClientScreen(row),
-        )
+        setScreenPhase(nextPhase)
+        setScreenState(mapScreenStateFromPhase(nextPhase))
         if (row.status === 'accepted') {
           setSearchStartTime(null)
         } else if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
@@ -894,6 +1057,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
+    upcoming.forEach((job) => {
+      lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
+    })
     setUpcomingJobs(upcoming)
 
     const tipByJobId = new Map<string, number>()
@@ -908,6 +1074,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
       hidden_by_client: hiddenHistoryIds.has(job.id),
       tip_amount: tipByJobId.get(job.id) ?? null,
     }))
+    completed.forEach((job) => {
+      lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
+    })
     const lastActiveCompleted = completed.find(
       (job) => job.status === 'completed' && job.id === lastActiveJobIdRef.current,
     )
@@ -972,7 +1141,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     walkerIds.forEach((id) => {
       void loadWalkerName(id)
     })
-  }, [profileId, loadWalkerName, hiddenHistoryIds, clearActiveState])
+  }, [profileId, loadWalkerName, hiddenHistoryIds, clearActiveState, currentJobId, screenState, showDispatchExhaustedMessage])
 
   useEffect(() => {
     void fetchCurrentAndLists()
@@ -1015,41 +1184,59 @@ export function useClientFlow(profileId: string, _profileName: string) {
             void loadWalkerName(updated.walker_id)
           }
 
+          const previousPhase = lifecyclePhaseRef.current.get(updated.id) ?? 'idle'
+          const nextPhase = getServicePhase(updated)
+          lifecyclePhaseRef.current.set(updated.id, nextPhase)
+
           const isSuppressed =
             !!suppressedActiveRequestIdsRef.current.get(updated.id) ||
             getCreatedTime(updated) <= staleActiveCutoffRef.current
-          const nextState = normalizeClientScreen(updated)
-
           if (
             (updated.status === 'open' || updated.status === 'awaiting_payment') &&
             isCurrentClientJob(updated) &&
             !isSuppressed &&
             currentJobId === updated.id
           ) {
-            setCurrentJob(updated)
+            setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
             setSearchStartTime((prev) => prev ?? Date.now())
-            setScreenState(nextState)
+            setScreenPhase(nextPhase)
+            setScreenState(mapScreenStateFromPhase(nextPhase))
           }
 
           if (updated.status === 'accepted' && !isSuppressed && currentJobId === updated.id) {
-            setCurrentJob(updated)
+            const labels = getServiceLabels(updated.service_type)
+            setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
             setSearchStartTime(null)
-            setScreenState(startedWalkIdsRef.current.has(updated.id) ? 'active' : nextState)
+            setScreenPhase(nextPhase)
+            setScreenState(mapScreenStateFromPhase(nextPhase))
 
             if (!acceptNotifiedRef.current.has(updated.id)) {
               acceptNotifiedRef.current.add(updated.id)
-              const walkerLabel = updated.walker_id
-                ? walkerNameById.get(updated.walker_id) || 'Walker'
-                : 'Walker'
               showLifecycleBanner(
                 updated.id,
                 'accepted',
-                `${walkerLabel} accepted your request and is heading to you${updated.dog_name ? ` for ${updated.dog_name}` : ''}.`,
+                'Provider is on the way.',
               )
+            }
+
+            if (updated.provider_arrived_at && !updated.client_arrival_confirmed_at && !arriveNotifiedRef.current.has(updated.id)) {
+              arriveNotifiedRef.current.add(updated.id)
+              showLifecycleBanner(updated.id, 'arrived', 'Provider has arrived.')
+            }
+
+            if (
+              nextPhase === 'in_progress' &&
+              previousPhase !== 'in_progress' &&
+              previousPhase !== 'completed' &&
+              !updated.service_completed_at &&
+              !startNotifiedRef.current.has(updated.id)
+            ) {
+              startNotifiedRef.current.add(updated.id)
+              showLifecycleBanner(updated.id, 'start_walk', labels.startedPast)
             }
           }
 
@@ -1059,19 +1246,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
             if (belongsToCurrentFlow) {
               flowCompletedJobIdsRef.current.add(updated.id)
-              const nextStarted = new Set(startedWalkIdsRef.current)
-              nextStarted.delete(updated.id)
-              persistStartedWalkIds(nextStarted)
               clearActiveState()
             }
 
             if (!completeNotifiedRef.current.has(updated.id)) {
               completeNotifiedRef.current.add(updated.id)
-              showLifecycleBanner(
-                updated.id,
-                'complete',
-                `Walk completed${updated.dog_name ? ` for ${updated.dog_name}` : ''}.`,
-              )
+              showLifecycleBanner(updated.id, 'complete', getServiceLabels(updated.service_type).completedPast)
             }
 
             if (
@@ -1095,6 +1275,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
             }
           }
 
+          if (
+            updated.smart_dispatch_state === 'exhausted' &&
+            (updated.id === currentJobId || updated.id === lastActiveJobIdRef.current || screenState === 'searching')
+          ) {
+            clearActiveState()
+            showDispatchExhaustedMessage(updated.id)
+          }
+
           void fetchCurrentAndLists()
         },
       )
@@ -1110,27 +1298,34 @@ export function useClientFlow(profileId: string, _profileName: string) {
           liveEventNotifiedRef.current.add(key)
 
           if (event.type === 'started' || event.type === 'start_walk') {
-            const nextStarted = new Set(startedWalkIdsRef.current)
-            nextStarted.add(event.jobId)
-            persistStartedWalkIds(nextStarted)
+            if (completeNotifiedRef.current.has(event.jobId)) return
             if (event.jobId === currentJobId || event.jobId === lastActiveJobIdRef.current) {
+              setScreenPhase('in_progress')
               setScreenState('active')
             }
-            showLifecycleBanner(event.jobId, 'start_walk', event.message || 'Walk has started.')
+            if (!startNotifiedRef.current.has(event.jobId)) {
+              startNotifiedRef.current.add(event.jobId)
+              showLifecycleBanner(event.jobId, 'start_walk', event.message || 'Service started.')
+            }
           } else if (event.type === 'accepted') {
             showLifecycleBanner(
               event.jobId,
               'accepted',
-              event.message || 'Walker accepted your request and is heading to you.',
+              event.message || 'Provider is on the way.',
             )
+          } else if (event.type === 'arrived') {
+            if (event.jobId === currentJobId || event.jobId === lastActiveJobIdRef.current) {
+              setScreenPhase('arrived_pending_confirmation')
+              setScreenState('tracking')
+            }
+            showLifecycleBanner(event.jobId, 'arrived', event.message || 'Provider has arrived.')
+            void fetchCurrentAndLists()
           } else if (event.type === 'complete' || event.type === 'completed') {
             flowCompletedJobIdsRef.current.add(event.jobId)
-            const nextStarted = new Set(startedWalkIdsRef.current)
-            nextStarted.delete(event.jobId)
-            persistStartedWalkIds(nextStarted)
+            lifecyclePhaseRef.current.set(event.jobId, 'completed')
             if (!completeNotifiedRef.current.has(event.jobId)) {
               completeNotifiedRef.current.add(event.jobId)
-              showLifecycleBanner(event.jobId, 'complete', event.message || 'Walk completed.')
+              showLifecycleBanner(event.jobId, 'complete', event.message || 'Service completed.')
             }
             if (
               event.walkerId &&
@@ -1174,22 +1369,66 @@ export function useClientFlow(profileId: string, _profileName: string) {
     loadWalkerName,
     clearActiveState,
     ratedJobIds,
-    persistStartedWalkIds,
     showLifecycleBanner,
+    screenState,
+    showDispatchExhaustedMessage,
   ])
 
   useEffect(() => {
-    if (!currentJob || currentJob.status !== 'accepted' || screenState !== 'tracking') return
-    if (!isArrived) return
+    if (!currentJob || currentJob.status !== 'accepted' || !currentJob.provider_arrived_at) return
+    if (currentJob.client_arrival_confirmed_at) return
     if (arriveNotifiedRef.current.has(currentJob.id)) return
 
     arriveNotifiedRef.current.add(currentJob.id)
-    const walkerLabel = currentJob.walker_id
-      ? walkerNameById.get(currentJob.walker_id) || 'Walker'
-      : 'Walker'
+    setSuccessMessage('Provider has arrived.')
+  }, [currentJob])
 
-    setSuccessMessage(`${walkerLabel} has arrived${currentJob.dog_name ? ` for ${currentJob.dog_name}` : ''}.`)
-  }, [currentJob, isArrived, profileId, screenState, walkerNameById])
+  const confirmArrival = useCallback(async () => {
+    if (!currentJobId) return
+
+    setArrivalConfirming(true)
+    setError(null)
+
+    const now = new Date().toISOString()
+    const { data, error: confirmError } = await supabase
+      .from('walk_requests')
+      .update({ client_arrival_confirmed_at: now })
+      .eq('id', currentJobId)
+      .eq('client_id', profileId)
+      .eq('status', 'accepted')
+      .not('provider_arrived_at', 'is', null)
+      .is('client_arrival_confirmed_at', null)
+      .select(JOB_SELECT)
+      .maybeSingle()
+
+    if (confirmError) {
+      setError(confirmError.message)
+      setArrivalConfirming(false)
+      return
+    }
+
+    if (data) {
+      const nextJob = data as WalkRequestRow
+      setCurrentJob((prev) => mergeWalkRequest(prev, nextJob))
+      setScreenPhase('arrival_confirmed')
+      setScreenState('tracking')
+    } else {
+      setCurrentJob((prev) =>
+        prev
+          ? mergeWalkRequest(prev, {
+              ...prev,
+              client_arrival_confirmed_at: now,
+            })
+          : prev,
+      )
+      setScreenPhase('arrival_confirmed')
+      setScreenState('tracking')
+    }
+
+    setSuccessMessage('Arrival confirmed.')
+    setArrivalConfirming(false)
+    void fetchCurrentAndLists()
+  }, [currentJobId, fetchCurrentAndLists, profileId])
 
   const cancelSearch = useCallback(async () => {
     if (!currentJobId) {
@@ -1397,6 +1636,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
         return
       }
 
+      if (!tipError) {
+        try {
+          await createNotification({
+            userId: tipJob.walkerId,
+            type: 'payment_received',
+            title: 'Tip received',
+            message: `You received a ₪${amount} tip`,
+            relatedJobId: tipJob.jobId,
+          })
+        } catch {
+          // noop
+        }
+      }
+
       setTipSubmitting(false)
       setTipJob(null)
       _setDuration(null)
@@ -1429,7 +1682,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
-    const bookingLocation = formatShortAddress(location) || location.trim()
+    const preferredLiveLocation =
+      latestResolvedLocationRef.current &&
+      (!location.trim() || location.trim() === lastAutoLocationRef.current)
+        ? latestResolvedLocationRef.current
+        : location.trim()
+
+    const bookingLocation = formatShortAddress(preferredLiveLocation) || preferredLiveLocation
 
     try {
       setLoading(true)
@@ -1558,6 +1817,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to request walk'
       setError(message)
+      setAvailabilityNotice(null)
       setScreenState('idle')
       setSearchStartTime(null)
       setCurrentJob(null)
@@ -1581,6 +1841,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   return {
     screenState,
+    screenPhase,
     setScreenState,
     searchStartTime,
 
@@ -1609,8 +1870,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
     loading,
     error,
     successMessage,
+    availabilityNotice,
     clearError,
     clearSuccess,
+    clearAvailabilityNotice,
 
     savedCard,
     upcomingJobs,
@@ -1636,7 +1899,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     gpsQuality,
     avgRating,
-
     surgeMultiplier,
     surgeLevel,
 
@@ -1652,11 +1914,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
     distanceMeters,
 
     completionRatingSubmitting,
+    arrivalConfirming,
     tipSubmitting,
     ratedJobIds,
 
     startsInMinutes,
     hideHistoryItem,
+    confirmArrival,
     cancelSearch,
     cancelScheduledJob,
     requestCardSetup,

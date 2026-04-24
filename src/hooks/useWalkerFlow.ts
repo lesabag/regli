@@ -3,6 +3,7 @@ import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
+import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 
 export type WalkerScreenState =
   | 'offline'
@@ -12,12 +13,23 @@ export type WalkerScreenState =
   | 'active'
   | 'completed'
 
+export type WalkerScreenPhase =
+  | 'offline'
+  | 'waiting'
+  | 'incoming_request'
+  | 'on_the_way'
+  | 'arrived_pending_confirmation'
+  | 'arrival_confirmed'
+  | 'in_progress'
+  | 'completed'
+
 interface WalkRequestRow {
   id: string
   client_id: string
   walker_id: string | null
   selected_walker_id: string | null
   status: 'open' | 'accepted' | 'completed' | 'cancelled'
+  service_type?: string | null
   dog_name: string | null
   location: string | null
   address: string | null
@@ -29,8 +41,13 @@ interface WalkRequestRow {
   payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
   paid_at: string | null
   stripe_payment_intent_id: string | null
+  provider_arrived_at?: string | null
+  client_arrival_confirmed_at?: string | null
+  service_started_at?: string | null
+  service_completed_at?: string | null
   booking_timing?: 'asap' | 'scheduled'
   scheduled_for?: string | null
+  tip_amount?: number | null
   dispatch_state?: 'queued' | 'dispatched' | 'expired' | 'cancelled' | null
   smart_dispatch_state?:
     | 'idle'
@@ -67,6 +84,11 @@ interface DispatchOfferRow {
   payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
   paid_at: string | null
   stripe_payment_intent_id: string | null
+  service_type?: string | null
+  provider_arrived_at?: string | null
+  client_arrival_confirmed_at?: string | null
+  service_started_at?: string | null
+  service_completed_at?: string | null
   booking_timing?: 'asap' | 'scheduled'
   scheduled_for?: string | null
   smart_dispatch_state?:
@@ -104,6 +126,14 @@ interface RatingRow {
   to_user_id: string
   rating: number
   review: string | null
+  created_at: string
+}
+
+interface TipRow {
+  id: string
+  walk_request_id: string
+  walker_id: string
+  amount: number
   created_at: string
 }
 
@@ -156,14 +186,10 @@ function completionDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_dismissed_${profileId}`
 }
 
-function startedWalkStorageKey(profileId: string): string {
-  return `regli_walker_started_walks_${profileId}`
-}
-
 function sendClientLiveOrderEvent(params: {
   clientId: string | null | undefined
   jobId: string
-  type: 'accepted' | 'start_walk' | 'complete'
+  type: 'accepted' | 'arrived' | 'start_walk' | 'complete'
   message: string
   walkerId?: string | null
   walkerName?: string | null
@@ -202,6 +228,12 @@ function getJobEventTime(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>): n
   if (!value) return 0
   const ts = new Date(value).getTime()
   return Number.isNaN(ts) ? 0 : ts
+}
+
+function getWalkerJobPhase(job: WalkRequestRow): Exclude<ServicePhase, 'idle' | 'searching'> {
+  const phase = getServicePhase(job)
+  if (phase === 'idle' || phase === 'searching') return 'on_the_way'
+  return phase
 }
 
 function isRecentCompletion(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>): boolean {
@@ -267,6 +299,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const [openJobs, setOpenJobs] = useState<WalkRequestRow[]>([])
   const [myJobs, setMyJobs] = useState<WalkRequestRow[]>([])
   const [activeOffers, setActiveOffers] = useState<DispatchOfferRow[]>([])
+  const retainedIncomingOfferRef = useRef<DispatchOfferRow | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -327,8 +360,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
   const shownStateMessagesRef = useRef<Set<string>>(new Set())
   const lastAcceptedJobIdRef = useRef<string | null>(null)
-  const [startedWalkIds, setStartedWalkIds] = useState<Set<string>>(new Set())
-
   const firstName = (profileName || '').split(' ')[0] || profileName
 
   const showStateMessage = useCallback((jobId: string, event: string, message: string) => {
@@ -338,6 +369,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setSuccessMessage(message)
   }, [])
 
+  const clearRetainedIncomingOffer = useCallback((requestId?: string | null) => {
+    if (!requestId) {
+      retainedIncomingOfferRef.current = null
+      return
+    }
+    if (retainedIncomingOfferRef.current?.request_id === requestId) {
+      retainedIncomingOfferRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(completionDismissStorageKey(profileId))
@@ -345,16 +386,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       dismissedCompletionIdsRef.current = new Set(Array.isArray(parsed) ? parsed : [])
     } catch {
       dismissedCompletionIdsRef.current = new Set()
-    }
-  }, [profileId])
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(startedWalkStorageKey(profileId))
-      const parsed = raw ? (JSON.parse(raw) as string[]) : []
-      setStartedWalkIds(new Set(Array.isArray(parsed) ? parsed : []))
-    } catch {
-      setStartedWalkIds(new Set())
     }
   }, [profileId])
 
@@ -379,13 +410,27 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const futureJobs = useMemo(() => visibleMyJobs.filter((j) => isFutureJob(j)), [visibleMyJobs])
 
   const onTheWayJobs = useMemo(
-    () => visibleMyJobs.filter((j) => j.status === 'accepted' && isDispatchedScheduledJob(j) && !isFutureJob(j)),
+    () =>
+      visibleMyJobs.filter(
+        (j) =>
+          j.status === 'accepted' &&
+          isDispatchedScheduledJob(j) &&
+          !isFutureJob(j) &&
+          !j.service_started_at,
+      ),
     [visibleMyJobs],
   )
 
   const activeJobs = useMemo(
-    () => onTheWayJobs.filter((j) => startedWalkIds.has(j.id)),
-    [onTheWayJobs, startedWalkIds],
+    () =>
+      visibleMyJobs.filter(
+        (j) =>
+          j.status === 'accepted' &&
+          isDispatchedScheduledJob(j) &&
+          !isFutureJob(j) &&
+          !!j.service_started_at,
+      ),
+    [visibleMyJobs],
   )
 
   useEffect(() => {
@@ -407,7 +452,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     }
   }, [completedJobs])
 
-  const activeJobIds = useMemo(() => onTheWayJobs.map((j) => j.id), [onTheWayJobs])
+  const activeJobIds = useMemo(
+    () => [...onTheWayJobs, ...activeJobs].map((j) => j.id),
+    [activeJobs, onTheWayJobs],
+  )
   useWalkerTracking(activeJobIds)
 
   const [walkerPosition, setWalkerPosition] = useState<[number, number] | null>(null)
@@ -633,11 +681,26 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const screenState: WalkerScreenState = useMemo(() => {
     if (completionSuccess) return 'completed'
     if (activeJobs.length > 0) return 'active'
-    if (onTheWayJobs.some((j) => !startedWalkIds.has(j.id))) return 'on_the_way'
+    if (onTheWayJobs.length > 0) return 'on_the_way'
     if (isOnline && visibleOpenJobs.length > 0) return 'incoming_request'
     if (isOnline) return 'waiting'
     return 'offline'
-  }, [completionSuccess, activeJobs, onTheWayJobs, startedWalkIds, isOnline, visibleOpenJobs])
+  }, [completionSuccess, activeJobs, onTheWayJobs, isOnline, visibleOpenJobs])
+
+  const screenPhase: WalkerScreenPhase = useMemo(() => {
+    if (completionSuccess) return 'completed'
+    if (activeJobs.length > 0) return 'in_progress'
+    const currentOnTheWayJob = onTheWayJobs[0] ?? null
+    if (currentOnTheWayJob) {
+      const phase = getWalkerJobPhase(currentOnTheWayJob)
+      if (phase === 'arrival_confirmed') return 'arrival_confirmed'
+      if (phase === 'arrived_pending_confirmation') return 'arrived_pending_confirmation'
+      return 'on_the_way'
+    }
+    if (isOnline && visibleOpenJobs.length > 0) return 'incoming_request'
+    if (isOnline) return 'waiting'
+    return 'offline'
+  }, [completionSuccess, activeJobs, onTheWayJobs, isOnline, visibleOpenJobs])
 
   useEffect(() => {
     const pendingCompletion = getCompletionPromptJob(
@@ -709,7 +772,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setError(null)
 
     const selectFields =
-      'id, client_id, walker_id, selected_walker_id, status, dog_name, location, address, notes, created_at, price, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
+      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, created_at, price, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
 
     const now = new Date().toISOString()
     let acceptedJobsFromAttempts: WalkRequestRow[] = []
@@ -836,6 +899,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               payment_status: request?.payment_status ?? 'authorized',
               paid_at: request?.paid_at ?? null,
               stripe_payment_intent_id: request?.stripe_payment_intent_id ?? null,
+              service_type: request?.service_type ?? null,
+              provider_arrived_at: request?.provider_arrived_at ?? null,
+              client_arrival_confirmed_at: request?.client_arrival_confirmed_at ?? null,
+              service_started_at: request?.service_started_at ?? null,
+              service_completed_at: request?.service_completed_at ?? null,
               booking_timing: request?.booking_timing,
               scheduled_for: request?.scheduled_for ?? null,
               smart_dispatch_state: request?.smart_dispatch_state ?? 'dispatching',
@@ -881,9 +949,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }
     }
 
-    setActiveOffers(offers)
-
-    const newOpen: WalkRequestRow[] = offers.map((offer) => ({
+    const buildOpenJobs = (offerRows: DispatchOfferRow[]): WalkRequestRow[] =>
+      offerRows.map((offer) => ({
       id: offer.request_id,
       client_id: offer.client_id ?? '',
       walker_id: null,
@@ -900,6 +967,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       payment_status: offer.payment_status,
       paid_at: offer.paid_at,
       stripe_payment_intent_id: offer.stripe_payment_intent_id,
+      service_type: offer.service_type ?? null,
+      provider_arrived_at: offer.provider_arrived_at ?? null,
+      client_arrival_confirmed_at: offer.client_arrival_confirmed_at ?? null,
+      service_started_at: offer.service_started_at ?? null,
+      service_completed_at: offer.service_completed_at ?? null,
       booking_timing: offer.booking_timing,
       scheduled_for: offer.scheduled_for,
       dispatch_state: offer.dispatch_state as WalkRequestRow['dispatch_state'],
@@ -910,27 +982,60 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         email: offer.client_email,
       },
     })).sort((a, b) => {
-      const aOffer = offers.find((o) => o.request_id === a.id)
-      const bOffer = offers.find((o) => o.request_id === b.id)
+      const aOffer = offerRows.find((o) => o.request_id === a.id)
+      const bOffer = offerRows.find((o) => o.request_id === b.id)
       return (aOffer?.attempt_no ?? 9999) - (bOffer?.attempt_no ?? 9999)
     })
 
-    const { data: mine, error: mineErr } = await supabase
-      .from('walk_requests')
-      .select(selectFields)
-      .eq('walker_id', profileId)
-      .order('created_at', { ascending: false })
+    const [mineResult, tipsResult] = await Promise.allSettled([
+      supabase
+        .from('walk_requests')
+        .select(selectFields)
+        .eq('walker_id', profileId)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('walker_tips')
+        .select('id, walk_request_id, walker_id, amount, created_at')
+        .eq('walker_id', profileId)
+        .order('created_at', { ascending: false }),
+    ])
 
-    if (mineErr) {
-      setError(mineErr.message)
+    if (mineResult.status === 'rejected') {
+      setError(mineResult.reason instanceof Error ? mineResult.reason.message : 'Failed to load jobs')
       setLoading(false)
       return
     }
 
-    let newMine = (((mine as Record<string, unknown>[] | null) ?? []).map((row) => ({
+    if (mineResult.value.error) {
+      setError(mineResult.value.error.message)
+      setLoading(false)
+      return
+    }
+
+    const tipByJobId = new Map<string, number>()
+    if (tipsResult.status === 'fulfilled') {
+      if (tipsResult.value.error) {
+        console.warn('[useWalkerFlow] walker tips unavailable:', tipsResult.value.error.message)
+      } else {
+        for (const tip of ((tipsResult.value.data as TipRow[] | null) ?? [])) {
+          if (!tipByJobId.has(tip.walk_request_id)) {
+            tipByJobId.set(tip.walk_request_id, tip.amount)
+          }
+        }
+      }
+    } else {
+      console.warn('[useWalkerFlow] walker tips unavailable:', tipsResult.reason)
+    }
+
+    let newMine = (((mineResult.value.data as Record<string, unknown>[] | null) ?? []).map((row) => ({
       ...row,
       client: Array.isArray(row.client) ? row.client[0] || null : row.client,
     })) as WalkRequestRow[])
+
+    newMine = newMine.map((job) => ({
+      ...job,
+      tip_amount: tipByJobId.get(job.id) ?? null,
+    }))
 
     if (acceptedJobsFromAttempts.length > 0) {
       const mineIds = new Set(newMine.map((job) => job.id))
@@ -940,6 +1045,53 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       ]
     }
 
+    let mergedOffers = offers
+    const retainedIncomingOffer = retainedIncomingOfferRef.current
+    if (retainedIncomingOffer && !declinedIds.has(retainedIncomingOffer.request_id)) {
+      const hasFreshOffer = offers.some((offer) => offer.id === retainedIncomingOffer.id)
+      const retainedAssignedToMe = newMine.some((job) => job.id === retainedIncomingOffer.request_id)
+
+      if (hasFreshOffer) {
+        retainedIncomingOfferRef.current =
+          offers.find((offer) => offer.id === retainedIncomingOffer.id) ?? retainedIncomingOffer
+      } else if (!retainedAssignedToMe) {
+        const { data: retainedRequestRow, error: retainedRequestError } = await supabase
+          .from('walk_requests')
+          .select('id, status, walker_id')
+          .eq('id', retainedIncomingOffer.request_id)
+          .maybeSingle()
+
+        if (retainedRequestError) {
+          console.warn('[useWalkerFlow] retained offer request lookup unavailable:', retainedRequestError.message)
+        }
+
+        const canKeepRetainedOffer =
+          !retainedRequestError &&
+          !!retainedRequestRow &&
+          retainedRequestRow.status === 'open' &&
+          retainedRequestRow.walker_id == null
+
+        if (canKeepRetainedOffer) {
+          mergedOffers = [retainedIncomingOffer, ...offers]
+        } else {
+          clearRetainedIncomingOffer(retainedIncomingOffer.request_id)
+        }
+      }
+    }
+
+    if (!retainedIncomingOfferRef.current && mergedOffers.length > 0) {
+      retainedIncomingOfferRef.current = mergedOffers[0]
+    }
+
+    mergedOffers = mergedOffers.filter(
+      (offer, index, self) =>
+        !declinedIds.has(offer.request_id) &&
+        self.findIndex((candidate) => candidate.id === offer.id) === index,
+    )
+
+    setActiveOffers(mergedOffers)
+
+    const newOpen = buildOpenJobs(mergedOffers)
     const newOfferIds = new Set(newOpen.map((j) => j.id))
     const myJobIds = new Set(newMine.map((j) => j.id))
     const prev = prevOfferIdsRef.current
@@ -957,7 +1109,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setOpenJobs(newOpen)
     setMyJobs(newMine)
     setLoading(false)
-  }, [profileId, declinedIds])
+  }, [profileId, declinedIds, clearRetainedIncomingOffer])
 
 
   useEffect(() => {
@@ -1062,6 +1214,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     let ch3: ReturnType<typeof supabase.channel> | null = null
     let ch4: ReturnType<typeof supabase.channel> | null = null
     let ch5: ReturnType<typeof supabase.channel> | null = null
+    let ch6: ReturnType<typeof supabase.channel> | null = null
 
     const tSub = setTimeout(() => {
       ch1 = supabase
@@ -1124,6 +1277,17 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           },
         )
         .subscribe()
+
+      ch6 = supabase
+        .channel(`wf-tips-${profileId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'walker_tips', filter: `walker_id=eq.${profileId}` },
+          () => {
+            void fetchAll()
+          },
+        )
+        .subscribe()
     }, 800)
 
     return () => {
@@ -1135,6 +1299,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (ch3) supabase.removeChannel(ch3)
       if (ch4) supabase.removeChannel(ch4)
       if (ch5) supabase.removeChannel(ch5)
+      if (ch6) supabase.removeChannel(ch6)
     }
   }, [
     profileId,
@@ -1167,6 +1332,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       if (!offer || !job) {
         setError('This request is no longer available.')
+        clearRetainedIncomingOffer(requestId)
         await fetchAll()
         return
       }
@@ -1195,6 +1361,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         await fetchAll()
         return
       }
+
+      clearRetainedIncomingOffer(requestId)
 
       const nextDispatchState =
         job.booking_timing === 'scheduled'
@@ -1255,6 +1423,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         job.booking_timing !== 'scheduled' ||
         nextDispatchState === 'dispatched' ||
         shouldStartScheduledNow
+      const labels = getServiceLabels(job.service_type)
 
       track(AnalyticsEvent.PROVIDER_MATCHED, {
         request_id: requestId,
@@ -1264,15 +1433,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         actor_role: 'provider',
         source_screen: 'walker_dashboard',
       })
-
-      if (dispatchNow || job.booking_timing !== 'scheduled') {
-        track(AnalyticsEvent.SERVICE_STARTED, {
-          request_id: requestId,
-          provider_id: profileId,
-          client_id: job.client_id ?? undefined,
-          source_screen: 'walker_dashboard',
-        })
-      }
 
       showStateMessage(requestId, 'accepted', dispatchNow ? 'Head to the client' : 'Job accepted')
         await fetchAll()
@@ -1300,14 +1460,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         type: dispatchNow ? 'dispatch_started' : 'job_accepted_self',
         title: dispatchNow ? 'Head to the client' : 'Job Accepted',
         message: dispatchNow
-          ? `Head to the pickup for ${dogLabel}. Start the walk when you're ready.`
+          ? `Head to the pickup for ${dogLabel}. ${labels.startAction} when the client confirms arrival.`
           : job.booking_timing === 'scheduled'
-            ? `You accepted a scheduled walk for ${dogLabel}. Head to the client when dispatch starts.`
-            : `You accepted a walk for ${dogLabel}. Head to the location and start the walk!`,
+            ? `You accepted a scheduled booking for ${dogLabel}. Head to the client when dispatch starts.`
+            : `You accepted a booking for ${dogLabel}. Head to the location and wait for arrival confirmation.`,
         relatedJobId: requestId,
       })
     },
-    [activeOffers, openJobs, profileId, profileName, fetchAll, walkerPosition, showStateMessage],
+    [activeOffers, openJobs, profileId, profileName, fetchAll, walkerPosition, showStateMessage, clearRetainedIncomingOffer],
   )
 
   const unassignFutureJob = useCallback(
@@ -1352,7 +1512,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   )
 
   const handleDecline = useCallback(
-    async (requestId: string) => {
+    async (requestId: string, reason: 'manual' | 'timeout' = 'manual') => {
       track(AnalyticsEvent.PROVIDER_REJECTED, {
         request_id: requestId,
         provider_id: profileId,
@@ -1367,11 +1527,19 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         next.add(requestId)
         return next
       })
+      clearRetainedIncomingOffer(requestId)
 
       if (!offer) {
         await fetchAll()
         return
       }
+
+      console.info('[useWalkerFlow] decline dispatch', {
+        request_id: requestId,
+        attempt_id: offer.id,
+        provider_id: profileId,
+        reason,
+      })
 
       const hasAuth = await prepareEdgeFunctionAuth()
       if (!hasAuth) {
@@ -1379,52 +1547,145 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
-      const { error: fnError } = await invokeEdgeFunction('decline-dispatch', {
+      const { data, error: fnError } = await invokeEdgeFunction('decline-dispatch', {
         body: {
           requestId,
           attemptId: offer.id,
-          timeoutSeconds: 12,
+          timeoutSeconds: 20,
         },
       })
 
       if (fnError) {
         console.error('[useWalkerFlow] decline dispatch error:', fnError)
+      } else {
+        console.info('[useWalkerFlow] decline dispatch advanced', {
+          request_id: requestId,
+          attempt_id: offer.id,
+          provider_id: profileId,
+          reason,
+          result: data ?? null,
+        })
       }
 
       await fetchAll()
     },
-    [profileId, activeOffers, fetchAll],
+    [profileId, activeOffers, fetchAll, clearRetainedIncomingOffer],
   )
 
-  const startWalk = useCallback((jobId: string) => {
-    const job = myJobs.find((item) => item.id === jobId)
-    const dogLabel = job?.dog_name || 'the walk'
+  const markArrived = useCallback(
+    async (jobId: string) => {
+      const job = myJobs.find((item) => item.id === jobId)
+      if (!job) return
 
-    setStartedWalkIds((prev) => {
-      const next = new Set(prev)
-      next.add(jobId)
-      try {
-        window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
-      } catch {
-        // noop
+      const now = new Date().toISOString()
+      const patch: Record<string, unknown> = { provider_arrived_at: job.provider_arrived_at ?? now }
+      if (walkerPosition) {
+        patch.walker_lat = walkerPosition[0]
+        patch.walker_lng = walkerPosition[1]
+        patch.last_location_update = now
       }
-      return next
-    })
-    showStateMessage(jobId, 'active', 'Walk has started')
-    sendClientLiveOrderEvent({
-      clientId: job?.client_id,
-      jobId,
-      type: 'start_walk',
-      message: `Walk has started${job?.dog_name ? ` for ${job.dog_name}` : ''}.`,
-    })
-    void createNotification({
-      userId: profileId,
-      type: 'dispatch_started',
-      title: 'Active walk',
-      message: `The walk with ${dogLabel} has started. Complete it when the walk is done.`,
-      relatedJobId: jobId,
-    })
-  }, [myJobs, profileId, showStateMessage])
+
+      const { error: arriveError } = await supabase
+        .from('walk_requests')
+        .update(patch)
+        .eq('id', jobId)
+        .eq('walker_id', profileId)
+        .eq('status', 'accepted')
+
+      if (arriveError) {
+        setError(arriveError.message)
+        return
+      }
+
+      track(AnalyticsEvent.PROVIDER_ARRIVED, {
+        request_id: jobId,
+        provider_id: profileId,
+        client_id: job.client_id ?? undefined,
+        source_screen: 'walker_dashboard',
+      })
+
+      showStateMessage(jobId, 'arrived', 'Arrived at the client')
+      sendClientLiveOrderEvent({
+        clientId: job.client_id,
+        jobId,
+        type: 'arrived',
+        message: 'Provider has arrived.',
+        walkerId: profileId,
+        walkerName: profileName,
+      })
+
+      await createNotification({
+        userId: profileId,
+        type: 'dispatch_started',
+        title: 'Arrived',
+        message: 'You have arrived. Wait for the client to confirm before starting.',
+        relatedJobId: jobId,
+      }).catch(() => {})
+
+      await fetchAll()
+    },
+    [fetchAll, myJobs, profileId, profileName, showStateMessage, walkerPosition],
+  )
+
+  const startService = useCallback(
+    async (jobId: string) => {
+      const job = myJobs.find((item) => item.id === jobId)
+      if (!job) return
+      if (!job.client_arrival_confirmed_at) {
+        setError('Wait for the client to confirm arrival before starting.')
+        return
+      }
+
+      const now = new Date().toISOString()
+      const { data, error: startError } = await supabase
+        .from('walk_requests')
+        .update({ service_started_at: job.service_started_at ?? now })
+        .eq('id', jobId)
+        .eq('walker_id', profileId)
+        .eq('status', 'accepted')
+        .not('client_arrival_confirmed_at', 'is', null)
+        .select('id')
+        .maybeSingle()
+
+      if (startError) {
+        setError(startError.message)
+        return
+      }
+
+      if (!data) {
+        setError('Client confirmation is required before starting.')
+        return
+      }
+
+      const labels = getServiceLabels(job.service_type)
+      track(AnalyticsEvent.SERVICE_STARTED, {
+        request_id: jobId,
+        provider_id: profileId,
+        client_id: job.client_id ?? undefined,
+        source_screen: 'walker_dashboard',
+      })
+
+      showStateMessage(jobId, 'active', labels.startedPast)
+      sendClientLiveOrderEvent({
+        clientId: job.client_id,
+        jobId,
+        type: 'start_walk',
+        message: labels.startedPast,
+        walkerId: profileId,
+        walkerName: profileName,
+      })
+      void createNotification({
+        userId: profileId,
+        type: 'dispatch_started',
+        title: labels.activeTitle,
+        message: `${labels.startedPast}. ${labels.completeAction} when the work is done.`,
+        relatedJobId: jobId,
+      })
+
+      await fetchAll()
+    },
+    [fetchAll, myJobs, profileId, profileName, showStateMessage],
+  )
 
   const handleComplete = useCallback(
     async (id: string) => {
@@ -1436,10 +1697,28 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setError('This future order is not ready yet. Completion is available only after dispatch starts.')
         return
       }
+      if (!job?.service_started_at) {
+        setError('Start the service after client arrival confirmation before completing it.')
+        return
+      }
 
       setCompletingJobId(id)
 
       try {
+        const serviceCompletedAt = job.service_completed_at ?? new Date().toISOString()
+        const { error: serviceCompleteError } = await supabase
+          .from('walk_requests')
+          .update({ service_completed_at: serviceCompletedAt })
+          .eq('id', id)
+          .eq('walker_id', profileId)
+          .eq('status', 'accepted')
+          .not('service_started_at', 'is', null)
+
+        if (serviceCompleteError) {
+          setError(serviceCompleteError.message)
+          return
+        }
+
         if (job?.stripe_payment_intent_id) {
           const { data, error: captureErr } = await invokeEdgeFunction<{
             success?: boolean
@@ -1490,6 +1769,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             .from('walk_requests')
             .update({
               status: 'completed',
+              service_completed_at: serviceCompletedAt,
               walker_lat: null,
               walker_lng: null,
               last_location_update: null,
@@ -1526,18 +1806,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setCompletionBlockedJob(null)
         setCompletionPaymentError(null)
         flowCompletedJobIdsRef.current.add(id)
-        setStartedWalkIds((prev) => {
-          if (!prev.has(id)) return prev
-          const next = new Set(prev)
-          next.delete(id)
-          try {
-            window.localStorage.setItem(startedWalkStorageKey(profileId), JSON.stringify(Array.from(next)))
-          } catch {
-            // noop
-          }
-          return next
-        })
-        showStateMessage(id, 'completed', 'Walk completed')
+        const labels = getServiceLabels(job?.service_type)
+        showStateMessage(id, 'completed', labels.completedPast)
         setCompletionSuccess({
           jobId: id,
           clientId: job?.client_id || '',
@@ -1553,7 +1823,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             clientId: job.client_id,
             jobId: id,
             type: 'complete',
-            message: `Walk completed${job.dog_name ? ` for ${job.dog_name}` : ''}.`,
+            message: labels.completedPast,
             walkerId: profileId,
             walkerName: profileName,
           })
@@ -1578,8 +1848,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         await createNotification({
           userId: profileId,
           type: 'job_completed_self',
-          title: 'Walk completed',
-          message: `You completed the walk for ${dogLabel}.`,
+          title: labels.completedTitle,
+          message: `You completed the ${labels.itemLabel} for ${dogLabel}.`,
           relatedJobId: id,
         }).catch(() => {})
 
@@ -1874,9 +2144,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     ratingsGiven,
 
     openJobs: visibleOpenJobs,
+    activeOffers,
     activeJob: activeJobs[0] ?? null,
     activeJobs,
-    onTheWayJobs: onTheWayJobs.filter((j) => !startedWalkIds.has(j.id)),
+    onTheWayJobs,
     futureJobs,
     completedJobs,
     recentJobs,
@@ -1919,12 +2190,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     dismissTakenNotice,
 
     walkerPosition,
+    screenPhase,
 
     startsInMinutes,
 
     handleAccept,
     handleDecline,
-    startWalk,
+    markArrived,
+    startService,
     unassignFutureJob,
     handleComplete,
     handleRelease,

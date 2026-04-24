@@ -64,6 +64,7 @@ type GroupedHistoryProps = {
   emptyTitle?: string
   emptySubtitle?: string
   className?: string
+  compact?: boolean
 }
 
 type Group = {
@@ -76,6 +77,7 @@ const SWIPE_HIDE_WIDTH = 132
 const SWIPE_HIDE_THRESHOLD = 86
 
 export default function GroupedHistory(props: GroupedHistoryProps) {
+  const compact = props.compact === true
   const rawItems = useMemo(
     () => props.items ?? props.history ?? props.requests ?? props.jobs ?? [],
     [props.items, props.history, props.requests, props.jobs],
@@ -141,17 +143,17 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
   const grouped = useMemo(() => buildGroups(items), [items])
 
   return (
-    <div className={props.className} style={styles.root}>
+    <div className={props.className} style={{ ...styles.root, ...(compact ? compactStyles.root : null) }}>
       {items.length === 0 ? (
-        <div style={styles.emptyCard}>
+        <div style={{ ...styles.emptyCard, ...(compact ? compactStyles.emptyCard : null) }}>
           <div style={styles.emptyTitle}>{emptyTitle}</div>
           <div style={styles.emptySubtitle}>{emptySubtitle}</div>
         </div>
       ) : (
         grouped.map((group) => (
-          <section key={group.key} style={styles.groupSection}>
+          <section key={group.key} style={{ ...styles.groupSection, ...(compact ? compactStyles.groupSection : null) }}>
             <div style={styles.groupHeader}>{group.label}</div>
-            <div style={styles.groupList}>
+            <div style={{ ...styles.groupList, ...(compact ? compactStyles.groupList : null) }}>
               {group.items.map((item) => {
                 const id = getItemId(item)
                 return (
@@ -159,6 +161,7 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
                     key={id}
                     item={item}
                     role={role}
+                    compact={compact}
                     canHide={!!props.onHide}
                     onBookAgain={() => handleBookAgain(item)}
                     onHide={() => handleHide(item)}
@@ -182,6 +185,7 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
 type SwipeHistoryRowProps = {
   item: HistoryItem
   role: Role
+  compact: boolean
   canHide: boolean
   onBookAgain: () => void
   onHide: () => void
@@ -194,6 +198,7 @@ type SwipeHistoryRowProps = {
 function SwipeHistoryRow({
   item,
   role,
+  compact,
   canHide,
   onBookAgain,
   onHide,
@@ -317,14 +322,14 @@ function SwipeHistoryRow({
   return (
     <div
       ref={registerRef}
-      style={styles.rowShell}
+      style={{ ...styles.rowShell, ...(compact ? compactStyles.rowShell : null) }}
       onPointerDown={actionWidth > 0 ? handlePointerDown : undefined}
       onPointerMove={actionWidth > 0 ? handlePointerMove : undefined}
       onPointerUp={actionWidth > 0 ? handlePointerUp : undefined}
       onPointerCancel={actionWidth > 0 ? handlePointerCancel : undefined}
     >
       {actionWidth > 0 ? (
-        <div style={styles.actionsRail}>
+        <div style={{ ...styles.actionsRail, ...(compact ? compactStyles.actionsRail : null) }}>
           <div style={styles.swipeHideCue}>
             <div style={styles.actionIcon}>✕</div>
             <div style={styles.actionLabel}>Hide</div>
@@ -342,7 +347,7 @@ function SwipeHistoryRow({
         <div
           role="button"
           tabIndex={0}
-          style={styles.cardButton}
+          style={{ ...styles.cardButton, ...(compact ? compactStyles.cardButton : null) }}
           onClick={handleCardClick}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -351,16 +356,16 @@ function SwipeHistoryRow({
             }
           }}
         >
-          <div style={styles.card}>
-            <div style={styles.cardTopRow}>
+          <div style={{ ...styles.card, ...(compact ? compactStyles.card : null) }}>
+            <div style={{ ...styles.cardTopRow, ...(compact ? compactStyles.cardTopRow : null) }}>
               <div style={styles.titleCluster}>
                 <div style={styles.titleRow}>
-                  <div style={styles.titleText}>{title}</div>
+                  <div style={{ ...styles.titleText, ...(compact ? compactStyles.titleText : null) }}>{title}</div>
                   <div style={statusBadgeStyle(status.tone)}>{status.label}</div>
                   {isHidden ? <div style={styles.hiddenBadge}>Hidden</div> : null}
                 </div>
 
-                <div style={styles.metaRow}>
+                <div style={{ ...styles.metaRow, ...(compact ? compactStyles.metaRow : null) }}>
                   <span>{dateLabel}</span>
                   {durationLabel ? <Dot /> : null}
                   {durationLabel ? <span>{durationLabel}</span> : null}
@@ -398,21 +403,21 @@ function SwipeHistoryRow({
             </div>
 
             {counterpartLabel ? (
-              <div style={styles.counterpartRow}>
+              <div style={{ ...styles.counterpartRow, ...(compact ? compactStyles.counterpartRow : null) }}>
                 <span style={styles.counterpartLabel}>{role === 'client' ? 'Walker' : 'Client'}</span>
-                <span style={styles.counterpartValue}>{counterpartLabel}</span>
+                <span style={{ ...styles.counterpartValue, ...(compact ? compactStyles.counterpartValue : null) }}>{counterpartLabel}</span>
               </div>
             ) : null}
 
             {hasPreview ? (
-              <MiniLocationPreview locationText={locationText} coords={coords} />
+              <MiniLocationPreview locationText={locationText} coords={coords} compact={compact} />
             ) : null}
 
             {reviewText ? (
-              <div style={styles.reviewBlock}>
-                <div style={styles.reviewHeaderRow}>
+              <div style={{ ...styles.reviewBlock, ...(compact ? compactStyles.reviewBlock : null) }}>
+                <div style={{ ...styles.reviewHeaderRow, ...(compact ? compactStyles.reviewHeaderRow : null) }}>
                   {rating ? (
-                    <div style={styles.reviewRatingInline}>
+                    <div style={{ ...styles.reviewRatingInline, ...(compact ? compactStyles.reviewRatingInline : null) }}>
                       <span style={styles.star}>★</span>
                       <span>{rating.toFixed(1)}</span>
                     </div>
@@ -422,6 +427,7 @@ function SwipeHistoryRow({
                 <div
                   style={{
                     ...styles.reviewText,
+                    ...(compact ? compactStyles.reviewText : null),
                     ...(reviewExpanded ? styles.reviewTextExpanded : styles.reviewTextCollapsed),
                   }}
                 >
@@ -449,33 +455,37 @@ function SwipeHistoryRow({
 function MiniLocationPreview({
   locationText,
   coords,
+  compact,
 }: {
   locationText: string
   coords: { lat: number; lng: number } | null
+  compact: boolean
 }) {
   const coordText = coords != null ? `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}` : null
 
   return (
-    <div style={styles.miniMapCard}>
-      <div style={styles.miniMapBackdrop}>
+    <div style={{ ...styles.miniMapCard, ...(compact ? compactStyles.miniMapCard : null) }}>
+      <div style={{ ...styles.miniMapBackdrop, ...(compact ? compactStyles.miniMapBackdrop : null) }}>
         <div style={styles.mapGridVerticalA} />
         <div style={styles.mapGridVerticalB} />
         <div style={styles.mapGridHorizontalA} />
         <div style={styles.mapGridHorizontalB} />
         <div style={styles.routeStrokeA} />
         <div style={styles.routeStrokeB} />
-        <div style={styles.locationPin} />
+        <div style={{ ...styles.locationPin, ...(compact ? compactStyles.locationPin : null) }} />
       </div>
 
-      <div style={styles.miniMapInfo}>
-        <div style={styles.miniMapTopRow}>
+      <div style={{ ...styles.miniMapInfo, ...(compact ? compactStyles.miniMapInfo : null) }}>
+        <div style={{ ...styles.miniMapTopRow, ...(compact ? compactStyles.miniMapTopRow : null) }}>
           <span style={styles.pinEmoji}>📍</span>
           <span style={styles.miniMapTitle}>Location</span>
         </div>
 
-        <div style={styles.miniMapLocationText}>{locationText || 'Saved pickup location'}</div>
+        <div style={{ ...styles.miniMapLocationText, ...(compact ? compactStyles.miniMapLocationText : null) }}>
+          {locationText || 'Saved pickup location'}
+        </div>
 
-        {coordText ? <div style={styles.miniMapCoords}>{coordText}</div> : null}
+        {coordText ? <div style={{ ...styles.miniMapCoords, ...(compact ? compactStyles.miniMapCoords : null) }}>{coordText}</div> : null}
       </div>
     </div>
   )
@@ -1226,5 +1236,98 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     lineHeight: 1.45,
     color: 'rgba(214, 224, 241, 0.72)',
+  },
+}
+
+const compactStyles: Partial<Record<string, React.CSSProperties>> = {
+  root: {
+    gap: 14,
+  },
+  groupSection: {
+    gap: 8,
+  },
+  groupList: {
+    gap: 8,
+  },
+  rowShell: {
+    borderRadius: 18,
+  },
+  actionsRail: {
+    padding: 6,
+  },
+  cardButton: {
+    borderRadius: 18,
+  },
+  card: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+  },
+  cardTopRow: {
+    gap: 8,
+  },
+  titleText: {
+    fontSize: 15,
+  },
+  metaRow: {
+    fontSize: 11.5,
+    gap: 5,
+  },
+  counterpartRow: {
+    gap: 6,
+  },
+  counterpartValue: {
+    fontSize: 12.5,
+  },
+  miniMapCard: {
+    gridTemplateColumns: '72px 1fr',
+    gap: 9,
+    minHeight: 62,
+    borderRadius: 14,
+  },
+  miniMapBackdrop: {
+    minHeight: 62,
+  },
+  locationPin: {
+    left: 38,
+    top: 24,
+    width: 11,
+    height: 11,
+    boxShadow: '0 0 0 4px rgba(255, 210, 74, 0.10)',
+  },
+  miniMapInfo: {
+    padding: '8px 10px 8px 0',
+    gap: 4,
+  },
+  miniMapTopRow: {
+    gap: 5,
+  },
+  miniMapLocationText: {
+    fontSize: 12,
+    lineHeight: 1.28,
+    WebkitLineClamp: 1,
+  },
+  miniMapCoords: {
+    fontSize: 10.5,
+  },
+  reviewBlock: {
+    gap: 5,
+    padding: '8px 10px',
+    borderRadius: 12,
+  },
+  reviewHeaderRow: {
+    gap: 6,
+  },
+  reviewRatingInline: {
+    padding: '4px 7px',
+    fontSize: 11,
+  },
+  reviewText: {
+    fontSize: 12.5,
+    lineHeight: 1.32,
+  },
+  emptyCard: {
+    borderRadius: 18,
+    padding: 14,
   },
 }

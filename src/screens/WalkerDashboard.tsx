@@ -10,6 +10,8 @@ import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { formatShortAddress } from '../utils/addressFormat'
+import { getServiceLabels } from '../utils/serviceLifecycle'
+import { getDurationSummary } from '../utils/serviceTiming'
 
 const REQUEST_TIMEOUT_SECONDS = 20
 
@@ -146,11 +148,16 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
     setCompRatingDone(true)
   }, [compRating, compReview, flow.submitCompletionRating])
 
+  const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
+
   const topRequest = flow.openJobs[0] ?? null
   const activeJob = flow.activeJobs[0] ?? null
   const onTheWayJob = flow.onTheWayJobs[0] ?? null
+  const onTheWayLabels = getServiceLabels(onTheWayJob?.service_type)
+  const activeLabels = getServiceLabels(activeJob?.service_type)
   const activeJobCanComplete =
     !!activeJob &&
+    !!activeJob.service_started_at &&
     (activeJob.booking_timing !== 'scheduled' || activeJob.dispatch_state === 'dispatched')
 
   const requestPrice = topRequest
@@ -162,6 +169,68 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
     : '—'
 
   const requestDuration = topRequest?.price ? durationFromPrice(topRequest.price) : '—'
+  const topOffer = flow.activeOffers.find((offer) => offer.request_id === topRequest?.id) ?? null
+
+  useEffect(() => {
+    const runningService = !!activeJob?.service_started_at && !activeJob?.service_completed_at
+    if (!runningService) return
+
+    const id = window.setInterval(() => {
+      setServiceClockNow(Date.now())
+    }, 1000)
+
+    return () => window.clearInterval(id)
+  }, [activeJob?.id, activeJob?.service_started_at, activeJob?.service_completed_at])
+
+  const activeDurationSummary = useMemo(
+    () =>
+      getDurationSummary({
+        plannedMinutes: activeJob?.price ? (activeJob.price <= 30 ? 20 : activeJob.price <= 50 ? 40 : 60) : null,
+        startedAt: activeJob?.service_started_at ?? null,
+        completedAt: activeJob?.service_completed_at ?? null,
+        now: serviceClockNow,
+      }),
+    [activeJob?.price, activeJob?.service_started_at, activeJob?.service_completed_at, serviceClockNow],
+  )
+
+  const completionJobDetails = useMemo(
+    () =>
+      flow.completionSuccess
+        ? flow.completedJobs.find((job) => job.id === flow.completionSuccess?.jobId) ?? null
+        : null,
+    [flow.completedJobs, flow.completionSuccess],
+  )
+
+  const completionDurationSummary = useMemo(
+    () =>
+      getDurationSummary({
+        plannedMinutes: completionJobDetails?.price
+          ? completionJobDetails.price <= 30
+            ? 20
+            : completionJobDetails.price <= 50
+              ? 40
+              : 60
+          : null,
+        startedAt: completionJobDetails?.service_started_at ?? null,
+        completedAt: completionJobDetails?.service_completed_at ?? null,
+      }),
+    [
+      completionJobDetails?.price,
+      completionJobDetails?.service_started_at,
+      completionJobDetails?.service_completed_at,
+    ],
+  )
+
+  const completionMetaRows = useMemo(() => {
+    const rows: Array<{ label: string; value: string }> = []
+    if (completionDurationSummary.plannedLabel) {
+      rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
+    }
+    if (completionDurationSummary.actualLabel) {
+      rows.push({ label: 'Actual', value: completionDurationSummary.actualLabel })
+    }
+    return rows
+  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel])
 
   const allHistoryItems = useMemo<HistoryItem[]>(() => {
     const ratingByJobId = new Map<string, { rating: number; review: string | null }>()
@@ -180,6 +249,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
           rating: ratingInfo?.rating ?? null,
           review: ratingInfo?.review ?? null,
           price: j.walker_earnings ?? (j.price != null ? Math.round(j.price * 0.8) : null),
+          tip_amount: j.tip_amount ?? null,
           status: j.status,
           created_at: j.created_at,
           completed_at: j.created_at,
@@ -223,7 +293,9 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
 
   const [countdown, setCountdown] = useState(REQUEST_TIMEOUT_SECONDS)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const trackedRequestIdRef = useRef<string | null>(null)
+  const trackedVisibleOfferKeyRef = useRef<string | null>(null)
+  const visibleOfferStartedAtRef = useRef<number | null>(null)
+  const timeoutFiredForOfferKeyRef = useRef<string | null>(null)
 
   const clearCountdown = useCallback(() => {
     if (countdownRef.current) {
@@ -236,29 +308,54 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
     const isIncoming = flow.screenState === 'incoming_request' && topRequest
     if (!isIncoming) {
       clearCountdown()
-      trackedRequestIdRef.current = null
+      trackedVisibleOfferKeyRef.current = null
+      visibleOfferStartedAtRef.current = null
+      timeoutFiredForOfferKeyRef.current = null
       return
     }
 
-    if (topRequest.id !== trackedRequestIdRef.current) {
+    const visibleOfferKey = `${topRequest.id}:${topOffer?.id ?? 'none'}`
+
+    const computeRemaining = () => {
+      const startedAt = visibleOfferStartedAtRef.current ?? Date.now()
+      return Math.max(0, REQUEST_TIMEOUT_SECONDS - Math.floor((Date.now() - startedAt) / 1000))
+    }
+
+    if (visibleOfferKey !== trackedVisibleOfferKeyRef.current) {
       clearCountdown()
-      trackedRequestIdRef.current = topRequest.id
+      trackedVisibleOfferKeyRef.current = visibleOfferKey
+      visibleOfferStartedAtRef.current = Date.now()
+      timeoutFiredForOfferKeyRef.current = null
       setCountdown(REQUEST_TIMEOUT_SECONDS)
 
       countdownRef.current = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            clearCountdown()
-            void flow.handleDecline(topRequest.id)
-            return 0
-          }
-          return prev - 1
-        })
+        const nextRemaining = computeRemaining()
+        setCountdown(nextRemaining)
+        if (nextRemaining <= 0 && timeoutFiredForOfferKeyRef.current !== visibleOfferKey) {
+          timeoutFiredForOfferKeyRef.current = visibleOfferKey
+          console.info('[WalkerDashboard] incoming offer timed out', {
+            request_id: topRequest.id,
+            attempt_id: topOffer?.id ?? null,
+          })
+          clearCountdown()
+          void flow.handleDecline(topRequest.id, 'timeout')
+        }
       }, 1000)
+    } else {
+      setCountdown(computeRemaining())
+      if (computeRemaining() <= 0 && timeoutFiredForOfferKeyRef.current !== visibleOfferKey) {
+        timeoutFiredForOfferKeyRef.current = visibleOfferKey
+        console.info('[WalkerDashboard] incoming offer timed out', {
+          request_id: topRequest.id,
+          attempt_id: topOffer?.id ?? null,
+        })
+        clearCountdown()
+        void flow.handleDecline(topRequest.id, 'timeout')
+      }
     }
 
     return () => clearCountdown()
-  }, [flow.screenState, topRequest?.id, flow.handleDecline, clearCountdown, topRequest])
+  }, [flow.screenState, topRequest?.id, topOffer?.id, flow.handleDecline, clearCountdown, topRequest])
 
   const isActiveOrCompleted = flow.screenState === 'on_the_way' || flow.screenState === 'active' || flow.screenState === 'completed'
 
@@ -365,6 +462,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                   <GroupedHistory
                     items={allHistoryItems}
                     role="walker"
+                    compact
                     onHide={hideHistoryItem}
                     emptyTitle="No walk history yet"
                     emptySubtitle="Completed jobs and client feedback will appear here."
@@ -422,6 +520,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                       <GroupedHistory
                         items={visibleHistoryItems}
                         role="walker"
+                        compact
                         onHide={hideHistoryItem}
                         emptyTitle="No walk history yet"
                         emptySubtitle="Completed jobs and client feedback will appear here."
@@ -578,7 +677,11 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
               <div style={activeHeaderRowStyle}>
                 <div style={onTheWayBadgeStyle}>
                   <div style={onTheWayBadgeDotStyle} />
-                  Head to the client
+                  {flow.screenPhase === 'arrived_pending_confirmation'
+                    ? 'Waiting for client confirmation'
+                    : flow.screenPhase === 'arrival_confirmed'
+                      ? 'Arrival confirmed'
+                      : 'Head to the client'}
                 </div>
               </div>
 
@@ -591,14 +694,32 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 </div>
               )}
 
+              {flow.screenPhase === 'arrived_pending_confirmation' && (
+                <div style={waitingStateStyle}>
+                  <div style={waitingStateTitleStyle}>Waiting for client to confirm arrival</div>
+                  <div style={waitingStateBodyStyle}>
+                    The service can start as soon as the client confirms you are with them.
+                  </div>
+                </div>
+              )}
+
               <button
                 onClick={async () => {
                   await hapticSuccess()
-                  flow.startWalk(onTheWayJob.id)
+                  if (flow.screenPhase === 'on_the_way') {
+                    void flow.markArrived(onTheWayJob.id)
+                    return
+                  }
+                  void flow.startService(onTheWayJob.id)
                 }}
+                disabled={flow.screenPhase === 'arrived_pending_confirmation'}
                 style={completeBtnStyle}
               >
-                Start walk
+                {flow.screenPhase === 'on_the_way'
+                  ? 'Arrived'
+                  : flow.screenPhase === 'arrival_confirmed'
+                    ? onTheWayLabels.startAction
+                    : 'Waiting for client'}
               </button>
             </div>
           )}
@@ -608,7 +729,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
               <div style={activeHeaderRowStyle}>
                 <div style={activeBadgeStyle}>
                   <div style={activeBadgeDotStyle} />
-                  Active walk
+                  {activeLabels.activeTitle}
                 </div>
               </div>
 
@@ -627,6 +748,29 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 </div>
               )}
 
+              {(activeDurationSummary.elapsedLabel ||
+                activeDurationSummary.plannedLabel ||
+                activeDurationSummary.actualLabel) && (
+                <div style={serviceTimerPanelStyle}>
+                  {activeDurationSummary.elapsedLabel && (
+                    <div style={serviceTimerPrimaryRowStyle}>
+                      <span style={serviceTimerLabelStyle}>Elapsed</span>
+                      <span style={serviceTimerValueStyle}>{activeDurationSummary.elapsedLabel}</span>
+                    </div>
+                  )}
+                  {(activeDurationSummary.plannedLabel || activeDurationSummary.actualLabel) && (
+                    <div style={serviceTimerMetaRowStyle}>
+                      {activeDurationSummary.plannedLabel && (
+                        <span style={serviceTimerMetaStyle}>Planned: {activeDurationSummary.plannedLabel}</span>
+                      )}
+                      {activeDurationSummary.actualLabel && (
+                        <span style={serviceTimerMetaStyle}>Actual: {activeDurationSummary.actualLabel}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button
                 onClick={async () => {
                   await hapticSuccess()
@@ -642,7 +786,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 {flow.completingJobId === activeJob.id
                   ? 'Completing...'
                   : activeJobCanComplete
-                    ? 'Complete walk'
+                    ? activeLabels.completeAction
                     : 'Available at dispatch time'}
               </button>
             </div>
@@ -651,13 +795,25 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
           {flow.screenState === 'completed' && flow.completionSuccess && (
             <div className="sheet-state-enter" style={completionCardStyle}>
               <div style={checkStyle}>✓</div>
-              <h3 style={completionTitleStyle}>Walk completed</h3>
+              <h3 style={completionTitleStyle}>{getServiceLabels(null).completedTitle}</h3>
               <p style={completionSubStyle}>{flow.completionSuccess.clientName}'s dog</p>
 
               {flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0 && (
                 <div style={earningsRowStyle}>
                   <span style={earningsLabelStyle}>Earned</span>
                   <span style={earningsValueStyle}>₪{flow.completionSuccess.earnings.toFixed(0)}</span>
+                </div>
+              )}
+
+              {!!completionMetaRows.length && (
+                <div style={serviceTimerPanelStyle}>
+                  <div style={serviceTimerMetaRowStyle}>
+                    {completionMetaRows.map((row) => (
+                      <span key={`${row.label}:${row.value}`} style={serviceTimerMetaStyle}>
+                        {row.label}: {row.value}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -832,8 +988,9 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
           <div style={completionOverlayCardStyle}>
             <CompletionCard
               promptKey={flow.completionSuccess.jobId}
-              title="Walk completed"
+              title={getServiceLabels(null).completedTitle}
               subtitle={`Rate ${flow.completionSuccess.clientName}`}
+              metaRows={completionMetaRows}
               earnings={
                 flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0
                   ? `₪${flow.completionSuccess.earnings.toFixed(0)}`
@@ -1112,7 +1269,7 @@ const menuItemActionStyle: React.CSSProperties = {
 }
 
 const historyContainerStyle: React.CSSProperties = {
-  padding: '0 24px 18px',
+  padding: '0 20px 14px',
   overflowY: 'auto',
 }
 
@@ -1477,6 +1634,28 @@ const completionPaymentErrorStyle: React.CSSProperties = {
   lineHeight: 1.45,
 }
 
+const waitingStateStyle: React.CSSProperties = {
+  marginTop: 12,
+  padding: '14px 16px',
+  borderRadius: 16,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gap: 4,
+}
+
+const waitingStateTitleStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const waitingStateBodyStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#64748B',
+  lineHeight: 1.45,
+}
+
 const ellipsisStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -1500,6 +1679,48 @@ const completeBtnStyle: React.CSSProperties = {
   lineHeight: 1.2,
   boxSizing: 'border-box',
   WebkitTapHighlightColor: 'transparent',
+}
+
+const serviceTimerPanelStyle: React.CSSProperties = {
+  marginTop: 14,
+  borderRadius: 18,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  padding: '14px 16px',
+  display: 'grid',
+  gap: 8,
+}
+
+const serviceTimerPrimaryRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const serviceTimerLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#64748B',
+}
+
+const serviceTimerValueStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+  color: '#0F172A',
+  fontVariantNumeric: 'tabular-nums',
+}
+
+const serviceTimerMetaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+}
+
+const serviceTimerMetaStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#475569',
 }
 
 const completionCardStyle: React.CSSProperties = {

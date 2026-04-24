@@ -30,7 +30,7 @@ serve(async (req) => {
 
     const body = (await req.json()) as StartDispatchBody
     const requestId = String(body.requestId ?? '').trim()
-    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 12)
+    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 20)
     const rankedCandidates = sanitizeCandidates(body.rankedCandidates)
     const resetExisting = body.resetExisting === true
 

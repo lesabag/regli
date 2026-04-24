@@ -562,6 +562,7 @@ serve(async (req: Request) => {
       .insert({
         client_id: user.id,
         selected_walker_id: walkerId || null,
+        service_type: serviceType,
         dog_name: dogName.trim(),
         location: location.trim(),
         notes: notes?.trim() || null,
