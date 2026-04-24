@@ -6,6 +6,7 @@ interface CompletionCardProps {
   title: string
   subtitle: string
   earnings?: string
+  metaRows?: Array<{ label: string; value: string }>
   onRate?: (rating: number, review: string) => void
   ratingSubmitting?: boolean
   alreadyRated?: boolean
@@ -20,6 +21,7 @@ export default function CompletionCard({
   title,
   subtitle,
   earnings,
+  metaRows,
   onRate,
   ratingSubmitting,
   alreadyRated,
@@ -88,6 +90,17 @@ export default function CompletionCard({
         <div style={earningsStyle}>
           <span style={{ fontSize: 13, color: '#15803D', fontWeight: 600 }}>Earned</span>
           <span style={{ fontSize: 20, fontWeight: 800, color: '#15803D' }}>{earnings}</span>
+        </div>
+      )}
+
+      {!!metaRows?.length && (
+        <div style={metaRowsStyle}>
+          {metaRows.map((row) => (
+            <div key={`${row.label}:${row.value}`} style={metaRowStyle}>
+              <span style={metaLabelStyle}>{row.label}</span>
+              <span style={metaValueStyle}>{row.value}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -250,6 +263,36 @@ const earningsStyle: React.CSSProperties = {
   borderRadius: 14,
   border: '1px solid #DCFCE7',
   marginBottom: 8,
+}
+
+const metaRowsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 10,
+  marginBottom: 8,
+}
+
+const metaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: '12px 16px',
+  borderRadius: 14,
+  border: '1px solid #E2E8F0',
+  background: '#F8FAFC',
+}
+
+const metaLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#64748B',
+}
+
+const metaValueStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
 }
 
 const favoriteButtonStyle: React.CSSProperties = {

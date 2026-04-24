@@ -28,7 +28,7 @@ serve(async (req) => {
 
     const body = (await req.json().catch(() => ({}))) as AdvanceDispatchBody
     const requestId = String(body.requestId ?? '').trim()
-    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 12)
+    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 20)
     const limit =
       typeof body.limit === 'number' && Number.isFinite(body.limit)
         ? Math.max(1, Math.min(200, Math.floor(body.limit)))

@@ -261,21 +261,21 @@ function capitalize(s: string) {
 
 const wrapperStyle: React.CSSProperties = {
   background: '#F8FAFC',
-  borderRadius: 16,
-  padding: '14px 16px',
+  borderRadius: 14,
+  padding: '11px 12px',
   border: '1px solid #F1F5F9',
 }
 
 const cardRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 12,
+  gap: 10,
 }
 
 const iconBoxStyle: React.CSSProperties = {
-  width: 40,
-  height: 40,
-  borderRadius: 12,
+  width: 34,
+  height: 34,
+  borderRadius: 10,
   background: '#EFF6FF',
   display: 'grid',
   placeItems: 'center',
@@ -283,25 +283,27 @@ const iconBoxStyle: React.CSSProperties = {
 }
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 700,
   color: '#0F172A',
+  lineHeight: 1.2,
 }
 
 const sublabelStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   color: '#94A3B8',
-  marginTop: 2,
+  marginTop: 1,
+  lineHeight: 1.25,
 }
 
 const changeBtnStyle: React.CSSProperties = {
   border: '1.5px solid #E2E8F0',
-  borderRadius: 10,
-  padding: '6px 12px',
+  borderRadius: 9,
+  padding: '5px 10px',
   background: '#FFFFFF',
   color: '#64748B',
   fontWeight: 600,
-  fontSize: 12,
+  fontSize: 11.5,
   cursor: 'pointer',
   flexShrink: 0,
   transition: 'background 0.12s ease',
@@ -310,12 +312,12 @@ const changeBtnStyle: React.CSSProperties = {
 
 const addBtnStyle: React.CSSProperties = {
   border: 'none',
-  borderRadius: 10,
-  padding: '7px 14px',
+  borderRadius: 9,
+  padding: '6px 11px',
   background: '#0F172A',
   color: '#FFFFFF',
   fontWeight: 600,
-  fontSize: 12,
+  fontSize: 11.5,
   cursor: 'pointer',
   flexShrink: 0,
   transition: 'opacity 0.12s ease',
@@ -324,12 +326,12 @@ const addBtnStyle: React.CSSProperties = {
 
 const retryBtnStyle: React.CSSProperties = {
   border: '1.5px solid #F59E0B',
-  borderRadius: 10,
-  padding: '6px 12px',
+  borderRadius: 9,
+  padding: '5px 10px',
   background: '#FFFBEB',
   color: '#92400E',
   fontWeight: 600,
-  fontSize: 12,
+  fontSize: 11.5,
   cursor: 'pointer',
   flexShrink: 0,
   WebkitTapHighlightColor: 'transparent',
@@ -362,8 +364,8 @@ const reassuranceStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  marginTop: 10,
-  fontSize: 11,
+  marginTop: 8,
+  fontSize: 10.5,
   color: '#94A3B8',
   letterSpacing: 0.1,
 }

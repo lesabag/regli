@@ -31,7 +31,7 @@ serve(async (req) => {
     const body = (await req.json()) as DeclineDispatchBody
     const requestId = String(body.requestId ?? '').trim()
     const attemptId = String(body.attemptId ?? '').trim()
-    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 12)
+    const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 20)
 
     if (!requestId || !attemptId) {
       return jsonResponse(

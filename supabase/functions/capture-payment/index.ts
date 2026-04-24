@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v3_payment_auth_failure_no_cancel_2026_04_22'
+const FUNCTION_VERSION = 'v4_service_completion_gate_2026_04_23'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -97,7 +97,7 @@ serve(async (req: Request) => {
     // Load the job
     const { data: job, error: jobError } = await supabaseAdmin
       .from('walk_requests')
-      .select('id, walker_id, selected_walker_id, client_id, status, payment_status, stripe_payment_intent_id, dog_name, price, walker_earnings, walker_amount, platform_fee, amount, currency')
+      .select('id, walker_id, selected_walker_id, client_id, status, payment_status, stripe_payment_intent_id, dog_name, price, walker_earnings, walker_amount, platform_fee, amount, currency, service_started_at, service_completed_at')
       .eq('id', jobId)
       .single()
 
@@ -160,13 +160,35 @@ serve(async (req: Request) => {
       )
     }
 
+    if (!job.service_started_at) {
+      return new Response(
+        JSON.stringify({
+          error: 'Service has not started yet',
+          details: 'Completion is blocked until service_started_at is set.',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!job.service_completed_at) {
+      return new Response(
+        JSON.stringify({
+          error: 'Service completion was not confirmed yet',
+          details: 'Completion is blocked until service_completed_at is set.',
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     // If there's no PaymentIntent, just mark as completed (free walk / test)
     if (!job.stripe_payment_intent_id) {
       console.log(`[capture-payment][${FUNCTION_VERSION}] No PaymentIntent — marking completed without capture`)
       const now = new Date().toISOString()
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'paid', paid_at: now })
+        .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
         .eq('id', jobId)
       return new Response(
         JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', noPayment: true, _v: FUNCTION_VERSION }),
@@ -203,7 +225,7 @@ serve(async (req: Request) => {
       const now = new Date().toISOString()
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'paid', paid_at: now })
+        .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
         .eq('id', jobId)
 
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
@@ -230,7 +252,7 @@ serve(async (req: Request) => {
       console.warn(`[capture-payment][${FUNCTION_VERSION}] PI is canceled — cannot capture`)
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'failed' })
+        .update({ status: 'completed', payment_status: 'failed', service_completed_at: job.service_completed_at ?? new Date().toISOString() })
         .eq('id', jobId)
       return new Response(
         JSON.stringify({
@@ -296,7 +318,7 @@ serve(async (req: Request) => {
             const now = new Date().toISOString()
             await supabaseAdmin
               .from('walk_requests')
-              .update({ status: 'completed', payment_status: 'paid', paid_at: now })
+              .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
               .eq('id', jobId)
 
             const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
@@ -358,6 +380,7 @@ serve(async (req: Request) => {
         status: 'completed',
         payment_status: 'paid',
         paid_at: now,
+        service_completed_at: job.service_completed_at ?? now,
       })
       .eq('id', jobId)
 
@@ -423,6 +446,8 @@ interface JobRow {
   currency: string | null
   dog_name: string | null
   stripe_payment_intent_id: string | null
+  service_started_at?: string | null
+  service_completed_at?: string | null
 }
 
 async function tryCreateTransfer(

@@ -36,7 +36,7 @@ export function createAdminClient(): SupabaseClient {
   })
 }
 
-export function normalizeTimeoutSeconds(value: unknown, fallback = 12): number {
+export function normalizeTimeoutSeconds(value: unknown, fallback = 20): number {
   const parsed =
     typeof value === 'number'
       ? value

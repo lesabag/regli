@@ -18,6 +18,8 @@ import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { formatShortAddress } from '../utils/addressFormat'
+import { getServiceLabels } from '../utils/serviceLifecycle'
+import { getDurationSummary } from '../utils/serviceTiming'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -202,6 +204,28 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     if (!showDogNameSheet) return
     setDogNameDraft(flow.dogName || '')
   }, [flow.dogName, showDogNameSheet])
+
+  const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const activeService =
+      (flow.screenState === 'tracking' || flow.screenState === 'active') &&
+      !!flow.activeJob?.service_started_at &&
+      !flow.activeJob?.service_completed_at
+
+    if (!activeService) return
+
+    const id = window.setInterval(() => {
+      setServiceClockNow(Date.now())
+    }, 1000)
+
+    return () => window.clearInterval(id)
+  }, [
+    flow.activeJob?.id,
+    flow.activeJob?.service_started_at,
+    flow.activeJob?.service_completed_at,
+    flow.screenState,
+  ])
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -444,6 +468,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       : `Favorite walkers (${preferredWalkers.length})`
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
+  const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
   const isIdleState = flow.screenState === 'idle' && !hasCompletionPrompt
   const showBanners =
     flow.screenState === 'idle' ||
@@ -472,6 +497,51 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       : flow.adjustedPriceILS > 0
         ? `₪${flow.adjustedPriceILS}`
         : '₪0'
+  const trackingDurationSummary = useMemo(
+    () =>
+      getDurationSummary({
+        plannedMinutes: flow.activeJob?.duration_minutes ?? null,
+        startedAt: flow.activeJob?.service_started_at ?? null,
+        completedAt: flow.activeJob?.service_completed_at ?? null,
+        now: serviceClockNow,
+      }),
+    [
+      flow.activeJob?.duration_minutes,
+      flow.activeJob?.service_started_at,
+      flow.activeJob?.service_completed_at,
+      serviceClockNow,
+    ],
+  )
+  const completionJobDetails = useMemo(
+    () =>
+      flow.completionJob
+        ? flow.completedJobs.find((job) => job.id === flow.completionJob?.jobId) ?? null
+        : null,
+    [flow.completedJobs, flow.completionJob],
+  )
+  const completionDurationSummary = useMemo(
+    () =>
+      getDurationSummary({
+        plannedMinutes: completionJobDetails?.duration_minutes ?? null,
+        startedAt: completionJobDetails?.service_started_at ?? null,
+        completedAt: completionJobDetails?.service_completed_at ?? null,
+      }),
+    [
+      completionJobDetails?.duration_minutes,
+      completionJobDetails?.service_started_at,
+      completionJobDetails?.service_completed_at,
+    ],
+  )
+  const completionMetaRows = useMemo(() => {
+    const rows: Array<{ label: string; value: string }> = []
+    if (completionDurationSummary.plannedLabel) {
+      rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
+    }
+    if (completionDurationSummary.actualLabel) {
+      rows.push({ label: 'Actual', value: completionDurationSummary.actualLabel })
+    }
+    return rows
+  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -600,8 +670,23 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           </div>
         </div>
 
-        {showBanners && (flow.error || flow.successMessage) && (
+        {showBanners && (flow.error || flow.successMessage || flow.availabilityNotice) && (
           <div style={floatingMessagesStyle}>
+            {flow.availabilityNotice && (
+              <MessageBanner
+                text={flow.availabilityNotice.title}
+                title={flow.availabilityNotice.title}
+                subtitle={flow.availabilityNotice.subtitle}
+                kind="info"
+                onDismiss={flow.clearAvailabilityNotice}
+                icon={
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="7" />
+                    <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                  </svg>
+                }
+              />
+            )}
             {flow.error && (
               <MessageBanner text={flow.error} kind="error" onDismiss={flow.clearError} />
             )}
@@ -665,6 +750,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                   <GroupedHistory
                     items={allHistoryItems}
                     role="client"
+                    compact
                     onBookAgain={handleBookAgain}
                     onHide={anyFlow.hideHistoryItem}
                     favoriteWalkerIds={flow.favoriteWalkerIds}
@@ -738,6 +824,7 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                         <GroupedHistory
                           items={visibleHistoryItems}
                           role="client"
+                          compact
                           onBookAgain={handleBookAgain}
                           onHide={anyFlow.hideHistoryItem}
                           favoriteWalkerIds={flow.favoriteWalkerIds}
@@ -1006,12 +1093,25 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     : 'Walker'
                 }
                 dogName={flow.activeJob.dog_name}
-                phase={flow.isWalkActive ? 'active' : 'on_the_way'}
+                phase={
+                  flow.screenPhase === 'in_progress' ||
+                  flow.screenPhase === 'arrival_confirmed' ||
+                  flow.screenPhase === 'arrived_pending_confirmation'
+                    ? flow.screenPhase
+                    : 'on_the_way'
+                }
                 isArrived={flow.isArrived}
                 etaMinutes={flow.etaMinutes}
                 displayEtaSeconds={flow.displayEtaSeconds}
                 distanceMeters={flow.distanceMeters}
                 gpsQuality={trackingGpsQuality}
+                startActionLabel={trackingLabels.startAction}
+                activeTitle={trackingLabels.activeTitle}
+                onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
+                confirmingArrival={flow.arrivalConfirming}
+                elapsedLabel={trackingDurationSummary.elapsedLabel}
+                plannedLabel={trackingDurationSummary.plannedLabel}
+                actualLabel={trackingDurationSummary.actualLabel}
               />
             </div>
           )}
@@ -1056,8 +1156,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
           <div style={completionOverlayCardStyle}>
             <CompletionCard
               promptKey={flow.completionJob.jobId}
-              title="Walk completed"
-              subtitle={`${flow.completionJob.walkerName} walked your dog`}
+              title={getServiceLabels(null).completedTitle}
+              subtitle={`Rate ${flow.completionJob.walkerName}`}
+              metaRows={completionMetaRows}
               onRate={flow.submitCompletionRating}
               ratingSubmitting={flow.completionRatingSubmitting}
               alreadyRated={flow.ratedJobIds.has(flow.completionJob.jobId)}
@@ -1382,46 +1483,97 @@ function TrackingCard({
   displayEtaSeconds,
   distanceMeters,
   gpsQuality,
+  startActionLabel,
+  activeTitle,
+  onConfirmArrival,
+  confirmingArrival,
+  elapsedLabel,
+  plannedLabel,
+  actualLabel,
 }: {
   walkerName: string
   dogName: string | null
-  phase: 'on_the_way' | 'active'
+  phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
   displayEtaSeconds: number | null
   distanceMeters: number | null
   gpsQuality: GpsQuality
+  startActionLabel: string
+  activeTitle: string
+  onConfirmArrival?: () => void
+  confirmingArrival?: boolean
+  elapsedLabel: string | null
+  plannedLabel: string | null
+  actualLabel: string | null
 }) {
+  const isServiceActive = phase === 'in_progress'
+  const isArrivalPending = phase === 'arrived_pending_confirmation'
+  const isArrivalConfirmed = phase === 'arrival_confirmed'
+  const topBadge = isServiceActive ? activeTitle : isArrivalPending ? 'Provider arrived' : 'On the way'
+  const title = isServiceActive ? activeTitle : isArrivalPending ? 'Provider has arrived' : 'On the way'
+  const subtitle = isServiceActive
+    ? dogName
+      ? `${dogName} is currently in service`
+      : 'Your service is in progress'
+    : isArrivalPending
+      ? 'Confirm the provider is with you before service starts'
+      : isArrivalConfirmed
+        ? `${walkerName} is ready to ${startActionLabel.toLowerCase()}`
+        : `${walkerName} is heading to you`
+
   return (
     <div style={trackingCardStyle}>
-      <div style={trackingTopBadgeStyle}>
-        {phase === 'active' ? 'Active walk' : isArrived ? 'Walker arrived' : 'On the way'}
-      </div>
-      <div style={trackingTitleStyle}>{phase === 'active' ? 'Active walk' : 'On the way'}</div>
-      <div style={trackingSubtitleStyle}>
-        {phase === 'active'
-          ? dogName
-            ? `${dogName} is out for a walk`
-            : 'Your dog is out for a walk'
-          : `${walkerName} is heading to you`}
-      </div>
+      <div style={trackingTopBadgeStyle}>{topBadge}</div>
+      <div style={trackingTitleStyle}>{title}</div>
+      <div style={trackingSubtitleStyle}>{subtitle}</div>
 
       <div style={trackingStatsGridStyle}>
         <div style={trackingStatCardStyle}>
           <div style={trackingStatLabelStyle}>ETA</div>
           <div style={trackingStatValueStyle}>
-            {formatEta(etaMinutes, displayEtaSeconds, isArrived)}
+            {formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)}
           </div>
         </div>
         <div style={trackingStatCardStyle}>
           <div style={trackingStatLabelStyle}>Distance</div>
-          <div style={trackingStatValueStyle}>{formatDistance(distanceMeters, isArrived)}</div>
+          <div style={trackingStatValueStyle}>
+            {formatDistance(distanceMeters, isArrived || isArrivalPending || isArrivalConfirmed)}
+          </div>
         </div>
         <div style={trackingStatCardStyle}>
           <div style={trackingStatLabelStyle}>GPS</div>
           <div style={trackingStatValueStyle}>{formatGpsQuality(gpsQuality)}</div>
         </div>
       </div>
+
+      {(elapsedLabel || plannedLabel || actualLabel) && (
+        <div style={trackingTimerPanelStyle}>
+          {elapsedLabel && (
+            <div style={trackingTimerPrimaryRowStyle}>
+              <span style={trackingTimerLabelStyle}>Elapsed</span>
+              <span style={trackingTimerValueStyle}>{elapsedLabel}</span>
+            </div>
+          )}
+          {(plannedLabel || actualLabel) && (
+            <div style={trackingTimerMetaRowStyle}>
+              {plannedLabel && <span style={trackingTimerMetaStyle}>Planned: {plannedLabel}</span>}
+              {actualLabel && <span style={trackingTimerMetaStyle}>Actual: {actualLabel}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isArrivalPending && onConfirmArrival && (
+        <div style={{ marginTop: 16 }}>
+          <ActionButton
+            label={confirmingArrival ? 'Confirming...' : 'Confirm arrival'}
+            onClick={onConfirmArrival}
+            loading={!!confirmingArrival}
+            disabled={!!confirmingArrival}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -1732,7 +1884,7 @@ const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
 
 const compactFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
 }
 
 const compactFieldLabelStyle: React.CSSProperties = {
@@ -1744,8 +1896,8 @@ const compactFieldLabelStyle: React.CSSProperties = {
 }
 
 const dogInputShellStyle: React.CSSProperties = {
-  height: 48,
-  borderRadius: 16,
+  height: 45,
+  borderRadius: 15,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   display: 'flex',
@@ -1754,8 +1906,8 @@ const dogInputShellStyle: React.CSSProperties = {
 }
 
 const dogThumbStyle: React.CSSProperties = {
-  width: 42,
-  height: 42,
+  width: 38,
+  height: 38,
   borderRadius: 12,
   marginLeft: 4,
   marginRight: 2,
@@ -1763,7 +1915,7 @@ const dogThumbStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: 20,
+  fontSize: 18,
   flexShrink: 0,
 }
 
@@ -1784,7 +1936,7 @@ const dogInputButtonContentStyle: React.CSSProperties = {
 }
 
 const dogInputValueTextStyle: React.CSSProperties = {
-  fontSize: 17,
+  fontSize: 16,
   color: '#0F172A',
   fontWeight: 700,
   whiteSpace: 'nowrap',
@@ -1793,7 +1945,7 @@ const dogInputValueTextStyle: React.CSSProperties = {
 }
 
 const dogInputPlaceholderTextStyle: React.CSSProperties = {
-  fontSize: 17,
+  fontSize: 16,
   color: '#94A3B8',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -1801,7 +1953,7 @@ const dogInputPlaceholderTextStyle: React.CSSProperties = {
 }
 
 const dogInputChevronStyle: React.CSSProperties = {
-  paddingRight: 14,
+  paddingRight: 12,
   color: '#94A3B8',
   fontSize: 24,
   lineHeight: 1,
@@ -1939,13 +2091,13 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  height: 48,
-  borderRadius: 16,
+  height: 44,
+  borderRadius: 15,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   outline: 'none',
-  padding: '0 14px',
-  fontSize: 17,
+  padding: '0 12px',
+  fontSize: 16,
   color: '#0F172A',
   boxSizing: 'border-box',
 }
@@ -1998,7 +2150,7 @@ const scheduledSummaryCardStyle: React.CSSProperties = {
   border: '1px solid #E2E8F0',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
   borderRadius: 16,
-  padding: '10px 12px',
+  padding: '9px 12px',
   cursor: 'pointer',
   boxShadow: '0 4px 14px rgba(15, 23, 42, 0.04)',
 }
@@ -2039,7 +2191,7 @@ const feeLabelStyle: React.CSSProperties = {
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
-  padding: '8px 14px calc(10px + env(safe-area-inset-bottom))',
+  padding: '6px 14px calc(8px + env(safe-area-inset-bottom))',
   borderTop: '1px solid rgba(226, 232, 240, 0.9)',
   background: 'rgba(255,255,255,0.96)',
   backdropFilter: 'blur(10px)',
@@ -2270,6 +2422,48 @@ const trackingStatValueStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
 }
 
+const trackingTimerPanelStyle: React.CSSProperties = {
+  marginTop: 14,
+  borderRadius: 18,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  padding: '14px 16px',
+  display: 'grid',
+  gap: 8,
+}
+
+const trackingTimerPrimaryRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const trackingTimerLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#64748B',
+}
+
+const trackingTimerValueStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+  color: '#0F172A',
+  fontVariantNumeric: 'tabular-nums',
+}
+
+const trackingTimerMetaRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+}
+
+const trackingTimerMetaStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#475569',
+}
+
 const menuOverlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -2376,9 +2570,10 @@ const menuActionStyle: React.CSSProperties = {
 
 const burgerSectionStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
-  paddingBottom: 18,
+  gap: 2,
+  paddingBottom: 14,
 }
+
 
 const burgerSectionHeaderStyle: React.CSSProperties = {
   display: 'flex',
