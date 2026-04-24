@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: 'Regli',
   webDir: 'dist',
   ios: {
-    scheme: 'Regli',
+    scheme: 'regli',
     contentInset: 'automatic',
   },
   server: {

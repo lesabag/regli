@@ -3,12 +3,15 @@ import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
 
 export type AppRole = 'client' | 'walker' | 'admin'
+export type ProfileRole = AppRole | 'provider' | 'customer'
 
 interface Profile {
   id: string
   email: string | null
   full_name: string | null
-  role: AppRole
+  role: ProfileRole
+  primary_service?: string | null
+  location_address?: string | null
 }
 
 const SESSION_INIT_TIMEOUT_MS = 8000
@@ -37,7 +40,7 @@ function getFallbackProfile(currentUser: User): Profile {
     full_name:
       (currentUser.user_metadata?.full_name as string | undefined) ?? null,
     role:
-      (currentUser.user_metadata?.role as AppRole | undefined) ?? 'client',
+      (currentUser.user_metadata?.role as ProfileRole | undefined) ?? 'client',
   }
 }
 
@@ -190,11 +193,15 @@ export function useAuth() {
       password,
       fullName,
       role,
+      primaryService,
+      locationAddress,
     }: {
       email: string
       password: string
       fullName: string
       role: AppRole
+      primaryService?: string
+      locationAddress?: string
     }) => {
       setAuthError(null)
 
@@ -209,6 +216,8 @@ export function useAuth() {
               data: {
                 full_name: fullName,
                 role: safeRole,
+                primary_service: primaryService ?? null,
+                location_address: locationAddress ?? null,
               },
             },
           }),
@@ -232,6 +241,8 @@ export function useAuth() {
           email,
           full_name: fullName,
           role: safeRole,
+          primary_service: primaryService ?? null,
+          location_address: locationAddress ?? null,
         }
 
         const { error: profileError } = await withTimeout(
@@ -243,7 +254,6 @@ export function useAuth() {
         )
 
         if (profileError) {
-          setAuthError(profileError.message)
           setProfile(profilePayload)
           return { ok: true }
         }

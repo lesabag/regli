@@ -25,6 +25,8 @@ interface WalkerDashboardProps {
     role: AppRole
   }
   onSignOut: () => Promise<void>
+  showOnboardingWowToken?: number
+  stripeReturnToken?: number
 }
 
 interface ConnectStatus {
@@ -82,7 +84,16 @@ function formatRelativeDate(value: string | null | undefined): string {
   })
 }
 
-export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardProps) {
+function providerAutoOnlineStorageKey(profileId: string) {
+  return `regli_provider_auto_online_${profileId}`
+}
+
+export default function WalkerDashboard({
+  profile,
+  onSignOut,
+  showOnboardingWowToken = 0,
+  stripeReturnToken = 0,
+}: WalkerDashboardProps) {
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
   const photo = useProfilePhoto(profile.id)
@@ -92,6 +103,9 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
   const [profileOpen, setProfileOpen] = useState(false)
   const [historyView, setHistoryView] = useState<'menu' | 'all'>('menu')
   const [historyOpen, setHistoryOpen] = useState(true)
+  const [showStripeGate, setShowStripeGate] = useState(false)
+  const [showOnboardingWow, setShowOnboardingWow] = useState(false)
+  const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [compRating, setCompRating] = useState(0)
   const [compHover, setCompHover] = useState(0)
   const [compPressed, setCompPressed] = useState(0)
@@ -99,6 +113,8 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
   const [compRatingDone, setCompRatingDone] = useState(false)
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const handledWowTokenRef = useRef(0)
+  const autoOnlineInFlightRef = useRef(false)
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -367,6 +383,114 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
     [hiddenHistoryIds, persistHiddenIds],
   )
 
+  const handleOnlineToggle = useCallback(async () => {
+    if (!flow.isOnline) {
+      const ok = await flow.toggleOnline()
+      if (!ok) {
+        setShowStripeGate(true)
+      }
+      return
+    }
+    setShowStripeGate(false)
+    await flow.toggleOnline()
+  }, [flow])
+
+  const handleStripeSetup = useCallback(async (rememberAutoOnline = false) => {
+    if (isCheckingPayout) return
+    setIsCheckingPayout(true)
+    if (rememberAutoOnline) {
+      try {
+        window.localStorage.setItem(providerAutoOnlineStorageKey(profile.id), '1')
+      } catch {
+        // noop
+      }
+    }
+    try {
+      if (flow.connectStatus?.connected) {
+        await flow.handleContinueOnboarding()
+        return
+      }
+      await flow.handleConnectAccount()
+    } finally {
+      setIsCheckingPayout(false)
+    }
+  }, [flow, isCheckingPayout, profile.id])
+
+  useEffect(() => {
+    if (!showOnboardingWowToken) return
+    if (handledWowTokenRef.current === showOnboardingWowToken) return
+    handledWowTokenRef.current = showOnboardingWowToken
+    setShowOnboardingWow(true)
+    setShowStripeGate(false)
+  }, [showOnboardingWowToken])
+
+  useEffect(() => {
+    if (!flow.stripeReadyForOnline) return
+    setShowStripeGate(false)
+  }, [flow.stripeReadyForOnline])
+
+  useEffect(() => {
+    const refreshConnect = () => {
+      void flow.fetchConnectStatus()
+    }
+
+    window.addEventListener('focus', refreshConnect)
+    document.addEventListener('visibilitychange', refreshConnect)
+    window.addEventListener('pageshow', refreshConnect)
+
+    return () => {
+      window.removeEventListener('focus', refreshConnect)
+      document.removeEventListener('visibilitychange', refreshConnect)
+      window.removeEventListener('pageshow', refreshConnect)
+    }
+  }, [flow.fetchConnectStatus])
+
+  useEffect(() => {
+    if (!stripeReturnToken) return
+    setShowStripeGate(false)
+    setShowOnboardingWow(false)
+    void flow.fetchConnectStatus()
+  }, [flow.fetchConnectStatus, stripeReturnToken])
+
+  useEffect(() => {
+    let pendingAutoOnline = false
+    try {
+      pendingAutoOnline = window.localStorage.getItem(providerAutoOnlineStorageKey(profile.id)) === '1'
+    } catch {
+      pendingAutoOnline = false
+    }
+
+    if (!pendingAutoOnline || !flow.stripeReadyForOnline || flow.isOnline || autoOnlineInFlightRef.current) {
+      return
+    }
+
+    autoOnlineInFlightRef.current = true
+    void (async () => {
+      const ok = await flow.toggleOnline()
+      autoOnlineInFlightRef.current = false
+      if (!ok) return
+      try {
+        window.localStorage.removeItem(providerAutoOnlineStorageKey(profile.id))
+      } catch {
+        // noop
+      }
+      setShowOnboardingWow(false)
+      setShowStripeGate(false)
+    })()
+  }, [flow.isOnline, flow.stripeReadyForOnline, flow.toggleOnline, profile.id])
+
+  const handleOnboardingWowPrimary = useCallback(async () => {
+    if (isCheckingPayout) return
+    if (flow.stripeReadyForOnline) {
+      const ok = await flow.toggleOnline()
+      if (ok) {
+        setShowOnboardingWow(false)
+      }
+      return
+    }
+    await handleStripeSetup(true)
+  }, [flow.stripeReadyForOnline, flow.toggleOnline, handleStripeSetup, isCheckingPayout])
+
   return (
     <>
       <div style={screenStyle}>
@@ -388,7 +512,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
               </svg>
             </button>
             <div style={{ minWidth: 0 }}>
-              <h1 style={greetingStyle}>Hey, {flow.firstName}</h1>
+              <h2 style={greetingStyle}>Hey, {flow.firstName}</h2>
             </div>
           </div>
 
@@ -408,7 +532,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 </div>
                 <button
                   type="button"
-                  onClick={flow.toggleOnline}
+                  onClick={() => void handleOnlineToggle()}
                   style={{ ...toggleBtnStyle, background: flow.isOnline ? '#16A34A' : '#CBD5E1' }}
                 >
                   <div
@@ -424,6 +548,86 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
             <NotificationsBell />
           </div>
         </div>
+
+        {showStripeGate && (
+          <>
+            <div style={stripeGateOverlayStyle} onClick={() => setShowStripeGate(false)} />
+            <div style={stripeGateCardStyle}>
+              <div style={stripeGateEyebrowStyle}>Payout setup</div>
+              <div style={stripeGateTitleStyle}>You&apos;re almost ready to go online</div>
+              <div style={stripeGateBodyStyle}>
+                Complete your payout setup to start receiving requests.
+              </div>
+              <div style={stripeGateActionsStyle}>
+                <button
+                  type="button"
+                  disabled={isCheckingPayout}
+                  onClick={() => void handleStripeSetup(false)}
+                  style={{
+                    ...stripeGatePrimaryStyle,
+                    ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
+                  }}
+                >
+                  {isCheckingPayout ? 'Checking...' : 'Complete setup'}
+                </button>
+                <button type="button" onClick={() => setShowStripeGate(false)} style={stripeGateSecondaryStyle}>
+                  Maybe later
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {showOnboardingWow && (
+          <>
+            <div style={stripeGateOverlayStyle} onClick={() => setShowOnboardingWow(false)} />
+            <div style={stripeGateCardStyle}>
+              <div style={stripeGateEyebrowStyle}>First step</div>
+              <div style={stripeGateTitleStyle}>
+                {flow.connectLoading
+                  ? 'Checking payout setup'
+                  : flow.stripeReadyForOnline
+                    ? 'Ready to receive your first request?'
+                    : 'Complete payout setup to go online'}
+              </div>
+              <div style={stripeGateBodyStyle}>
+                {flow.connectLoading
+                  ? 'We are checking your payout status so we can get you online smoothly.'
+                  : flow.stripeReadyForOnline
+                    ? 'Turn on availability whenever you’re ready to start receiving bookings.'
+                    : 'Set up payouts once so you can receive requests and get paid.'}
+              </div>
+              <div style={stripeGateActionsStyle}>
+                <button
+                  type="button"
+                  disabled={isCheckingPayout}
+                  onClick={() => void handleOnboardingWowPrimary()}
+                  style={{
+                    ...stripeGatePrimaryStyle,
+                    ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
+                  }}
+                >
+                  {flow.connectLoading
+                    ? 'Checking...'
+                    : flow.stripeReadyForOnline
+                      ? 'Go online'
+                      : isCheckingPayout
+                        ? 'Checking...'
+                        : 'Complete setup'}
+                </button>
+                {!flow.connectLoading && !flow.stripeReadyForOnline ? (
+                  <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
+                    Maybe later
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
+                    Maybe later
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
 
         {burgerOpen && (
           <>
@@ -647,7 +851,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 error={flow.connectError}
                 onConnect={flow.handleConnectAccount}
                 onContinue={flow.handleContinueOnboarding}
-                onRefresh={flow.fetchConnectStatus}
+                onRefresh={() => void flow.fetchConnectStatus()}
               />
             </div>
           )}
@@ -667,7 +871,7 @@ export default function WalkerDashboard({ profile, onSignOut }: WalkerDashboardP
                 error={flow.connectError}
                 onConnect={flow.handleConnectAccount}
                 onContinue={flow.handleContinueOnboarding}
-                onRefresh={flow.fetchConnectStatus}
+                onRefresh={() => void flow.fetchConnectStatus()}
               />
             </div>
           )}
@@ -1163,6 +1367,85 @@ const toggleKnobStyle: React.CSSProperties = {
   borderRadius: 999,
   background: '#FFFFFF',
   transition: 'transform 0.2s ease',
+}
+
+const stripeGateOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 29,
+  background: 'rgba(15, 23, 42, 0.24)',
+}
+
+const stripeGateCardStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 16,
+  right: 16,
+  bottom: 'calc(16px + env(safe-area-inset-bottom))',
+  zIndex: 30,
+  borderRadius: 28,
+  background: 'rgba(255,255,255,0.98)',
+  border: '1px solid rgba(255,255,255,0.72)',
+  boxShadow: '0 24px 56px rgba(15, 23, 42, 0.20)',
+  padding: 22,
+  display: 'grid',
+  gap: 12,
+}
+
+const stripeGateEyebrowStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#5B7CFA',
+  textTransform: 'uppercase',
+}
+
+const stripeGateTitleStyle: React.CSSProperties = {
+  fontSize: 28,
+  lineHeight: 1.05,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const stripeGateBodyStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.55,
+  color: '#5E6B83',
+}
+
+const stripeGateActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+  marginTop: 4,
+}
+
+const stripeGatePrimaryStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  minHeight: 52,
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const stripeGatePrimaryDisabledStyle: React.CSSProperties = {
+  opacity: 0.6,
+  cursor: 'not-allowed',
+  boxShadow: 'none',
+}
+
+const stripeGateSecondaryStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  minHeight: 52,
+  borderRadius: 18,
+  background: '#FFFFFF',
+  color: '#23314F',
+  fontSize: 15,
+  fontWeight: 700,
+  cursor: 'pointer',
 }
 
 const menuOverlayStyle: React.CSSProperties = {

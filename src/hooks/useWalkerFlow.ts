@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
@@ -143,6 +144,15 @@ interface ConnectStatus {
   stripe_connect_onboarding_complete: boolean
   payouts_enabled: boolean
   charges_enabled: boolean
+}
+
+function isStripeReadyForOnline(status: ConnectStatus | null | undefined): boolean {
+  return !!(
+    status?.connected &&
+    status.stripe_connect_onboarding_complete &&
+    status.payouts_enabled &&
+    status.charges_enabled
+  )
 }
 
 async function prepareEdgeFunctionAuth(): Promise<boolean> {
@@ -1156,23 +1166,25 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (!hasAuth) {
         setConnectError('Authentication issue. Please refresh and try again.')
         setConnectLoading(false)
-        return
+        return null
       }
       const { data, error } = await invokeEdgeFunction<ConnectStatus>('get-connect-status')
       if (error) {
         setConnectError(error || 'Failed to load payout account status.')
         setConnectLoading(false)
-        return
+        return null
       }
       if (!data) {
         setConnectError('Empty response.')
         setConnectLoading(false)
-        return
+        return null
       }
       setConnectStatus(data as ConnectStatus)
       setConnectError(null)
+      return data as ConnectStatus
     } catch {
       setConnectError('Failed to load payout account status.')
+      return null
     } finally {
       setConnectLoading(false)
     }
@@ -1186,14 +1198,24 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const toggleOnline = useCallback(async () => {
     const newValue = !isOnline
+
+    if (newValue) {
+      const latestStatus = await fetchConnectStatus()
+      if (!isStripeReadyForOnline(latestStatus ?? connectStatus)) {
+        return false
+      }
+    }
+
     setIsOnline(newValue)
 
     const { error } = await supabase.from('profiles').update({ is_online: newValue }).eq('id', profileId)
     if (error) {
       console.error('[useWalkerFlow] toggleOnline error:', error.message)
       setIsOnline(!newValue)
+      return false
     }
-  }, [isOnline, profileId])
+    return true
+  }, [connectStatus, fetchConnectStatus, isOnline, profileId])
 
   useEffect(() => {
     fetchAll()
@@ -2082,7 +2104,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
-      const { data: linkData, error: linkErr } = await invokeEdgeFunction<{ url?: string; error?: string }>('create-connect-onboarding-link')
+      const { data: linkData, error: linkErr } = await invokeEdgeFunction<{ url?: string; error?: string }>(
+        'create-connect-onboarding-link',
+        {
+          body: {
+            useNativeDeepLink: Capacitor.isNativePlatform(),
+          },
+        },
+      )
       if (linkErr) {
         setConnectError(linkErr || 'Failed to get onboarding link')
         setConnectLoading(false)
@@ -2113,7 +2142,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
-      const { data, error } = await invokeEdgeFunction<{ url?: string; error?: string }>('create-connect-onboarding-link')
+      const { data, error } = await invokeEdgeFunction<{ url?: string; error?: string }>(
+        'create-connect-onboarding-link',
+        {
+          body: {
+            useNativeDeepLink: Capacitor.isNativePlatform(),
+          },
+        },
+      )
       if (error) {
         setConnectError(error || 'Failed to get onboarding link')
         setConnectLoading(false)
@@ -2165,6 +2201,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     connectStatus,
     connectLoading,
     connectError,
+    stripeReadyForOnline: isStripeReadyForOnline(connectStatus),
     handleConnectAccount,
     handleContinueOnboarding,
     fetchConnectStatus,

@@ -7,24 +7,100 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function normalizeBaseUrl(
+  value: string | null | undefined,
+  options?: { allowLocalhost?: boolean },
+): string | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+
+  const withProtocol =
+    raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`
+
+  try {
+    const url = new URL(withProtocol)
+    const host = url.hostname.toLowerCase()
+    if (
+      !options?.allowLocalhost &&
+      (host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host.endsWith('.local'))
+    ) {
+      return null
+    }
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
+function resolvePublicAppBaseUrl(): { baseUrl: string | null; source: string | null } {
+  const allowLocalhost = Deno.env.get('ALLOW_LOCALHOST_STRIPE_CONNECT_URLS') === 'true'
+
+  const envCandidates: Array<{ source: string; value: string | null | undefined }> = [
+    { source: 'APP_PUBLIC_URL', value: Deno.env.get('APP_PUBLIC_URL') },
+    { source: 'PUBLIC_APP_URL', value: Deno.env.get('PUBLIC_APP_URL') },
+    { source: 'SITE_URL', value: Deno.env.get('SITE_URL') },
+    { source: 'VITE_APP_URL', value: Deno.env.get('VITE_APP_URL') },
+    { source: 'VITE_PUBLIC_APP_URL', value: Deno.env.get('VITE_PUBLIC_APP_URL') },
+  ]
+
+  for (const candidate of envCandidates) {
+    const normalized = normalizeBaseUrl(candidate.value, { allowLocalhost })
+    if (normalized) {
+      return { baseUrl: normalized, source: candidate.source }
+    }
+  }
+
+  return { baseUrl: null, source: null }
+}
+
+function buildConnectRouteUrl(baseUrl: string, kind: 'return' | 'refresh'): string {
+  const url = new URL('/', baseUrl)
+  url.searchParams.set('stripe_connect', kind)
+  return url.toString()
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
+    const requestBody = await req.json().catch(() => ({}))
     const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    const refreshUrl = Deno.env.get('STRIPE_CONNECT_REFRESH_URL')
-    const returnUrl = Deno.env.get('STRIPE_CONNECT_RETURN_URL')
+    const { baseUrl, source } = resolvePublicAppBaseUrl()
 
-    if (!stripeKey || !supabaseUrl || !serviceRoleKey || !refreshUrl || !returnUrl) {
+    if (!stripeKey || !supabaseUrl || !serviceRoleKey) {
       return new Response(
-        JSON.stringify({ error: 'Server misconfigured' }),
+        JSON.stringify({
+          error: 'Server misconfigured',
+        }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
+
+    if (!baseUrl) {
+      return new Response(
+        JSON.stringify({
+          error: 'Missing public app URL for Stripe onboarding return URL',
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const refreshUrl = buildConnectRouteUrl(baseUrl, 'refresh')
+    const returnUrl = buildConnectRouteUrl(baseUrl, 'return')
+    console.log('create-connect-onboarding-link URL selection:', {
+      source,
+      baseUrl,
+      fromEnv: !!source,
+      refreshUrl,
+      returnUrl,
+    })
 
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
