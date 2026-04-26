@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+
 interface ActionButtonProps {
   label: string
   onClick?: () => void
@@ -5,6 +7,7 @@ interface ActionButtonProps {
   loading?: boolean
   variant?: 'primary' | 'secondary' | 'success' | 'danger'
   sticky?: boolean
+  touchSafe?: boolean
 }
 
 export default function ActionButton({
@@ -14,8 +17,23 @@ export default function ActionButton({
   loading,
   variant = 'primary',
   sticky,
+  touchSafe = false,
 }: ActionButtonProps) {
   const isDisabled = disabled || loading
+  const lastTouchTriggeredAtRef = useRef(0)
+
+  const handleTouchEnd = (event: React.TouchEvent<HTMLButtonElement>) => {
+    if (!touchSafe || isDisabled || !onClick) return
+    event.preventDefault()
+    lastTouchTriggeredAtRef.current = Date.now()
+    onClick()
+  }
+
+  const handleClick = () => {
+    if (!onClick || isDisabled) return
+    if (touchSafe && Date.now() - lastTouchTriggeredAtRef.current < 700) return
+    onClick()
+  }
 
   const bg = isDisabled
     ? '#E2E8F0'
@@ -48,7 +66,9 @@ export default function ActionButton({
       }}
     >
       <button
-        onClick={onClick}
+        type="button"
+        onClick={handleClick}
+        onTouchEnd={touchSafe ? handleTouchEnd : undefined}
         disabled={isDisabled}
         style={{
           width: '100%',
@@ -64,6 +84,7 @@ export default function ActionButton({
           transition: 'opacity 0.15s ease, transform 0.1s ease, background 0.15s ease',
           boxShadow: shadow,
           WebkitTapHighlightColor: 'transparent',
+          touchAction: touchSafe ? 'manipulation' : 'auto',
         }}
       >
         {loading ? (

@@ -24,6 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_analytics_events_event_time  ON analytics_events 
 ALTER TABLE analytics_events ENABLE ROW LEVEL SECURITY;
 
 -- Authenticated users can insert their own events
+DROP POLICY IF EXISTS "Users can insert own events" ON analytics_events;
 CREATE POLICY "Users can insert own events"
   ON analytics_events
   FOR INSERT
@@ -31,6 +32,7 @@ CREATE POLICY "Users can insert own events"
   WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 -- Anon can insert (for pre-auth events like app_opened)
+DROP POLICY IF EXISTS "Anon can insert events" ON analytics_events;
 CREATE POLICY "Anon can insert events"
   ON analytics_events
   FOR INSERT
@@ -38,6 +40,7 @@ CREATE POLICY "Anon can insert events"
   WITH CHECK (true);
 
 -- Only admins can read all events
+DROP POLICY IF EXISTS "Admins can read all events" ON analytics_events;
 CREATE POLICY "Admins can read all events"
   ON analytics_events
   FOR SELECT
@@ -49,6 +52,7 @@ CREATE POLICY "Admins can read all events"
   );
 
 -- Users can read their own events
+DROP POLICY IF EXISTS "Users can read own events" ON analytics_events;
 CREATE POLICY "Users can read own events"
   ON analytics_events
   FOR SELECT

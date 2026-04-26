@@ -7,7 +7,9 @@
 
 -- A walker receives the pending attempt whose attempt_no matches their candidate
 -- rank. The frontend already reads this view from useWalkerFlow/useWalkerDispatch.
-CREATE OR REPLACE VIEW public.active_dispatch_offers AS
+DROP VIEW IF EXISTS public.active_dispatch_offers;
+
+CREATE VIEW public.active_dispatch_offers AS
 SELECT
   da.id,
   da.request_id,
@@ -35,23 +37,35 @@ GRANT SELECT ON public.active_dispatch_offers TO authenticated;
 
 DO $$
 BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.dispatch_attempts;
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-  WHEN undefined_object THEN NULL;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'dispatch_attempts'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.dispatch_attempts;
+  END IF;
 END $$;
 
 DO $$
 BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.dispatch_candidates;
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-  WHEN undefined_object THEN NULL;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'dispatch_candidates'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.dispatch_candidates;
+  END IF;
 END $$;
 
 -- ============================================================================
 -- RPC: accept_dispatch_attempt
 -- ============================================================================
+DROP FUNCTION IF EXISTS public.accept_dispatch_attempt(UUID, UUID, UUID);
+
 CREATE OR REPLACE FUNCTION public.accept_dispatch_attempt(
   p_request_id UUID,
   p_attempt_id UUID,
@@ -164,6 +178,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================================================
 -- RPC: advance_dispatch_request
 -- ============================================================================
+DROP FUNCTION IF EXISTS public.advance_dispatch_request(UUID, INTEGER);
+
 CREATE OR REPLACE FUNCTION public.advance_dispatch_request(
   p_request_id UUID,
   p_timeout_seconds INTEGER DEFAULT 12
@@ -232,10 +248,10 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT COALESCE(MAX(attempt_no), 0)
+  SELECT COALESCE(MAX(da.attempt_no), 0)
   INTO v_last_attempt_no
-  FROM public.dispatch_attempts
-  WHERE request_id = p_request_id;
+  FROM public.dispatch_attempts da
+  WHERE da.request_id = p_request_id;
 
   v_next_rank := v_last_attempt_no + 1;
 
@@ -316,6 +332,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================================================
 -- RPC: decline_dispatch_attempt
 -- ============================================================================
+DROP FUNCTION IF EXISTS public.decline_dispatch_attempt(UUID, UUID, UUID, INTEGER);
+
 CREATE OR REPLACE FUNCTION public.decline_dispatch_attempt(
   p_request_id UUID,
   p_attempt_id UUID,

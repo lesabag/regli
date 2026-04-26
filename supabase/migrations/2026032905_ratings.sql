@@ -10,17 +10,19 @@ CREATE TABLE IF NOT EXISTS public.ratings (
   UNIQUE (job_id, from_user_id)
 );
 
-CREATE INDEX idx_ratings_job_id ON public.ratings(job_id);
-CREATE INDEX idx_ratings_to_user_id ON public.ratings(to_user_id);
-CREATE INDEX idx_ratings_from_user_id ON public.ratings(from_user_id);
+CREATE INDEX IF NOT EXISTS idx_ratings_job_id ON public.ratings(job_id);
+CREATE INDEX IF NOT EXISTS idx_ratings_to_user_id ON public.ratings(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_ratings_from_user_id ON public.ratings(from_user_id);
 
 ALTER TABLE public.ratings ENABLE ROW LEVEL SECURITY;
 
 -- Everyone can read ratings
+DROP POLICY IF EXISTS "ratings_select" ON public.ratings;
 CREATE POLICY "ratings_select" ON public.ratings
   FOR SELECT USING (true);
 
 -- Users can insert their own ratings
+DROP POLICY IF EXISTS "ratings_insert" ON public.ratings;
 CREATE POLICY "ratings_insert" ON public.ratings
   FOR INSERT WITH CHECK (from_user_id = auth.uid());
 

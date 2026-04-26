@@ -23,10 +23,12 @@ CREATE INDEX IF NOT EXISTS idx_balance_adj_job ON public.walker_balance_adjustme
 ALTER TABLE public.walker_balance_adjustments ENABLE ROW LEVEL SECURITY;
 
 -- Walkers can read their own adjustments
+DROP POLICY IF EXISTS "ba_walker_read" ON public.walker_balance_adjustments;
 CREATE POLICY "ba_walker_read" ON public.walker_balance_adjustments
   FOR SELECT USING (walker_id = auth.uid());
 
 -- Admins can read all
+DROP POLICY IF EXISTS "ba_admin_read" ON public.walker_balance_adjustments;
 CREATE POLICY "ba_admin_read" ON public.walker_balance_adjustments
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
@@ -38,4 +40,15 @@ CREATE POLICY "ba_admin_read" ON public.walker_balance_adjustments
 GRANT SELECT ON public.walker_balance_adjustments TO authenticated;
 
 -- Enable realtime for walker subscriptions
-ALTER PUBLICATION supabase_realtime ADD TABLE public.walker_balance_adjustments;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'walker_balance_adjustments'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.walker_balance_adjustments;
+  END IF;
+END $$;

@@ -560,8 +560,12 @@ export default function ClientDashboard({
       flow.screenState === 'active') &&
     matchingUiState === null
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
-  const matchingEmptyTitle = flow.availabilityNotice?.title || 'No providers available right now'
-  const matchingEmptySubtitle = flow.availabilityNotice?.title
+  const shouldShowNoProvidersEmptyState =
+    flow.availabilityNotice?.title === 'No providers available right now'
+  const matchingEmptyTitle = shouldShowNoProvidersEmptyState
+    ? 'No providers available right now'
+    : flow.availabilityNotice?.title || 'No providers available right now'
+  const matchingEmptySubtitle = shouldShowNoProvidersEmptyState
     ? 'Try again in a few minutes'
     : flow.error || 'Try again in a few minutes'
 
@@ -584,6 +588,11 @@ export default function ClientDashboard({
   }, [guidedBookingField])
 
   useEffect(() => {
+    if (shouldShowNoProvidersEmptyState) {
+      setMatchingUiState('empty')
+      return
+    }
+
     if (isSearching) {
       setMatchingUiState('matching')
       return
@@ -596,17 +605,17 @@ export default function ClientDashboard({
 
     setMatchingUiState((current) => {
       if (current !== 'matching') return current
-      if (flow.availabilityNotice || flow.error) return 'empty'
+      if (flow.error) return 'empty'
       if (flow.screenState === 'idle') return null
       return current
     })
   }, [
-    flow.availabilityNotice,
     flow.completionJob,
     flow.error,
     flow.screenState,
     isSearching,
     isTrackingState,
+    shouldShowNoProvidersEmptyState,
   ])
 
   const nearbyWalkers = useNearbyWalkers(
@@ -1875,6 +1884,7 @@ function TrackingCard({
             onClick={onConfirmArrival}
             loading={!!confirmingArrival}
             disabled={!!confirmingArrival}
+            touchSafe
           />
         </div>
       )}

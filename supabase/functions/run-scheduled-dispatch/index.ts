@@ -5,6 +5,7 @@ import {
   getEnv,
   jsonResponse,
 } from '../_shared/dispatch.ts'
+import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
 
 const LEAD_MINUTES = 15
 const DISPATCH_TIMEOUT_SECONDS = 60
@@ -15,6 +16,13 @@ type ActiveAttemptRow = {
 
 type WalkerRow = {
   id: string
+  last_lat: number | null
+  last_lng: number | null
+}
+
+type RatingRow = {
+  to_user_id: string
+  rating: number
 }
 
 type StartDispatchResponse = {
@@ -169,7 +177,7 @@ serve(async (req) => {
         // 🔍 fetch online walkers
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id')
+          .select('id, last_lat, last_lng')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -207,10 +215,60 @@ serve(async (req) => {
           continue
         }
 
-        const ranked = (walkers as WalkerRow[]).map((w, i) => ({
-          walkerId: w.id,
-          score: 1 - i * 0.01,
-          meta: { source: 'run-scheduled-dispatch' },
+        const onlineWalkers = (walkers as WalkerRow[] | null) ?? []
+        const walkerIds = onlineWalkers.map((walker) => walker.id)
+
+        let ratingsByWalker = new Map<string, { total: number; count: number }>()
+        if (walkerIds.length > 0) {
+          const { data: ratingsRows, error: ratingsError } = await supabase
+            .from('ratings')
+            .select('to_user_id, rating')
+            .in('to_user_id', walkerIds)
+
+          if (ratingsError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_walker_ratings_lookup_failed',
+              p_payload: { error: ratingsError.message, retry_later: true },
+            })
+            continue
+          }
+
+          ratingsByWalker = ((ratingsRows as RatingRow[] | null) ?? []).reduce((map, row) => {
+            const current = map.get(row.to_user_id) ?? { total: 0, count: 0 }
+            current.total += row.rating
+            current.count += 1
+            map.set(row.to_user_id, current)
+            return map
+          }, new Map<string, { total: number; count: number }>())
+        }
+
+        const ranked = rankWalkerCandidates(
+          onlineWalkers.map((walker) => {
+            const ratingStats = ratingsByWalker.get(walker.id)
+            return {
+              walkerId: walker.id,
+              distanceKm: null,
+              avgRating:
+                ratingStats && ratingStats.count > 0
+                  ? ratingStats.total / ratingStats.count
+                  : null,
+              reviewCount: ratingStats?.count ?? 0,
+            }
+          }),
+        ).map((candidate) => ({
+          walkerId: candidate.walkerId,
+          score: candidate.score,
+          meta: {
+            source: 'run-scheduled-dispatch',
+            distance_score: candidate.distanceScore,
+            rating_score: candidate.ratingScore,
+            review_count_score: candidate.reviewCountScore,
+            distance_km: candidate.distanceKm,
+            avg_rating: candidate.avgRating,
+            review_count: candidate.reviewCount,
+          },
         }))
 
         await supabase.rpc('log_dispatch_event', {
@@ -220,6 +278,13 @@ serve(async (req) => {
           p_payload: {
             candidate_count: ranked.length,
             timeout_seconds: DISPATCH_TIMEOUT_SECONDS,
+            top_candidates: ranked.slice(0, 5).map((candidate) => ({
+              walker_id: candidate.walkerId,
+              score: candidate.score,
+              distance_score: candidate.meta.distance_score,
+              rating_score: candidate.meta.rating_score,
+              review_count_score: candidate.meta.review_count_score,
+            })),
           },
         })
 

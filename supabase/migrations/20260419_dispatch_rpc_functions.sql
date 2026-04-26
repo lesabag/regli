@@ -97,8 +97,7 @@ BEGIN
   -- Update request
   UPDATE walk_requests SET
     walker_id = p_walker_id,
-    status = 'accepted',
-    updated_at = NOW()
+    status = 'accepted'
   WHERE id = p_request_id;
 
   -- Cancel other pending attempts for this request
@@ -128,6 +127,7 @@ DECLARE
   v_expires_at TIMESTAMPTZ;
   v_candidate_count INTEGER;
   v_next_rank INTEGER;
+  v_next_walker_id UUID;
 BEGIN
   -- Fetch request
   SELECT * INTO v_request FROM walk_requests WHERE id = p_request_id;
@@ -142,9 +142,37 @@ BEGIN
     RETURN;
   END IF;
 
+  UPDATE dispatch_attempts SET
+    status = 'expired',
+    responded_at = NOW(),
+    response_note = 'expired by dispatcher advance',
+    updated_at = NOW()
+  WHERE request_id = p_request_id
+    AND status = 'pending'
+    AND expires_at <= NOW();
+
+  IF EXISTS (
+    SELECT 1
+    FROM dispatch_attempts da
+    WHERE da.request_id = p_request_id
+      AND da.status = 'pending'
+      AND da.expires_at > NOW()
+  ) THEN
+    RETURN QUERY
+    SELECT TRUE, 'Pending attempt still active', da.id, da.attempt_no
+    FROM dispatch_attempts da
+    WHERE da.request_id = p_request_id
+      AND da.status = 'pending'
+      AND da.expires_at > NOW()
+    ORDER BY da.attempt_no DESC
+    LIMIT 1;
+    RETURN;
+  END IF;
+
   -- Get last attempt number
-  SELECT COALESCE(MAX(attempt_no), 0) INTO v_last_attempt_no
-  FROM dispatch_attempts WHERE request_id = p_request_id;
+  SELECT COALESCE(MAX(da.attempt_no), 0) INTO v_last_attempt_no
+  FROM dispatch_attempts da
+  WHERE da.request_id = p_request_id;
 
   v_next_rank := v_last_attempt_no + 1;
 
@@ -155,10 +183,24 @@ BEGIN
   -- If no more candidates, mark as exhausted
   IF v_next_rank > v_candidate_count THEN
     UPDATE walk_requests SET
-      smart_dispatch_state = 'exhausted',
-      updated_at = NOW()
+      smart_dispatch_state = 'exhausted'
     WHERE id = p_request_id;
     RETURN QUERY SELECT FALSE, 'All candidates exhausted', NULL::UUID, NULL::INTEGER;
+    RETURN;
+  END IF;
+
+  SELECT dc.walker_id
+  INTO v_next_walker_id
+  FROM dispatch_candidates dc
+  WHERE dc.request_id = p_request_id
+    AND dc.rank = v_next_rank
+  LIMIT 1;
+
+  IF v_next_walker_id IS NULL THEN
+    UPDATE walk_requests SET
+      smart_dispatch_state = 'idle'
+    WHERE id = p_request_id;
+    RETURN QUERY SELECT FALSE, 'Missing dispatch candidate', NULL::UUID, NULL::INTEGER;
     RETURN;
   END IF;
 
@@ -166,15 +208,14 @@ BEGIN
   v_expires_at := NOW() + (p_timeout_seconds || ' seconds')::INTERVAL;
 
   INSERT INTO dispatch_attempts (
-    request_id, attempt_no, status, expires_at, created_at, updated_at
+    request_id, walker_id, rank, attempt_no, status, expires_at, dispatch_version, created_at, updated_at
   ) VALUES (
-    p_request_id, v_next_rank, 'pending', v_expires_at, NOW(), NOW()
+    p_request_id, v_next_walker_id, v_next_rank, v_next_rank, 'pending', v_expires_at, 1, NOW(), NOW()
   ) RETURNING id INTO v_new_attempt_id;
 
   -- Update request state
   UPDATE walk_requests SET
-    smart_dispatch_state = 'dispatching',
-    updated_at = NOW()
+    smart_dispatch_state = 'dispatching'
   WHERE id = p_request_id;
 
   RETURN QUERY SELECT TRUE, 'Attempt created', v_new_attempt_id, v_next_rank;
@@ -213,4 +254,3 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION public.accept_dispatch_attempt(UUID, UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.advance_dispatch_request(UUID, INTEGER) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.log_dispatch_event(UUID, UUID, TEXT, JSONB) TO authenticated;
-

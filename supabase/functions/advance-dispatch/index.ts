@@ -37,12 +37,22 @@ serve(async (req) => {
     const supabase = createAdminClient()
 
     if (requestId) {
+      console.log('[advance-dispatch] single request advance', {
+        requestId,
+        timeoutSeconds,
+      })
+
       const { data, error } = await supabase.rpc('advance_dispatch_request', {
         p_request_id: requestId,
         p_timeout_seconds: timeoutSeconds,
       })
 
       if (error) {
+        console.error('[advance-dispatch] failed single request advance', {
+          requestId,
+          timeoutSeconds,
+          error: error.message,
+        })
         return jsonResponse(
           500,
           {
@@ -69,10 +79,11 @@ serve(async (req) => {
     const nowIso = new Date().toISOString()
 
     const { data: expiredRows, error: expiredQueryError } = await supabase
-      .from('dispatch_attempts')
-      .select('request_id')
+      .from('active_dispatch_offers')
+      .select('request_id, expires_at, request_status')
       .eq('status', 'pending')
-      .lt('expires_at', nowIso)
+      .eq('request_status', 'open')
+      .lte('expires_at', nowIso)
       .order('expires_at', { ascending: true })
       .limit(limit)
 
@@ -95,10 +106,29 @@ serve(async (req) => {
     const results: Array<Record<string, unknown>> = []
 
     for (const expiredRequestId of uniqueRequestIds) {
+      console.log('[advance-dispatch] batch request advance', {
+        requestId: expiredRequestId,
+        timeoutSeconds,
+      })
+
       const { data, error } = await supabase.rpc('advance_dispatch_request', {
         p_request_id: expiredRequestId,
         p_timeout_seconds: timeoutSeconds,
       })
+
+      if (error) {
+        console.error('[advance-dispatch] failed batch request advance', {
+          requestId: expiredRequestId,
+          timeoutSeconds,
+          error: error.message,
+        })
+      } else {
+        console.log('[advance-dispatch] batch request advance result', {
+          requestId: expiredRequestId,
+          timeoutSeconds,
+          result: data,
+        })
+      }
 
       results.push({
         requestId: expiredRequestId,

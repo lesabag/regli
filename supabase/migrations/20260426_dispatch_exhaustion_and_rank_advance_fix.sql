@@ -5,12 +5,13 @@ CREATE OR REPLACE FUNCTION public.advance_dispatch_request(
 RETURNS TABLE(ok BOOLEAN, message TEXT, attempt_id UUID, attempt_no INTEGER) AS $dispatch_advance$
 DECLARE
   v_request public.walk_requests%ROWTYPE;
-  v_last_attempt_no INTEGER;
+  v_active_attempt public.dispatch_attempts%ROWTYPE;
   v_new_attempt_id UUID;
   v_expires_at TIMESTAMPTZ;
   v_candidate_count INTEGER;
-  v_next_rank INTEGER;
+  v_last_attempt_no INTEGER;
   v_timeout_seconds INTEGER;
+  v_next_candidate public.dispatch_candidates%ROWTYPE;
 BEGIN
   v_timeout_seconds := GREATEST(3, LEAST(60, COALESCE(p_timeout_seconds, 20)));
 
@@ -25,6 +26,15 @@ BEGIN
   END IF;
 
   IF v_request.status <> 'open' THEN
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      NULL,
+      'dispatch_advance_skipped',
+      jsonb_build_object(
+        'reason', 'request_not_open',
+        'request_status', v_request.status
+      )
+    );
     RETURN QUERY SELECT FALSE, 'Request is not open', NULL::UUID, NULL::INTEGER;
     RETURN;
   END IF;
@@ -34,6 +44,16 @@ BEGIN
     SET smart_dispatch_state = 'assigned',
         updated_at = now()
     WHERE id = p_request_id;
+
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      NULL,
+      'dispatch_advance_skipped',
+      jsonb_build_object(
+        'reason', 'request_already_assigned',
+        'walker_id', v_request.walker_id
+      )
+    );
 
     RETURN QUERY SELECT FALSE, 'Request already assigned', NULL::UUID, NULL::INTEGER;
     RETURN;
@@ -48,21 +68,28 @@ BEGIN
     AND status = 'pending'
     AND expires_at <= now();
 
-  IF EXISTS (
-    SELECT 1
-    FROM public.dispatch_attempts
-    WHERE request_id = p_request_id
-      AND status = 'pending'
-      AND expires_at > now()
-  ) THEN
+  SELECT *
+  INTO v_active_attempt
+  FROM public.dispatch_attempts
+  WHERE request_id = p_request_id
+    AND status = 'pending'
+    AND expires_at > now()
+  ORDER BY public.dispatch_attempts.attempt_no DESC
+  LIMIT 1;
+
+  IF v_active_attempt.id IS NOT NULL THEN
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      v_active_attempt.id,
+      'dispatch_advance_pending_still_active',
+      jsonb_build_object(
+        'current_attempt_rank', v_active_attempt.attempt_no,
+        'reason', 'pending_attempt_still_active'
+      )
+    );
+
     RETURN QUERY
-    SELECT TRUE, 'Pending attempt still active', da.id, da.attempt_no
-    FROM public.dispatch_attempts da
-    WHERE da.request_id = p_request_id
-      AND da.status = 'pending'
-      AND da.expires_at > now()
-    ORDER BY da.attempt_no DESC
-    LIMIT 1;
+    SELECT TRUE, 'Pending attempt still active', v_active_attempt.id, v_active_attempt.attempt_no;
     RETURN;
   END IF;
 
@@ -71,12 +98,10 @@ BEGIN
   FROM public.dispatch_attempts da
   WHERE da.request_id = p_request_id;
 
-  v_next_rank := v_last_attempt_no + 1;
-
   SELECT COUNT(*)
   INTO v_candidate_count
-  FROM public.dispatch_candidates
-  WHERE request_id = p_request_id;
+  FROM public.dispatch_candidates dc
+  WHERE dc.request_id = p_request_id;
 
   IF v_candidate_count = 0 THEN
     UPDATE public.walk_requests
@@ -85,11 +110,36 @@ BEGIN
         updated_at = now()
     WHERE id = p_request_id;
 
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      NULL,
+      'dispatch_advance_no_candidates',
+      jsonb_build_object(
+        'candidate_count', 0,
+        'current_attempt_rank', v_last_attempt_no,
+        'reason', 'no_dispatch_candidates'
+      )
+    );
+
     RETURN QUERY SELECT FALSE, 'No candidates available', NULL::UUID, NULL::INTEGER;
     RETURN;
   END IF;
 
-  IF v_next_rank > v_candidate_count THEN
+  SELECT *
+  INTO v_next_candidate
+  FROM public.dispatch_candidates dc
+  WHERE dc.request_id = p_request_id
+    AND dc.rank > v_last_attempt_no
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.dispatch_attempts da
+      WHERE da.request_id = p_request_id
+        AND da.attempt_no = dc.rank
+    )
+  ORDER BY dc.rank ASC, dc.score DESC, dc.walker_id ASC
+  LIMIT 1;
+
+  IF v_next_candidate.id IS NULL THEN
     UPDATE public.walk_requests
     SET smart_dispatch_state = 'exhausted',
         smart_dispatch_completed_at = now(),
@@ -101,7 +151,13 @@ BEGIN
       p_request_id,
       NULL,
       'dispatch_exhausted',
-      jsonb_build_object('candidate_count', v_candidate_count)
+      jsonb_build_object(
+        'candidate_count', v_candidate_count,
+        'current_attempt_rank', v_last_attempt_no,
+        'next_candidate_rank', NULL,
+        'next_walker_id', NULL,
+        'reason', 'no_next_candidate'
+      )
     );
 
     RETURN QUERY SELECT FALSE, 'All candidates exhausted', NULL::UUID, NULL::INTEGER;
@@ -112,17 +168,23 @@ BEGIN
 
   INSERT INTO public.dispatch_attempts (
     request_id,
+    walker_id,
+    rank,
     attempt_no,
     status,
     expires_at,
+    dispatch_version,
     created_at,
     updated_at
   )
   VALUES (
     p_request_id,
-    v_next_rank,
+    v_next_candidate.walker_id,
+    v_next_candidate.rank,
+    v_next_candidate.rank,
     'pending',
     v_expires_at,
+    1,
     now(),
     now()
   )
@@ -130,7 +192,7 @@ BEGIN
 
   UPDATE public.walk_requests
   SET smart_dispatch_state = 'dispatching',
-      smart_dispatch_cursor = v_next_rank,
+      smart_dispatch_cursor = v_next_candidate.rank,
       smart_dispatch_expires_at = v_expires_at,
       smart_dispatch_last_error = NULL,
       updated_at = now()
@@ -140,10 +202,17 @@ BEGIN
     p_request_id,
     v_new_attempt_id,
     'dispatch_attempt_created',
-    jsonb_build_object('attempt_no', v_next_rank, 'expires_at', v_expires_at)
+    jsonb_build_object(
+      'current_attempt_rank', v_last_attempt_no,
+      'next_candidate_rank', v_next_candidate.rank,
+      'next_walker_id', v_next_candidate.walker_id,
+      'dispatch_version', 1,
+      'score', v_next_candidate.score,
+      'expires_at', v_expires_at
+    )
   );
 
-  RETURN QUERY SELECT TRUE, 'Attempt created', v_new_attempt_id, v_next_rank;
+  RETURN QUERY SELECT TRUE, 'Attempt created', v_new_attempt_id, v_next_candidate.rank;
 END;
 $dispatch_advance$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -177,6 +246,17 @@ BEGIN
     AND rank = v_attempt.attempt_no;
 
   IF v_candidate.id IS NULL THEN
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      p_attempt_id,
+      'dispatch_decline_rejected',
+      jsonb_build_object(
+        'current_attempt_rank', v_attempt.attempt_no,
+        'walker_id', p_walker_id,
+        'reason', 'walker_not_assigned_to_attempt'
+      )
+    );
+
     RETURN QUERY SELECT FALSE, 'Walker is not assigned to this attempt', NULL::UUID, NULL::INTEGER;
     RETURN;
   END IF;
@@ -193,7 +273,21 @@ BEGIN
       p_request_id,
       p_attempt_id,
       'dispatch_declined',
-      jsonb_build_object('walker_id', p_walker_id)
+      jsonb_build_object(
+        'walker_id', p_walker_id,
+        'current_attempt_rank', v_attempt.attempt_no
+      )
+    );
+  ELSE
+    PERFORM public.log_dispatch_event(
+      p_request_id,
+      p_attempt_id,
+      'dispatch_decline_ignored',
+      jsonb_build_object(
+        'walker_id', p_walker_id,
+        'current_attempt_rank', v_attempt.attempt_no,
+        'attempt_status', v_attempt.status
+      )
     );
   END IF;
 
@@ -201,6 +295,19 @@ BEGIN
   INTO v_next
   FROM public.advance_dispatch_request(p_request_id, p_timeout_seconds)
   LIMIT 1;
+
+  PERFORM public.log_dispatch_event(
+    p_request_id,
+    p_attempt_id,
+    'dispatch_decline_advanced',
+    jsonb_build_object(
+      'current_attempt_rank', v_attempt.attempt_no,
+      'next_candidate_rank', v_next.attempt_no,
+      'next_attempt_id', v_next.attempt_id,
+      'message', v_next.message,
+      'ok', v_next.ok
+    )
+  );
 
   RETURN QUERY
   SELECT

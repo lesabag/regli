@@ -46,6 +46,13 @@ serve(async (req) => {
 
     const supabase = createAdminClient()
 
+    console.log('[decline-dispatch] request received', {
+      requestId,
+      attemptId,
+      walkerId: userId,
+      timeoutSeconds,
+    })
+
     const { data, error } = await supabase.rpc('decline_dispatch_attempt', {
       p_request_id: requestId,
       p_attempt_id: attemptId,
@@ -54,6 +61,13 @@ serve(async (req) => {
     })
 
     if (error) {
+      console.error('[decline-dispatch] failed', {
+        requestId,
+        attemptId,
+        walkerId: userId,
+        timeoutSeconds,
+        error: error.message,
+      })
       return jsonResponse(
         500,
         {

@@ -18,6 +18,34 @@ type StartDispatchBody = {
 const SCHEDULED_DISPATCH_LEAD_MINUTES = 15
 const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
 
+function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!meta) return {}
+  const source = typeof meta.source === 'string' ? meta.source : null
+  return source ? { source } : {}
+}
+
+function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
+  const meta = candidate.meta ?? {}
+  return {
+    rank,
+    walkerId: candidate.walkerId,
+    score: candidate.score,
+    distance_score:
+      typeof meta.distance_score === 'number' ? meta.distance_score : null,
+    rating_score:
+      typeof meta.rating_score === 'number' ? meta.rating_score : null,
+    review_count_score:
+      typeof meta.review_count_score === 'number' ? meta.review_count_score : null,
+    distance_km:
+      typeof meta.distance_km === 'number' ? meta.distance_km : null,
+    avg_rating:
+      typeof meta.avg_rating === 'number' ? meta.avg_rating : null,
+    review_count:
+      typeof meta.review_count === 'number' ? meta.review_count : null,
+    source: typeof meta.source === 'string' ? meta.source : null,
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -39,6 +67,9 @@ serve(async (req) => {
       requestId,
       timeoutSeconds,
       rankedCandidateCount: rankedCandidates.length,
+      rankedCandidateScores: rankedCandidates.slice(0, 10).map((candidate, index) =>
+        buildCandidateScoreLog(candidate, index + 1)
+      ),
       resetExisting,
     })
 
@@ -301,7 +332,7 @@ serve(async (req) => {
       walker_id: candidate.walkerId,
       rank: index + 1,
       score: candidate.score,
-      meta: candidate.meta ?? {},
+      meta: buildPersistedMeta(candidate.meta),
     }))
 
     console.log('[start-dispatch] inserting candidates', {
@@ -309,6 +340,9 @@ serve(async (req) => {
       requestId,
       candidateCount: candidateRows.length,
       candidateWalkerIds: candidateRows.map((row) => row.walker_id),
+      candidateScoreBreakdown: rankedCandidates.slice(0, 10).map((candidate, index) =>
+        buildCandidateScoreLog(candidate, index + 1)
+      ),
     })
 
     const { error: insertCandidatesError } = await supabase

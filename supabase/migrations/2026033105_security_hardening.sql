@@ -13,10 +13,12 @@ ALTER TABLE public.walk_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.walk_requests FORCE ROW LEVEL SECURITY;
 
 -- Client can read own jobs
+DROP POLICY IF EXISTS "wr_client_select" ON public.walk_requests;
 CREATE POLICY "wr_client_select" ON public.walk_requests
   FOR SELECT USING (client_id = auth.uid());
 
 -- Walker can read: own assigned jobs, jobs targeted at them, open+paid jobs
+DROP POLICY IF EXISTS "wr_walker_select" ON public.walk_requests;
 CREATE POLICY "wr_walker_select" ON public.walk_requests
   FOR SELECT USING (
     walker_id = auth.uid()
@@ -25,12 +27,14 @@ CREATE POLICY "wr_walker_select" ON public.walk_requests
   );
 
 -- Admin can read all
+DROP POLICY IF EXISTS "wr_admin_select" ON public.walk_requests;
 CREATE POLICY "wr_admin_select" ON public.walk_requests
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
   );
 
 -- Client can update own jobs (payment authorization)
+DROP POLICY IF EXISTS "wr_client_update" ON public.walk_requests;
 CREATE POLICY "wr_client_update" ON public.walk_requests
   FOR UPDATE
   USING (client_id = auth.uid())
@@ -38,6 +42,7 @@ CREATE POLICY "wr_client_update" ON public.walk_requests
 
 -- Walker can update own assigned jobs (location, release)
 -- or accept open jobs (walker_id is still NULL at accept-time)
+DROP POLICY IF EXISTS "wr_walker_update" ON public.walk_requests;
 CREATE POLICY "wr_walker_update" ON public.walk_requests
   FOR UPDATE
   USING (
@@ -46,6 +51,7 @@ CREATE POLICY "wr_walker_update" ON public.walk_requests
   );
 
 -- Admin can do everything on walk_requests
+DROP POLICY IF EXISTS "wr_admin_all" ON public.walk_requests;
 CREATE POLICY "wr_admin_all" ON public.walk_requests
   FOR ALL USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
@@ -62,16 +68,19 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles FORCE ROW LEVEL SECURITY;
 
 -- Authenticated users can read all profiles (needed for walker list, names)
+DROP POLICY IF EXISTS "profiles_select_authenticated" ON public.profiles;
 CREATE POLICY "profiles_select_authenticated" ON public.profiles
   FOR SELECT USING (auth.role() = 'authenticated');
 
 -- Users can update their own profile only
+DROP POLICY IF EXISTS "profiles_update_own" ON public.profiles;
 CREATE POLICY "profiles_update_own" ON public.profiles
   FOR UPDATE
   USING (id = auth.uid())
   WITH CHECK (id = auth.uid());
 
 -- Admin can do everything on profiles
+DROP POLICY IF EXISTS "profiles_admin_all" ON public.profiles;
 CREATE POLICY "profiles_admin_all" ON public.profiles
   FOR ALL USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')

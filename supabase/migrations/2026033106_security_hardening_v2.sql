@@ -19,6 +19,7 @@ CREATE POLICY "profiles_update_own" ON public.profiles
   );
 
 -- Block admin on INSERT (signup creates profiles via client-side upsert)
+DROP POLICY IF EXISTS "profiles_insert_own" ON public.profiles;
 CREATE POLICY "profiles_insert_own" ON public.profiles
   FOR INSERT
   WITH CHECK (

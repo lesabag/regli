@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
+import { distanceKm, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
@@ -78,6 +79,8 @@ type WalkRequestRow = {
   walker_lng: number | null
   last_location_update: string | null
   payment_status?: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded' | string | null
+  smart_dispatch_last_error?: string | null
+  smart_dispatch_completed_at?: string | null
   paid_at?: string | null
   created_at?: string | null
   completed_at?: string | null
@@ -129,13 +132,24 @@ type TipRow = {
   created_at: string
 }
 
+type DispatchWalkerProfile = {
+  id: string
+  last_lat: number | null
+  last_lng: number | null
+}
+
+type DispatchRatingRow = {
+  to_user_id: string
+  rating: number
+}
+
 type QueryResult<T> = {
   data: T | null
   error: { message: string } | null
 }
 
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
+  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
@@ -247,8 +261,12 @@ function isActiveUiCandidate(job: WalkRequestRow): boolean {
 
 function isExhaustedUiCandidate(job: WalkRequestRow): boolean {
   if (!isCurrentClientJob(job)) return false
-  if (job.status !== 'awaiting_payment' && job.status !== 'open' && job.status !== 'accepted') return false
-  return job.smart_dispatch_state === 'exhausted'
+  if (job.smart_dispatch_state === 'exhausted') return true
+  return (
+    job.status === 'cancelled' &&
+    typeof job.smart_dispatch_last_error === 'string' &&
+    job.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted')
+  )
 }
 
 function getNewestActiveRequest(
@@ -287,6 +305,16 @@ function getNewestExhaustedRequest(
     .sort((a, b) => getCreatedTime(b) - getCreatedTime(a))
 
   return candidates[0] ?? null
+}
+
+function isDispatchUnavailableMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase()
+  return (
+    normalized.includes('no walkers online') ||
+    normalized.includes('no candidates available') ||
+    normalized.includes('all candidates exhausted') ||
+    normalized.includes('no providers available')
+  )
 }
 
 function isRecentCompletion(job: WalkRequestRow): boolean {
@@ -636,9 +664,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const showDispatchExhaustedMessage = useCallback((jobId: string) => {
     if (exhaustedDispatchNotifiedRef.current.has(jobId)) return
     exhaustedDispatchNotifiedRef.current.add(jobId)
+    setError(null)
+    setSuccessMessage(null)
     setAvailabilityNotice({
       title: 'No providers available right now',
-      subtitle: 'Please try again soon or schedule for later.',
+      subtitle: 'Try again in a few minutes',
     })
   }, [])
 
@@ -1332,6 +1362,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
           if (updated.status === 'cancelled') {
             if (updated.id === currentJobId) {
+              if (
+                typeof updated.smart_dispatch_last_error === 'string' &&
+                updated.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted')
+              ) {
+                showDispatchExhaustedMessage(updated.id)
+              }
               clearActiveState()
             }
           }
@@ -1833,7 +1869,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       if (shouldSearchNow) {
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id')
+          .select('id, last_lat, last_lng')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -1841,12 +1877,64 @@ export function useClientFlow(profileId: string, _profileName: string) {
           throw new Error(walkersError.message)
         }
 
-        const ranked =
-          walkers?.map((walker, index) => ({
-            walkerId: walker.id,
-            score: 1 - index * 0.01,
-            meta: {},
-          })) ?? []
+        const onlineWalkers = (walkers as DispatchWalkerProfile[] | null) ?? []
+        const walkerIds = onlineWalkers.map((walker) => walker.id)
+
+        let ratingsByWalker = new Map<string, { total: number; count: number }>()
+        if (walkerIds.length > 0) {
+          const { data: ratingsRows, error: ratingsError } = await supabase
+            .from('ratings')
+            .select('to_user_id, rating')
+            .in('to_user_id', walkerIds)
+
+          if (ratingsError) {
+            throw new Error(ratingsError.message)
+          }
+
+          ratingsByWalker = ((ratingsRows as DispatchRatingRow[] | null) ?? []).reduce((map, row) => {
+            const current = map.get(row.to_user_id) ?? { total: 0, count: 0 }
+            current.total += row.rating
+            current.count += 1
+            map.set(row.to_user_id, current)
+            return map
+          }, new Map<string, { total: number; count: number }>())
+        }
+
+        const ranked = rankWalkerCandidates(
+          onlineWalkers.map((walker) => {
+            const ratingStats = ratingsByWalker.get(walker.id)
+            const hasWalkerLocation =
+              userLocation &&
+              typeof walker.last_lat === 'number' &&
+              Number.isFinite(walker.last_lat) &&
+              typeof walker.last_lng === 'number' &&
+              Number.isFinite(walker.last_lng)
+
+            return {
+              walkerId: walker.id,
+              distanceKm: hasWalkerLocation
+                ? distanceKm(userLocation![0], userLocation![1], walker.last_lat!, walker.last_lng!)
+                : null,
+              avgRating:
+                ratingStats && ratingStats.count > 0
+                  ? ratingStats.total / ratingStats.count
+                  : null,
+              reviewCount: ratingStats?.count ?? 0,
+            }
+          }),
+        ).map((candidate) => ({
+          walkerId: candidate.walkerId,
+          score: candidate.score,
+          meta: {
+            source: 'useClientFlow',
+            distance_score: candidate.distanceScore,
+            rating_score: candidate.ratingScore,
+            review_count_score: candidate.reviewCountScore,
+            distance_km: candidate.distanceKm,
+            avg_rating: candidate.avgRating,
+            review_count: candidate.reviewCount,
+          },
+        }))
 
         if (ranked.length === 0) {
           throw new Error('No walkers online')
@@ -1878,8 +1966,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
       void fetchCurrentAndLists()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to request walk'
-      setError(message)
-      setAvailabilityNotice(null)
+      if (isDispatchUnavailableMessage(message)) {
+        setError(null)
+        setAvailabilityNotice({
+          title: 'No providers available right now',
+          subtitle: 'Try again in a few minutes',
+        })
+      } else {
+        setError(message)
+        setAvailabilityNotice(null)
+      }
       setScreenState('idle')
       setSearchStartTime(null)
       setCurrentJob(null)

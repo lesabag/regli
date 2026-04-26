@@ -20,9 +20,9 @@ WITH ranked_active AS (
       OR booking_timing = 'asap'
       OR dispatch_state = 'dispatched'
     )
-    AND COALESCE(dispatch_state::text, '') NOT IN ('cancelled', 'expired')
-    AND COALESCE(smart_dispatch_state::text, '') NOT IN ('cancelled', 'exhausted')
-    AND COALESCE(payment_status::text, '') NOT IN ('failed', 'refunded')
+    AND (dispatch_state IS NULL OR dispatch_state NOT IN ('cancelled', 'expired'))
+    AND (smart_dispatch_state IS NULL OR smart_dispatch_state NOT IN ('cancelled', 'exhausted'))
+    AND (payment_status IS NULL OR payment_status NOT IN ('failed', 'refunded'))
 )
 UPDATE public.walk_requests wr
 SET
@@ -47,6 +47,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_walk_requests_one_active_per_client
       OR booking_timing = 'asap'
       OR dispatch_state = 'dispatched'
     )
-    AND COALESCE(dispatch_state::text, '') NOT IN ('cancelled', 'expired')
-    AND COALESCE(smart_dispatch_state::text, '') NOT IN ('cancelled', 'exhausted')
-    AND COALESCE(payment_status::text, '') NOT IN ('failed', 'refunded');
+    AND (dispatch_state IS NULL OR dispatch_state NOT IN ('cancelled', 'expired'))
+    AND (smart_dispatch_state IS NULL OR smart_dispatch_state NOT IN ('cancelled', 'exhausted'))
+    AND (payment_status IS NULL OR payment_status NOT IN ('failed', 'refunded'));

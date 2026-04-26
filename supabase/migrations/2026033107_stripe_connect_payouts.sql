@@ -23,9 +23,9 @@ CREATE TABLE IF NOT EXISTS public.walker_payouts (
   UNIQUE(job_id)  -- one transfer per job
 );
 
-CREATE INDEX idx_walker_payouts_walker_id ON public.walker_payouts(walker_id);
-CREATE INDEX idx_walker_payouts_status ON public.walker_payouts(status);
-CREATE INDEX idx_walker_payouts_stripe_transfer_id ON public.walker_payouts(stripe_transfer_id);
+CREATE INDEX IF NOT EXISTS idx_walker_payouts_walker_id ON public.walker_payouts(walker_id);
+CREATE INDEX IF NOT EXISTS idx_walker_payouts_status ON public.walker_payouts(status);
+CREATE INDEX IF NOT EXISTS idx_walker_payouts_stripe_transfer_id ON public.walker_payouts(stripe_transfer_id);
 
 -- stripe_events: idempotent webhook event log
 CREATE TABLE IF NOT EXISTS public.stripe_events (
@@ -36,13 +36,14 @@ CREATE TABLE IF NOT EXISTS public.stripe_events (
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_stripe_events_type ON public.stripe_events(type);
+CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON public.stripe_events(type);
 
 -- RLS
 ALTER TABLE public.walker_payouts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stripe_events ENABLE ROW LEVEL SECURITY;
 
 -- Walkers can read their own payouts
+DROP POLICY IF EXISTS "walker_payouts_select_own" ON public.walker_payouts;
 CREATE POLICY "walker_payouts_select_own" ON public.walker_payouts
   FOR SELECT USING (walker_id = auth.uid());
 
@@ -59,7 +60,18 @@ GRANT INSERT, UPDATE ON public.walker_payouts TO service_role;
 GRANT INSERT ON public.stripe_events TO service_role;
 
 -- Add walker_payouts to realtime publication
-ALTER PUBLICATION supabase_realtime ADD TABLE public.walker_payouts;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'walker_payouts'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.walker_payouts;
+  END IF;
+END $$;;
 
 -- Add details_submitted field to profiles if missing
 DO $$

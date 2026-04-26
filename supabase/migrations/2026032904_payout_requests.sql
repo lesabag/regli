@@ -9,21 +9,24 @@ CREATE TABLE IF NOT EXISTS public.payout_requests (
   processed_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_payout_requests_walker_id ON public.payout_requests(walker_id);
-CREATE INDEX idx_payout_requests_status ON public.payout_requests(status);
-CREATE INDEX idx_payout_requests_created_at ON public.payout_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payout_requests_walker_id ON public.payout_requests(walker_id);
+CREATE INDEX IF NOT EXISTS idx_payout_requests_status ON public.payout_requests(status);
+CREATE INDEX IF NOT EXISTS idx_payout_requests_created_at ON public.payout_requests(created_at DESC);
 
 ALTER TABLE public.payout_requests ENABLE ROW LEVEL SECURITY;
 
 -- Walker can read own payout requests
+DROP POLICY IF EXISTS "payout_requests_walker_select" ON public.payout_requests;
 CREATE POLICY "payout_requests_walker_select" ON public.payout_requests
   FOR SELECT USING (walker_id = auth.uid());
 
 -- Walker can insert own payout requests
+DROP POLICY IF EXISTS "payout_requests_walker_insert" ON public.payout_requests;
 CREATE POLICY "payout_requests_walker_insert" ON public.payout_requests
   FOR INSERT WITH CHECK (walker_id = auth.uid());
 
 -- Admin can read all payout requests
+DROP POLICY IF EXISTS "payout_requests_admin_select" ON public.payout_requests;
 CREATE POLICY "payout_requests_admin_select" ON public.payout_requests
   FOR SELECT USING (
     EXISTS (
@@ -33,6 +36,7 @@ CREATE POLICY "payout_requests_admin_select" ON public.payout_requests
   );
 
 -- Admin can update all payout requests
+DROP POLICY IF EXISTS "payout_requests_admin_update" ON public.payout_requests;
 CREATE POLICY "payout_requests_admin_update" ON public.payout_requests
   FOR UPDATE USING (
     EXISTS (

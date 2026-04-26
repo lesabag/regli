@@ -14,9 +14,11 @@ CREATE TABLE IF NOT EXISTS public.walker_wallets (
 
 ALTER TABLE public.walker_wallets ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "wallet_select_own" ON public.walker_wallets;
 CREATE POLICY wallet_select_own ON public.walker_wallets
   FOR SELECT USING (walker_id = auth.uid());
 
+DROP POLICY IF EXISTS "wallet_select_admin" ON public.walker_wallets;
 CREATE POLICY wallet_select_admin ON public.walker_wallets
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
@@ -36,15 +38,17 @@ CREATE TABLE IF NOT EXISTS public.wallet_transactions (
   UNIQUE (walker_id, job_id, type)
 );
 
-CREATE INDEX idx_wallet_tx_walker ON public.wallet_transactions (walker_id);
-CREATE INDEX idx_wallet_tx_job ON public.wallet_transactions (job_id);
-CREATE INDEX idx_wallet_tx_created ON public.wallet_transactions (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wallet_tx_walker ON public.wallet_transactions (walker_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_tx_job ON public.wallet_transactions (job_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_tx_created ON public.wallet_transactions (created_at DESC);
 
 ALTER TABLE public.wallet_transactions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "wallet_tx_select_own" ON public.wallet_transactions;
 CREATE POLICY wallet_tx_select_own ON public.wallet_transactions
   FOR SELECT USING (walker_id = auth.uid());
 
+DROP POLICY IF EXISTS "wallet_tx_select_admin" ON public.wallet_transactions;
 CREATE POLICY wallet_tx_select_admin ON public.wallet_transactions
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
