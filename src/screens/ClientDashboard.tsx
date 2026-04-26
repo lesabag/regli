@@ -1266,7 +1266,7 @@ export default function ClientDashboard({
                         ? 'Add a card'
                         : flow.bookingTiming === 'scheduled'
                           ? 'Schedule walk'
-                          : 'Find walker'
+                          : 'Find nearby providers'
                 }
                 onClick={handleFindWalker}
                 loading={flow.loading || flow.cardLoading}

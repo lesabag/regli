@@ -330,9 +330,9 @@ export default function AuthScreen({
                 />
               </div>
               <div style={eyebrowStyle}>Welcome</div>
-              <h1 style={titleStyle}>Premium service booking, right where you are.</h1>
+              <h1 style={titleStyle}>Book trusted services in minutes</h1>
               <p style={subtitleStyle}>
-                Discover trusted providers, book in minutes, and keep every step of the service flow in one calm place.
+                Choose a service, confirm your details, and we’ll find a trusted provider nearby.
               </p>
 
               <div style={featureRowStyle}>

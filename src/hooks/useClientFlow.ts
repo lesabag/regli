@@ -326,6 +326,10 @@ function bookingDraftStorageKey(profileId: string): string {
   return `regli_client_last_booking_${profileId}`
 }
 
+function reusableServiceNameStorageKey(profileId: string): string {
+  return `regli_client_reusable_service_name_${profileId}`
+}
+
 function isFutureScheduledJob(job: WalkRequestRow): boolean {
   if (job.booking_timing !== 'scheduled') return false
   if (job.status === 'completed' || job.status === 'cancelled') return false
@@ -438,6 +442,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const lastAutoLocationRef = useRef<string>('')
   const lastGeocodeCoordsRef = useRef<[number, number] | null>(null)
   const latestResolvedLocationRef = useRef<string>('')
+  const reusableServiceNameRef = useRef<string>('')
+  const reusableServiceNameAutofilledRef = useRef(false)
 
   useEffect(() => {
     try {
@@ -479,6 +485,47 @@ export function useClientFlow(profileId: string, _profileName: string) {
       // noop
     }
   }, [profileId])
+
+  useEffect(() => {
+    reusableServiceNameAutofilledRef.current = false
+    try {
+      reusableServiceNameRef.current =
+        window.localStorage.getItem(reusableServiceNameStorageKey(profileId))?.trim() ?? ''
+    } catch {
+      reusableServiceNameRef.current = ''
+    }
+  }, [profileId])
+
+  useEffect(() => {
+    if (reusableServiceNameAutofilledRef.current) return
+    if (screenState !== 'idle') return
+    if (currentJob) return
+    if (dogName.trim()) return
+
+    const reusableName = reusableServiceNameRef.current.trim()
+    if (!reusableName) return
+
+    reusableServiceNameAutofilledRef.current = true
+    _setDogName((current) => current.trim() || reusableName)
+    try {
+      const key = bookingDraftStorageKey(profileId)
+      const currentRaw = window.localStorage.getItem(key)
+      const current = currentRaw ? (JSON.parse(currentRaw) as Partial<LastBookingDraft>) : {}
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          dogName: reusableName,
+          location: typeof current.location === 'string' ? current.location : '',
+          duration:
+            current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
+              ? current.duration
+              : '20min',
+        } satisfies LastBookingDraft),
+      )
+    } catch {
+      // noop
+    }
+  }, [currentJob, dogName, profileId, screenState])
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -638,6 +685,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 : '20min',
         }
         window.localStorage.setItem(key, JSON.stringify(next))
+      } catch {
+        // noop
+      }
+    },
+    [profileId],
+  )
+
+  const saveReusableServiceName = useCallback(
+    (value: string) => {
+      const normalized = value.trim()
+      if (!normalized) return
+      reusableServiceNameRef.current = normalized
+      try {
+        window.localStorage.setItem(reusableServiceNameStorageKey(profileId), normalized)
       } catch {
         // noop
       }
@@ -1729,6 +1790,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const jobId = response.data.jobId
+      saveReusableServiceName(dogName)
       const durationMinutes = durationToMinutes(duration)
       const shouldSearchNow = bookingTiming === 'asap'
 
@@ -1837,6 +1899,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     savedCard,
     scheduledFor,
     stripeCustomerId,
+    saveReusableServiceName,
   ])
 
   return {
