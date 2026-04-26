@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { AppRole } from '../hooks/useAuth'
 import { formatShortAddress } from '../utils/addressFormat'
+import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
+import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
+import customerCharacterImage from '../assets/onboarding/customer-character.jpg'
+import mapPreviewImage from '../assets/onboarding/map-preview.jpg'
 
 interface AuthScreenProps {
   onSignIn: (args: { email: string; password: string }) => Promise<{ ok: boolean }>
@@ -25,14 +29,9 @@ type ServiceOption = {
 
 const SERVICE_OPTIONS: ServiceOption[] = [
   { id: 'dog-walking', icon: '🐾', label: 'Dog Walking' },
-  { id: 'pet-sitting', icon: '🏡', label: 'Pet Sitting' },
-  { id: 'home-cleaning', icon: '🧼', label: 'Home Cleaning' },
-  { id: 'handyman', icon: '🛠️', label: 'Handyman' },
-  { id: 'elderly-care', icon: '🤝', label: 'Elderly Care' },
-  { id: 'other', icon: '✨', label: 'Other' },
 ]
 
-const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'auth']
+const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'location', 'auth']
 
 function getStepIndex(mode: OnboardingMode, step: SignupStep) {
   if (mode === 'signin') return SIGNUP_STEPS.indexOf('auth')
@@ -179,6 +178,16 @@ export default function AuthScreen({
       return
     }
 
+    if (signupStep === 'location') {
+      setSignupStep('role')
+      return
+    }
+
+    if (signupStep === 'auth') {
+      setSignupStep('location')
+      return
+    }
+
     const currentIndex = SIGNUP_STEPS.indexOf(signupStep)
     if (currentIndex <= 0) {
       setMode('welcome')
@@ -204,7 +213,7 @@ export default function AuthScreen({
     }
 
     if (signupStep === 'role') {
-      setSignupStep('service')
+      setSignupStep('location')
       return
     }
 
@@ -311,6 +320,15 @@ export default function AuthScreen({
           >
           {mode === 'welcome' && (
             <>
+              <div style={welcomeHeroWrapStyle}>
+                <img
+                  src={welcomeHeroImage}
+                  alt="Premium onboarding welcome illustration"
+                  style={welcomeHeroImageStyle}
+                  decoding="async"
+                  fetchPriority="high"
+                />
+              </div>
               <div style={eyebrowStyle}>Welcome</div>
               <h1 style={titleStyle}>Premium service booking, right where you are.</h1>
               <p style={subtitleStyle}>
@@ -335,6 +353,8 @@ export default function AuthScreen({
                   description="Offer services, get booked, and earn on your time."
                   selected={role === 'walker'}
                   icon="🧑‍💼"
+                  imageSrc={providerCharacterImage}
+                  imageAlt="Provider onboarding character"
                   onClick={() => setRole('walker')}
                 />
                 <RoleCard
@@ -342,6 +362,8 @@ export default function AuthScreen({
                   description="Find trusted providers and book services with ease."
                   selected={role === 'client'}
                   icon="✨"
+                  imageSrc={customerCharacterImage}
+                  imageAlt="Customer onboarding character"
                   onClick={() => setRole('client')}
                 />
               </div>
@@ -380,7 +402,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'location' && (
             <>
-              <div style={eyebrowStyle}>Step 3</div>
+              <div style={eyebrowStyle}>Step 2</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 We’ll use this to tailor nearby availability and a smoother first experience.
@@ -388,6 +410,14 @@ export default function AuthScreen({
 
               <div style={locationCardStyle}>
                 <div style={locationMapStyle}>
+                  <img
+                    src={mapPreviewImage}
+                    alt="Map preview"
+                    loading="lazy"
+                    decoding="async"
+                    style={locationPreviewImageStyle}
+                  />
+                  <div style={locationMapImageOverlayStyle} />
                   <div style={locationMapGridStyle} />
                   <div style={locationMapRouteStyle} />
                   <div style={locationMapPinStyle}>📍</div>
@@ -423,7 +453,7 @@ export default function AuthScreen({
 
           {currentStep === 'auth' && (
             <>
-              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 4'}</div>
+              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 3'}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 {mode === 'signin'
@@ -581,12 +611,16 @@ function RoleCard({
   description,
   selected,
   icon,
+  imageSrc,
+  imageAlt,
   onClick,
 }: {
   title: string
   description: string
   selected: boolean
   icon: string
+  imageSrc: string
+  imageAlt: string
   onClick: () => void
 }) {
   return (
@@ -598,12 +632,25 @@ function RoleCard({
         ...(selected ? roleCardSelectedStyle : null),
       }}
     >
-      <div style={roleCardTopStyle}>
-        <div style={roleIconStyle}>{icon}</div>
-        {selected ? <span style={checkBadgeStyle}>✓</span> : null}
+      <div style={roleCardImageWrapStyle}>
+        <img
+          src={imageSrc}
+          alt={imageAlt}
+          loading="lazy"
+          decoding="async"
+          style={roleCardImageStyle}
+        />
       </div>
-      <div style={roleTitleStyle}>{title}</div>
-      <div style={roleDescriptionStyle}>{description}</div>
+      <div style={roleCardBodyStyle}>
+        <div style={roleCardTopStyle}>
+          <div style={roleCardTitleRowStyle}>
+            <div style={roleIconStyle}>{icon}</div>
+            <div style={roleTitleStyle}>{title}</div>
+          </div>
+          {selected ? <span style={checkBadgeStyle}>✓</span> : null}
+        </div>
+        <div style={roleDescriptionStyle}>{description}</div>
+      </div>
     </button>
   )
 }
@@ -722,8 +769,8 @@ const shellStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'space-between',
-  padding: 'calc(env(safe-area-inset-top, 0px) + 18px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px)',
-  gap: 14,
+  padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px calc(env(safe-area-inset-bottom, 0px) + 14px)',
+  gap: 10,
   maxWidth: 460,
   margin: '0 auto',
   boxSizing: 'border-box',
@@ -732,7 +779,7 @@ const shellStyle: CSSProperties = {
 
 const heroStyle: CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 8,
 }
 
 const brandRowStyle: CSSProperties = {
@@ -789,12 +836,12 @@ const stepDotActiveStyle: CSSProperties = {
 const cardStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
-  borderRadius: 28,
+  borderRadius: 26,
   background: 'rgba(255,255,255,0.86)',
   backdropFilter: 'blur(16px)',
   border: '1px solid rgba(255,255,255,0.70)',
   boxShadow: '0 24px 60px rgba(45, 68, 126, 0.14)',
-  padding: 20,
+  padding: 16,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -802,7 +849,7 @@ const cardStyle: CSSProperties = {
 
 const cardContentStyle: CSSProperties = {
   display: 'grid',
-  gap: 14,
+  gap: 10,
   alignContent: 'start',
   minHeight: 0,
 }
@@ -823,7 +870,7 @@ const eyebrowStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 30,
+  fontSize: 28,
   lineHeight: 1.04,
   fontWeight: 900,
   color: '#0F172A',
@@ -831,15 +878,34 @@ const titleStyle: CSSProperties = {
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13.5,
-  lineHeight: 1.5,
+  fontSize: 13,
+  lineHeight: 1.45,
   color: '#5E6B83',
+}
+
+const welcomeHeroWrapStyle: CSSProperties = {
+  width: '100%',
+  maxHeight: 156,
+  minHeight: 132,
+  display: 'grid',
+  placeItems: 'center',
+  padding: '2px 0 0',
+  boxSizing: 'border-box',
+}
+
+const welcomeHeroImageStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  maxHeight: 156,
+  objectFit: 'contain',
+  objectPosition: 'center',
+  display: 'block',
 }
 
 const featureRowStyle: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: 8,
+  gap: 6,
 }
 
 const socialStackStyle: CSSProperties = {
@@ -902,18 +968,18 @@ const comingSoonPillStyle: CSSProperties = {
 }
 
 const featurePillStyle: CSSProperties = {
-  padding: '9px 12px',
+  padding: '8px 11px',
   borderRadius: 999,
   background: 'rgba(255,255,255,0.82)',
   color: '#31405D',
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 700,
   border: '1px solid rgba(91, 124, 250, 0.14)',
 }
 
 const optionStackStyle: CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 8,
 }
 
 const roleCardStyle: CSSProperties = {
@@ -922,9 +988,10 @@ const roleCardStyle: CSSProperties = {
   border: '1px solid rgba(145, 164, 196, 0.24)',
   background: '#FFFFFF',
   borderRadius: 22,
-  padding: 16,
-  display: 'grid',
-  gap: 8,
+  padding: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
   cursor: 'pointer',
   transition: 'all 180ms ease',
 }
@@ -939,27 +1006,63 @@ const roleCardTopStyle: CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
+  gap: 10,
+}
+
+const roleCardBodyStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'grid',
+  gap: 6,
+}
+
+const roleCardImageWrapStyle: CSSProperties = {
+  width: 84,
+  minWidth: 84,
+  height: 84,
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, rgba(239,244,255,0.92) 0%, rgba(248,251,255,0.96) 100%)',
+  border: '1px solid rgba(145, 164, 196, 0.14)',
+  display: 'grid',
+  placeItems: 'center',
+  overflow: 'hidden',
+}
+
+const roleCardImageStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'contain',
+  objectPosition: 'center',
+  display: 'block',
+}
+
+const roleCardTitleRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
 }
 
 const roleIconStyle: CSSProperties = {
-  width: 42,
-  height: 42,
-  borderRadius: 16,
+  width: 34,
+  height: 34,
+  borderRadius: 12,
   background: '#EEF4FF',
   display: 'grid',
   placeItems: 'center',
-  fontSize: 20,
+  fontSize: 16,
+  flexShrink: 0,
 }
 
 const roleTitleStyle: CSSProperties = {
-  fontSize: 17,
+  fontSize: 16,
   fontWeight: 800,
   color: '#0F172A',
 }
 
 const roleDescriptionStyle: CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
+  fontSize: 12.5,
+  lineHeight: 1.4,
   color: '#5E6B83',
 }
 
@@ -1003,27 +1106,44 @@ const serviceLabelStyle: CSSProperties = {
 const checkBadgeStyle: CSSProperties = {
   display: 'inline-grid',
   placeItems: 'center',
-  width: 24,
-  height: 24,
+  width: 22,
+  height: 22,
   borderRadius: 999,
   background: '#5B7CFA',
   color: '#FFFFFF',
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 900,
+  flexShrink: 0,
 }
 
 const locationCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 10,
 }
 
 const locationMapStyle: CSSProperties = {
   position: 'relative',
-  minHeight: 156,
+  minHeight: 144,
   borderRadius: 24,
   overflow: 'hidden',
-  background: 'linear-gradient(180deg, #EAF1FF 0%, #F8FBFF 100%)',
+  background: 'linear-gradient(180deg, #F4F7FF 0%, #FCFDFF 100%)',
   border: '1px solid rgba(145, 164, 196, 0.20)',
+}
+
+const locationPreviewImageStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  width: '100%',
+  height: '100%',
+  objectFit: 'contain',
+  objectPosition: 'center',
+  display: 'block',
+}
+
+const locationMapImageOverlayStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(248,251,255,0.22) 100%)',
 }
 
 const locationMapGridStyle: CSSProperties = {
@@ -1155,7 +1275,7 @@ const authErrorStyle: CSSProperties = {
 
 const footerStyle: CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 8,
 }
 
 const buttonRowStyle: CSSProperties = {
