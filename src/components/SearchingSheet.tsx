@@ -1,17 +1,21 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 
 interface SearchingSheetProps {
   elapsedSeconds: number
   durationLabel: string
   priceLabel: string
+  mode: 'matching' | 'empty'
+  emptyTitle?: string
+  emptySubtitle?: string
   onCancel: () => void
+  onTryAgain?: () => void
 }
 
-type SearchStage = {
-  title: string
-  subtitle: string
-  state: 'searching' | 'offering' | 'retrying'
-}
+const MATCHING_MESSAGES = [
+  'Looking for nearby providers...',
+  'Checking availability...',
+  'Almost there...',
+] as const
 
 function formatElapsed(seconds: number): string {
   const safe = Math.max(0, seconds)
@@ -20,385 +24,518 @@ function formatElapsed(seconds: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
-function getStage(elapsedSeconds: number): SearchStage {
-  if (elapsedSeconds < 4) {
-    return {
-      title: 'Finding a walker',
-      subtitle: 'Looking for someone nearby...',
-      state: 'searching',
-    }
-  }
-
-  if (elapsedSeconds < 9) {
-    return {
-      title: 'Finding a walker',
-      subtitle: 'Offering your request to a nearby walker.',
-      state: 'offering',
-    }
-  }
-
-  if (elapsedSeconds < 16) {
-    return {
-      title: 'Finding a walker',
-      subtitle: 'Looking for someone nearby...',
-      state: 'retrying',
-    }
-  }
-
-  return {
-    title: 'Finding a walker',
-    subtitle: 'Looking for someone nearby...',
-    state: 'retrying',
-  }
-}
-
 export default function SearchingSheet({
   elapsedSeconds,
   durationLabel,
   priceLabel,
+  mode,
+  emptyTitle = 'No providers available right now',
+  emptySubtitle = 'Try again in a few minutes',
   onCancel,
+  onTryAgain,
 }: SearchingSheetProps) {
-  const stage = useMemo(() => getStage(elapsedSeconds), [elapsedSeconds])
+  const [messageIndex, setMessageIndex] = useState(0)
+
+  useEffect(() => {
+    if (mode !== 'matching') {
+      setMessageIndex(0)
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      setMessageIndex((current) => (current + 1) % MATCHING_MESSAGES.length)
+    }, 1500)
+
+    return () => window.clearInterval(intervalId)
+  }, [mode])
 
   const progressWidth = useMemo(() => {
     const capped = Math.min(elapsedSeconds, 18)
-    return `${Math.max(12, (capped / 18) * 100)}%`
+    return `${Math.max(18, (capped / 18) * 100)}%`
   }, [elapsedSeconds])
 
-  const dots = useMemo(() => {
-    if (stage.state === 'searching') return [true, false, false]
-    if (stage.state === 'offering') return [true, true, false]
-    return [true, true, true]
-  }, [stage.state])
+  const detailChips = useMemo(
+    () => [
+      { label: 'Search time', value: formatElapsed(elapsedSeconds) },
+      { label: 'Duration', value: durationLabel || 'Walk' },
+      { label: 'Price', value: priceLabel || '—' },
+    ],
+    [durationLabel, elapsedSeconds, priceLabel],
+  )
+
+  if (mode === 'empty') {
+    return (
+      <div style={sheetStyle}>
+        <style>{matchingAnimations}</style>
+        <div style={emptyWrapStyle}>
+          <div style={emptyIconWrapStyle}>
+            <div style={emptyHaloStyle} />
+            <div style={emptyIconStyle}>
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <line x1="16.65" y1="16.65" x2="21" y2="21" />
+              </svg>
+            </div>
+          </div>
+
+          <div style={emptyTitleStyle}>{emptyTitle}</div>
+          <div style={emptySubtitleStyle}>{emptySubtitle}</div>
+
+          <div style={infoRowStyle}>
+            {detailChips.slice(1).map((chip) => (
+              <div key={chip.label} style={compactInfoCardStyle}>
+                <div style={compactInfoLabelStyle}>{chip.label}</div>
+                <div style={compactInfoValueStyle}>{chip.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <button type="button" onClick={onTryAgain} style={primaryButtonStyle}>
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div style={cardStyle}>
-      <div style={topRowStyle}>
-        <div style={pulseWrapStyle}>
-          <div style={pulseRingStyle} />
-          <div style={pulseRingDelayedStyle} />
-          <div style={centerIconStyle}>
-            <svg
-              width="22"
-              height="22"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#0F172A"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
+    <div style={sheetStyle}>
+      <style>{matchingAnimations}</style>
+
+      <div style={matchingWrapStyle}>
+        <div style={visualStageStyle}>
+          <div style={mapGlowStyle} />
+          <div style={mapGlowDelayedStyle} />
+          <div style={shimmerOrbStyle} />
+          <div style={routeLineStyle} />
+          <div style={routeDotStartStyle} />
+          <div style={routeDotEndStyle} />
+          <div style={loaderCoreStyle}>
+            <div style={loaderPulseStyle} />
+            <div style={loaderCenterStyle}>
+              <svg
+                width="26"
+                height="26"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#0F172A"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
           </div>
         </div>
 
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={eyebrowStyle}>Live dispatch</div>
-          <h2 style={titleStyle}>{stage.title}</h2>
-          <p style={subtitleStyle}>{stage.subtitle}</p>
+        <div style={contentStyle}>
+          <div style={eyebrowStyle}>Live matching</div>
+          <h2 style={titleStyle}>Finding a provider near you...</h2>
+          <p key={messageIndex} style={matchingMessageStyle}>
+            {MATCHING_MESSAGES[messageIndex]}
+          </p>
+
+          <div style={progressTrackStyle}>
+            <div style={{ ...progressFillStyle, width: progressWidth }} />
+          </div>
+
+          <div style={infoGridStyle}>
+            {detailChips.map((chip, index) => (
+              <div
+                key={chip.label}
+                style={{
+                  ...infoCardStyle,
+                  ...(index === 0 ? infoCardHighlightStyle : null),
+                }}
+              >
+                <div style={infoLabelStyle}>{chip.label}</div>
+                <div
+                  style={{
+                    ...infoValueStyle,
+                    ...(index === 0 ? infoValueHighlightStyle : null),
+                  }}
+                >
+                  {chip.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={supportCopyStyle}>
+            We’re checking nearby providers in real time and will move you forward as soon as one is available.
+          </div>
         </div>
       </div>
 
-      <div style={progressTrackStyle}>
-        <div style={{ ...progressFillStyle, width: progressWidth }} />
-      </div>
-
-      <div style={stepsRowStyle}>
-        <StepDot active={dots[0]} label="Search" />
-        <StepConnector active={dots[1]} />
-        <StepDot active={dots[1]} label="Offer" />
-        <StepConnector active={dots[2]} />
-        <StepDot active={dots[2]} label="Retry" />
-      </div>
-
-      <div style={infoGridStyle}>
-        <InfoCard label="Search time" value={formatElapsed(elapsedSeconds)} highlight />
-        <InfoCard label="Duration" value={durationLabel} />
-        <InfoCard label="Price" value={priceLabel} />
-      </div>
-
-      <div style={messageBoxStyle}>
-        <div style={messageTitleStyle}>What is happening now?</div>
-        <div style={messageTextStyle}>
-          We rank nearby walkers by distance, rating, and acceptance history, then offer the
-          walk one at a time until someone accepts.
-        </div>
-      </div>
-
-      <button type="button" onClick={onCancel} style={cancelBtnStyle}>
+      <button type="button" onClick={onCancel} style={cancelButtonStyle}>
         Cancel request
       </button>
     </div>
   )
 }
 
-function StepDot({ active, label }: { active: boolean; label: string }) {
-  return (
-    <div style={stepItemStyle}>
-      <div
-        style={{
-          ...stepDotStyle,
-          ...(active ? stepDotActiveStyle : {}),
-        }}
-      />
-      <span
-        style={{
-          ...stepLabelStyle,
-          ...(active ? stepLabelActiveStyle : {}),
-        }}
-      >
-        {label}
-      </span>
-    </div>
-  )
-}
+const matchingAnimations = `
+  @keyframes matchingSheetEnter {
+    0% { opacity: 0; transform: translateY(24px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
 
-function StepConnector({ active }: { active: boolean }) {
-  return (
-    <div
-      style={{
-        ...stepConnectorStyle,
-        ...(active ? stepConnectorActiveStyle : {}),
-      }}
-    />
-  )
-}
+  @keyframes matchingGlow {
+    0% { opacity: 0.7; transform: scale(0.96); }
+    50% { opacity: 1; transform: scale(1.02); }
+    100% { opacity: 0.7; transform: scale(0.96); }
+  }
 
-function InfoCard({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string
-  value: string
-  highlight?: boolean
-}) {
-  return (
-    <div
-      style={{
-        ...infoCardStyle,
-        ...(highlight ? infoCardHighlightStyle : {}),
-      }}
-    >
-      <div style={infoLabelStyle}>{label}</div>
-      <div
-        style={{
-          ...infoValueStyle,
-          ...(highlight ? infoValueHighlightStyle : {}),
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  )
-}
+  @keyframes matchingShimmer {
+    0% { transform: translateX(-120%) rotate(8deg); opacity: 0; }
+    30% { opacity: 0.42; }
+    100% { transform: translateX(120%) rotate(8deg); opacity: 0; }
+  }
 
-const cardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  borderRadius: 24,
-  padding: 20,
-  boxShadow: '0 10px 32px rgba(15, 23, 42, 0.06)',
+  @keyframes matchingPulse {
+    0% { transform: scale(0.92); opacity: 0.26; }
+    70% { transform: scale(1.14); opacity: 0; }
+    100% { transform: scale(1.14); opacity: 0; }
+  }
+
+  @keyframes matchingMessageEnter {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+`
+
+const sheetStyle: CSSProperties = {
+  height: '100%',
+  minHeight: 0,
+  maxHeight: 'calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 148px)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  borderRadius: 28,
+  padding: '16px 16px calc(14px + env(safe-area-inset-bottom, 0px))',
+  boxShadow: '0 20px 48px rgba(15, 23, 42, 0.10)',
   display: 'flex',
   flexDirection: 'column',
-  gap: 16,
+  justifyContent: 'space-between',
+  gap: 12,
+  animation: 'matchingSheetEnter 260ms cubic-bezier(0.22, 1, 0.36, 1)',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
 }
 
-const topRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 16,
+const matchingWrapStyle: CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
+  WebkitOverflowScrolling: 'touch',
+  paddingRight: 2,
 }
 
-const pulseWrapStyle: React.CSSProperties = {
+const visualStageStyle: CSSProperties = {
   position: 'relative',
-  width: 72,
-  height: 72,
-  flexShrink: 0,
+  minHeight: 164,
+  borderRadius: 22,
+  overflow: 'hidden',
+  background: 'linear-gradient(180deg, #EEF4FF 0%, #F8FBFF 100%)',
+  border: '1px solid rgba(191, 219, 254, 0.9)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.72)',
 }
 
-const pulseRingStyle: React.CSSProperties = {
+const mapGlowStyle: CSSProperties = {
+  position: 'absolute',
+  inset: '8% 16%',
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(59,130,246,0.22) 0%, rgba(59,130,246,0.05) 48%, rgba(59,130,246,0) 72%)',
+  animation: 'matchingGlow 2.8s ease-in-out infinite',
+}
+
+const mapGlowDelayedStyle: CSSProperties = {
+  position: 'absolute',
+  inset: '16% 24%',
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(14,165,233,0.16) 0%, rgba(14,165,233,0.04) 52%, rgba(14,165,233,0) 72%)',
+  animation: 'matchingGlow 2.8s ease-in-out infinite 0.5s',
+}
+
+const shimmerOrbStyle: CSSProperties = {
+  position: 'absolute',
+  top: '-10%',
+  left: '-20%',
+  width: '50%',
+  height: '120%',
+  background: 'linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.44) 50%, rgba(255,255,255,0) 100%)',
+  animation: 'matchingShimmer 2.4s ease-in-out infinite',
+}
+
+const routeLineStyle: CSSProperties = {
+  position: 'absolute',
+  left: '27%',
+  right: '27%',
+  top: '50%',
+  height: 0,
+  borderTop: '2px dashed rgba(37, 99, 235, 0.34)',
+}
+
+const routeDotStartStyle: CSSProperties = {
+  position: 'absolute',
+  top: 'calc(50% - 6px)',
+  left: '24%',
+  width: 12,
+  height: 12,
+  borderRadius: '50%',
+  background: '#2563EB',
+  boxShadow: '0 0 0 8px rgba(37,99,235,0.10)',
+}
+
+const routeDotEndStyle: CSSProperties = {
+  position: 'absolute',
+  top: 'calc(50% - 7px)',
+  right: '24%',
+  width: 14,
+  height: 14,
+  borderRadius: '50%',
+  background: '#0F172A',
+  boxShadow: '0 0 0 8px rgba(15,23,42,0.08)',
+}
+
+const loaderCoreStyle: CSSProperties = {
+  position: 'absolute',
+  inset: '50% auto auto 50%',
+  width: 74,
+  height: 74,
+  transform: 'translate(-50%, -50%)',
+  display: 'grid',
+  placeItems: 'center',
+}
+
+const loaderPulseStyle: CSSProperties = {
   position: 'absolute',
   inset: 0,
   borderRadius: '50%',
-  background: 'rgba(37, 99, 235, 0.10)',
-  animation: 'searchPulse 1.8s ease-out infinite',
+  border: '8px solid rgba(37, 99, 235, 0.10)',
+  animation: 'matchingPulse 1.8s ease-out infinite',
 }
 
-const pulseRingDelayedStyle: React.CSSProperties = {
-  position: 'absolute',
-  inset: 8,
+const loaderCenterStyle: CSSProperties = {
+  position: 'relative',
+  width: 48,
+  height: 48,
   borderRadius: '50%',
-  background: 'rgba(37, 99, 235, 0.14)',
-  animation: 'searchPulse 1.8s ease-out infinite 0.4s',
-}
-
-const centerIconStyle: React.CSSProperties = {
-  position: 'absolute',
-  inset: 16,
-  borderRadius: '50%',
-  background: '#FFFFFF',
-  border: '1px solid #DBEAFE',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  border: '1px solid rgba(191, 219, 254, 0.9)',
   display: 'grid',
   placeItems: 'center',
-  boxShadow: '0 6px 18px rgba(37, 99, 235, 0.12)',
+  boxShadow: '0 14px 34px rgba(37, 99, 235, 0.14)',
 }
 
-const eyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  textTransform: 'uppercase',
-  letterSpacing: 0.6,
-  color: '#2563EB',
-  marginBottom: 6,
-}
-
-const titleStyle: React.CSSProperties = {
-  margin: 0,
-  fontSize: 22,
-  lineHeight: 1.15,
-  fontWeight: 800,
-  color: '#0F172A',
-  letterSpacing: -0.4,
-}
-
-const subtitleStyle: React.CSSProperties = {
-  margin: '8px 0 0',
-  fontSize: 14,
-  lineHeight: 1.5,
-  color: '#64748B',
-}
-
-const progressTrackStyle: React.CSSProperties = {
-  width: '100%',
-  height: 8,
-  borderRadius: 999,
-  background: '#E2E8F0',
-  overflow: 'hidden',
-}
-
-const progressFillStyle: React.CSSProperties = {
-  height: '100%',
-  borderRadius: 999,
-  background: 'linear-gradient(90deg, #2563EB, #60A5FA)',
-  transition: 'width 0.8s ease',
-}
-
-const stepsRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-}
-
-const stepItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  flexShrink: 0,
-}
-
-const stepDotStyle: React.CSSProperties = {
-  width: 10,
-  height: 10,
-  borderRadius: '50%',
-  background: '#CBD5E1',
-  transition: 'all 0.25s ease',
-}
-
-const stepDotActiveStyle: React.CSSProperties = {
-  background: '#2563EB',
-  boxShadow: '0 0 0 4px rgba(37, 99, 235, 0.12)',
-}
-
-const stepLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#94A3B8',
-}
-
-const stepLabelActiveStyle: React.CSSProperties = {
-  color: '#2563EB',
-}
-
-const stepConnectorStyle: React.CSSProperties = {
-  height: 2,
-  flex: 1,
-  minWidth: 12,
-  background: '#E2E8F0',
-  borderRadius: 999,
-}
-
-const stepConnectorActiveStyle: React.CSSProperties = {
-  background: '#93C5FD',
-}
-
-const infoGridStyle: React.CSSProperties = {
+const contentStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   gap: 10,
 }
 
-const infoCardStyle: React.CSSProperties = {
-  borderRadius: 16,
-  padding: '12px 12px',
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-}
-
-const infoCardHighlightStyle: React.CSSProperties = {
-  background: '#EFF6FF',
-  border: '1px solid #BFDBFE',
-}
-
-const infoLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
+const eyebrowStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: 0.5,
   textTransform: 'uppercase',
-  letterSpacing: 0.4,
+  color: '#2563EB',
+}
+
+const titleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 24,
+  lineHeight: 1.08,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const matchingMessageStyle: CSSProperties = {
+  margin: 0,
+  minHeight: 20,
+  fontSize: 14,
+  lineHeight: 1.4,
+  color: '#64748B',
+  animation: 'matchingMessageEnter 220ms ease',
+}
+
+const progressTrackStyle: CSSProperties = {
+  position: 'relative',
+  overflow: 'hidden',
+  height: 8,
+  borderRadius: 999,
+  background: 'rgba(226, 232, 240, 0.95)',
+}
+
+const progressFillStyle: CSSProperties = {
+  height: '100%',
+  borderRadius: 999,
+  background: 'linear-gradient(90deg, #2563EB 0%, #60A5FA 58%, #93C5FD 100%)',
+  transition: 'width 420ms ease',
+}
+
+const infoGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 8,
+}
+
+const infoCardStyle: CSSProperties = {
+  minWidth: 0,
+  borderRadius: 16,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: '#FFFFFF',
+  padding: '10px 8px',
+  display: 'grid',
+  gap: 4,
+}
+
+const infoCardHighlightStyle: CSSProperties = {
+  background: 'linear-gradient(180deg, #EFF6FF 0%, #F8FBFF 100%)',
+  border: '1px solid rgba(96, 165, 250, 0.4)',
+}
+
+const infoLabelStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
   color: '#94A3B8',
 }
 
-const infoValueStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 16,
+const infoValueStyle: CSSProperties = {
+  fontSize: 14,
   fontWeight: 800,
   color: '#0F172A',
 }
 
-const infoValueHighlightStyle: React.CSSProperties = {
+const infoValueHighlightStyle: CSSProperties = {
   color: '#1D4ED8',
 }
 
-const messageBoxStyle: React.CSSProperties = {
-  borderRadius: 16,
-  padding: 14,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+const supportCopyStyle: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#475569',
 }
 
-const messageTitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
+const cancelButtonStyle: CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(226, 232, 240, 0.98)',
+  background: '#FFFFFF',
   color: '#0F172A',
-  marginBottom: 6,
+  minHeight: 46,
+  borderRadius: 18,
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+  flexShrink: 0,
 }
 
-const messageTextStyle: React.CSSProperties = {
-  fontSize: 13,
+const emptyWrapStyle: CSSProperties = {
+  flex: 1,
+  display: 'grid',
+  alignContent: 'center',
+  justifyItems: 'center',
+  gap: 16,
+  textAlign: 'center',
+  padding: '12px 6px',
+}
+
+const emptyIconWrapStyle: CSSProperties = {
+  position: 'relative',
+  width: 92,
+  height: 92,
+  display: 'grid',
+  placeItems: 'center',
+}
+
+const emptyHaloStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(148,163,184,0.18) 0%, rgba(148,163,184,0.06) 52%, rgba(148,163,184,0) 74%)',
+}
+
+const emptyIconStyle: CSSProperties = {
+  position: 'relative',
+  width: 58,
+  height: 58,
+  borderRadius: '50%',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  color: '#0F172A',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  display: 'grid',
+  placeItems: 'center',
+  boxShadow: '0 14px 30px rgba(15, 23, 42, 0.08)',
+}
+
+const emptyTitleStyle: CSSProperties = {
+  fontSize: 28,
+  lineHeight: 1.06,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const emptySubtitleStyle: CSSProperties = {
+  maxWidth: 280,
+  fontSize: 15,
   lineHeight: 1.5,
   color: '#64748B',
 }
 
-const cancelBtnStyle: React.CSSProperties = {
+const infoRowStyle: CSSProperties = {
   width: '100%',
-  height: 52,
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 10,
+}
+
+const compactInfoCardStyle: CSSProperties = {
+  borderRadius: 18,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
   background: '#FFFFFF',
-  color: '#334155',
+  padding: '12px 10px',
+  display: 'grid',
+  gap: 5,
+}
+
+const compactInfoLabelStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: '#94A3B8',
+}
+
+const compactInfoValueStyle: CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
+  color: '#0F172A',
+}
+
+const primaryButtonStyle: CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  minHeight: 52,
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: 800,
+  padding: '0 22px',
   cursor: 'pointer',
+  boxShadow: '0 18px 34px rgba(15, 23, 42, 0.14)',
 }

@@ -110,6 +110,7 @@ export default function ClientDashboard({
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
+  const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
@@ -553,11 +554,16 @@ export default function ClientDashboard({
   const isPaymentGuided = guidedBookingField === 'payment'
   const shouldShowGuidanceCtaHelper = guidedBookingField !== null && !flow.loading && !flow.cardLoading
   const showBanners =
-    flow.screenState === 'idle' ||
-    flow.screenState === 'searching' ||
-    flow.screenState === 'tracking' ||
-    flow.screenState === 'active'
+    (flow.screenState === 'idle' ||
+      flow.screenState === 'searching' ||
+      flow.screenState === 'tracking' ||
+      flow.screenState === 'active') &&
+    matchingUiState === null
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
+  const matchingEmptyTitle = flow.availabilityNotice?.title || 'No providers available right now'
+  const matchingEmptySubtitle = flow.availabilityNotice?.title
+    ? 'Try again in a few minutes'
+    : flow.error || 'Try again in a few minutes'
 
   useEffect(() => {
     setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
@@ -576,6 +582,32 @@ export default function ClientDashboard({
 
     return () => window.clearTimeout(timeoutId)
   }, [guidedBookingField])
+
+  useEffect(() => {
+    if (isSearching) {
+      setMatchingUiState('matching')
+      return
+    }
+
+    if (isTrackingState || flow.completionJob) {
+      setMatchingUiState(null)
+      return
+    }
+
+    setMatchingUiState((current) => {
+      if (current !== 'matching') return current
+      if (flow.availabilityNotice || flow.error) return 'empty'
+      if (flow.screenState === 'idle') return null
+      return current
+    })
+  }, [
+    flow.availabilityNotice,
+    flow.completionJob,
+    flow.error,
+    flow.screenState,
+    isSearching,
+    isTrackingState,
+  ])
 
   const nearbyWalkers = useNearbyWalkers(
     flow.hasUserLocation ? flow.userLocation : null,
@@ -710,6 +742,15 @@ export default function ClientDashboard({
   const clearScheduleToAsap = useCallback(() => {
     flow.setBookingTiming('asap')
     setShowScheduleSheet(false)
+  }, [flow])
+
+  const handleMatchingTryAgain = useCallback(() => {
+    flow.clearAvailabilityNotice()
+    flow.clearError()
+    setMatchingUiState(null)
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    })
   }, [flow])
 
   const openFavoritesMenu = useCallback(() => {
@@ -1203,13 +1244,17 @@ export default function ClientDashboard({
             </div>
           )}
 
-          {isSearching && (
+          {matchingUiState && (
             <div style={sheetContentStyle}>
               <SearchingSheet
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
-                onCancel={flow.cancelSearch}
+                mode={matchingUiState}
+                emptyTitle={matchingEmptyTitle}
+                emptySubtitle={matchingEmptySubtitle}
+                onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
+                onTryAgain={handleMatchingTryAgain}
               />
             </div>
           )}
