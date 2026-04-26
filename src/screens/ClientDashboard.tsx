@@ -76,6 +76,7 @@ interface ClientDashboardProps {
     role: AppRole
   }
   onSignOut: () => Promise<void>
+  showOnboardingWowToken?: number
 }
 
 interface UpcomingBookingItem {
@@ -87,7 +88,11 @@ interface UpcomingBookingItem {
   price: number | null
 }
 
-export default function ClientDashboard({ profile, onSignOut }: ClientDashboardProps) {
+export default function ClientDashboard({
+  profile,
+  onSignOut,
+  showOnboardingWowToken = 0,
+}: ClientDashboardProps) {
   const clientName = profile.full_name || profile.email || 'Client'
   const flow = useClientFlow(profile.id, clientName)
   const photo = useProfilePhoto(profile.id)
@@ -101,8 +106,13 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
+  const [showFirstBookingWow, setShowFirstBookingWow] = useState(false)
+  const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
+  const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
+  const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const lastOnboardingWowTokenRef = useRef(0)
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -143,6 +153,26 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       .regli-client-screen > * {
         max-width: 100%;
         box-sizing: border-box;
+      }
+
+      @keyframes regliGuidedFieldPulse {
+        0% {
+          opacity: 0.72;
+          transform: translateY(4px) scale(0.992);
+          box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+        }
+
+        55% {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+        }
+
+        100% {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+        }
       }
     `
     document.head.appendChild(style)
@@ -205,6 +235,23 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     setDogNameDraft(flow.dogName || '')
   }, [flow.dogName, showDogNameSheet])
 
+  useEffect(() => {
+    if (!showOnboardingWowToken || showOnboardingWowToken === lastOnboardingWowTokenRef.current) return
+    lastOnboardingWowTokenRef.current = showOnboardingWowToken
+    setResumeFirstBookingWowAfterCardSetup(false)
+    setShowFirstBookingWow(true)
+  }, [showOnboardingWowToken])
+
+  useEffect(() => {
+    if (!resumeFirstBookingWowAfterCardSetup) return
+    if (flow.cardLoading || flow.setupClientSecret) return
+
+    setResumeFirstBookingWowAfterCardSetup(false)
+    if (flow.savedCard) {
+      scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }, [flow.cardLoading, flow.savedCard, flow.setupClientSecret, resumeFirstBookingWowAfterCardSetup])
+
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -240,6 +287,11 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     flow.requestWalk()
   }, [flow.dogName, flow.duration, flow.location, flow.savedCard, flow.requestWalk])
 
+  const handleFirstBookingAddPayment = useCallback(() => {
+    setShowFirstBookingWow(false)
+    setResumeFirstBookingWowAfterCardSetup(true)
+    flow.requestCardSetup()
+  }, [flow.requestCardSetup])
 
   const persistRecentDogNames = useCallback(
     (names: string[]) => {
@@ -277,6 +329,12 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
     commitDogName(dogNameDraft)
     setShowDogNameSheet(false)
   }, [commitDogName, dogNameDraft])
+
+  const handleFirstBookingStart = useCallback(() => {
+    setShowFirstBookingWow(false)
+    setResumeFirstBookingWowAfterCardSetup(false)
+    scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
 
   const upcomingScheduledItems = useMemo<UpcomingBookingItem[]>(
     () =>
@@ -470,12 +528,54 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
   const isIdleState = flow.screenState === 'idle' && !hasCompletionPrompt
+  const shouldShowFirstBookingWow =
+    showFirstBookingWow && isIdleState && !flow.completionJob && !flow.tipJob
+  const hasSavedPaymentMethod = !!flow.savedCard
+  const hasPreviousBookingActivity =
+    allHistoryItems.length > 0 ||
+    upcomingScheduledItems.length > 0 ||
+    !!flow.currentJob ||
+    !!flow.activeJob ||
+    !!flow.completionJob ||
+    !!flow.tipJob
+  const shouldUseSteplessGuidance = !hasPreviousBookingActivity && isIdleState && !showFirstBookingWow
+  const nextGuidedBookingField: 'dogName' | 'duration' | 'payment' | null = !shouldUseSteplessGuidance
+    ? null
+    : !flow.dogName.trim()
+      ? 'dogName'
+      : !flow.duration
+        ? 'duration'
+        : !flow.savedCard
+          ? 'payment'
+          : null
+  const isDogNameGuided = guidedBookingField === 'dogName'
+  const isDurationGuided = guidedBookingField === 'duration'
+  const isPaymentGuided = guidedBookingField === 'payment'
+  const shouldShowGuidanceCtaHelper = guidedBookingField !== null && !flow.loading && !flow.cardLoading
   const showBanners =
     flow.screenState === 'idle' ||
     flow.screenState === 'searching' ||
     flow.screenState === 'tracking' ||
     flow.screenState === 'active'
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
+
+  useEffect(() => {
+    setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
+  }, [nextGuidedBookingField])
+
+  useEffect(() => {
+    if (!guidedBookingField) {
+      setShouldAnimateGuidedField(false)
+      return
+    }
+
+    setShouldAnimateGuidedField(true)
+    const timeoutId = window.setTimeout(() => {
+      setShouldAnimateGuidedField(false)
+    }, 1400)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [guidedBookingField])
 
   const nearbyWalkers = useNearbyWalkers(
     flow.hasUserLocation ? flow.userLocation : null,
@@ -930,9 +1030,18 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                     <button
                       type="button"
                       onClick={openDogNameSheet}
-                      style={dogInputButtonStyle}
+                      style={{
+                        ...dogInputButtonStyle,
+                        ...(isDogNameGuided ? guidedFieldButtonStyle : null),
+                        ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                      }}
                     >
-                      <div style={dogInputShellStyle}>
+                      <div
+                        style={{
+                          ...dogInputShellStyle,
+                          ...(isDogNameGuided ? guidedFieldShellStyle : null),
+                        }}
+                      >
                         <div style={dogThumbStyle}>🐶</div>
                         <div style={dogInputButtonContentStyle}>
                           <div
@@ -948,6 +1057,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                         <div style={dogInputChevronStyle}>›</div>
                       </div>
                     </button>
+                    {isDogNameGuided && (
+                      <div style={guidedFieldHelperStyle}>Start here</div>
+                    )}
                   </div>
 
                   {preferredWalkers.length > 0 && (
@@ -1036,7 +1148,16 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                   </div>
 
                   <div style={compactFieldStyle}>
-                    <div style={compactDurationWrapStyle}>
+                    {isDurationGuided && (
+                      <div style={guidedFieldHintAboveStyle}>Choose a duration</div>
+                    )}
+                    <div
+                      style={{
+                        ...compactDurationWrapStyle,
+                        ...(isDurationGuided ? durationGuidedFieldShellStyle : null),
+                        ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                      }}
+                    >
                       <DurationPicker
                         options={DURATION_OPTIONS}
                         selected={flow.duration ?? ''}
@@ -1048,7 +1169,16 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
                   </div>
 
                   <div style={compactFieldStyle}>
-                    <div style={compactPaymentWrapStyle}>
+                    {isPaymentGuided && (
+                      <div style={guidedFieldHintAboveStyle}>Add payment method</div>
+                    )}
+                    <div
+                      style={{
+                        ...compactPaymentWrapStyle,
+                        ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                        ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                      }}
+                    >
                       <CardSetupForm
                         savedCard={flow.savedCard}
                         setupClientSecret={flow.setupClientSecret}
@@ -1120,6 +1250,9 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
 
         {isIdleState && (
           <div style={stickyCtaWrapStyle}>
+            {shouldShowGuidanceCtaHelper && (
+              <div style={guidedCtaHelperStyle}>Complete the highlighted field to continue</div>
+            )}
             <div style={stickyMainActionStyle}>
               <ActionButton
                 label={
@@ -1191,6 +1324,63 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
               onSubmit={flow.submitTip}
               onDismiss={flow.dismissTip}
             />
+          </div>
+        </div>
+      )}
+
+      {shouldShowFirstBookingWow && (
+        <div style={firstBookingWowOverlayStyle}>
+          <div style={firstBookingWowCardStyle}>
+            <div
+              style={{
+                ...firstBookingWowBadgeStyle,
+                background: flow.cardLoading
+                  ? 'rgba(148, 163, 184, 0.16)'
+                  : hasSavedPaymentMethod
+                    ? 'rgba(91, 124, 250, 0.10)'
+                    : 'rgba(245, 158, 11, 0.12)',
+              }}
+            >
+              {flow.cardLoading ? '…' : hasSavedPaymentMethod ? '✨' : '💳'}
+            </div>
+
+            <div style={firstBookingWowTitleStyle}>
+              {flow.cardLoading
+                ? 'Checking your payment setup'
+                : hasSavedPaymentMethod
+                  ? 'You’re ready to book'
+                  : 'You’re almost ready'}
+            </div>
+
+            <div style={firstBookingWowBodyStyle}>
+              {flow.cardLoading
+                ? 'This only takes a moment.'
+                : hasSavedPaymentMethod
+                  ? 'Add the service details and we’ll find a provider nearby.'
+                  : 'Add a payment method before your first booking.'}
+            </div>
+
+            {!flow.cardLoading && !hasSavedPaymentMethod && (
+              <div style={firstBookingWowHelperStyle}>
+                You’ll only be charged after the service is completed.
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={hasSavedPaymentMethod ? handleFirstBookingStart : handleFirstBookingAddPayment}
+              disabled={flow.cardLoading}
+              style={{
+                ...firstBookingWowButtonStyle,
+                ...(flow.cardLoading ? firstBookingWowButtonDisabledStyle : null),
+              }}
+            >
+              {flow.cardLoading
+                ? 'Checking...'
+                : hasSavedPaymentMethod
+                  ? 'Start booking'
+                  : 'Add payment method'}
+            </button>
           </div>
         </div>
       )}
@@ -1281,6 +1471,75 @@ export default function ClientDashboard({ profile, onSignOut }: ClientDashboardP
       />
     </div>
   )
+}
+
+const firstBookingWowOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 45,
+  display: 'grid',
+  placeItems: 'end center',
+  padding:
+    'calc(env(safe-area-inset-top, 0px) + 20px) 18px calc(env(safe-area-inset-bottom, 0px) + 24px)',
+  background: 'linear-gradient(180deg, rgba(15,23,42,0.08) 0%, rgba(15,23,42,0.18) 100%)',
+}
+
+const firstBookingWowCardStyle: React.CSSProperties = {
+  width: 'min(100%, 420px)',
+  borderRadius: 28,
+  background: 'rgba(255,255,255,0.96)',
+  border: '1px solid rgba(255,255,255,0.72)',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
+  padding: 22,
+  display: 'grid',
+  gap: 12,
+  boxSizing: 'border-box',
+  fontFamily: 'Inter, system-ui, sans-serif',
+}
+
+const firstBookingWowBadgeStyle: React.CSSProperties = {
+  width: 48,
+  height: 48,
+  borderRadius: 16,
+  display: 'grid',
+  placeItems: 'center',
+  fontSize: 24,
+}
+
+const firstBookingWowTitleStyle: React.CSSProperties = {
+  color: '#0F172A',
+  fontSize: 28,
+  lineHeight: 1.04,
+  fontWeight: 900,
+}
+
+const firstBookingWowBodyStyle: React.CSSProperties = {
+  color: '#5E6B83',
+  fontSize: 14,
+  lineHeight: 1.55,
+}
+
+const firstBookingWowHelperStyle: React.CSSProperties = {
+  color: '#64748B',
+  fontSize: 13,
+  lineHeight: 1.5,
+}
+
+const firstBookingWowButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  minHeight: 54,
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  fontSize: 16,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const firstBookingWowButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.68,
+  cursor: 'default',
 }
 
 function BurgerSection({
@@ -1887,6 +2146,32 @@ const compactFieldStyle: React.CSSProperties = {
   gap: 3,
 }
 
+const guidedFieldButtonStyle: React.CSSProperties = {
+  borderRadius: 18,
+  transformOrigin: 'center top',
+  willChange: 'transform, box-shadow, opacity',
+}
+
+const guidedFieldShellStyle: React.CSSProperties = {
+  borderColor: '#60A5FA',
+  boxShadow: '0 0 0 4px rgba(96, 165, 250, 0.18)',
+  background: '#F8FBFF',
+}
+
+const guidedFieldHelperStyle: React.CSSProperties = {
+  marginTop: 3,
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#2563EB',
+  lineHeight: 1.35,
+}
+
+const guidedFieldHintAboveStyle: React.CSSProperties = {
+  ...guidedFieldHelperStyle,
+  marginTop: 0,
+  marginBottom: 3,
+}
+
 const compactFieldLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
@@ -2176,10 +2461,40 @@ const scheduledSummarySubStyle: React.CSSProperties = {
 
 const compactDurationWrapStyle: React.CSSProperties = {
   marginTop: 0,
+  border: '2px solid transparent',
+  borderRadius: 24,
+  padding: 2,
+  boxSizing: 'border-box',
+  transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
+  transformOrigin: 'center top',
+  willChange: 'transform, box-shadow, opacity',
+}
+
+const durationGuidedFieldShellStyle: React.CSSProperties = {
+  border: '2px solid #3B82F6',
+  background: 'rgba(59,130,246,0.06)',
+  boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
+}
+
+const guidedFieldAnimationStyle: React.CSSProperties = {
+  animation: 'regliGuidedFieldPulse 420ms cubic-bezier(0.22, 1, 0.36, 1) 1',
 }
 
 const compactPaymentWrapStyle: React.CSSProperties = {
   marginTop: 0,
+  border: '2px solid transparent',
+  borderRadius: 24,
+  padding: 2,
+  boxSizing: 'border-box',
+  transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
+  transformOrigin: 'center top',
+  willChange: 'transform, box-shadow, opacity',
+}
+
+const paymentGuidedFieldShellStyle: React.CSSProperties = {
+  border: '2px solid #3B82F6',
+  background: 'rgba(59,130,246,0.06)',
+  boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
 }
 
 const feeLabelStyle: React.CSSProperties = {
@@ -2196,6 +2511,15 @@ const stickyCtaWrapStyle: React.CSSProperties = {
   background: 'rgba(255,255,255,0.96)',
   backdropFilter: 'blur(10px)',
   flexShrink: 0,
+}
+
+const guidedCtaHelperStyle: React.CSSProperties = {
+  marginBottom: 8,
+  fontSize: 12,
+  fontWeight: 700,
+  lineHeight: 1.35,
+  color: '#2563EB',
+  textAlign: 'center',
 }
 
 const stickyMainActionStyle: React.CSSProperties = {

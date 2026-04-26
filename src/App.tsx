@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
@@ -91,8 +91,8 @@ export default function App() {
   } = useAuth()
 
   const [splashDone, setSplashDone] = useState(false)
-  const [wowRole, setWowRole] = useState<'provider' | 'customer' | null>(null)
   const [providerWowToken, setProviderWowToken] = useState(0)
+  const [customerWowToken, setCustomerWowToken] = useState(0)
   const [stripeReturnToken, setStripeReturnToken] = useState(0)
   const handleSplashDone = useCallback(() => setSplashDone(true), [])
 
@@ -178,16 +178,14 @@ export default function App() {
     const pendingWow = window.sessionStorage.getItem('regli:onboarding-wow')
     if (pendingWow === 'provider') {
       setProviderWowToken((value) => value + 1)
-      setWowRole(null)
       window.sessionStorage.removeItem('regli:onboarding-wow')
       return
     }
     if (pendingWow === 'customer') {
-      setWowRole('customer')
+      setCustomerWowToken((value) => value + 1)
       window.sessionStorage.removeItem('regli:onboarding-wow')
       return
     }
-    setWowRole(null)
   }, [profile])
 
   return (
@@ -225,24 +223,13 @@ export default function App() {
               stripeReturnToken={stripeReturnToken}
             />
           ) : (
-            <ClientDashboard profile={dashboardProfile!} onSignOut={signOut} />
+            <ClientDashboard
+              profile={dashboardProfile!}
+              onSignOut={signOut}
+              showOnboardingWowToken={customerWowToken}
+            />
           )}
         </Suspense>
-      )}
-
-      {Dashboard && profile && wowRole === 'customer' && splashDone && (
-        <div style={wowOverlayStyle}>
-          <div style={wowCardStyle}>
-            <div style={wowBadgeStyle}>💡</div>
-            <div style={wowTitleStyle}>Ready to book your first service?</div>
-            <div style={wowBodyStyle}>
-              Everything is ready. Start exploring nearby providers and book your first service in just a few taps.
-            </div>
-            <button type="button" onClick={() => setWowRole(null)} style={wowButtonStyle}>
-              Find a provider
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Auth screen — only after splash (no map to morph into) */}
@@ -327,63 +314,4 @@ export default function App() {
       )}
     </>
   )
-}
-
-const wowOverlayStyle: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  zIndex: 30,
-  display: 'grid',
-  placeItems: 'end center',
-  padding:
-    'calc(env(safe-area-inset-top, 0px) + 20px) 18px calc(env(safe-area-inset-bottom, 0px) + 24px)',
-  background: 'linear-gradient(180deg, rgba(15,23,42,0.08) 0%, rgba(15,23,42,0.18) 100%)',
-}
-
-const wowCardStyle: CSSProperties = {
-  width: 'min(100%, 420px)',
-  borderRadius: 28,
-  background: 'rgba(255,255,255,0.96)',
-  border: '1px solid rgba(255,255,255,0.72)',
-  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
-  padding: 22,
-  display: 'grid',
-  gap: 12,
-  boxSizing: 'border-box',
-  fontFamily: 'Inter, system-ui, sans-serif',
-}
-
-const wowBadgeStyle: CSSProperties = {
-  width: 48,
-  height: 48,
-  borderRadius: 16,
-  background: 'rgba(91, 124, 250, 0.10)',
-  display: 'grid',
-  placeItems: 'center',
-  fontSize: 24,
-}
-
-const wowTitleStyle: CSSProperties = {
-  color: '#0F172A',
-  fontSize: 28,
-  lineHeight: 1.04,
-  fontWeight: 900,
-}
-
-const wowBodyStyle: CSSProperties = {
-  color: '#5E6B83',
-  fontSize: 14,
-  lineHeight: 1.55,
-}
-
-const wowButtonStyle: CSSProperties = {
-  appearance: 'none',
-  border: 'none',
-  minHeight: 54,
-  borderRadius: 18,
-  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
-  color: '#FFFFFF',
-  fontSize: 16,
-  fontWeight: 800,
-  cursor: 'pointer',
 }
