@@ -562,12 +562,29 @@ export default function ClientDashboard({
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
   const shouldShowNoProvidersEmptyState =
     flow.availabilityNotice?.title === 'No providers available right now'
-  const matchingEmptyTitle = shouldShowNoProvidersEmptyState
-    ? 'No providers available right now'
-    : flow.availabilityNotice?.title || 'No providers available right now'
-  const matchingEmptySubtitle = shouldShowNoProvidersEmptyState
-    ? 'Try again in a few minutes'
-    : flow.error || 'Try again in a few minutes'
+  const exhaustedRequest = ((anyFlow.requests ?? []) as Array<Record<string, unknown>>).find(
+    (item) =>
+      item.smart_dispatch_state === 'exhausted' &&
+      item.status === 'open' &&
+      item.walker_id == null,
+  )
+
+  const isDispatchExhausted =
+    exhaustedRequest != null ||
+    (flow.currentJob as { smart_dispatch_state?: string } | null | undefined)?.smart_dispatch_state ===
+      'exhausted' ||
+    (flow.activeJob as { smart_dispatch_state?: string } | null | undefined)?.smart_dispatch_state ===
+      'exhausted'
+  const matchingEmptyTitle = isDispatchExhausted
+    ? 'No providers accepted your request'
+    : shouldShowNoProvidersEmptyState
+      ? 'No providers available right now'
+      : flow.availabilityNotice?.title || 'No providers available right now'
+  const matchingEmptySubtitle = isDispatchExhausted
+    ? 'Try again or schedule for later'
+    : shouldShowNoProvidersEmptyState
+      ? 'Try again in a few minutes'
+      : flow.error || 'Try again in a few minutes'
 
   useEffect(() => {
     setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
@@ -588,7 +605,7 @@ export default function ClientDashboard({
   }, [guidedBookingField])
 
   useEffect(() => {
-    if (shouldShowNoProvidersEmptyState) {
+    if (shouldShowNoProvidersEmptyState || isDispatchExhausted) {
       setMatchingUiState('empty')
       return
     }
@@ -613,6 +630,7 @@ export default function ClientDashboard({
     flow.completionJob,
     flow.error,
     flow.screenState,
+    isDispatchExhausted,
     isSearching,
     isTrackingState,
     shouldShowNoProvidersEmptyState,
@@ -1253,16 +1271,20 @@ export default function ClientDashboard({
             </div>
           )}
 
-          {matchingUiState && (
+          {(matchingUiState || isDispatchExhausted) && (
             <div style={sheetContentStyle}>
               <SearchingSheet
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
-                mode={matchingUiState}
+                mode={isDispatchExhausted ? 'empty' : (matchingUiState ?? 'empty')}
                 emptyTitle={matchingEmptyTitle}
                 emptySubtitle={matchingEmptySubtitle}
-                onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
+                onCancel={
+                  !isDispatchExhausted && matchingUiState === 'matching'
+                    ? flow.cancelSearch
+                    : handleMatchingTryAgain
+                }
                 onTryAgain={handleMatchingTryAgain}
               />
             </div>
@@ -3202,3 +3224,4 @@ const profileRatingStyle: React.CSSProperties = {
   color: '#64748B',
   fontWeight: 800,
 }
+

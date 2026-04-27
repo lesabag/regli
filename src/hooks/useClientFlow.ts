@@ -667,8 +667,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setError(null)
     setSuccessMessage(null)
     setAvailabilityNotice({
-      title: 'No providers available right now',
-      subtitle: 'Try again in a few minutes',
+      title: 'No providers accepted your request',
+      subtitle: 'Try again or schedule for later',
     })
   }, [])
 
