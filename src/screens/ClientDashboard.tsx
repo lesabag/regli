@@ -1259,11 +1259,12 @@ export default function ClientDashboard({
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
-                mode={matchingUiState}
-                emptyTitle={matchingEmptyTitle}
-                emptySubtitle={matchingEmptySubtitle}
-                onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
-                onTryAgain={handleMatchingTryAgain}
+		mode={matchingUiState ?? 'matching'}
+  		serviceType={flow.currentJob?.service_type}
+  		emptyTitle={matchingEmptyTitle}
+  		emptySubtitle={matchingEmptySubtitle}
+  		onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
+  		onTryAgain={handleMatchingTryAgain}	
               />
             </div>
           )}
