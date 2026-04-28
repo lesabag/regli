@@ -86,6 +86,7 @@ interface UpcomingBookingItem {
   scheduledFor: string | null
   startsInMin: number | null
   price: number | null
+  findingProviderAt: string | null
 }
 
 export default function ClientDashboard({
@@ -111,6 +112,7 @@ export default function ClientDashboard({
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
+  const [isCalendarPressed, setIsCalendarPressed] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
@@ -346,6 +348,7 @@ export default function ClientDashboard({
         scheduledFor: j.scheduled_for,
         startsInMin: flow.startsInMinutes(j.scheduled_for),
         price: j.scheduled_fee_snapshot ?? j.price,
+        findingProviderAt: getScheduledDispatchWindowLabel(j.scheduled_for),
       })),
     [flow.upcomingJobs, flow.startsInMinutes],
   )
@@ -528,6 +531,11 @@ export default function ClientDashboard({
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
+  const hasFutureOrders = upcomingScheduledItems.length > 0
+  const isScheduledDispatchSearching =
+    flow.screenState === 'searching' &&
+    flow.currentJob?.booking_timing === 'scheduled' &&
+    flow.currentJob?.dispatch_state === 'dispatched'
   const isActivelyMatchingExhaustedJob = (
     job:
       | {
@@ -809,6 +817,18 @@ export default function ClientDashboard({
     })
   }, [])
 
+  const openFutureOrdersMenu = useCallback(() => {
+    setProfileOpen(false)
+    setHistoryView('menu')
+    setBurgerOpen(true)
+    window.setTimeout(() => {
+      document.getElementById('future-orders-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 0)
+  }, [])
+
   const currentMapStyle: React.CSSProperties = isTrackingState
     ? trackingMapContainerStyle
     : isSearching
@@ -823,30 +843,76 @@ export default function ClientDashboard({
     <div className="regli-client-screen" style={screenStyle}>
       <div style={topUiLayerStyle}>
         <div style={floatingTopBarStyle}>
-          <button
-            type="button"
-            onClick={() => {
-              setProfileOpen(false)
-              setHistoryView('menu')
-              setBurgerOpen((v) => !v)
-            }}
-            style={controlBtnStyle}
-            aria-label="Menu"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#0F172A"
-              strokeWidth="2.2"
-              strokeLinecap="round"
+          <div style={menuButtonWrapStyle}>
+            <button
+              type="button"
+              onClick={() => {
+                setProfileOpen(false)
+                setHistoryView('menu')
+                setBurgerOpen((v) => !v)
+              }}
+              style={controlBtnStyle}
+              aria-label="Menu"
             >
-              <line x1="4" y1="7" x2="20" y2="7" />
-              <line x1="4" y1="12" x2="20" y2="12" />
-              <line x1="4" y1="17" x2="20" y2="17" />
-            </svg>
-          </button>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#0F172A"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+              >
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </svg>
+            </button>
+            {hasFutureOrders && (
+              <div
+                role="button"
+                tabIndex={0}
+                onPointerUp={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setIsCalendarPressed(false)
+                  openFutureOrdersMenu()
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    openFutureOrdersMenu()
+                  }
+                }}
+                onPointerDown={() => setIsCalendarPressed(true)}
+                onPointerCancel={() => setIsCalendarPressed(false)}
+                onPointerLeave={() => setIsCalendarPressed(false)}
+                style={{
+                  ...calendarWrapStyle,
+                  transform: isCalendarPressed ? 'scale(0.96)' : 'scale(1)',
+                }}
+                aria-label="Open future orders"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#1E3A8A"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
+                  <line x1="8" y1="3.75" x2="8" y2="7.25" />
+                  <line x1="16" y1="3.75" x2="16" y2="7.25" />
+                  <line x1="3.5" y1="9" x2="20.5" y2="9" />
+                </svg>
+                <span style={menuCalendarDotStyle} aria-hidden="true" />
+              </div>
+            )}
+          </div>
 
           <div style={topRightGroupStyle}>
             <div style={bellWrapStyle}>
@@ -880,6 +946,14 @@ export default function ClientDashboard({
                 text={flow.successMessage}
                 kind="success"
                 onDismiss={flow.clearSuccess}
+              />
+            )}
+            {isScheduledDispatchSearching && (
+              <MessageBanner
+                text="Finding your provider"
+                title="Finding your provider"
+                subtitle="We’ve started matching your scheduled order with nearby providers."
+                kind="info"
               />
             )}
           </div>
@@ -970,26 +1044,29 @@ export default function ClientDashboard({
                   </button>
 
                   <BurgerSection
+                    id="future-orders-section"
                     title="Future orders"
                     subtitle="Scheduled walks waiting to be dispatched."
                   >
-                    <BurgerUpcomingList
+                  <BurgerUpcomingList
                       items={upcomingScheduledItems}
                       onCancel={flow.cancelScheduledJob}
                     />
                   </BurgerSection>
 
-                  <BurgerSection
-                    id="client-favorites-section"
-                    title="Preferred walkers"
-                    subtitle="Saved walkers for quick reference."
-                  >
-                    <FavoriteWalkerMenuList
-                      favorites={flow.favoriteWalkers}
-                      fallbackNames={flow.walkerNameById}
-                      onToggleFavorite={flow.toggleFavoriteWalker}
-                    />
-                  </BurgerSection>
+                  {flow.favoriteWalkers.length > 0 && (
+                    <BurgerSection
+                      id="client-favorites-section"
+                      title="Preferred walkers"
+                      subtitle="Saved walkers for quick reference."
+                    >
+                      <FavoriteWalkerMenuList
+                        favorites={flow.favoriteWalkers}
+                        fallbackNames={flow.walkerNameById}
+                        onToggleFavorite={flow.toggleFavoriteWalker}
+                      />
+                    </BurgerSection>
+                  )}
 
                   <section style={burgerSectionStyle}>
                     <button
@@ -1811,8 +1888,17 @@ function BurgerUpcomingList({
               )}
             </div>
           </div>
+          <div style={burgerListMetaColumnStyle}>
+            <div style={burgerListMetaStyle}>Scheduled for {formatScheduledTime(item.scheduledFor)}</div>
+            <div style={burgerListMetaStyle}>
+              Finding provider around {item.findingProviderAt || '15 min before'}
+            </div>
+            <div style={burgerListMetaStyle}>
+              Estimated arrival around {formatScheduledTime(item.scheduledFor)}
+            </div>
+          </div>
           <div style={burgerListMetaRowStyle}>
-            <div style={burgerListMetaStyle}>{formatScheduledDate(item.scheduledFor)}</div>
+            <div style={burgerListMetaSubtleStyle}>{formatScheduledDate(item.scheduledFor)}</div>
             {item.startsInMin != null && item.startsInMin >= 0 && item.startsInMin <= 60 && (
               <div style={clientUpcomingBadgeStyle}>starts in {item.startsInMin} min</div>
             )}
@@ -1971,6 +2057,23 @@ function formatScheduledDate(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function formatScheduledTime(value: string | null | undefined): string {
+  const dt = parseDateTimeFlexible(value)
+  if (!dt) return '—'
+  return dt.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function getScheduledDispatchWindowLabel(value: string | null | undefined): string | null {
+  const dt = parseDateTimeFlexible(value)
+  if (!dt) return null
+  const matchingTime = new Date(dt.getTime() - 15 * 60 * 1000)
+  return formatScheduledTime(matchingTime.toISOString())
 }
 
 function formatDurationLabelFromMinutes(minutes: number | null | undefined): string {
@@ -2889,11 +2992,11 @@ const menuOverlayStyle: React.CSSProperties = {
 
 const menuPanelStyle: React.CSSProperties = {
   position: 'fixed',
-  top: 'calc(16px + env(safe-area-inset-top))',
-  left: 'max(12px, env(safe-area-inset-left, 0px))',
-  bottom: 'calc(16px + env(safe-area-inset-bottom))',
-  width: 'min(360px, calc(100% - 24px))',
-  maxWidth: 'calc(100% - 24px)',
+  top: 'calc(22px + env(safe-area-inset-top))',
+  left: 'max(14px, env(safe-area-inset-left, 0px))',
+  bottom: 'calc(18px + env(safe-area-inset-bottom))',
+  width: 'min(344px, calc(100% - 28px))',
+  maxWidth: 'calc(100% - 28px)',
   borderRadius: 28,
   background: '#FFFFFF',
   boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
@@ -2939,7 +3042,47 @@ const menuScrollAreaStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: 'auto',
-  padding: '0 16px 14px',
+  padding: '0 16px 12px',
+}
+
+const menuButtonWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'flex-start',
+  pointerEvents: 'auto',
+}
+
+const calendarWrapStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 54,
+  left: 2,
+  width: 40,
+  height: 40,
+  borderRadius: 12,
+  border: '1px solid rgba(226, 232, 240, 0.92)',
+  background: '#FFFFFF',
+  color: '#1E3A8A',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  zIndex: 50,
+  cursor: 'pointer',
+  pointerEvents: 'auto',
+  WebkitTapHighlightColor: 'transparent',
+  transition: 'transform 0.1s ease',
+}
+
+const menuCalendarDotStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: 5,
+  top: 5,
+  width: 9,
+  height: 9,
+  borderRadius: 999,
+  background: '#EF4444',
+  border: '2px solid #FFFFFF',
+  boxShadow: '0 6px 14px rgba(239, 68, 68, 0.22)',
 }
 
 const menuProfileButtonStyle: React.CSSProperties = {
@@ -3147,9 +3290,20 @@ const burgerListMetaRowStyle: React.CSSProperties = {
   marginTop: 6,
 }
 
+const burgerListMetaColumnStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  marginTop: 8,
+}
+
 const burgerListMetaStyle: React.CSSProperties = {
   fontSize: 12,
   color: '#475569',
+}
+
+const burgerListMetaSubtleStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#94A3B8',
 }
 
 const clientUpcomingBadgeStyle: React.CSSProperties = {
