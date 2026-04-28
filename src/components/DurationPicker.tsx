@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { DurationOption } from '../lib/payments'
 import type { SurgeLevel } from '../lib/pricing'
 
@@ -19,6 +20,13 @@ export default function DurationPicker({
   surgeLevel = 'normal',
 }: DurationPickerProps) {
   const hasSurge = surgeMultiplier > 1
+  const [pressedValue, setPressedValue] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (pressedValue === selected) {
+      setPressedValue(null)
+    }
+  }, [pressedValue, selected])
 
   return (
     <div>
@@ -42,6 +50,7 @@ export default function DurationPicker({
       <div style={containerStyle}>
         {options.map((opt) => {
           const isActive = opt.value === selected
+          const isPressed = pressedValue === opt.value
           const adjustedPrice = hasSurge
             ? Math.round(opt.priceILS * surgeMultiplier)
             : opt.priceILS
@@ -49,13 +58,37 @@ export default function DurationPicker({
             <button
               key={opt.value}
               type="button"
-              onClick={() => onSelect(opt.value)}
+              onPointerDown={() => setPressedValue(opt.value)}
+              onPointerUp={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setPressedValue(opt.value)
+                onSelect(opt.value)
+                window.setTimeout(() => {
+                  setPressedValue((current) => (current === opt.value ? null : current))
+                }, 120)
+              }}
+              onPointerCancel={() => setPressedValue((current) => (current === opt.value ? null : current))}
+              onPointerLeave={() => setPressedValue((current) => (current === opt.value ? null : current))}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onSelect(opt.value)
+                }
+              }}
               style={{
                 ...pillStyle,
                 background: isActive ? '#0F172A' : '#F4F6F8',
                 color: isActive ? '#FFFFFF' : '#475569',
-                boxShadow: isActive ? '0 2px 10px rgba(15, 23, 42, 0.2)' : 'none',
                 border: isActive ? '1.5px solid #0F172A' : '1.5px solid transparent',
+                transform: isPressed ? 'scale(0.98)' : 'scale(1)',
+                filter: isPressed && !isActive ? 'brightness(0.97)' : 'none',
+                boxShadow:
+                  isActive
+                    ? '0 2px 10px rgba(15, 23, 42, 0.2)'
+                    : isPressed
+                      ? '0 3px 10px rgba(15, 23, 42, 0.08)'
+                      : 'none',
               }}
             >
               <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.3 }}>{opt.label}</span>
@@ -105,6 +138,7 @@ const pillStyle: React.CSSProperties = {
   padding: '10px 6px',
   borderRadius: 14,
   cursor: 'pointer',
-  transition: 'all 0.15s ease',
+  transition: 'transform 0.1s ease, box-shadow 0.1s ease, filter 0.1s ease, background 0.1s ease',
+  touchAction: 'manipulation',
   WebkitTapHighlightColor: 'transparent',
 }

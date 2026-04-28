@@ -113,7 +113,9 @@ export default function ClientDashboard({
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
   const [isCalendarPressed, setIsCalendarPressed] = useState(false)
+  const [isDogNameButtonPressed, setIsDogNameButtonPressed] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const locationInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
 
@@ -235,7 +237,8 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!showDogNameSheet) return
-    setDogNameDraft(flow.dogName || '')
+    console.log('[dog-sheet] rendered', showDogNameSheet)
+    console.timeEnd('dog-sheet-open')
   }, [flow.dogName, showDogNameSheet])
 
   useEffect(() => {
@@ -320,8 +323,13 @@ export default function ClientDashboard({
   )
 
   const openDogNameSheet = useCallback(() => {
-    setDogNameDraft(flow.dogName || '')
+    console.time('dog-sheet-open')
+    console.log('[dog-sheet] pointer received')
+    console.log('[dog-sheet] setting local state')
     setShowDogNameSheet(true)
+    requestAnimationFrame(() => {
+      setDogNameDraft(flow.dogName || '')
+    })
   }, [flow.dogName])
 
   const closeDogNameSheet = useCallback(() => {
@@ -783,11 +791,13 @@ export default function ClientDashboard({
   )
 
   const openScheduleSheet = useCallback(() => {
-    flow.setBookingTiming('scheduled')
-    if (shouldResetScheduledValue(flow.scheduledFor)) {
-      flow.setScheduledFor(getNowPlus15LocalInput())
-    }
     setShowScheduleSheet(true)
+    requestAnimationFrame(() => {
+      flow.setBookingTiming('scheduled')
+      if (shouldResetScheduledValue(flow.scheduledFor)) {
+        flow.setScheduledFor(getNowPlus15LocalInput())
+      }
+    })
   }, [flow])
 
   const clearScheduleToAsap = useCallback(() => {
@@ -846,10 +856,20 @@ export default function ClientDashboard({
           <div style={menuButtonWrapStyle}>
             <button
               type="button"
-              onClick={() => {
+              onPointerUp={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
                 setProfileOpen(false)
                 setHistoryView('menu')
                 setBurgerOpen((v) => !v)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setProfileOpen(false)
+                  setHistoryView('menu')
+                  setBurgerOpen((v) => !v)
+                }
               }}
               style={controlBtnStyle}
               aria-label="Menu"
@@ -1191,11 +1211,20 @@ export default function ClientDashboard({
                   <div style={compactFieldStyle}>
                     <button
                       type="button"
-                      onClick={openDogNameSheet}
+                      onPointerDown={() => setIsDogNameButtonPressed(true)}
+                      onPointerUp={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setIsDogNameButtonPressed(false)
+                        openDogNameSheet()
+                      }}
+                      onPointerCancel={() => setIsDogNameButtonPressed(false)}
+                      onPointerLeave={() => setIsDogNameButtonPressed(false)}
                       style={{
                         ...dogInputButtonStyle,
                         ...(isDogNameGuided ? guidedFieldButtonStyle : null),
                         ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                        transform: isDogNameButtonPressed ? 'scale(0.98)' : 'scale(1)',
                       }}
                     >
                       <div
@@ -1246,12 +1275,24 @@ export default function ClientDashboard({
                   <div style={compactFieldStyle}>
                     <div style={compactFieldLabelStyle}>Pickup</div>
                     <input
+                      ref={locationInputRef}
                       value={flow.location}
                       onChange={(e) => flow.setLocation(e.target.value)}
+                      onPointerUp={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        window.setTimeout(() => {
+                          locationInputRef.current?.focus()
+                        }, 0)
+                      }}
                       placeholder={
                         flow.locationLoading ? 'Finding your location...' : 'Pickup location'
                       }
-                      style={inputStyle}
+                      style={{
+                        ...inputStyle,
+                        touchAction: 'manipulation',
+                        WebkitTapHighlightColor: 'transparent',
+                      }}
                     />
                   </div>
 
@@ -1269,7 +1310,17 @@ export default function ClientDashboard({
                           </button>
                           <button
                             type="button"
-                            onClick={openScheduleSheet}
+                            onPointerUp={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openScheduleSheet()
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                openScheduleSheet()
+                              }
+                            }}
                             style={scheduledEditBtnStyle}
                           >
                             Edit
@@ -1278,7 +1329,17 @@ export default function ClientDashboard({
                       ) : (
                         <button
                           type="button"
-                          onClick={openScheduleSheet}
+                          onPointerUp={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            openScheduleSheet()
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              openScheduleSheet()
+                            }
+                          }}
                           style={scheduledEditBtnStyle}
                         >
                           Schedule
@@ -1288,7 +1349,17 @@ export default function ClientDashboard({
 
                     <button
                       type="button"
-                      onClick={openScheduleSheet}
+                      onPointerUp={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        openScheduleSheet()
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          openScheduleSheet()
+                        }
+                      }}
                       style={{
                         ...scheduledSummaryCardStyle,
                         ...(flow.bookingTiming === 'scheduled'
@@ -1584,10 +1655,9 @@ export default function ClientDashboard({
               </div>
             )}
 
-            <div style={dogNameInputCardStyle}>
+              <div style={dogNameInputCardStyle}>
               <div style={dogNameInputLabelStyle}>Add new</div>
               <input
-                autoFocus
                 value={dogNameDraft}
                 onChange={(e) => setDogNameDraft(e.target.value)}
                 placeholder="Type dog name"
@@ -2188,11 +2258,13 @@ const controlBtnStyle: React.CSSProperties = {
   border: '1px solid rgba(255,255,255,0.9)',
   background: 'rgba(255,255,255,0.96)',
   boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+  pointerEvents: 'auto',
+  touchAction: 'manipulation',
+  WebkitTapHighlightColor: 'transparent',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
-  pointerEvents: 'auto',
   backdropFilter: 'blur(10px)',
 }
 
