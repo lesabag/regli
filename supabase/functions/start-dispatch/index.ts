@@ -15,7 +15,13 @@ type StartDispatchBody = {
   resetExisting?: boolean
 }
 
-const SCHEDULED_DISPATCH_LEAD_MINUTES = 15
+function getScheduledDispatchLeadMinutes(): number {
+  const raw = Deno.env.get('SCHEDULED_DISPATCH_LEAD_MINUTES')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 15
+}
+
+const SCHEDULED_DISPATCH_LEAD_MINUTES = getScheduledDispatchLeadMinutes()
 const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
 
 function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -123,10 +129,11 @@ serve(async (req) => {
       return jsonResponse(409, { ok: false, error: 'request is not open' }, corsHeaders)
     }
 
-    if (
-      requestRow.payment_status !== 'authorized' ||
-      !requestRow.stripe_payment_intent_id
-    ) {
+    const hasDispatchReadyPaymentStatus =
+      requestRow.payment_status === 'authorized' ||
+      requestRow.payment_status === 'requires_capture'
+
+    if (!hasDispatchReadyPaymentStatus || !requestRow.stripe_payment_intent_id) {
       console.warn('[start-dispatch] request payment is not authorized', {
         version: START_DISPATCH_VERSION,
         requestId,
@@ -144,7 +151,7 @@ serve(async (req) => {
         })
         .eq('id', requestId)
         .eq('status', 'open')
-        .neq('payment_status', 'authorized')
+        .not('payment_status', 'in', '("authorized","requires_capture")')
 
       return jsonResponse(
         409,

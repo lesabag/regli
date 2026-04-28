@@ -528,9 +528,25 @@ export default function ClientDashboard({
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
+  const isActivelyMatchingExhaustedJob = (
+    job:
+      | {
+          smart_dispatch_state?: string | null
+          booking_timing?: string | null
+          scheduled_for?: string | null
+          dispatch_state?: string | null
+        }
+      | null
+      | undefined,
+  ) =>
+    !!job &&
+    job.smart_dispatch_state === 'exhausted' &&
+    (job.scheduled_for == null ||
+      job.booking_timing !== 'scheduled' ||
+      job.dispatch_state === 'dispatched')
   const isDispatchExhausted =
-    flow.currentJob?.smart_dispatch_state === 'exhausted' ||
-    flow.activeJob?.smart_dispatch_state === 'exhausted'
+    isActivelyMatchingExhaustedJob(flow.currentJob) ||
+    isActivelyMatchingExhaustedJob(flow.activeJob)
   const shouldShowNoProvidersEmptyState =
     flow.availabilityNotice?.title === 'No providers available right now'
   const isIdleState =

@@ -1925,11 +1925,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const createdJob = job as WalkRequestRow
-      setCurrentJobId(createdJob.id)
-      setCurrentJob(createdJob)
-      lastActiveJobIdRef.current = createdJob.id
 
       if (shouldSearchNow) {
+        setCurrentJobId(createdJob.id)
+        setCurrentJob(createdJob)
+        lastActiveJobIdRef.current = createdJob.id
+
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
           .select('id, last_lat, last_lng')
@@ -2023,6 +2024,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setScheduledFor(null)
         setSearchStartTime(null)
         setScreenState('idle')
+        setCurrentJob(null)
+        setCurrentJobId(null)
         setSuccessMessage('Scheduled walk saved')
         _setDuration(null)
       }

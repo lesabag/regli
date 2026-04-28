@@ -7,7 +7,13 @@ import {
 } from '../_shared/dispatch.ts'
 import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
 
-const LEAD_MINUTES = 15
+function getScheduledDispatchLeadMinutes(): number {
+  const raw = Deno.env.get('SCHEDULED_DISPATCH_LEAD_MINUTES')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 15
+}
+
+const LEAD_MINUTES = getScheduledDispatchLeadMinutes()
 const DISPATCH_TIMEOUT_SECONDS = 60
 
 type ActiveAttemptRow = {
@@ -45,6 +51,12 @@ serve(async (req) => {
     const now = new Date()
     const leadTime = new Date(now.getTime() + LEAD_MINUTES * 60 * 1000)
 
+    console.log('[run-scheduled-dispatch] tick', {
+      nowIso: now.toISOString(),
+      leadMinutes: LEAD_MINUTES,
+      leadTimeIso: leadTime.toISOString(),
+    })
+
     // 🔍 fetch ONLY relevant jobs
     const { data: jobs, error } = await supabase
       .from('walk_requests')
@@ -61,19 +73,41 @@ serve(async (req) => {
       `)
       .eq('booking_timing', 'scheduled')
       .eq('status', 'open')
-      .eq('payment_status', 'authorized')
+      .in('payment_status', ['authorized', 'requires_capture'])
       .not('stripe_payment_intent_id', 'is', null)
       .is('walker_id', null)
       .not('scheduled_for', 'is', null)
       .lte('scheduled_for', leadTime.toISOString())
+      .not('dispatch_state', 'eq', 'dispatched')
 
     if (error) {
+      console.error('[run-scheduled-dispatch] job query failed', {
+        nowIso: now.toISOString(),
+        leadTimeIso: leadTime.toISOString(),
+        leadMinutes: LEAD_MINUTES,
+        error: error.message,
+      })
       return jsonResponse(500, {
         ok: false,
         error: 'failed to fetch scheduled jobs',
         details: error.message,
       }, corsHeaders)
     }
+
+    console.log('[run-scheduled-dispatch] jobs selected', {
+      nowIso: now.toISOString(),
+      leadTimeIso: leadTime.toISOString(),
+      leadMinutes: LEAD_MINUTES,
+      count: jobs?.length ?? 0,
+      jobs: (jobs ?? []).map((job) => ({
+        id: job.id,
+        scheduled_for: job.scheduled_for,
+        status: job.status,
+        payment_status: job.payment_status,
+        dispatch_state: job.dispatch_state,
+        smart_dispatch_state: job.smart_dispatch_state,
+      })),
+    })
 
     if (!jobs || jobs.length === 0) {
       return jsonResponse(200, {
@@ -89,6 +123,15 @@ serve(async (req) => {
 
     for (const job of jobs) {
       try {
+        console.log('[run-scheduled-dispatch] processing job', {
+          requestId: job.id,
+          scheduledFor: job.scheduled_for,
+          status: job.status,
+          paymentStatus: job.payment_status,
+          dispatchState: job.dispatch_state,
+          smartDispatchState: job.smart_dispatch_state,
+        })
+
         const { data: activeAttempts, error: activeAttemptsError } = await supabase
           .from('dispatch_attempts')
           .select('id')
@@ -289,6 +332,12 @@ serve(async (req) => {
         })
 
         const startDispatchUrl = `${getEnv('SUPABASE_URL')}/functions/v1/start-dispatch`
+        console.log('[run-scheduled-dispatch] invoking start-dispatch', {
+          requestId: job.id,
+          startDispatchUrl,
+          candidateCount: ranked.length,
+          timeoutSeconds: DISPATCH_TIMEOUT_SECONDS,
+        })
         const startDispatchResponse = await fetch(startDispatchUrl, {
           method: 'POST',
           headers: {
@@ -309,6 +358,13 @@ serve(async (req) => {
         } catch {
           startDispatchResult = null
         }
+
+        console.log('[run-scheduled-dispatch] start-dispatch response', {
+          requestId: job.id,
+          httpStatus: startDispatchResponse.status,
+          ok: startDispatchResponse.ok,
+          result: startDispatchResult,
+        })
 
         if (!startDispatchResponse.ok || !startDispatchResult?.ok) {
           const message =
