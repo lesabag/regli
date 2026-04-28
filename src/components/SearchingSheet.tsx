@@ -54,7 +54,7 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
         'Trying the next best match...',
       ],
       emptyAsset: dogCharacterImg,
-      emptyTitle: 'No one could take this request right now',
+      emptyTitle: 'No providers available right now',
       emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'pet',
     }
@@ -79,8 +79,8 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
         'Trying the next trusted match...',
       ],
       emptyAsset: babyImg,
-      emptyTitle: 'No sitter could take this request right now',
-      emptySubtitle: 'Trusted sitters nearby are busy. Try again or schedule for later.',
+      emptyTitle: 'No providers available right now',
+      emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'sitter',
     }
   }
@@ -99,8 +99,8 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
         'Trying the next best match...',
       ],
       emptyAsset: cleaningImg,
-      emptyTitle: 'No cleaner could take this request right now',
-      emptySubtitle: 'Cleaners nearby are busy. Try again or schedule for later.',
+      emptyTitle: 'No providers available right now',
+      emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'cleaning',
     }
   }
@@ -118,7 +118,7 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
       'Trying the next best match...',
     ],
     emptyAsset: defaultImg,
-    emptyTitle: 'No one could take this request right now',
+    emptyTitle: 'No providers available right now',
     emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
     tone: 'default',
   }
@@ -191,7 +191,7 @@ export default function SearchingSheet({
 
           <div style={emptyTipStyle}>
             <span style={tipIconStyle}>💡</span>
-            <span>Tip: try again in a few minutes or choose a different time.</span>
+            <span>Tip: demand is high right now — try again in a few minutes or schedule ahead.</span>
           </div>
 
           <button type="button" onClick={onTryAgain} style={primaryButtonStyle}>
@@ -296,9 +296,12 @@ function MatchingRadar({
   muted?: boolean
 }) {
   const toneStyles = getToneStyles(tone)
+  const wrapStyle = muted ? { ...radarWrapStyle, width: 128, height: 102 } : radarWrapStyle
+  const centerStyle = muted ? { ...radarCenterStyle, width: 102, height: 76 } : radarCenterStyle
+  const assetStyle = muted ? { ...radarAssetStyle, width: 114, height: 82 } : radarAssetStyle
 
   return (
-    <div style={radarWrapStyle}>
+    <div style={wrapStyle}>
       <div
         style={{
           ...radarSoftGlowStyle,
@@ -317,11 +320,11 @@ function MatchingRadar({
       {!muted && <div style={{ ...providerPingStyle, ...providerPingThreeStyle }} />}
       <div
         style={{
-          ...radarCenterStyle,
+          ...centerStyle,
           ...(muted ? radarCenterMutedStyle : null),
         }}
       >
-        <img src={asset} alt="Matching service" style={radarAssetStyle} />
+        <img src={asset} alt="Matching service" style={assetStyle} />
       </div>
     </div>
   )
@@ -801,18 +804,18 @@ const emptyWrapStyle: CSSProperties = {
   display: 'grid',
   alignContent: 'center',
   justifyItems: 'center',
-  gap: 16,
+  gap: 12,
   textAlign: 'center',
-  padding: '12px 6px',
+  padding: '10px 6px',
 }
 
 const emptyCopyStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 6,
 }
 
 const emptyTitleStyle: CSSProperties = {
-  fontSize: 28,
+  fontSize: 25,
   lineHeight: 1.06,
   fontWeight: 900,
   color: '#0F172A',
@@ -820,8 +823,8 @@ const emptyTitleStyle: CSSProperties = {
 
 const emptySubtitleStyle: CSSProperties = {
   maxWidth: 300,
-  fontSize: 15,
-  lineHeight: 1.5,
+  fontSize: 14,
+  lineHeight: 1.45,
   color: '#64748B',
 }
 
@@ -829,16 +832,16 @@ const infoRowStyle: CSSProperties = {
   width: '100%',
   display: 'grid',
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 10,
+  gap: 8,
 }
 
 const compactInfoCardStyle: CSSProperties = {
   borderRadius: 18,
   border: '1px solid rgba(226, 232, 240, 0.95)',
   background: '#FFFFFF',
-  padding: '12px 10px',
+  padding: '10px 9px',
   display: 'grid',
-  gap: 5,
+  gap: 4,
 }
 
 const compactInfoLabelStyle: CSSProperties = {
@@ -850,7 +853,7 @@ const compactInfoLabelStyle: CSSProperties = {
 }
 
 const compactInfoValueStyle: CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 800,
   color: '#0F172A',
 }
@@ -860,14 +863,14 @@ const emptyTipStyle: CSSProperties = {
   border: '1px solid rgba(226,232,240,0.95)',
   borderRadius: 18,
   background: 'linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)',
-  padding: '12px',
+  padding: '10px 11px',
   display: 'grid',
   gridTemplateColumns: '28px 1fr',
   alignItems: 'center',
-  gap: 10,
+  gap: 8,
   textAlign: 'left',
   color: '#64748B',
-  fontSize: 13,
+  fontSize: 12.5,
   lineHeight: 1.35,
 }
 
@@ -883,7 +886,7 @@ const tipIconStyle: CSSProperties = {
 const primaryButtonStyle: CSSProperties = {
   appearance: 'none',
   border: 'none',
-  minHeight: 52,
+  minHeight: 48,
   borderRadius: 18,
   background: 'linear-gradient(180deg, #2563EB 0%, #1D4ED8 100%)',
   color: '#FFFFFF',

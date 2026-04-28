@@ -528,7 +528,17 @@ export default function ClientDashboard({
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
-  const isIdleState = flow.screenState === 'idle' && !hasCompletionPrompt
+  const isDispatchExhausted =
+    flow.currentJob?.smart_dispatch_state === 'exhausted' ||
+    flow.activeJob?.smart_dispatch_state === 'exhausted'
+  const shouldShowNoProvidersEmptyState =
+    flow.availabilityNotice?.title === 'No providers available right now'
+  const isIdleState =
+    flow.screenState === 'idle' &&
+    !hasCompletionPrompt &&
+    !isDispatchExhausted &&
+    !shouldShowNoProvidersEmptyState &&
+    matchingUiState !== 'empty'
   const shouldShowFirstBookingWow =
     showFirstBookingWow && isIdleState && !flow.completionJob && !flow.tipJob
   const hasSavedPaymentMethod = !!flow.savedCard
@@ -560,14 +570,16 @@ export default function ClientDashboard({
       flow.screenState === 'active') &&
     matchingUiState === null
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
-  const shouldShowNoProvidersEmptyState =
-    flow.availabilityNotice?.title === 'No providers available right now'
-  const matchingEmptyTitle = shouldShowNoProvidersEmptyState
+  const matchingEmptyTitle = isDispatchExhausted
     ? 'No providers available right now'
-    : flow.availabilityNotice?.title || 'No providers available right now'
-  const matchingEmptySubtitle = shouldShowNoProvidersEmptyState
-    ? 'Try again in a few minutes'
-    : flow.error || 'Try again in a few minutes'
+    : shouldShowNoProvidersEmptyState
+      ? 'No providers available right now'
+      : flow.availabilityNotice?.title || 'No providers available right now'
+  const matchingEmptySubtitle = isDispatchExhausted
+    ? 'Nearby providers are busy. Try again or schedule for later.'
+    : shouldShowNoProvidersEmptyState
+      ? 'Try again in a few minutes'
+      : flow.error || 'Try again in a few minutes'
 
   useEffect(() => {
     setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
@@ -588,6 +600,11 @@ export default function ClientDashboard({
   }, [guidedBookingField])
 
   useEffect(() => {
+    if (isDispatchExhausted) {
+      setMatchingUiState('empty')
+      return
+    }
+
     if (shouldShowNoProvidersEmptyState) {
       setMatchingUiState('empty')
       return
@@ -613,6 +630,7 @@ export default function ClientDashboard({
     flow.completionJob,
     flow.error,
     flow.screenState,
+    isDispatchExhausted,
     isSearching,
     isTrackingState,
     shouldShowNoProvidersEmptyState,
@@ -756,6 +774,7 @@ export default function ClientDashboard({
   const handleMatchingTryAgain = useCallback(() => {
     flow.clearAvailabilityNotice()
     flow.clearError()
+    flow.clearExhaustedRequestForRetry?.()
     setMatchingUiState(null)
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1253,18 +1272,18 @@ export default function ClientDashboard({
             </div>
           )}
 
-          {matchingUiState && (
+          {(matchingUiState || isDispatchExhausted) && (
             <div style={sheetContentStyle}>
               <SearchingSheet
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
-		mode={matchingUiState ?? 'matching'}
-  		serviceType={flow.currentJob?.service_type}
-  		emptyTitle={matchingEmptyTitle}
-  		emptySubtitle={matchingEmptySubtitle}
-  		onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
-  		onTryAgain={handleMatchingTryAgain}	
+                mode={isDispatchExhausted ? 'empty' : matchingUiState === 'empty' ? 'empty' : 'matching'}
+                serviceType={flow.currentJob?.service_type}
+                emptyTitle={matchingEmptyTitle}
+                emptySubtitle={matchingEmptySubtitle}
+                onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
+                onTryAgain={handleMatchingTryAgain}
               />
             </div>
           )}

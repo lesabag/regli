@@ -472,6 +472,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const latestResolvedLocationRef = useRef<string>('')
   const reusableServiceNameRef = useRef<string>('')
   const reusableServiceNameAutofilledRef = useRef(false)
+  const dismissedExhaustedRequestIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     try {
@@ -660,6 +661,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const clearAvailabilityNotice = useCallback(() => setAvailabilityNotice(null), [])
+  const dismissExhaustedRequest = useCallback(() => {
+    const exhaustedJobId =
+      currentJob?.smart_dispatch_state === 'exhausted'
+        ? currentJob.id
+        : currentJobId
+    if (exhaustedJobId) {
+      dismissedExhaustedRequestIdRef.current = exhaustedJobId
+    }
+    setAvailabilityNotice(null)
+    setError(null)
+    setSuccessMessage(null)
+    setScreenState('idle')
+    setScreenPhase('idle')
+    setCurrentJob(null)
+    setCurrentJobId(null)
+    setSearchStartTime(null)
+  }, [currentJob, currentJobId])
+  const clearExhaustedRequestForRetry = useCallback(() => {
+    dismissExhaustedRequest()
+  }, [dismissExhaustedRequest])
 
   const showDispatchExhaustedMessage = useCallback((jobId: string) => {
     if (exhaustedDispatchNotifiedRef.current.has(jobId)) return
@@ -1118,14 +1139,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
       )
 
       if (!row) {
-        if (exhaustedRow) {
+        if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
           const belongsToCurrentFlow =
             exhaustedRow.id === currentJobId ||
             exhaustedRow.id === lastActiveJobIdRef.current ||
             screenState === 'searching'
 
           if (belongsToCurrentFlow) {
+            setCurrentJob((prev) => mergeWalkRequest(prev, exhaustedRow))
+            setCurrentJobId(exhaustedRow.id)
+            lastActiveJobIdRef.current = exhaustedRow.id
+            setScreenPhase('idle')
+            setScreenState('idle')
+            setSearchStartTime(null)
             showDispatchExhaustedMessage(exhaustedRow.id)
+            return
           }
         }
         clearActiveState()
@@ -1232,7 +1260,15 @@ export function useClientFlow(profileId: string, _profileName: string) {
     walkerIds.forEach((id) => {
       void loadWalkerName(id)
     })
-  }, [profileId, loadWalkerName, hiddenHistoryIds, clearActiveState, currentJobId, screenState, showDispatchExhaustedMessage])
+  }, [
+    profileId,
+    loadWalkerName,
+    hiddenHistoryIds,
+    clearActiveState,
+    currentJobId,
+    screenState,
+    showDispatchExhaustedMessage,
+  ])
 
   useEffect(() => {
     void fetchCurrentAndLists()
@@ -1271,13 +1307,37 @@ export function useClientFlow(profileId: string, _profileName: string) {
           const updated = (payload.new ?? null) as WalkRequestRow | null
           if (!updated) return
 
+          if (
+            updated.smart_dispatch_state === 'exhausted' &&
+            updated.id === dismissedExhaustedRequestIdRef.current
+          ) {
+            return
+          }
+
           if (updated.walker_id) {
             void loadWalkerName(updated.walker_id)
           }
 
+          const belongsToCurrentFlow =
+            updated.id === currentJobId ||
+            updated.id === lastActiveJobIdRef.current ||
+            screenState === 'searching'
+
           const previousPhase = lifecyclePhaseRef.current.get(updated.id) ?? 'idle'
           const nextPhase = getServicePhase(updated)
           lifecyclePhaseRef.current.set(updated.id, nextPhase)
+
+          if (updated.smart_dispatch_state === 'exhausted' && belongsToCurrentFlow) {
+            setCurrentJob((prev) => mergeWalkRequest(prev, updated))
+            setCurrentJobId(updated.id)
+            lastActiveJobIdRef.current = updated.id
+            setScreenPhase('idle')
+            setScreenState('idle')
+            setSearchStartTime(null)
+            showDispatchExhaustedMessage(updated.id)
+            void fetchCurrentAndLists()
+            return
+          }
 
           const isSuppressed =
             !!suppressedActiveRequestIdsRef.current.get(updated.id) ||
@@ -1366,18 +1426,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 typeof updated.smart_dispatch_last_error === 'string' &&
                 updated.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted')
               ) {
+                setCurrentJob((prev) => mergeWalkRequest(prev, updated))
+                setCurrentJobId(updated.id)
+                lastActiveJobIdRef.current = updated.id
+                setScreenPhase('idle')
+                setScreenState('idle')
+                setSearchStartTime(null)
                 showDispatchExhaustedMessage(updated.id)
+                void fetchCurrentAndLists()
+                return
               }
               clearActiveState()
             }
-          }
-
-          if (
-            updated.smart_dispatch_state === 'exhausted' &&
-            (updated.id === currentJobId || updated.id === lastActiveJobIdRef.current || screenState === 'searching')
-          ) {
-            clearActiveState()
-            showDispatchExhaustedMessage(updated.id)
           }
 
           void fetchCurrentAndLists()
@@ -1762,6 +1822,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [])
 
   const requestWalk = useCallback(async () => {
+    dismissedExhaustedRequestIdRef.current = null
+
     if (!dogName.trim()) {
       setError('Enter name')
       return
@@ -1791,6 +1853,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setLoading(true)
       setError(null)
       setSuccessMessage(null)
+      setAvailabilityNotice(null)
       if (bookingLocation !== location) {
         _setLocation(bookingLocation)
         persistBookingDraft({ location: bookingLocation })
@@ -1952,6 +2015,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         setSearchStartTime(Date.now())
         setScreenState('searching')
+        setScreenPhase('searching')
         setSuccessMessage('Searching for a walker...')
         _setDuration(null)
       } else {
@@ -2033,6 +2097,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearError,
     clearSuccess,
     clearAvailabilityNotice,
+    dismissExhaustedRequest,
+    clearExhaustedRequestForRetry,
 
     savedCard,
     upcomingJobs,
@@ -2092,7 +2158,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
     dismissCompletion,
     submitTip,
     dismissTip,
-
     requestWalk,
   }
 }
