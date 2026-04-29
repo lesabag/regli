@@ -67,6 +67,7 @@ function normalizeDogName(value: string): string {
 }
 
 type AppRole = 'client' | 'walker' | 'admin'
+type SheetSnap = 'collapsed' | 'default' | 'expanded'
 
 interface ClientDashboardProps {
   profile: {
@@ -114,10 +115,21 @@ export default function ClientDashboard({
   const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
   const [isCalendarPressed, setIsCalendarPressed] = useState(false)
   const [isDogNameButtonPressed, setIsDogNameButtonPressed] = useState(false)
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('collapsed')
+  const [dragOffsetY, setDragOffsetY] = useState(0)
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === 'undefined' ? 844 : window.innerHeight,
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const locationInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
+  const dragStartYRef = useRef(0)
+  const dragStartOffsetRef = useRef(0)
+  const sheetDidDragRef = useRef(false)
+  const suppressDogNameOpenUntilRef = useRef(0)
+  const wasIdleStateRef = useRef(false)
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -199,6 +211,16 @@ export default function ClientDashboard({
   }, [flow.screenState, flow.bookingTiming])
 
   useEffect(() => {
+    const updateViewportHeight = () => {
+      setViewportHeight(window.innerHeight)
+    }
+
+    updateViewportHeight()
+    window.addEventListener('resize', updateViewportHeight)
+    return () => window.removeEventListener('resize', updateViewportHeight)
+  }, [])
+
+  useEffect(() => {
     if (scrollRef.current && flow.completionJob) scrollRef.current.scrollTop = 0
   }, [flow.completionJob?.jobId])
 
@@ -237,8 +259,6 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!showDogNameSheet) return
-    console.log('[dog-sheet] rendered', showDogNameSheet)
-    console.timeEnd('dog-sheet-open')
   }, [flow.dogName, showDogNameSheet])
 
   useEffect(() => {
@@ -323,9 +343,6 @@ export default function ClientDashboard({
   )
 
   const openDogNameSheet = useCallback(() => {
-    console.time('dog-sheet-open')
-    console.log('[dog-sheet] pointer received')
-    console.log('[dog-sheet] setting local state')
     setShowDogNameSheet(true)
     requestAnimationFrame(() => {
       setDogNameDraft(flow.dogName || '')
@@ -571,6 +588,16 @@ export default function ClientDashboard({
     !isDispatchExhausted &&
     !shouldShowNoProvidersEmptyState &&
     matchingUiState !== 'empty'
+  useEffect(() => {
+    if (isDraggingSheet) return
+    if (isIdleState && !wasIdleStateRef.current) {
+      setSheetSnap('collapsed')
+    }
+    if (!isIdleState && wasIdleStateRef.current) {
+      setSheetSnap('default')
+    }
+    wasIdleStateRef.current = isIdleState
+  }, [isDraggingSheet, isIdleState])
   const shouldShowFirstBookingWow =
     showFirstBookingWow && isIdleState && !flow.completionJob && !flow.tipJob
   const hasSavedPaymentMethod = !!flow.savedCard
@@ -800,6 +827,13 @@ export default function ClientDashboard({
     })
   }, [flow])
 
+  const openLocationDetails = useCallback(() => {
+    setSheetSnap('default')
+    window.setTimeout(() => {
+      locationInputRef.current?.focus()
+    }, 0)
+  }, [])
+
   const clearScheduleToAsap = useCallback(() => {
     flow.setBookingTiming('asap')
     setShowScheduleSheet(false)
@@ -814,6 +848,14 @@ export default function ClientDashboard({
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     })
   }, [flow])
+
+  const handleDurationSelect = useCallback(
+    (value: DurationType) => {
+      flow.setDuration(value)
+      setSheetSnap('default')
+    },
+    [flow],
+  )
 
   const openFavoritesMenu = useCallback(() => {
     setProfileOpen(false)
@@ -848,6 +890,90 @@ export default function ClientDashboard({
   const currentSheetScrollStyle: React.CSSProperties = isIdleState
     ? idleSheetScrollStyle
     : sheetScrollStyle
+  const isSheetCollapsed = sheetSnap === 'collapsed'
+
+  const sheetSnapOffsets = useMemo(
+    () =>
+      ({
+        collapsed: Math.min(320, Math.max(210, viewportHeight * 0.32)),
+        default: 0,
+        expanded: -Math.min(168, Math.max(72, viewportHeight * 0.14)),
+      }) satisfies Record<SheetSnap, number>,
+    [viewportHeight],
+  )
+
+  const mapBottomViewportPadding = useMemo(() => {
+    const collapsedPadding = isIdleState
+      ? Math.round(Math.min(300, Math.max(210, viewportHeight * 0.28)))
+      : Math.round(Math.min(180, Math.max(120, viewportHeight * 0.18)))
+    const defaultPadding = Math.round(Math.min(320, Math.max(220, viewportHeight * 0.3)))
+    const expandedPadding = Math.round(Math.min(420, Math.max(280, viewportHeight * 0.38)))
+
+    if (sheetSnap === 'collapsed') return collapsedPadding
+    if (sheetSnap === 'expanded') return expandedPadding
+    return defaultPadding
+  }, [isIdleState, sheetSnap, viewportHeight])
+
+  const activeSheetOffset = isDraggingSheet ? dragOffsetY : sheetSnapOffsets[sheetSnap]
+
+  const snapSheetToNearest = useCallback(
+    (offset: number) => {
+      const nearest = (Object.entries(sheetSnapOffsets) as Array<[SheetSnap, number]>).reduce(
+        (closest, entry) =>
+          Math.abs(entry[1] - offset) < Math.abs(closest[1] - offset) ? entry : closest,
+        ['default', sheetSnapOffsets.default] as [SheetSnap, number],
+      )
+      setSheetSnap(nearest[0])
+      setDragOffsetY(0)
+    },
+    [sheetSnapOffsets],
+  )
+
+  const handleSheetPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      dragStartYRef.current = event.clientY
+      dragStartOffsetRef.current = sheetSnapOffsets[sheetSnap]
+      sheetDidDragRef.current = false
+      setDragOffsetY(sheetSnapOffsets[sheetSnap])
+      setIsDraggingSheet(true)
+      event.currentTarget.setPointerCapture(event.pointerId)
+    },
+    [sheetSnap, sheetSnapOffsets],
+  )
+
+  const handleSheetPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingSheet) return
+      const deltaY = event.clientY - dragStartYRef.current
+      if (Math.abs(deltaY) > 8) {
+        sheetDidDragRef.current = true
+      }
+      const nextOffset = dragStartOffsetRef.current + deltaY
+      const clampedOffset = Math.max(
+        sheetSnapOffsets.expanded,
+        Math.min(sheetSnapOffsets.collapsed, nextOffset),
+      )
+      setDragOffsetY(clampedOffset)
+    },
+    [isDraggingSheet, sheetSnapOffsets],
+  )
+
+  const handleSheetPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingSheet) return
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      if (sheetDidDragRef.current) {
+        suppressDogNameOpenUntilRef.current = Date.now() + 220
+      }
+      setIsDraggingSheet(false)
+      snapSheetToNearest(dragOffsetY)
+    },
+    [dragOffsetY, isDraggingSheet, snapSheetToNearest],
+  )
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
@@ -986,6 +1112,7 @@ export default function ClientDashboard({
           showUserMarker={true}
           isSearching={isSearching}
           nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
+          bottomViewportPadding={mapBottomViewportPadding}
           {...(isTrackingState && flow.walkerLocation
             ? {
                 walkerLocation: flow.walkerLocation,
@@ -1194,8 +1321,32 @@ export default function ClientDashboard({
         </>
       )}
 
-      <div style={sheetStyle}>
-        <div style={sheetHandleStyle} />
+      <div
+        style={{
+          ...sheetStyle,
+          transform: `translateY(${activeSheetOffset}px)`,
+          transition: isDraggingSheet
+            ? 'none'
+            : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+        }}
+      >
+        <div
+          style={sheetHandleTouchAreaStyle}
+          onPointerDown={handleSheetPointerDown}
+          onPointerMove={handleSheetPointerMove}
+          onPointerUp={handleSheetPointerUp}
+          onPointerCancel={handleSheetPointerUp}
+        >
+          <div style={sheetHandleStyle} />
+          <div style={sheetHandleHintStyle}>
+            <span style={sheetHandleHintIconStyle}>
+              {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
+            </span>
+            <span>
+              {sheetSnap === 'collapsed' ? 'Pull up to book' : 'Pull down to hide'}
+            </span>
+          </div>
+        </div>
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
           {isIdleState && (
@@ -1216,6 +1367,9 @@ export default function ClientDashboard({
                         event.preventDefault()
                         event.stopPropagation()
                         setIsDogNameButtonPressed(false)
+                        if (Date.now() < suppressDogNameOpenUntilRef.current) {
+                          return
+                        }
                         openDogNameSheet()
                       }}
                       onPointerCancel={() => setIsDogNameButtonPressed(false)}
@@ -1253,7 +1407,7 @@ export default function ClientDashboard({
                     )}
                   </div>
 
-                  {preferredWalkers.length > 0 && (
+                  {!isSheetCollapsed && preferredWalkers.length > 0 && (
                     <button
                       type="button"
                       onClick={openFavoritesMenu}
@@ -1273,111 +1427,64 @@ export default function ClientDashboard({
                   )}
 
                   <div style={compactFieldStyle}>
-                    <div style={compactFieldLabelStyle}>Pickup</div>
-                    <input
-                      ref={locationInputRef}
-                      value={flow.location}
-                      onChange={(e) => flow.setLocation(e.target.value)}
-                      onPointerUp={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        window.setTimeout(() => {
-                          locationInputRef.current?.focus()
-                        }, 0)
-                      }}
-                      placeholder={
-                        flow.locationLoading ? 'Finding your location...' : 'Pickup location'
-                      }
-                      style={{
-                        ...inputStyle,
-                        touchAction: 'manipulation',
-                        WebkitTapHighlightColor: 'transparent',
-                      }}
-                    />
-                  </div>
-
-                  <div style={compactFieldStyle}>
-                    <div style={scheduledHeaderRowStyle}>
-                      <label style={scheduledLabelStyle}>BOOK</label>
-                      {flow.bookingTiming === 'scheduled' ? (
-                        <div style={scheduledActionsStyle}>
-                          <button
-                            type="button"
-                            onClick={clearScheduleToAsap}
-                            style={scheduledAsapBtnStyle}
+                    {isSheetCollapsed ? (
+                      <button
+                        type="button"
+                        onPointerUp={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          openLocationDetails()
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openLocationDetails()
+                          }
+                        }}
+                        style={compactPickupRowButtonStyle}
+                      >
+                        <span style={compactPickupRowLabelStyle}>Pick-up from:</span>
+                        <span style={compactPickupRowValueWrapStyle}>
+                          <span style={compactPickupRowIconStyle}>📍</span>
+                          <span
+                            style={
+                              flow.location.trim()
+                                ? compactPickupRowValueStyle
+                                : compactPickupRowPlaceholderStyle
+                            }
                           >
-                            BOOK NOW
-                          </button>
-                          <button
-                            type="button"
-                            onPointerUp={(event) => {
-                              event.preventDefault()
-                              event.stopPropagation()
-                              openScheduleSheet()
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault()
-                                openScheduleSheet()
-                              }
-                            }}
-                            style={scheduledEditBtnStyle}
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
+                            {flow.locationLoading
+                              ? 'Finding your location...'
+                              : flow.location.trim() || 'Pickup location'}
+                          </span>
+                        </span>
+                        <span style={compactPickupRowChevronStyle}>˅</span>
+                      </button>
+                    ) : (
+                      <>
+                        <div style={compactFieldLabelStyle}>Pickup</div>
+                        <input
+                          ref={locationInputRef}
+                          value={flow.location}
+                          onChange={(e) => flow.setLocation(e.target.value)}
                           onPointerUp={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
-                            openScheduleSheet()
+                            window.setTimeout(() => {
+                              locationInputRef.current?.focus()
+                            }, 0)
                           }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              openScheduleSheet()
-                            }
+                          placeholder={
+                            flow.locationLoading ? 'Finding your location...' : 'Pickup location'
+                          }
+                          style={{
+                            ...inputStyle,
+                            touchAction: 'manipulation',
+                            WebkitTapHighlightColor: 'transparent',
                           }}
-                          style={scheduledEditBtnStyle}
-                        >
-                          Schedule
-                        </button>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onPointerUp={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        openScheduleSheet()
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          openScheduleSheet()
-                        }
-                      }}
-                      style={{
-                        ...scheduledSummaryCardStyle,
-                        ...(flow.bookingTiming === 'scheduled'
-                          ? scheduledSummaryCardActiveStyle
-                          : null),
-                      }}
-                    >
-                      <div style={scheduledSummaryMainStyle}>
-                        {flow.bookingTiming === 'scheduled'
-                          ? formatScheduledDate(flow.scheduledFor)
-                          : 'NOW'}
-                      </div>
-                      <div style={scheduledSummarySubStyle}>
-                        {flow.bookingTiming === 'scheduled'
-                          ? 'Dispatch starts automatically about 15 min before the walk.'
-                          : 'We’ll start finding a walker right away.'}
-                      </div>
-                    </button>
+                        />
+                      </>
+                    )}
                   </div>
 
                   <div style={compactFieldStyle}>
@@ -1394,44 +1501,134 @@ export default function ClientDashboard({
                       <DurationPicker
                         options={DURATION_OPTIONS}
                         selected={flow.duration ?? ''}
-                        onSelect={(v) => flow.setDuration(v as DurationType)}
+                        onSelect={(v) => handleDurationSelect(v as DurationType)}
                         surgeMultiplier={flow.surgeMultiplier}
                         surgeLevel={flow.surgeLevel}
                       />
                     </div>
                   </div>
 
-                  <div style={compactFieldStyle}>
-                    {isPaymentGuided && (
-                      <div style={guidedFieldHintAboveStyle}>Add payment method</div>
-                    )}
-                    <div
-                      style={{
-                        ...compactPaymentWrapStyle,
-                        ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
-                        ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                      }}
-                    >
-                      <CardSetupForm
-                        savedCard={flow.savedCard}
-                        setupClientSecret={flow.setupClientSecret}
-                        loadingCard={flow.cardLoading}
-                        loadError={flow.cardError}
-                        onRequestSetup={flow.requestCardSetup}
-                        onChangeCard={flow.changeCard}
-                        onSetupComplete={flow.onCardSetupComplete}
-                        onCancelSetup={flow.cancelCardSetup}
-                        onRetry={flow.retryLoadCard}
-                      />
+                  {!isSheetCollapsed && (
+                    <div style={compactFieldStyle}>
+                      <div style={scheduledHeaderRowStyle}>
+                        <label style={scheduledLabelStyle}>BOOK</label>
+                        {flow.bookingTiming === 'scheduled' ? (
+                          <div style={scheduledActionsStyle}>
+                            <button
+                              type="button"
+                              onClick={clearScheduleToAsap}
+                              style={scheduledAsapBtnStyle}
+                            >
+                              BOOK NOW
+                            </button>
+                            <button
+                              type="button"
+                              onPointerUp={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                openScheduleSheet()
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault()
+                                  openScheduleSheet()
+                                }
+                              }}
+                              style={scheduledEditBtnStyle}
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onPointerUp={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              openScheduleSheet()
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                openScheduleSheet()
+                              }
+                            }}
+                            style={scheduledEditBtnStyle}
+                          >
+                            Schedule
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onPointerUp={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          openScheduleSheet()
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openScheduleSheet()
+                          }
+                        }}
+                        style={{
+                          ...scheduledSummaryCardStyle,
+                          ...(flow.bookingTiming === 'scheduled'
+                            ? scheduledSummaryCardActiveStyle
+                            : null),
+                        }}
+                      >
+                        <div style={scheduledSummaryMainStyle}>
+                          {flow.bookingTiming === 'scheduled'
+                            ? formatScheduledDate(flow.scheduledFor)
+                            : 'NOW'}
+                        </div>
+                        <div style={scheduledSummarySubStyle}>
+                          {flow.bookingTiming === 'scheduled'
+                            ? 'Dispatch starts automatically about 15 min before the walk.'
+                            : 'We’ll start finding a walker right away.'}
+                        </div>
+                      </button>
                     </div>
-                  </div>
+                  )}
+
+                  {!isSheetCollapsed && (
+                    <div style={compactFieldStyle}>
+                      {isPaymentGuided && (
+                        <div style={guidedFieldHintAboveStyle}>Add payment method</div>
+                      )}
+                      <div
+                        style={{
+                          ...compactPaymentWrapStyle,
+                          ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                          ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                        }}
+                      >
+                        <CardSetupForm
+                          savedCard={flow.savedCard}
+                          setupClientSecret={flow.setupClientSecret}
+                          loadingCard={flow.cardLoading}
+                          loadError={flow.cardError}
+                          onRequestSetup={flow.requestCardSetup}
+                          onChangeCard={flow.changeCard}
+                          onSetupComplete={flow.onCardSetupComplete}
+                          onCancelSetup={flow.cancelCardSetup}
+                          onRetry={flow.retryLoadCard}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div style={feeLabelStyle}>
-                  {flow.bookingTiming === 'scheduled'
-                    ? 'Price locked now · payment visible · auto dispatch later'
-                    : 'Service fee included · charged after walk'}
-                </div>
+                {!isSheetCollapsed && (
+                  <div style={feeLabelStyle}>
+                    {flow.bookingTiming === 'scheduled'
+                      ? 'Price locked now · payment visible · auto dispatch later'
+                      : 'Service fee included · charged after walk'}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1486,7 +1683,7 @@ export default function ClientDashboard({
 
         </div>
 
-        {isIdleState && (
+        {isIdleState && !isSheetCollapsed && (
           <div style={stickyCtaWrapStyle}>
             {shouldShowGuidanceCtaHelper && (
               <div style={guidedCtaHelperStyle}>Complete the highlighted field to continue</div>
@@ -2215,9 +2412,8 @@ const topUiLayerStyle: React.CSSProperties = {
 }
 
 const mapContainerBaseStyle: React.CSSProperties = {
-  position: 'relative',
-  flexShrink: 0,
-  minHeight: 220,
+  position: 'absolute',
+  inset: 0,
   overflow: 'hidden',
   width: '100%',
   maxWidth: '100%',
@@ -2225,15 +2421,15 @@ const mapContainerBaseStyle: React.CSSProperties = {
 }
 
 const idleMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const searchingMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const trackingMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const floatingTopBarStyle: React.CSSProperties = {
@@ -2297,13 +2493,11 @@ const floatingMessagesStyle: React.CSSProperties = {
 }
 
 const sheetStyle: React.CSSProperties = {
-  position: 'relative',
-  marginTop: -18,
-  alignSelf: 'stretch',
-  flex: 1,
-  minHeight: 0,
-  width: '100%',
-  maxWidth: '100%',
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  top: 'calc(36dvh - 18px)',
   borderTopLeftRadius: 28,
   borderTopRightRadius: 28,
   background: '#FFFFFF',
@@ -2313,8 +2507,27 @@ const sheetStyle: React.CSSProperties = {
   overflow: 'hidden',
   zIndex: 1,
   boxSizing: 'border-box',
-  marginLeft: 0,
-  marginRight: 0,
+  willChange: 'transform',
+}
+
+const sheetHandleTouchAreaStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '12px 0 18px',
+  flexShrink: 0,
+  touchAction: 'none',
+  pointerEvents: 'auto',
+  cursor: 'grab',
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
+  position: 'relative',
+  zIndex: 2,
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
 }
 
 const sheetHandleStyle: React.CSSProperties = {
@@ -2322,8 +2535,23 @@ const sheetHandleStyle: React.CSSProperties = {
   height: 4,
   borderRadius: 999,
   background: '#CBD5E1',
-  margin: '8px auto 6px',
-  flexShrink: 0,
+}
+
+const sheetHandleHintStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#5B7CFA',
+  lineHeight: 1,
+  pointerEvents: 'none',
+}
+
+const sheetHandleHintIconStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#475569',
+  transform: 'translateY(-1px)',
 }
 
 const sheetScrollStyle: React.CSSProperties = {
@@ -2444,6 +2672,67 @@ const compactFieldLabelStyle: React.CSSProperties = {
   letterSpacing: 0.6,
   textTransform: 'uppercase',
   color: '#64748B',
+}
+
+const compactPickupRowButtonStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 38,
+  border: 'none',
+  borderRadius: 14,
+  background: 'rgba(248, 250, 252, 0.92)',
+  color: '#0F172A',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '0 12px',
+  textAlign: 'left',
+  cursor: 'pointer',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const compactPickupRowLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#64748B',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+}
+
+const compactPickupRowValueWrapStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const compactPickupRowIconStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
+const compactPickupRowValueStyle: React.CSSProperties = {
+  minWidth: 0,
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#0F172A',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const compactPickupRowPlaceholderStyle: React.CSSProperties = {
+  ...compactPickupRowValueStyle,
+  color: '#94A3B8',
+  fontWeight: 600,
+}
+
+const compactPickupRowChevronStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1,
+  color: '#94A3B8',
+  flexShrink: 0,
 }
 
 const dogInputShellStyle: React.CSSProperties = {
