@@ -30,14 +30,12 @@ serve(async (req: Request) => {
     const apnsKeyId = Deno.env.get('APNS_KEY_ID')
     const apnsTeamId = Deno.env.get('APNS_TEAM_ID')
     const apnsKeyP8 = Deno.env.get('APNS_KEY_P8')
-    const appBundleId = Deno.env.get('APP_BUNDLE_ID') || 'com.regli.app'
+    const appBundleId = Deno.env.get('APP_BUNDLE_ID')
     const apnsEnv = Deno.env.get('APNS_ENVIRONMENT') || 'development'
+    const hasApnsConfig = !!(apnsKeyId && apnsTeamId && apnsKeyP8 && appBundleId)
 
     if (!supabaseUrl || !serviceRoleKey) {
       return jsonResp({ error: 'Server misconfigured (supabase)' }, 500)
-    }
-    if (!apnsKeyId || !apnsTeamId || !apnsKeyP8) {
-      return jsonResp({ error: 'Server misconfigured (apns)' }, 500)
     }
 
     // Auth: verify caller is authenticated
@@ -139,7 +137,24 @@ serve(async (req: Request) => {
     }
 
     if (!tokens || tokens.length === 0) {
-      return jsonResp({ sent: 0, notified: walkerIds.length, message: 'No push tokens found (in-app notifications still created)' }, 200)
+      return jsonResp({
+        ok: true,
+        sent: 0,
+        notified: walkerIds.length,
+        skipped: hasApnsConfig ? null : 'apns_not_configured',
+        message: 'No push tokens found (in-app notifications still created)',
+      }, 200)
+    }
+
+    if (!hasApnsConfig) {
+      console.warn('[Push] APNs not configured; skipping remote push delivery')
+      return jsonResp({
+        ok: true,
+        sent: 0,
+        total: tokens.length,
+        notified: walkerIds.length,
+        skipped: 'apns_not_configured',
+      }, 200)
     }
 
     // Generate APNs JWT
@@ -206,6 +221,7 @@ serve(async (req: Request) => {
     }
 
     return jsonResp({
+      ok: true,
       sent: sentCount,
       total: tokens.length,
       notified: walkerIds.length,

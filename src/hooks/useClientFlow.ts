@@ -473,6 +473,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const reusableServiceNameRef = useRef<string>('')
   const reusableServiceNameAutofilledRef = useRef(false)
   const dismissedExhaustedRequestIdRef = useRef<string | null>(null)
+  const fullRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const currentOnlyRefreshInFlightRef = useRef<Promise<void> | null>(null)
 
   useEffect(() => {
     try {
@@ -1049,7 +1051,99 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setSearchStartTime(null)
   }, [])
 
+  const applyCurrentRows = useCallback((currentRows: WalkRequestRow[]) => {
+    const row = getNewestActiveRequest(
+      currentRows,
+      suppressedActiveRequestIdsRef.current,
+      staleActiveCutoffRef.current,
+    )
+    const exhaustedRow = getNewestExhaustedRequest(
+      currentRows,
+      suppressedActiveRequestIdsRef.current,
+      staleActiveCutoffRef.current,
+    )
+
+    if (!row) {
+      if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
+        const belongsToCurrentFlow =
+          exhaustedRow.id === currentJobId ||
+          exhaustedRow.id === lastActiveJobIdRef.current ||
+          screenState === 'searching'
+
+        if (belongsToCurrentFlow) {
+          setCurrentJob((prev) => mergeWalkRequest(prev, exhaustedRow))
+          setCurrentJobId(exhaustedRow.id)
+          lastActiveJobIdRef.current = exhaustedRow.id
+          setScreenPhase('idle')
+          setScreenState('idle')
+          setSearchStartTime(null)
+          showDispatchExhaustedMessage(exhaustedRow.id)
+          return
+        }
+      }
+      clearActiveState()
+      return
+    }
+
+    setAvailabilityNotice(null)
+    const nextPhase = getServicePhase(row)
+    lifecyclePhaseRef.current.set(row.id, nextPhase)
+    setCurrentJob((prev) => mergeWalkRequest(prev, row))
+    setCurrentJobId(row.id)
+    lastActiveJobIdRef.current = row.id
+    if (row.walker_id) void loadWalkerName(row.walker_id)
+    setScreenPhase(nextPhase)
+    setScreenState(mapScreenStateFromPhase(nextPhase))
+    if (row.status === 'accepted') {
+      setSearchStartTime(null)
+    } else if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
+      setSearchStartTime((prev) => prev ?? Date.now())
+    }
+  }, [
+    clearActiveState,
+    currentJobId,
+    loadWalkerName,
+    screenState,
+    showDispatchExhaustedMessage,
+  ])
+
+  const fetchCurrentJobState = useCallback(async () => {
+    if (currentOnlyRefreshInFlightRef.current) {
+      await currentOnlyRefreshInFlightRef.current
+      return
+    }
+
+    const run = (async () => {
+      const { data, error } = await supabase
+        .from('walk_requests')
+        .select(JOB_SELECT)
+        .eq('client_id', profileId)
+        .in('status', ['awaiting_payment', 'open', 'accepted'])
+        .or('booking_timing.is.null,booking_timing.eq.asap,dispatch_state.eq.dispatched')
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) {
+        console.warn('[useClientFlow] current request unavailable:', error.message)
+        return
+      }
+
+      applyCurrentRows((data as WalkRequestRow[] | null) ?? [])
+    })().finally(() => {
+      currentOnlyRefreshInFlightRef.current = null
+    })
+
+    currentOnlyRefreshInFlightRef.current = run
+    await run
+  }, [applyCurrentRows, profileId])
+
   const fetchCurrentAndLists = useCallback(async () => {
+    if (fullRefreshInFlightRef.current) {
+      await fullRefreshInFlightRef.current
+      return
+    }
+
+    const run = (async () => {
     const [
       currentResult,
       upcomingResult,
@@ -1126,53 +1220,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (currentRes.error) {
       // Preserve the current UI state on transient read failures.
     } else {
-      const currentRows = (currentRes.data as WalkRequestRow[] | null) ?? []
-      const row = getNewestActiveRequest(
-        currentRows,
-        suppressedActiveRequestIdsRef.current,
-        staleActiveCutoffRef.current,
-      )
-      const exhaustedRow = getNewestExhaustedRequest(
-        currentRows,
-        suppressedActiveRequestIdsRef.current,
-        staleActiveCutoffRef.current,
-      )
-
-      if (!row) {
-        if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
-          const belongsToCurrentFlow =
-            exhaustedRow.id === currentJobId ||
-            exhaustedRow.id === lastActiveJobIdRef.current ||
-            screenState === 'searching'
-
-          if (belongsToCurrentFlow) {
-            setCurrentJob((prev) => mergeWalkRequest(prev, exhaustedRow))
-            setCurrentJobId(exhaustedRow.id)
-            lastActiveJobIdRef.current = exhaustedRow.id
-            setScreenPhase('idle')
-            setScreenState('idle')
-            setSearchStartTime(null)
-            showDispatchExhaustedMessage(exhaustedRow.id)
-            return
-          }
-        }
-        clearActiveState()
-      } else {
-        setAvailabilityNotice(null)
-        const nextPhase = getServicePhase(row)
-        lifecyclePhaseRef.current.set(row.id, nextPhase)
-        setCurrentJob((prev) => mergeWalkRequest(prev, row))
-        setCurrentJobId(row.id)
-        lastActiveJobIdRef.current = row.id
-        if (row.walker_id) void loadWalkerName(row.walker_id)
-        setScreenPhase(nextPhase)
-        setScreenState(mapScreenStateFromPhase(nextPhase))
-        if (row.status === 'accepted') {
-          setSearchStartTime(null)
-        } else if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
-          setSearchStartTime((prev) => prev ?? Date.now())
-        }
-      }
+      applyCurrentRows((currentRes.data as WalkRequestRow[] | null) ?? [])
     }
 
     const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
@@ -1260,14 +1308,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
     walkerIds.forEach((id) => {
       void loadWalkerName(id)
     })
+    })().finally(() => {
+      fullRefreshInFlightRef.current = null
+    })
+
+    fullRefreshInFlightRef.current = run
+    await run
   }, [
+    applyCurrentRows,
     profileId,
     loadWalkerName,
     hiddenHistoryIds,
-    clearActiveState,
-    currentJobId,
-    screenState,
-    showDispatchExhaustedMessage,
   ])
 
   useEffect(() => {
@@ -1276,10 +1327,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   useEffect(() => {
     const refresh = () => {
-      void fetchCurrentAndLists()
+      if (document.visibilityState === 'hidden') return
+      if (screenState === 'idle') {
+        void fetchCurrentAndLists()
+        return
+      }
+      void fetchCurrentJobState()
     }
 
-    const pollId = window.setInterval(refresh, 5000)
+    const pollId = window.setInterval(
+      refresh,
+      screenState === 'idle' ? 12_000 : 10_000,
+    )
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refresh()
@@ -1295,7 +1354,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       window.removeEventListener('pageshow', refresh)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [fetchCurrentAndLists])
+  }, [fetchCurrentAndLists, fetchCurrentJobState, screenState])
 
   useEffect(() => {
     const channel = supabase
@@ -1822,8 +1881,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [])
 
   const requestWalk = useCallback(async () => {
-    dismissedExhaustedRequestIdRef.current = null
-
     if (!dogName.trim()) {
       setError('Enter name')
       return
@@ -1927,6 +1984,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const createdJob = job as WalkRequestRow
 
       if (shouldSearchNow) {
+        dismissedExhaustedRequestIdRef.current = null
         setCurrentJobId(createdJob.id)
         setCurrentJob(createdJob)
         lastActiveJobIdRef.current = createdJob.id
@@ -2020,6 +2078,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setSuccessMessage('Searching for a walker...')
         _setDuration(null)
       } else {
+        dismissedExhaustedRequestIdRef.current = null
         setBookingTiming('asap')
         setScheduledFor(null)
         setSearchStartTime(null)

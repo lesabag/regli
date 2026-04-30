@@ -191,6 +191,10 @@ function startsInMinutes(value: string | null | undefined): number | null {
 const AUTO_DISPATCH_LEAD_MINUTES = 15
 const AUTO_DISPATCH_POLL_MS = 20_000
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
+const IDLE_WALKER_POLL_MS = 12_000
+const ACTIVE_WALKER_POLL_MS = 4_000
+const IDLE_LOCATION_BROADCAST_MS = 15_000
+const ACTIVE_LOCATION_BROADCAST_MS = 5_000
 
 function completionDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_dismissed_${profileId}`
@@ -370,7 +374,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
   const shownStateMessagesRef = useRef<Set<string>>(new Set())
   const lastAcceptedJobIdRef = useRef<string | null>(null)
+  const candidateRequestIdsRef = useRef<Set<string>>(new Set())
+  const assignedJobIdsRef = useRef<Set<string>>(new Set())
   const firstName = (profileName || '').split(' ')[0] || profileName
+  const [isDocumentVisible, setIsDocumentVisible] = useState(() =>
+    typeof document === 'undefined' ? true : !document.hidden,
+  )
+
+  const hasActiveWalkerWork =
+    activeOffers.length > 0 ||
+    myJobs.some((job) => job.status === 'accepted' && !isFutureJob(job))
 
   const showStateMessage = useCallback((jobId: string, event: string, message: string) => {
     const key = `${event}:${jobId}`
@@ -398,6 +411,17 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       dismissedCompletionIdsRef.current = new Set()
     }
   }, [profileId])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+
+    const handleVisibilityChange = () => {
+      setIsDocumentVisible(!document.hidden)
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
 
   const avgRating = useMemo(() => {
     if (ratingsReceived.length === 0) return null
@@ -507,6 +531,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return
     }
 
+    if (!isDocumentVisible) return
+
     const broadcast = () => {
       const pos = walkerPosRef.current
       if (!pos) return
@@ -520,9 +546,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     }
 
     broadcast()
-    const id = setInterval(broadcast, 5_000)
+    const id = setInterval(
+      broadcast,
+      hasActiveWalkerWork ? ACTIVE_LOCATION_BROADCAST_MS : IDLE_LOCATION_BROADCAST_MS,
+    )
     return () => clearInterval(id)
-  }, [isOnline, profileId])
+  }, [hasActiveWalkerWork, isDocumentVisible, isOnline, profileId])
 
   const autoDispatchScheduledJob = useCallback(
     async (job: WalkRequestRow) => {
@@ -818,6 +847,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
     const candidates = (candidateRows as DispatchCandidateRow[] | null) ?? []
     const candidateRequestIds = [...new Set(candidates.map((candidate) => candidate.request_id))]
+    candidateRequestIdsRef.current = new Set(candidateRequestIds)
 
     if (candidateRequestIds.length > 0) {
       const { data: attemptRows, error: attemptsErr } = await supabase
@@ -1118,19 +1148,25 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
     setOpenJobs(newOpen)
     setMyJobs(newMine)
+    assignedJobIdsRef.current = new Set(newMine.map((job) => job.id))
     setLoading(false)
   }, [profileId, declinedIds, clearRetainedIncomingOffer])
 
 
   useEffect(() => {
-    if (!isOnline) return
+    if (!isOnline || !isDocumentVisible) return
 
     const id = window.setInterval(() => {
       void fetchAll()
-    }, 4000)
+    }, hasActiveWalkerWork ? ACTIVE_WALKER_POLL_MS : IDLE_WALKER_POLL_MS)
 
     return () => window.clearInterval(id)
-  }, [isOnline, fetchAll])
+  }, [fetchAll, hasActiveWalkerWork, isDocumentVisible, isOnline])
+
+  useEffect(() => {
+    if (!isOnline || !isDocumentVisible) return
+    void fetchAll()
+  }, [fetchAll, isDocumentVisible, isOnline])
 
   const fetchRatings = useCallback(async () => {
     const { data: received } = await supabase.from('ratings').select('*').eq('to_user_id', profileId)
@@ -1241,10 +1277,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     const tSub = setTimeout(() => {
       ch1 = supabase
         .channel(`wf-requests-${profileId}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'walk_requests' }, () => {
-          void fetchAll()
-          void fetchWallet()
-        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'walk_requests', filter: `walker_id=eq.${profileId}` },
+          () => {
+            if (!isDocumentVisible) return
+            void fetchAll()
+            void fetchWallet()
+          },
+        )
         .subscribe()
 
       ch2 = supabase
@@ -1288,13 +1329,30 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'dispatch_candidates', filter: `walker_id=eq.${profileId}` },
           () => {
+            if (!isDocumentVisible) return
             void fetchAll()
           },
         )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'dispatch_attempts' },
-          () => {
+          (payload) => {
+            if (!isDocumentVisible) return
+            const requestId =
+              (typeof payload.new === 'object' && payload.new && 'request_id' in payload.new
+                ? String(payload.new.request_id ?? '')
+                : '') ||
+              (typeof payload.old === 'object' && payload.old && 'request_id' in payload.old
+                ? String(payload.old.request_id ?? '')
+                : '')
+
+            if (
+              requestId &&
+              !candidateRequestIdsRef.current.has(requestId) &&
+              !assignedJobIdsRef.current.has(requestId)
+            ) {
+              return
+            }
             void fetchAll()
           },
         )
@@ -1306,6 +1364,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'walker_tips', filter: `walker_id=eq.${profileId}` },
           () => {
+            if (!isDocumentVisible) return
             void fetchAll()
           },
         )
@@ -1331,6 +1390,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     fetchBalanceAdjustments,
     fetchConnectStatus,
     fetchOnlineStatus,
+    isDocumentVisible,
   ])
 
   useEffect(() => {
