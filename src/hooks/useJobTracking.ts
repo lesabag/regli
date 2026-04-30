@@ -233,8 +233,9 @@ export function useJobTracking(jobId: string | null) {
       .subscribe()
 
     const pollId = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return
       void fetchLatest()
-    }, 5000)
+    }, 10_000)
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {

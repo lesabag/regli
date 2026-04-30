@@ -67,6 +67,7 @@ function normalizeDogName(value: string): string {
 }
 
 type AppRole = 'client' | 'walker' | 'admin'
+type SheetSnap = 'collapsed' | 'default'
 
 interface ClientDashboardProps {
   profile: {
@@ -114,10 +115,23 @@ export default function ClientDashboard({
   const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
   const [isCalendarPressed, setIsCalendarPressed] = useState(false)
   const [isDogNameButtonPressed, setIsDogNameButtonPressed] = useState(false)
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('collapsed')
+  const [dragOffsetY, setDragOffsetY] = useState(0)
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === 'undefined' ? 844 : window.innerHeight,
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const locationInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
+  const dragStartYRef = useRef(0)
+  const dragStartOffsetRef = useRef(0)
+  const sheetDidDragRef = useRef(false)
+  const suppressDogNameOpenUntilRef = useRef(0)
+  const lastCurrentJobIdRef = useRef<string | null>(null)
+  const hasUserInteractedRef = useRef(false)
+  const arrivalBeepPlayedJobIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -199,8 +213,32 @@ export default function ClientDashboard({
   }, [flow.screenState, flow.bookingTiming])
 
   useEffect(() => {
+    const updateViewportHeight = () => {
+      setViewportHeight(window.innerHeight)
+    }
+
+    updateViewportHeight()
+    window.addEventListener('resize', updateViewportHeight)
+    return () => window.removeEventListener('resize', updateViewportHeight)
+  }, [])
+
+  useEffect(() => {
     if (scrollRef.current && flow.completionJob) scrollRef.current.scrollTop = 0
   }, [flow.completionJob?.jobId])
+
+  useEffect(() => {
+    const markInteracted = () => {
+      hasUserInteractedRef.current = true
+    }
+
+    window.addEventListener('pointerdown', markInteracted, { capture: true, passive: true })
+    window.addEventListener('keydown', markInteracted, { capture: true })
+
+    return () => {
+      window.removeEventListener('pointerdown', markInteracted, { capture: true } as EventListenerOptions)
+      window.removeEventListener('keydown', markInteracted, { capture: true } as EventListenerOptions)
+    }
+  }, [])
 
 
   useEffect(() => {
@@ -237,9 +275,53 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!showDogNameSheet) return
-    console.log('[dog-sheet] rendered', showDogNameSheet)
-    console.timeEnd('dog-sheet-open')
   }, [flow.dogName, showDogNameSheet])
+
+  const playArrivalBeep = useCallback(() => {
+    if (!hasUserInteractedRef.current || typeof window === 'undefined') return
+
+    try {
+      const AudioContextCtor =
+        window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+
+      if (!AudioContextCtor) return
+
+      const audioContext = new AudioContextCtor()
+      const oscillator = audioContext.createOscillator()
+      const gainNode = audioContext.createGain()
+
+      oscillator.type = 'sine'
+      oscillator.frequency.value = 988
+      gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.08, audioContext.currentTime + 0.01)
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.18)
+
+      oscillator.connect(gainNode)
+      gainNode.connect(audioContext.destination)
+
+      oscillator.start()
+      oscillator.stop(audioContext.currentTime + 0.2)
+      oscillator.onended = () => {
+        void audioContext.close().catch(() => undefined)
+      }
+    } catch {
+      // fail silently on unsupported or blocked audio
+    }
+  }, [])
+
+  useEffect(() => {
+    const currentArrivalJobId =
+      flow.screenPhase === 'arrived_pending_confirmation'
+        ? flow.activeJob?.id ?? flow.currentJob?.id ?? null
+        : null
+
+    if (!currentArrivalJobId) return
+    if (arrivalBeepPlayedJobIdRef.current === currentArrivalJobId) return
+
+    arrivalBeepPlayedJobIdRef.current = currentArrivalJobId
+    playArrivalBeep()
+  }, [flow.activeJob?.id, flow.currentJob?.id, flow.screenPhase, playArrivalBeep])
 
   useEffect(() => {
     if (!showOnboardingWowToken || showOnboardingWowToken === lastOnboardingWowTokenRef.current) return
@@ -290,8 +372,18 @@ export default function ClientDashboard({
 
   const handleFindWalker = useCallback(() => {
     if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
+    flow.clearAvailabilityNotice()
+    flow.clearError()
+    setMatchingUiState(null)
     flow.requestWalk()
-  }, [flow.dogName, flow.duration, flow.location, flow.savedCard, flow.requestWalk])
+  }, [
+    flow,
+    flow.dogName,
+    flow.duration,
+    flow.location,
+    flow.requestWalk,
+    flow.savedCard,
+  ])
 
   const handleFirstBookingAddPayment = useCallback(() => {
     setShowFirstBookingWow(false)
@@ -323,9 +415,6 @@ export default function ClientDashboard({
   )
 
   const openDogNameSheet = useCallback(() => {
-    console.time('dog-sheet-open')
-    console.log('[dog-sheet] pointer received')
-    console.log('[dog-sheet] setting local state')
     setShowDogNameSheet(true)
     requestAnimationFrame(() => {
       setDogNameDraft(flow.dogName || '')
@@ -569,8 +658,17 @@ export default function ClientDashboard({
     flow.screenState === 'idle' &&
     !hasCompletionPrompt &&
     !isDispatchExhausted &&
-    !shouldShowNoProvidersEmptyState &&
-    matchingUiState !== 'empty'
+    !shouldShowNoProvidersEmptyState
+  const shouldRenderIdleSheet =
+    flow.screenState === 'idle' &&
+    !hasCompletionPrompt &&
+    !flow.tipJob &&
+    !isDispatchExhausted &&
+    !shouldShowNoProvidersEmptyState
+  const shouldRenderSearchingSheet =
+    flow.screenState === 'searching' || isDispatchExhausted || shouldShowNoProvidersEmptyState
+  const canInteractWithSheet = true
+  const isSheetCollapsed = sheetSnap === 'collapsed'
   const shouldShowFirstBookingWow =
     showFirstBookingWow && isIdleState && !flow.completionJob && !flow.tipJob
   const hasSavedPaymentMethod = !!flow.savedCard
@@ -667,6 +765,17 @@ export default function ClientDashboard({
     isTrackingState,
     shouldShowNoProvidersEmptyState,
   ])
+
+  useEffect(() => {
+    const currentJobId = flow.currentJob?.id ?? null
+
+    if (currentJobId !== lastCurrentJobIdRef.current) {
+      lastCurrentJobIdRef.current = currentJobId
+      if (currentJobId && !isDispatchExhausted && !shouldShowNoProvidersEmptyState) {
+        setMatchingUiState(null)
+      }
+    }
+  }, [flow.currentJob?.id, isDispatchExhausted, shouldShowNoProvidersEmptyState])
 
   const nearbyWalkers = useNearbyWalkers(
     flow.hasUserLocation ? flow.userLocation : null,
@@ -800,6 +909,18 @@ export default function ClientDashboard({
     })
   }, [flow])
 
+  const openLocationDetails = useCallback(() => {
+    setSheetSnap('default')
+    window.setTimeout(() => {
+      locationInputRef.current?.focus()
+    }, 0)
+  }, [])
+
+  const toggleSheetSnap = useCallback(() => {
+    setSheetSnap((current) => (current === 'collapsed' ? 'default' : 'collapsed'))
+    setDragOffsetY(0)
+  }, [])
+
   const clearScheduleToAsap = useCallback(() => {
     flow.setBookingTiming('asap')
     setShowScheduleSheet(false)
@@ -814,6 +935,14 @@ export default function ClientDashboard({
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     })
   }, [flow])
+
+  const handleDurationSelect = useCallback(
+    (value: DurationType) => {
+      flow.setDuration(value)
+      setSheetSnap('default')
+    },
+    [flow],
+  )
 
   const openFavoritesMenu = useCallback(() => {
     setProfileOpen(false)
@@ -845,9 +974,200 @@ export default function ClientDashboard({
       ? searchingMapContainerStyle
       : idleMapContainerStyle
 
+  const currentSheetStyle: React.CSSProperties = isTrackingState
+    ? trackingSheetStyle
+    : sheetStyle
+
   const currentSheetScrollStyle: React.CSSProperties = isIdleState
     ? idleSheetScrollStyle
-    : sheetScrollStyle
+    : isTrackingState
+      ? trackingSheetScrollStyle
+      : sheetScrollStyle
+  const sheetSnapOffsets = useMemo(
+    () =>
+      ({
+        collapsed: Math.min(360, Math.max(220, viewportHeight * 0.28)),
+        default: 0,
+      }) satisfies Record<SheetSnap, number>,
+    [viewportHeight],
+  )
+
+  const mapBottomViewportPadding = useMemo(() => {
+    const collapsedPadding = Math.round(Math.min(220, Math.max(140, viewportHeight * 0.2)))
+    const defaultPadding = Math.round(Math.min(320, Math.max(220, viewportHeight * 0.3)))
+
+    if (sheetSnap === 'collapsed') return collapsedPadding
+    return defaultPadding
+  }, [sheetSnap, viewportHeight])
+
+  const activeSheetOffset = isDraggingSheet ? dragOffsetY : sheetSnapOffsets[sheetSnap]
+
+  const snapSheetToNearest = useCallback(
+    (offset: number) => {
+      setSheetSnap(offset > sheetSnapOffsets.collapsed * 0.35 ? 'collapsed' : 'default')
+      setDragOffsetY(0)
+    },
+    [sheetSnapOffsets],
+  )
+
+  const handleSheetPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!canInteractWithSheet) return
+      event.preventDefault()
+      event.stopPropagation()
+      dragStartYRef.current = event.clientY
+      dragStartOffsetRef.current = sheetSnapOffsets[sheetSnap]
+      sheetDidDragRef.current = false
+      setDragOffsetY(sheetSnapOffsets[sheetSnap])
+      setIsDraggingSheet(true)
+      event.currentTarget.setPointerCapture(event.pointerId)
+    },
+    [canInteractWithSheet, sheetSnap, sheetSnapOffsets],
+  )
+
+  const handleSheetPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!canInteractWithSheet || !isDraggingSheet) return
+      const deltaY = event.clientY - dragStartYRef.current
+      if (Math.abs(deltaY) > 8) {
+        sheetDidDragRef.current = true
+      }
+      const nextOffset = dragStartOffsetRef.current + deltaY
+      const clampedOffset = Math.max(0, Math.min(sheetSnapOffsets.collapsed, nextOffset))
+      setDragOffsetY(clampedOffset)
+    },
+    [canInteractWithSheet, isDraggingSheet, sheetSnapOffsets],
+  )
+
+  const handleSheetPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingSheet) return
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      const didDrag = sheetDidDragRef.current
+      if (didDrag) {
+        suppressDogNameOpenUntilRef.current = Date.now() + 220
+        snapSheetToNearest(dragOffsetY)
+      } else {
+        toggleSheetSnap()
+      }
+      setIsDraggingSheet(false)
+    },
+    [dragOffsetY, isDraggingSheet, snapSheetToNearest, toggleSheetSnap],
+  )
+
+  const dogSelectorBlock = (
+    <div style={compactFieldStyle}>
+      <button
+        type="button"
+        onPointerDown={() => setIsDogNameButtonPressed(true)}
+        onPointerUp={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setIsDogNameButtonPressed(false)
+          if (Date.now() < suppressDogNameOpenUntilRef.current) {
+            return
+          }
+          openDogNameSheet()
+        }}
+        onPointerCancel={() => setIsDogNameButtonPressed(false)}
+        onPointerLeave={() => setIsDogNameButtonPressed(false)}
+        style={{
+          ...dogInputButtonStyle,
+          ...(isDogNameGuided ? guidedFieldButtonStyle : null),
+          ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+          transform: isDogNameButtonPressed ? 'scale(0.98)' : 'scale(1)',
+        }}
+      >
+        <div
+          style={{
+            ...dogInputShellStyle,
+            ...(isDogNameGuided ? guidedFieldShellStyle : null),
+          }}
+        >
+          <div style={dogThumbStyle}>🐶</div>
+          <div style={dogInputButtonContentStyle}>
+            <div
+              style={
+                flow.dogName.trim()
+                  ? dogInputValueTextStyle
+                  : dogInputPlaceholderTextStyle
+              }
+            >
+              {flow.dogName.trim() || "Dog's name"}
+            </div>
+          </div>
+          <div style={dogInputChevronStyle}>›</div>
+        </div>
+      </button>
+      {isDogNameGuided && (
+        <div style={guidedFieldHelperStyle}>Start here</div>
+      )}
+    </div>
+  )
+
+  const pickupSelectorBlock = (
+    <div style={compactFieldStyle}>
+      <div style={compactFieldLabelStyle}>Pick-up from:</div>
+      <button
+        type="button"
+        onPointerUp={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          openLocationDetails()
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            openLocationDetails()
+          }
+        }}
+        style={pickupSelectorButtonStyle}
+      >
+        <div style={pickupSelectorShellStyle}>
+          <span style={pickupSelectorInlineIconStyle} aria-hidden="true">
+            📍
+          </span>
+          <span
+            style={
+              flow.location.trim()
+                ? pickupSelectorValueStyle
+                : pickupSelectorPlaceholderStyle
+            }
+          >
+            {flow.locationLoading
+              ? 'Finding your location...'
+              : flow.location.trim() || 'Pickup location'}
+          </span>
+          <div style={pickupSelectorChevronStyle}>˅</div>
+        </div>
+      </button>
+    </div>
+  )
+
+  const durationPickerBlock = (
+    <div style={compactFieldStyle}>
+      {isDurationGuided && (
+        <div style={guidedFieldHintAboveStyle}>Choose a duration</div>
+      )}
+      <div
+        style={{
+          ...compactDurationWrapStyle,
+          ...(isDurationGuided ? durationGuidedFieldShellStyle : null),
+          ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+        }}
+      >
+        <DurationPicker
+          options={DURATION_OPTIONS}
+          selected={flow.duration ?? ''}
+          onSelect={(v) => handleDurationSelect(v as DurationType)}
+          surgeMultiplier={flow.surgeMultiplier}
+          surgeLevel={flow.surgeLevel}
+        />
+      </div>
+    </div>
+  )
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
@@ -986,6 +1306,7 @@ export default function ClientDashboard({
           showUserMarker={true}
           isSearching={isSearching}
           nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
+          bottomViewportPadding={mapBottomViewportPadding}
           {...(isTrackingState && flow.walkerLocation
             ? {
                 walkerLocation: flow.walkerLocation,
@@ -1194,12 +1515,43 @@ export default function ClientDashboard({
         </>
       )}
 
-      <div style={sheetStyle}>
-        <div style={sheetHandleStyle} />
+      <div
+        style={{
+          ...currentSheetStyle,
+          transform: `translateY(${activeSheetOffset}px)`,
+          transition: isDraggingSheet
+            ? 'none'
+            : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+        }}
+      >
+        <div
+          style={{
+            ...sheetHandleTouchAreaStyle,
+          }}
+          onPointerDown={handleSheetPointerDown}
+          onPointerMove={handleSheetPointerMove}
+          onPointerUp={handleSheetPointerUp}
+          onPointerCancel={handleSheetPointerUp}
+        >
+          <div style={sheetHandleStyle} />
+          <div style={sheetHandleHintStyle}>
+            <span style={sheetHandleHintIconStyle}>
+              {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
+            </span>
+            <span>
+              {sheetSnap === 'collapsed' ? 'Pull up' : 'Pull down'}
+            </span>
+          </div>
+        </div>
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
-          {isIdleState && (
-            <div style={idleSheetContentStyle}>
+          {shouldRenderIdleSheet && (
+            <div
+              style={{
+                ...idleSheetContentStyle,
+                ...(isSheetCollapsed ? idleSheetContentCollapsedStyle : null),
+              }}
+            >
               <div style={bookingCardStyle}>
                 <div style={sheetHeaderRowStyle}>
                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -1208,52 +1560,9 @@ export default function ClientDashboard({
                 </div>
 
                 <div style={compactFormGridStyle}>
-                  <div style={compactFieldStyle}>
-                    <button
-                      type="button"
-                      onPointerDown={() => setIsDogNameButtonPressed(true)}
-                      onPointerUp={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        setIsDogNameButtonPressed(false)
-                        openDogNameSheet()
-                      }}
-                      onPointerCancel={() => setIsDogNameButtonPressed(false)}
-                      onPointerLeave={() => setIsDogNameButtonPressed(false)}
-                      style={{
-                        ...dogInputButtonStyle,
-                        ...(isDogNameGuided ? guidedFieldButtonStyle : null),
-                        ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                        transform: isDogNameButtonPressed ? 'scale(0.98)' : 'scale(1)',
-                      }}
-                    >
-                      <div
-                        style={{
-                          ...dogInputShellStyle,
-                          ...(isDogNameGuided ? guidedFieldShellStyle : null),
-                        }}
-                      >
-                        <div style={dogThumbStyle}>🐶</div>
-                        <div style={dogInputButtonContentStyle}>
-                          <div
-                            style={
-                              flow.dogName.trim()
-                                ? dogInputValueTextStyle
-                                : dogInputPlaceholderTextStyle
-                            }
-                          >
-                            {flow.dogName.trim() || "Dog's name"}
-                          </div>
-                        </div>
-                        <div style={dogInputChevronStyle}>›</div>
-                      </div>
-                    </button>
-                    {isDogNameGuided && (
-                      <div style={guidedFieldHelperStyle}>Start here</div>
-                    )}
-                  </div>
+                  {dogSelectorBlock}
 
-                  {preferredWalkers.length > 0 && (
+                  {!isSheetCollapsed && preferredWalkers.length > 0 && (
                     <button
                       type="button"
                       onClick={openFavoritesMenu}
@@ -1272,61 +1581,63 @@ export default function ClientDashboard({
                     </button>
                   )}
 
-                  <div style={compactFieldStyle}>
-                    <div style={compactFieldLabelStyle}>Pickup</div>
-                    <input
-                      ref={locationInputRef}
-                      value={flow.location}
-                      onChange={(e) => flow.setLocation(e.target.value)}
-                      onPointerUp={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        window.setTimeout(() => {
-                          locationInputRef.current?.focus()
-                        }, 0)
-                      }}
-                      placeholder={
-                        flow.locationLoading ? 'Finding your location...' : 'Pickup location'
-                      }
-                      style={{
-                        ...inputStyle,
-                        touchAction: 'manipulation',
-                        WebkitTapHighlightColor: 'transparent',
-                      }}
-                    />
-                  </div>
+                  {pickupSelectorBlock}
 
-                  <div style={compactFieldStyle}>
-                    <div style={scheduledHeaderRowStyle}>
-                      <label style={scheduledLabelStyle}>BOOK</label>
-                      {flow.bookingTiming === 'scheduled' ? (
-                        <div style={scheduledActionsStyle}>
-                          <button
-                            type="button"
-                            onClick={clearScheduleToAsap}
-                            style={scheduledAsapBtnStyle}
-                          >
-                            BOOK NOW
-                          </button>
-                          <button
-                            type="button"
-                            onPointerUp={(event) => {
-                              event.preventDefault()
-                              event.stopPropagation()
-                              openScheduleSheet()
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
+                  {durationPickerBlock}
+
+                  {!isSheetCollapsed && (
+                    <>
+                      <div style={compactFieldStyle}>
+                        <div style={scheduledHeaderRowStyle}>
+                          <label style={scheduledLabelStyle}>BOOK</label>
+                          {flow.bookingTiming === 'scheduled' ? (
+                            <div style={scheduledActionsStyle}>
+                              <button
+                                type="button"
+                                onClick={clearScheduleToAsap}
+                                style={scheduledAsapBtnStyle}
+                              >
+                                BOOK NOW
+                              </button>
+                              <button
+                                type="button"
+                                onPointerUp={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  openScheduleSheet()
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    openScheduleSheet()
+                                  }
+                                }}
+                                style={scheduledEditBtnStyle}
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onPointerUp={(event) => {
                                 event.preventDefault()
+                                event.stopPropagation()
                                 openScheduleSheet()
-                              }
-                            }}
-                            style={scheduledEditBtnStyle}
-                          >
-                            Edit
-                          </button>
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault()
+                                  openScheduleSheet()
+                                }
+                              }}
+                              style={scheduledEditBtnStyle}
+                            >
+                              Schedule
+                            </button>
+                          )}
                         </div>
-                      ) : (
+
                         <button
                           type="button"
                           onPointerUp={(event) => {
@@ -1340,113 +1651,80 @@ export default function ClientDashboard({
                               openScheduleSheet()
                             }
                           }}
-                          style={scheduledEditBtnStyle}
+                          style={{
+                            ...scheduledSummaryCardStyle,
+                            ...(flow.bookingTiming === 'scheduled'
+                              ? scheduledSummaryCardActiveStyle
+                              : null),
+                          }}
                         >
-                          Schedule
+                          <div style={scheduledSummaryMainStyle}>
+                            {flow.bookingTiming === 'scheduled'
+                              ? formatScheduledDate(flow.scheduledFor)
+                              : 'NOW'}
+                          </div>
+                          <div style={scheduledSummarySubStyle}>
+                            {flow.bookingTiming === 'scheduled'
+                              ? 'Dispatch starts automatically about 15 min before the walk.'
+                              : 'We’ll start finding a walker right away.'}
+                          </div>
                         </button>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onPointerUp={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        openScheduleSheet()
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          openScheduleSheet()
-                        }
-                      }}
-                      style={{
-                        ...scheduledSummaryCardStyle,
-                        ...(flow.bookingTiming === 'scheduled'
-                          ? scheduledSummaryCardActiveStyle
-                          : null),
-                      }}
-                    >
-                      <div style={scheduledSummaryMainStyle}>
-                        {flow.bookingTiming === 'scheduled'
-                          ? formatScheduledDate(flow.scheduledFor)
-                          : 'NOW'}
                       </div>
-                      <div style={scheduledSummarySubStyle}>
-                        {flow.bookingTiming === 'scheduled'
-                          ? 'Dispatch starts automatically about 15 min before the walk.'
-                          : 'We’ll start finding a walker right away.'}
+
+                      <div style={compactFieldStyle}>
+                        {isPaymentGuided && (
+                          <div style={guidedFieldHintAboveStyle}>Add payment method</div>
+                        )}
+                        <div
+                          style={{
+                            ...compactPaymentWrapStyle,
+                            ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                            ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                          }}
+                        >
+                          <CardSetupForm
+                            savedCard={flow.savedCard}
+                            setupClientSecret={flow.setupClientSecret}
+                            loadingCard={flow.cardLoading}
+                            loadError={flow.cardError}
+                            onRequestSetup={flow.requestCardSetup}
+                            onChangeCard={flow.changeCard}
+                            onSetupComplete={flow.onCardSetupComplete}
+                            onCancelSetup={flow.cancelCardSetup}
+                            onRetry={flow.retryLoadCard}
+                          />
+                        </div>
                       </div>
-                    </button>
-                  </div>
-
-                  <div style={compactFieldStyle}>
-                    {isDurationGuided && (
-                      <div style={guidedFieldHintAboveStyle}>Choose a duration</div>
-                    )}
-                    <div
-                      style={{
-                        ...compactDurationWrapStyle,
-                        ...(isDurationGuided ? durationGuidedFieldShellStyle : null),
-                        ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                      }}
-                    >
-                      <DurationPicker
-                        options={DURATION_OPTIONS}
-                        selected={flow.duration ?? ''}
-                        onSelect={(v) => flow.setDuration(v as DurationType)}
-                        surgeMultiplier={flow.surgeMultiplier}
-                        surgeLevel={flow.surgeLevel}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={compactFieldStyle}>
-                    {isPaymentGuided && (
-                      <div style={guidedFieldHintAboveStyle}>Add payment method</div>
-                    )}
-                    <div
-                      style={{
-                        ...compactPaymentWrapStyle,
-                        ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
-                        ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                      }}
-                    >
-                      <CardSetupForm
-                        savedCard={flow.savedCard}
-                        setupClientSecret={flow.setupClientSecret}
-                        loadingCard={flow.cardLoading}
-                        loadError={flow.cardError}
-                        onRequestSetup={flow.requestCardSetup}
-                        onChangeCard={flow.changeCard}
-                        onSetupComplete={flow.onCardSetupComplete}
-                        onCancelSetup={flow.cancelCardSetup}
-                        onRetry={flow.retryLoadCard}
-                      />
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
 
-                <div style={feeLabelStyle}>
-                  {flow.bookingTiming === 'scheduled'
-                    ? 'Price locked now · payment visible · auto dispatch later'
-                    : 'Service fee included · charged after walk'}
-                </div>
+                {!isSheetCollapsed && (
+                  <div style={feeLabelStyle}>
+                    {flow.bookingTiming === 'scheduled'
+                      ? 'Price locked now · payment visible · auto dispatch later'
+                      : 'Service fee included · charged after walk'}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {(matchingUiState || isDispatchExhausted) && (
+          {shouldRenderSearchingSheet && (
             <div style={sheetContentStyle}>
               <SearchingSheet
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
-                mode={isDispatchExhausted ? 'empty' : matchingUiState === 'empty' ? 'empty' : 'matching'}
+                mode={isDispatchExhausted || shouldShowNoProvidersEmptyState ? 'empty' : 'matching'}
                 serviceType={flow.currentJob?.service_type}
                 emptyTitle={matchingEmptyTitle}
                 emptySubtitle={matchingEmptySubtitle}
-                onCancel={matchingUiState === 'matching' ? flow.cancelSearch : handleMatchingTryAgain}
+                onCancel={
+                  isDispatchExhausted || shouldShowNoProvidersEmptyState
+                    ? handleMatchingTryAgain
+                    : flow.cancelSearch
+                }
                 onTryAgain={handleMatchingTryAgain}
               />
             </div>
@@ -1460,7 +1738,6 @@ export default function ClientDashboard({
                     ? flow.walkerNameById.get(flow.activeJob.walker_id) || 'Walker'
                     : 'Walker'
                 }
-                dogName={flow.activeJob.dog_name}
                 phase={
                   flow.screenPhase === 'in_progress' ||
                   flow.screenPhase === 'arrival_confirmed' ||
@@ -1473,7 +1750,6 @@ export default function ClientDashboard({
                 displayEtaSeconds={flow.displayEtaSeconds}
                 distanceMeters={flow.distanceMeters}
                 gpsQuality={trackingGpsQuality}
-                startActionLabel={trackingLabels.startAction}
                 activeTitle={trackingLabels.activeTitle}
                 onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                 confirmingArrival={flow.arrivalConfirming}
@@ -1486,7 +1762,7 @@ export default function ClientDashboard({
 
         </div>
 
-        {isIdleState && (
+        {shouldRenderIdleSheet && !isSheetCollapsed && (
           <div style={stickyCtaWrapStyle}>
             {shouldShowGuidanceCtaHelper && (
               <div style={guidedCtaHelperStyle}>Complete the highlighted field to continue</div>
@@ -1981,14 +2257,12 @@ function BurgerUpcomingList({
 
 function TrackingCard({
   walkerName,
-  dogName,
   phase,
   isArrived,
   etaMinutes,
   displayEtaSeconds,
   distanceMeters,
   gpsQuality,
-  startActionLabel,
   activeTitle,
   onConfirmArrival,
   confirmingArrival,
@@ -1997,14 +2271,12 @@ function TrackingCard({
   actualLabel,
 }: {
   walkerName: string
-  dogName: string | null
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
   displayEtaSeconds: number | null
   distanceMeters: number | null
   gpsQuality: GpsQuality
-  startActionLabel: string
   activeTitle: string
   onConfirmArrival?: () => void
   confirmingArrival?: boolean
@@ -2015,16 +2287,26 @@ function TrackingCard({
   const isServiceActive = phase === 'in_progress'
   const isArrivalPending = phase === 'arrived_pending_confirmation'
   const isArrivalConfirmed = phase === 'arrival_confirmed'
-  const topBadge = isServiceActive ? activeTitle : isArrivalPending ? 'Provider arrived' : 'On the way'
-  const title = isServiceActive ? activeTitle : isArrivalPending ? 'Provider has arrived' : 'On the way'
+  const topBadge = isServiceActive
+    ? activeTitle
+    : isArrivalPending
+      ? 'Provider arrived'
+      : isArrivalConfirmed
+        ? 'Ready to start'
+        : 'On the way'
+  const title = isServiceActive
+    ? 'Walk in progress 🐾'
+    : isArrivalPending
+      ? 'Provider has arrived'
+      : isArrivalConfirmed
+        ? "Let's start 🙂"
+        : 'On the way'
   const subtitle = isServiceActive
-    ? dogName
-      ? `${dogName} is currently in service`
-      : 'Your service is in progress'
+    ? 'Your service has started.'
     : isArrivalPending
       ? 'Confirm the provider is with you before service starts'
       : isArrivalConfirmed
-        ? `${walkerName} is ready to ${startActionLabel.toLowerCase()}`
+        ? 'Your provider is ready to start the service.'
         : `${walkerName} is heading to you`
 
   return (
@@ -2215,9 +2497,8 @@ const topUiLayerStyle: React.CSSProperties = {
 }
 
 const mapContainerBaseStyle: React.CSSProperties = {
-  position: 'relative',
-  flexShrink: 0,
-  minHeight: 220,
+  position: 'absolute',
+  inset: 0,
   overflow: 'hidden',
   width: '100%',
   maxWidth: '100%',
@@ -2225,15 +2506,15 @@ const mapContainerBaseStyle: React.CSSProperties = {
 }
 
 const idleMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const searchingMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const trackingMapContainerStyle: React.CSSProperties = {
-  height: '40dvh',
+  height: '100%',
 }
 
 const floatingTopBarStyle: React.CSSProperties = {
@@ -2297,13 +2578,11 @@ const floatingMessagesStyle: React.CSSProperties = {
 }
 
 const sheetStyle: React.CSSProperties = {
-  position: 'relative',
-  marginTop: -18,
-  alignSelf: 'stretch',
-  flex: 1,
-  minHeight: 0,
-  width: '100%',
-  maxWidth: '100%',
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  top: 'calc(36dvh - 18px)',
   borderTopLeftRadius: 28,
   borderTopRightRadius: 28,
   background: '#FFFFFF',
@@ -2313,8 +2592,34 @@ const sheetStyle: React.CSSProperties = {
   overflow: 'hidden',
   zIndex: 1,
   boxSizing: 'border-box',
-  marginLeft: 0,
-  marginRight: 0,
+  willChange: 'transform',
+}
+
+const trackingSheetStyle: React.CSSProperties = {
+  ...sheetStyle,
+  top: 'auto',
+  height: 'auto',
+  maxHeight: 'calc(100dvh - 92px)',
+}
+
+const sheetHandleTouchAreaStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '12px 0 18px',
+  flexShrink: 0,
+  touchAction: 'none',
+  pointerEvents: 'auto',
+  cursor: 'grab',
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
+  position: 'relative',
+  zIndex: 2,
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
 }
 
 const sheetHandleStyle: React.CSSProperties = {
@@ -2322,8 +2627,23 @@ const sheetHandleStyle: React.CSSProperties = {
   height: 4,
   borderRadius: 999,
   background: '#CBD5E1',
-  margin: '8px auto 6px',
-  flexShrink: 0,
+}
+
+const sheetHandleHintStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#5B7CFA',
+  lineHeight: 1,
+  pointerEvents: 'none',
+}
+
+const sheetHandleHintIconStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#475569',
+  transform: 'translateY(-1px)',
 }
 
 const sheetScrollStyle: React.CSSProperties = {
@@ -2338,10 +2658,33 @@ const sheetScrollStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
+const trackingSheetScrollStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  minHeight: 0,
+  overflowY: 'visible',
+  overflowX: 'hidden',
+  paddingTop: 0,
+  paddingRight: 14,
+  paddingBottom: 8,
+  paddingLeft: 14,
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
+}
+
 const idleSheetScrollStyle: React.CSSProperties = {
-  ...sheetScrollStyle,
   overflowY: 'auto',
+  flex: 1,
+  minHeight: 0,
+  overflowX: 'hidden',
+  paddingTop: 0,
+  paddingRight: 14,
   paddingBottom: 6,
+  paddingLeft: 14,
+  WebkitOverflowScrolling: 'touch',
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
 }
 
 const sheetContentStyle: React.CSSProperties = {
@@ -2353,6 +2696,11 @@ const sheetContentStyle: React.CSSProperties = {
 
 const idleSheetContentStyle: React.CSSProperties = {
   paddingBottom: 6,
+}
+
+const idleSheetContentCollapsedStyle: React.CSSProperties = {
+  maxHeight: 232,
+  overflow: 'hidden',
 }
 
 const bookingCardStyle: React.CSSProperties = {
@@ -2419,7 +2767,7 @@ const guidedFieldButtonStyle: React.CSSProperties = {
 }
 
 const guidedFieldShellStyle: React.CSSProperties = {
-  borderColor: '#60A5FA',
+  border: '1px solid #60A5FA',
   boxShadow: '0 0 0 4px rgba(96, 165, 250, 0.18)',
   background: '#F8FBFF',
 }
@@ -2444,6 +2792,73 @@ const compactFieldLabelStyle: React.CSSProperties = {
   letterSpacing: 0.6,
   textTransform: 'uppercase',
   color: '#64748B',
+}
+
+const pickupSelectorButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  textAlign: 'left',
+  cursor: 'pointer',
+  width: '100%',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const pickupSelectorShellStyle: React.CSSProperties = {
+  height: 45,
+  borderRadius: 15,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  overflow: 'hidden',
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '0 12px',
+}
+
+const pickupSelectorInlineIconStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  fontSize: 16,
+  lineHeight: 1,
+}
+
+const pickupSelectorValueStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 16,
+  color: '#0F172A',
+  fontWeight: 700,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const pickupSelectorPlaceholderStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 16,
+  color: '#94A3B8',
+  fontWeight: 600,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const pickupSelectorChevronStyle: React.CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 16,
+  lineHeight: 1,
+  flexShrink: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const dogInputShellStyle: React.CSSProperties = {
@@ -2640,19 +3055,6 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  height: 44,
-  borderRadius: 15,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  outline: 'none',
-  padding: '0 12px',
-  fontSize: 16,
-  color: '#0F172A',
-  boxSizing: 'border-box',
-}
-
 const scheduledHeaderRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -2707,7 +3109,9 @@ const scheduledSummaryCardStyle: React.CSSProperties = {
 }
 
 const scheduledSummaryCardActiveStyle: React.CSSProperties = {
-  border: '1px solid rgba(37, 99, 235, 0.28)',
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'rgba(37, 99, 235, 0.28)',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #EFF6FF 100%)',
 }
 

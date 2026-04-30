@@ -31,6 +31,7 @@ interface MapViewProps {
   showUserMarker?: boolean
   isSearching?: boolean
   nearbyWalkers?: NearbyWalkerMarker[]
+  bottomViewportPadding?: number
 }
 
 function FitAndFollow({
@@ -39,12 +40,14 @@ function FitAndFollow({
   nearbyWalkers,
   isArrived,
   proximityLevel = 'far',
+  bottomViewportPadding = 0,
 }: {
   userLocation: [number, number]
   walkerLocation?: [number, number]
   nearbyWalkers: NearbyWalkerMarker[]
   isArrived: boolean
   proximityLevel?: ProximityLevel
+  bottomViewportPadding?: number
 }) {
   const map = useMap()
   const hasInitializedRef = useRef(false)
@@ -53,6 +56,19 @@ function FitAndFollow({
   const flyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const userInteractedRef = useRef(false)
   const interactTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const getViewportAdjustedCenter = (
+    target: [number, number],
+    verticalPadding: number,
+    zoom = map.getZoom(),
+  ): [number, number] => {
+    const projectedPoint = map.project(target, zoom)
+    const adjustedCenter = map.unproject(
+      L.point(projectedPoint.x, projectedPoint.y + Math.max(0, verticalPadding) / 2),
+      zoom,
+    )
+    return [adjustedCenter.lat, adjustedCenter.lng]
+  }
 
   useEffect(() => {
     function onInteract() {
@@ -77,8 +93,22 @@ function FitAndFollow({
     if (hasInitializedRef.current) return
     if (userLocation[0] === 32.0853 && userLocation[1] === 34.7818) return
     hasInitializedRef.current = true
-    map.flyTo(userLocation, 15, { animate: true, duration: 0.8 })
-  }, [userLocation, map])
+    map.flyTo(getViewportAdjustedCenter(userLocation, bottomViewportPadding, 15), 15, {
+      animate: true,
+      duration: 0.8,
+    })
+  }, [bottomViewportPadding, map, userLocation])
+
+  useEffect(() => {
+    if (!hasInitializedRef.current) return
+    if (walkerLocation || nearbyWalkers.length > 0) return
+    if (userInteractedRef.current) return
+    const adjustedCenter = getViewportAdjustedCenter(userLocation, bottomViewportPadding)
+    map.flyTo(adjustedCenter, map.getZoom(), {
+      animate: true,
+      duration: 0.45,
+    })
+  }, [bottomViewportPadding, map, nearbyWalkers.length, userLocation, walkerLocation])
 
   useEffect(() => {
     if (walkerLocation) {
@@ -102,11 +132,12 @@ function FitAndFollow({
     const bounds = L.latLngBounds(points)
     hasFittedNearbyRef.current = true
     map.fitBounds(bounds, {
-      padding: [40, 40],
+      paddingTopLeft: [40, 40],
+      paddingBottomRight: [40, Math.max(40, bottomViewportPadding)],
       maxZoom: 14,
       animate: true,
     })
-  }, [nearbyWalkers, userLocation, walkerLocation, map])
+  }, [bottomViewportPadding, nearbyWalkers, userLocation, walkerLocation, map])
 
   useEffect(() => {
     if (!walkerLocation || isArrived) return
@@ -115,7 +146,12 @@ function FitAndFollow({
     if (!hasFittedTrackingRef.current) {
       hasFittedTrackingRef.current = true
       const bounds = L.latLngBounds([userLocation, walkerLocation])
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16, animate: true })
+      map.fitBounds(bounds, {
+        paddingTopLeft: [50, 50],
+        paddingBottomRight: [50, Math.max(50, bottomViewportPadding)],
+        maxZoom: 16,
+        animate: true,
+      })
       return
     }
 
@@ -137,7 +173,7 @@ function FitAndFollow({
             ? Math.max(map.getZoom(), 17)
             : map.getZoom()
 
-      map.flyTo([centerLat, centerLng], zoom, {
+      map.flyTo(getViewportAdjustedCenter([centerLat, centerLng], bottomViewportPadding, zoom), zoom, {
         animate: true,
         duration: 1.2,
       })
@@ -146,7 +182,7 @@ function FitAndFollow({
     return () => {
       if (flyTimeoutRef.current) clearTimeout(flyTimeoutRef.current)
     }
-  }, [walkerLocation, userLocation, isArrived, proximityLevel, map])
+  }, [bottomViewportPadding, walkerLocation, userLocation, isArrived, proximityLevel, map])
 
   useEffect(() => {
     if (!walkerLocation) {
@@ -541,6 +577,7 @@ export default function MapView({
   showUserMarker = true,
   isSearching = false,
   nearbyWalkers = [],
+  bottomViewportPadding = 0,
 }: MapViewProps) {
   useEffect(() => {
     injectMarkerStyles()
@@ -591,6 +628,7 @@ export default function MapView({
           nearbyWalkers={filteredNearbyWalkers}
           isArrived={isArrived}
           proximityLevel={proximityLevel}
+          bottomViewportPadding={bottomViewportPadding}
         />
 
         <RouteLine routePolyline={routePolyline} />
