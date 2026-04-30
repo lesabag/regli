@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import MapView from '../components/MapView'
 import DurationPicker from '../components/DurationPicker'
@@ -18,8 +19,8 @@ import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { formatShortAddress } from '../utils/addressFormat'
-import { getServiceLabels } from '../utils/serviceLifecycle'
 import { getDurationSummary } from '../utils/serviceTiming'
+import i18n from '../i18n'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -95,7 +96,8 @@ export default function ClientDashboard({
   onSignOut,
   showOnboardingWowToken = 0,
 }: ClientDashboardProps) {
-  const clientName = profile.full_name || profile.email || 'Client'
+  const { t, i18n } = useTranslation()
+  const clientName = profile.full_name || profile.email || t('common.client')
   const flow = useClientFlow(profile.id, clientName)
   const photo = useProfilePhoto(profile.id)
   usePushNotifications(profile.id)
@@ -440,14 +442,14 @@ export default function ClientDashboard({
     () =>
       flow.upcomingJobs.map((j) => ({
         id: j.id,
-        dogName: j.dog_name || 'Walk',
+        dogName: j.dog_name || t('booking.walkFallback'),
         location: formatShortAddress(j.address || j.location),
         scheduledFor: j.scheduled_for,
         startsInMin: flow.startsInMinutes(j.scheduled_for),
         price: j.scheduled_fee_snapshot ?? j.price,
         findingProviderAt: getScheduledDispatchWindowLabel(j.scheduled_for),
       })),
-    [flow.upcomingJobs, flow.startsInMinutes],
+    [flow.upcomingJobs, flow.startsInMinutes, t],
   )
 
   const anyFlow = flow as typeof flow & {
@@ -527,15 +529,15 @@ export default function ClientDashboard({
             : typeof item.walkerName === 'string'
               ? item.walkerName
               : typeof item.walker_id === 'string'
-                ? flow.walkerNameById.get(item.walker_id) || 'Walker'
-                : 'Walker'
+                ? flow.walkerNameById.get(item.walker_id) || t('common.provider')
+                : t('common.provider')
 
         const dogName =
           typeof item.dog_name === 'string'
             ? item.dog_name
             : typeof item.dogName === 'string'
               ? item.dogName
-              : 'Walk'
+              : t('booking.walkFallback')
 
         const location =
           typeof item.location === 'string'
@@ -607,6 +609,7 @@ export default function ClientDashboard({
     anyFlow.requests,
     flow.walkerNameById,
     ratingByJobId,
+    t,
   ])
 
   const visibleHistoryItems = useMemo(
@@ -618,16 +621,16 @@ export default function ClientDashboard({
   const preferredWalkers = flow.favoriteWalkers
   const favoriteIndicatorLabel =
     preferredWalkers.length === 1
-      ? `Favorite walker: ${
-          preferredWalkers[0]?.walker?.full_name ||
-          preferredWalkers[0]?.walker?.email ||
-          flow.walkerNameById.get(preferredWalkers[0]?.walker_id ?? '') ||
-          'Walker'
-        }`
-      : `Favorite walkers (${preferredWalkers.length})`
+      ? t('menu.favoriteWalker', {
+          name:
+            preferredWalkers[0]?.walker?.full_name ||
+            preferredWalkers[0]?.walker?.email ||
+            flow.walkerNameById.get(preferredWalkers[0]?.walker_id ?? '') ||
+            t('common.provider'),
+        })
+      : t('menu.favoriteWalkersCount', { count: preferredWalkers.length })
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
-  const trackingLabels = getServiceLabels(flow.activeJob?.service_type)
   const hasFutureOrders = upcomingScheduledItems.length > 0
   const isScheduledDispatchSearching =
     flow.screenState === 'searching' &&
@@ -653,7 +656,8 @@ export default function ClientDashboard({
     isActivelyMatchingExhaustedJob(flow.currentJob) ||
     isActivelyMatchingExhaustedJob(flow.activeJob)
   const shouldShowNoProvidersEmptyState =
-    flow.availabilityNotice?.title === 'No providers available right now'
+    flow.availabilityNotice?.title === 'No providers available right now' ||
+    flow.availabilityNotice?.title === t('booking.noProvidersAvailable')
   const isIdleState =
     flow.screenState === 'idle' &&
     !hasCompletionPrompt &&
@@ -701,15 +705,15 @@ export default function ClientDashboard({
     matchingUiState === null
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
   const matchingEmptyTitle = isDispatchExhausted
-    ? 'No providers available right now'
+    ? t('booking.noProvidersAvailable')
     : shouldShowNoProvidersEmptyState
-      ? 'No providers available right now'
-      : flow.availabilityNotice?.title || 'No providers available right now'
+      ? t('booking.noProvidersAvailable')
+      : flow.availabilityNotice?.title || t('booking.noProvidersAvailable')
   const matchingEmptySubtitle = isDispatchExhausted
-    ? 'Nearby providers are busy. Try again or schedule for later.'
+    ? t('booking.providersBusyRetryLater')
     : shouldShowNoProvidersEmptyState
-      ? 'Try again in a few minutes'
-      : flow.error || 'Try again in a few minutes'
+      ? t('booking.tryAgainSoon')
+      : flow.error || t('booking.tryAgainSoon')
 
   useEffect(() => {
     setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
@@ -790,7 +794,7 @@ export default function ClientDashboard({
 
   const requestDurationLabel = formatDurationLabelFromMinutes(flow.currentJob?.duration_minutes) ||
     flow.selectedDuration.label ||
-    'Walk'
+    t('booking.walkFallback')
   const requestPriceLabel =
     flow.currentJob?.price != null && flow.currentJob.price > 0
       ? `₪${flow.currentJob.price}`
@@ -835,13 +839,13 @@ export default function ClientDashboard({
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
     if (completionDurationSummary.plannedLabel) {
-      rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
+      rows.push({ label: t('tracking.planned'), value: completionDurationSummary.plannedLabel })
     }
     if (completionDurationSummary.actualLabel) {
-      rows.push({ label: 'Actual', value: completionDurationSummary.actualLabel })
+      rows.push({ label: t('tracking.actual'), value: completionDurationSummary.actualLabel })
     }
     return rows
-  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel])
+  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel, t])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -1109,7 +1113,7 @@ export default function ClientDashboard({
 
   const pickupSelectorBlock = (
     <div style={compactFieldStyle}>
-      <div style={compactFieldLabelStyle}>Pick-up from:</div>
+      <div style={compactFieldLabelStyle}>{t('booking.pickupFrom')}</div>
       <button
         type="button"
         onPointerUp={(event) => {
@@ -1148,6 +1152,7 @@ export default function ClientDashboard({
 
   const durationPickerBlock = (
     <div style={compactFieldStyle}>
+      <div style={compactFieldLabelStyle}>{t('booking.durationQuestion')}</div>
       {isDurationGuided && (
         <div style={guidedFieldHintAboveStyle}>Choose a duration</div>
       )}
@@ -1192,7 +1197,7 @@ export default function ClientDashboard({
                 }
               }}
               style={controlBtnStyle}
-              aria-label="Menu"
+              aria-label={t('menu.menu')}
             >
               <svg
                 width="20"
@@ -1232,7 +1237,7 @@ export default function ClientDashboard({
                   ...calendarWrapStyle,
                   transform: isCalendarPressed ? 'scale(0.96)' : 'scale(1)',
                 }}
-                aria-label="Open future orders"
+                aria-label={t('menu.openFutureOrders')}
               >
                 <svg
                   width="14"
@@ -1290,9 +1295,9 @@ export default function ClientDashboard({
             )}
             {isScheduledDispatchSearching && (
               <MessageBanner
-                text="Finding your provider"
-                title="Finding your provider"
-                subtitle="We’ve started matching your scheduled order with nearby providers."
+                text={t('booking.findingYourProvider')}
+                title={t('booking.findingYourProvider')}
+                subtitle={t('booking.findingYourProviderSubtitle')}
                 kind="info"
               />
             )}
@@ -1336,17 +1341,17 @@ export default function ClientDashboard({
                     }
                   }}
                   style={menuBackButtonStyle}
-                  aria-label={historyView === 'all' ? 'Back' : 'Close'}
+                  aria-label={historyView === 'all' ? t('common.back') : t('common.close')}
                 >
                   {historyView === 'all' ? '‹' : '☰'}
                 </button>
-                <span style={menuTitleStyle}>{historyView === 'all' ? 'All history' : 'Menu'}</span>
+                <span style={menuTitleStyle}>{historyView === 'all' ? t('menu.allHistory') : t('menu.menu')}</span>
               </div>
             </div>
 
             <div style={menuScrollAreaStyle}>
               {historyView === 'all' ? (
-                <BurgerSection title="All history" subtitle="Your previous orders and reviews.">
+                <BurgerSection title={t('menu.allHistory')} subtitle={t('menu.allHistorySubtitle')}>
                   <GroupedHistory
                     items={allHistoryItems}
                     role="client"
@@ -1355,8 +1360,8 @@ export default function ClientDashboard({
                     onHide={anyFlow.hideHistoryItem}
                     favoriteWalkerIds={flow.favoriteWalkerIds}
                     onToggleFavoriteWalker={flow.toggleFavoriteWalker}
-                    emptyTitle="No walk history yet"
-                    emptySubtitle="Your completed walks and reviews will appear here."
+                    emptyTitle={t('menu.noWalkHistory')}
+                    emptySubtitle={t('menu.noWalkHistorySubtitle')}
                   />
                 </BurgerSection>
               ) : (
@@ -1377,17 +1382,49 @@ export default function ClientDashboard({
                       {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
                       {flow.avgRating !== null && (
                         <div style={profileRatingStyle}>
-                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · review score
+                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
                         </div>
                       )}
                     </div>
                     <div style={menuProfileChevronStyle}>›</div>
                   </button>
 
+                  <section style={burgerSectionStyle}>
+                    <div style={burgerSectionHeaderStyle}>
+                      <div style={burgerSectionTitleStyle}>{t('common.language')}</div>
+                    </div>
+                    <div style={languageSelectorRowStyle}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void i18n.changeLanguage('he')
+                        }}
+                        style={{
+                          ...languageButtonStyle,
+                          ...(i18n.resolvedLanguage === 'he' ? languageButtonActiveStyle : null),
+                        }}
+                      >
+                        🇮🇱 עברית
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void i18n.changeLanguage('en')
+                        }}
+                        style={{
+                          ...languageButtonStyle,
+                          ...(i18n.resolvedLanguage === 'en' ? languageButtonActiveStyle : null),
+                        }}
+                      >
+                        🇺🇸 EN
+                      </button>
+                    </div>
+                  </section>
+
                   <BurgerSection
                     id="future-orders-section"
-                    title="Future orders"
-                    subtitle="Scheduled walks waiting to be dispatched."
+                    title={t('menu.futureOrders')}
+                    subtitle={t('menu.futureOrdersSubtitle')}
                   >
                   <BurgerUpcomingList
                       items={upcomingScheduledItems}
@@ -1398,8 +1435,8 @@ export default function ClientDashboard({
                   {flow.favoriteWalkers.length > 0 && (
                     <BurgerSection
                       id="client-favorites-section"
-                      title="Preferred walkers"
-                      subtitle="Saved walkers for quick reference."
+                      title={t('menu.preferredWalkers')}
+                      subtitle={t('menu.preferredWalkersSubtitle')}
                     >
                       <FavoriteWalkerMenuList
                         favorites={flow.favoriteWalkers}
@@ -1416,8 +1453,8 @@ export default function ClientDashboard({
                       style={accordionButtonStyle}
                     >
                       <div>
-                        <div style={burgerSectionTitleStyle}>Walk history</div>
-                        <div style={burgerSectionSubtitleStyle}>Recent completed orders.</div>
+                        <div style={burgerSectionTitleStyle}>{t('menu.walkHistory')}</div>
+                        <div style={burgerSectionSubtitleStyle}>{t('menu.walkHistorySubtitle')}</div>
                       </div>
                       <div style={accordionChevronStyle}>{walkHistoryOpen ? '−' : '+'}</div>
                     </button>
@@ -1432,8 +1469,8 @@ export default function ClientDashboard({
                           onHide={anyFlow.hideHistoryItem}
                           favoriteWalkerIds={flow.favoriteWalkerIds}
                           onToggleFavoriteWalker={flow.toggleFavoriteWalker}
-                          emptyTitle="No walk history yet"
-                          emptySubtitle="Your completed walks and reviews will appear here."
+                          emptyTitle={t('menu.noWalkHistory')}
+                          emptySubtitle={t('menu.noWalkHistorySubtitle')}
                         />
                         {allHistoryItems.length > 7 && (
                           <div style={{ marginTop: 10, textAlign: 'center' }}>
@@ -1442,7 +1479,7 @@ export default function ClientDashboard({
                               onClick={() => setHistoryView('all')}
                               style={viewAllButtonStyle}
                             >
-                              View all
+                              {t('menu.viewAll')}
                             </button>
                           </div>
                         )}
@@ -1463,7 +1500,7 @@ export default function ClientDashboard({
               }}
               style={menuActionStyle}
             >
-              Sign out
+              {t('menu.signOut')}
             </button>
           </div>
         </>
@@ -1506,7 +1543,7 @@ export default function ClientDashboard({
                 {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
                 {flow.avgRating !== null && (
                   <div style={profileRatingStyle}>
-                    <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · review score
+                    <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
                   </div>
                 )}
               </div>
@@ -1539,7 +1576,7 @@ export default function ClientDashboard({
               {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
             </span>
             <span>
-              {sheetSnap === 'collapsed' ? 'Pull up' : 'Pull down'}
+              {sheetSnap === 'collapsed' ? t('booking.pullUp') : t('booking.pullDown')}
             </span>
           </div>
         </div>
@@ -1555,7 +1592,7 @@ export default function ClientDashboard({
               <div style={bookingCardStyle}>
                 <div style={sheetHeaderRowStyle}>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <span style={sheetGreetingStyle}>Hi, {clientName.split(' ')[0]}</span>
+                    <span style={sheetGreetingStyle}>{t('booking.greeting', { name: clientName.split(' ')[0] })}</span>
                   </div>
                 </div>
 
@@ -1589,7 +1626,8 @@ export default function ClientDashboard({
                     <>
                       <div style={compactFieldStyle}>
                         <div style={scheduledHeaderRowStyle}>
-                          <label style={scheduledLabelStyle}>BOOK</label>
+                          <label style={scheduledLabelStyle}>{t('booking.bookingLabel')}</label>
+                          
                           {flow.bookingTiming === 'scheduled' ? (
                             <div style={scheduledActionsStyle}>
                               <button
@@ -1597,7 +1635,7 @@ export default function ClientDashboard({
                                 onClick={clearScheduleToAsap}
                                 style={scheduledAsapBtnStyle}
                               >
-                                BOOK NOW
+                                {t('booking.bookNow')}
                               </button>
                               <button
                                 type="button"
@@ -1614,7 +1652,7 @@ export default function ClientDashboard({
                                 }}
                                 style={scheduledEditBtnStyle}
                               >
-                                Edit
+                                {t('booking.change')}
                               </button>
                             </div>
                           ) : (
@@ -1633,7 +1671,7 @@ export default function ClientDashboard({
                               }}
                               style={scheduledEditBtnStyle}
                             >
-                              Schedule
+                              {t('booking.schedule')}
                             </button>
                           )}
                         </div>
@@ -1661,19 +1699,19 @@ export default function ClientDashboard({
                           <div style={scheduledSummaryMainStyle}>
                             {flow.bookingTiming === 'scheduled'
                               ? formatScheduledDate(flow.scheduledFor)
-                              : 'NOW'}
+                              : t('booking.now')}
                           </div>
                           <div style={scheduledSummarySubStyle}>
                             {flow.bookingTiming === 'scheduled'
-                              ? 'Dispatch starts automatically about 15 min before the walk.'
-                              : 'We’ll start finding a walker right away.'}
+                              ? t('booking.dispatchStartsAutomatically')
+                              : t('booking.startFindingRightAway')}
                           </div>
                         </button>
                       </div>
 
                       <div style={compactFieldStyle}>
                         {isPaymentGuided && (
-                          <div style={guidedFieldHintAboveStyle}>Add payment method</div>
+                          <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
                         )}
                         <div
                           style={{
@@ -1702,8 +1740,8 @@ export default function ClientDashboard({
                 {!isSheetCollapsed && (
                   <div style={feeLabelStyle}>
                     {flow.bookingTiming === 'scheduled'
-                      ? 'Price locked now · payment visible · auto dispatch later'
-                      : 'Service fee included · charged after walk'}
+                      ? t('booking.priceLockedNow')
+                      : t('booking.serviceFeeIncluded')}
                   </div>
                 )}
               </div>
@@ -1735,8 +1773,8 @@ export default function ClientDashboard({
               <TrackingCard
                 walkerName={
                   flow.activeJob.walker_id
-                    ? flow.walkerNameById.get(flow.activeJob.walker_id) || 'Walker'
-                    : 'Walker'
+                    ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
+                    : t('common.provider')
                 }
                 phase={
                   flow.screenPhase === 'in_progress' ||
@@ -1750,7 +1788,7 @@ export default function ClientDashboard({
                 displayEtaSeconds={flow.displayEtaSeconds}
                 distanceMeters={flow.distanceMeters}
                 gpsQuality={trackingGpsQuality}
-                activeTitle={trackingLabels.activeTitle}
+                activeTitle={t('tracking.walkInProgress')}
                 onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                 confirmingArrival={flow.arrivalConfirming}
                 elapsedLabel={trackingDurationSummary.elapsedLabel}
@@ -1765,22 +1803,22 @@ export default function ClientDashboard({
         {shouldRenderIdleSheet && !isSheetCollapsed && (
           <div style={stickyCtaWrapStyle}>
             {shouldShowGuidanceCtaHelper && (
-              <div style={guidedCtaHelperStyle}>Complete the highlighted field to continue</div>
+              <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
             )}
             <div style={stickyMainActionStyle}>
               <ActionButton
                 label={
                   flow.loading
                     ? flow.bookingTiming === 'scheduled'
-                      ? 'Scheduling...'
-                      : 'Requesting...'
+                      ? t('booking.scheduling')
+                      : t('booking.requesting')
                     : flow.cardLoading
-                      ? 'Loading payment...'
+                      ? t('booking.loadingPayment')
                       : !flow.savedCard
-                        ? 'Add a card'
+                        ? t('booking.addCard')
                         : flow.bookingTiming === 'scheduled'
-                          ? 'Schedule walk'
-                          : 'Find nearby providers'
+                          ? t('booking.scheduleWalk')
+                          : t('booking.findNearbyProviders')
                 }
                 onClick={handleFindWalker}
                 loading={flow.loading || flow.cardLoading}
@@ -1803,8 +1841,8 @@ export default function ClientDashboard({
           <div style={completionOverlayCardStyle}>
             <CompletionCard
               promptKey={flow.completionJob.jobId}
-              title={getServiceLabels(null).completedTitle}
-              subtitle={`Rate ${flow.completionJob.walkerName}`}
+              title={t('completion.completed')}
+              subtitle={t('completion.rateProvider', { name: flow.completionJob.walkerName })}
               metaRows={completionMetaRows}
               onRate={flow.submitCompletionRating}
               ratingSubmitting={flow.completionRatingSubmitting}
@@ -1860,23 +1898,23 @@ export default function ClientDashboard({
 
             <div style={firstBookingWowTitleStyle}>
               {flow.cardLoading
-                ? 'Checking your payment setup'
+                ? t('firstBooking.checkingPaymentSetup')
                 : hasSavedPaymentMethod
-                  ? 'You’re ready to book'
-                  : 'You’re almost ready'}
+                  ? t('firstBooking.readyToBook')
+                  : t('firstBooking.almostReady')}
             </div>
 
             <div style={firstBookingWowBodyStyle}>
               {flow.cardLoading
-                ? 'This only takes a moment.'
+                ? t('firstBooking.thisOnlyTakesMoment')
                 : hasSavedPaymentMethod
-                  ? 'Add the service details and we’ll find a provider nearby.'
-                  : 'Add a payment method before your first booking.'}
+                  ? t('firstBooking.addServiceDetails')
+                  : t('firstBooking.addPaymentBeforeFirstBooking')}
             </div>
 
             {!flow.cardLoading && !hasSavedPaymentMethod && (
               <div style={firstBookingWowHelperStyle}>
-                You’ll only be charged after the service is completed.
+                {t('firstBooking.chargeAfterCompleted')}
               </div>
             )}
 
@@ -1890,10 +1928,10 @@ export default function ClientDashboard({
               }}
             >
               {flow.cardLoading
-                ? 'Checking...'
+                ? t('firstBooking.checking')
                 : hasSavedPaymentMethod
-                  ? 'Start booking'
-                  : 'Add payment method'}
+                  ? t('firstBooking.startBooking')
+                  : t('firstBooking.addPaymentMethod')}
             </button>
           </div>
         </div>
@@ -1905,9 +1943,9 @@ export default function ClientDashboard({
           <div style={dogNameSheetStyle}>
             <div style={bottomSheetHandleStyle} />
             <div style={dogNameSheetHeaderStyle}>
-              <div style={dogNameSheetTitleStyle}>Dog name</div>
+              <div style={dogNameSheetTitleStyle}>{t('dogNameSheet.title')}</div>
               <div style={dogNameSheetSubtitleStyle}>
-                Pick a previous name quickly or type a new one.
+                {t('dogNameSheet.subtitle')}
               </div>
             </div>
 
@@ -1932,11 +1970,11 @@ export default function ClientDashboard({
             )}
 
               <div style={dogNameInputCardStyle}>
-              <div style={dogNameInputLabelStyle}>Add new</div>
+              <div style={dogNameInputLabelStyle}>{t('dogNameSheet.addNew')}</div>
               <input
                 value={dogNameDraft}
                 onChange={(e) => setDogNameDraft(e.target.value)}
-                placeholder="Type dog name"
+                placeholder={t('dogNameSheet.typePlaceholder')}
                 style={dogNameSheetInputStyle}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -1949,7 +1987,7 @@ export default function ClientDashboard({
 
             <div style={dogNameSheetActionsStyle}>
               <button type="button" onClick={closeDogNameSheet} style={dogNameSecondaryBtnStyle}>
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
@@ -1957,7 +1995,7 @@ export default function ClientDashboard({
                 style={dogNamePrimaryBtnStyle}
                 disabled={!normalizeDogName(dogNameDraft)}
               >
-                Save
+                {t('common.save')}
               </button>
             </div>
           </div>
@@ -1968,7 +2006,7 @@ export default function ClientDashboard({
         open={showScheduleSheet}
         value={flow.scheduledFor || getNowPlus15LocalInput()}
         minValue={getNowPlus15LocalInput()}
-        title="Choose date & time"
+        title={t('booking.schedule')}
         subtitle=""
         onChange={flow.setScheduledFor}
         onClose={() => setShowScheduleSheet(false)}
@@ -2086,8 +2124,9 @@ function FavoriteWalkerMenuList({
   fallbackNames: Map<string, string>
   onToggleFavorite: (walkerId: string) => Promise<void>
 }) {
+  const { t } = useTranslation()
   if (favorites.length === 0) {
-    return <div style={burgerEmptyStateStyle}>No preferred walkers yet.</div>
+    return <div style={burgerEmptyStateStyle}>{t('menu.noPreferredWalkers')}</div>
   }
 
   return (
@@ -2097,7 +2136,7 @@ function FavoriteWalkerMenuList({
           favorite.walker?.full_name ||
           favorite.walker?.email ||
           fallbackNames.get(favorite.walker_id) ||
-          'Walker'
+          t('common.provider')
 
         return (
           <div key={favorite.walker_id} style={favoriteMenuItemStyle}>
@@ -2109,7 +2148,7 @@ function FavoriteWalkerMenuList({
             />
             <div style={favoriteMenuTextStyle}>
               <div style={favoriteMenuNameStyle}>{walkerName}</div>
-              <div style={favoriteMenuSubStyle}>Preferred walker</div>
+              <div style={favoriteMenuSubStyle}>{t('menu.preferredWalkers')}</div>
             </div>
             <button
               type="button"
@@ -2118,7 +2157,7 @@ function FavoriteWalkerMenuList({
               }}
               style={favoriteMenuRemoveStyle}
             >
-              Remove
+              {t('menu.remove')}
             </button>
           </div>
         )
@@ -2138,6 +2177,7 @@ function TipPromptCard({
   onSubmit: (amount: number) => Promise<void>
   onDismiss: () => void
 }) {
+  const { t } = useTranslation()
   const [customOpen, setCustomOpen] = useState(false)
   const [customAmount, setCustomAmount] = useState('')
 
@@ -2146,8 +2186,8 @@ function TipPromptCard({
   return (
     <div style={tipCardStyle}>
       <div style={tipIconStyle}>₪</div>
-      <h3 style={tipTitleStyle}>Add a tip for {walkerName}?</h3>
-      <p style={tipSubtitleStyle}>Optional, separate from the walk payment.</p>
+      <h3 style={tipTitleStyle}>{t('tip.addTip', { walkerName })}</h3>
+      <p style={tipSubtitleStyle}>{t('tip.optionalSeparate')}</p>
 
       <div style={tipPresetRowStyle}>
         {[5, 10, 15].map((amount) => (
@@ -2171,7 +2211,7 @@ function TipPromptCard({
             value={customAmount}
             onChange={(event) => setCustomAmount(event.target.value.replace(/[^\d]/g, ''))}
             inputMode="numeric"
-            placeholder="Custom"
+            placeholder={t('tip.customPlaceholder')}
             style={tipCustomInputStyle}
           />
           <button
@@ -2185,17 +2225,17 @@ function TipPromptCard({
               opacity: submitting || parsedCustomAmount <= 0 ? 0.55 : 1,
             }}
           >
-            Send
+            {t('tip.send')}
           </button>
         </div>
       ) : (
         <button type="button" onClick={() => setCustomOpen(true)} style={tipCustomToggleStyle}>
-          Custom amount
+          {t('tip.customAmount')}
         </button>
       )}
 
       <button type="button" onClick={onDismiss} disabled={submitting} style={tipSkipButtonStyle}>
-        No tip
+        {t('tip.noTip')}
       </button>
     </div>
   )
@@ -2208,8 +2248,9 @@ function BurgerUpcomingList({
   items: UpcomingBookingItem[]
   onCancel?: (id: string) => void
 }) {
+  const { t } = useTranslation()
   if (items.length === 0) {
-    return <div style={burgerEmptyStateStyle}>No future orders.</div>
+    return <div style={burgerEmptyStateStyle}>{t('menu.noFutureOrders')}</div>
   }
 
   return (
@@ -2219,7 +2260,9 @@ function BurgerUpcomingList({
           <div style={burgerListCardHeaderStyle}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={burgerListTitleStyle}>{item.dogName}</div>
-              <div style={burgerListSubtitleStyle}>{formatShortAddress(item.location) || 'Scheduled walk'}</div>
+              <div style={burgerListSubtitleStyle}>
+                {formatShortAddress(item.location) || t('menu.scheduledWalk')}
+              </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               {item.price != null && <div style={burgerListPriceStyle}>₪{item.price}</div>}
@@ -2229,24 +2272,28 @@ function BurgerUpcomingList({
                   onClick={() => onCancel(item.id)}
                   style={clientUpcomingCancelBtnStyle}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               )}
             </div>
           </div>
           <div style={burgerListMetaColumnStyle}>
-            <div style={burgerListMetaStyle}>Scheduled for {formatScheduledTime(item.scheduledFor)}</div>
             <div style={burgerListMetaStyle}>
-              Finding provider around {item.findingProviderAt || '15 min before'}
+              {t('menu.scheduledFor', { time: formatScheduledTime(item.scheduledFor) })}
             </div>
             <div style={burgerListMetaStyle}>
-              Estimated arrival around {formatScheduledTime(item.scheduledFor)}
+              {t('menu.findingProviderAround', { time: item.findingProviderAt || t('booking.fifteenMinutesBefore') })}
+            </div>
+            <div style={burgerListMetaStyle}>
+              {t('menu.estimatedArrivalAround', { time: formatScheduledTime(item.scheduledFor) })}
             </div>
           </div>
           <div style={burgerListMetaRowStyle}>
             <div style={burgerListMetaSubtleStyle}>{formatScheduledDate(item.scheduledFor)}</div>
             {item.startsInMin != null && item.startsInMin >= 0 && item.startsInMin <= 60 && (
-              <div style={clientUpcomingBadgeStyle}>starts in {item.startsInMin} min</div>
+              <div style={clientUpcomingBadgeStyle}>
+                {t('menu.startsInMinutes', { count: item.startsInMin })}
+              </div>
             )}
           </div>
         </div>
@@ -2284,52 +2331,58 @@ function TrackingCard({
   plannedLabel: string | null
   actualLabel: string | null
 }) {
+  const { t } = useTranslation()
   const isServiceActive = phase === 'in_progress'
   const isArrivalPending = phase === 'arrived_pending_confirmation'
   const isArrivalConfirmed = phase === 'arrival_confirmed'
+  const isOnTheWay = !isServiceActive && !isArrivalPending && !isArrivalConfirmed
   const topBadge = isServiceActive
     ? activeTitle
     : isArrivalPending
-      ? 'Provider arrived'
+      ? t('tracking.providerArrived')
       : isArrivalConfirmed
-        ? 'Ready to start'
-        : 'On the way'
-  const title = isServiceActive
-    ? 'Walk in progress 🐾'
+        ? t('tracking.readyToStart')
+        : t('tracking.onTheWay')
+  const title = isOnTheWay
+    ? t('tracking.headingToYou', { walkerName })
+    : isServiceActive
+    ? t('tracking.walkInProgress')
     : isArrivalPending
-      ? 'Provider has arrived'
+      ? t('tracking.providerArrived')
       : isArrivalConfirmed
-        ? "Let's start 🙂"
-        : 'On the way'
-  const subtitle = isServiceActive
-    ? 'Your service has started.'
+        ? t('tracking.readyToStart')
+        : t('tracking.onTheWay')
+  const subtitle = isOnTheWay
+    ? ''
+    : isServiceActive
+    ? t('tracking.startedSubtitle')
     : isArrivalPending
-      ? 'Confirm the provider is with you before service starts'
+      ? t('tracking.arrivalConfirmationSubtitle')
       : isArrivalConfirmed
-        ? 'Your provider is ready to start the service.'
-        : `${walkerName} is heading to you`
+        ? t('tracking.readySubtitle')
+        : t('tracking.headingToYou', { walkerName })
 
   return (
     <div style={trackingCardStyle}>
       <div style={trackingTopBadgeStyle}>{topBadge}</div>
       <div style={trackingTitleStyle}>{title}</div>
-      <div style={trackingSubtitleStyle}>{subtitle}</div>
+      {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
 
       <div style={trackingStatsGridStyle}>
-        <div style={trackingStatCardStyle}>
-          <div style={trackingStatLabelStyle}>ETA</div>
+        <div style={{ ...trackingStatCardStyle, ...trackingEtaStatCardStyle }}>
+          <div style={trackingStatLabelStyle}>{t('tracking.eta')}</div>
           <div style={trackingStatValueStyle}>
             {formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)}
           </div>
         </div>
         <div style={trackingStatCardStyle}>
-          <div style={trackingStatLabelStyle}>Distance</div>
+          <div style={trackingStatLabelStyle}>{t('tracking.distance')}</div>
           <div style={trackingStatValueStyle}>
             {formatDistance(distanceMeters, isArrived || isArrivalPending || isArrivalConfirmed)}
           </div>
         </div>
         <div style={trackingStatCardStyle}>
-          <div style={trackingStatLabelStyle}>GPS</div>
+          <div style={trackingStatLabelStyle}>{t('tracking.gps')}</div>
           <div style={trackingStatValueStyle}>{formatGpsQuality(gpsQuality)}</div>
         </div>
       </div>
@@ -2338,14 +2391,14 @@ function TrackingCard({
         <div style={trackingTimerPanelStyle}>
           {elapsedLabel && (
             <div style={trackingTimerPrimaryRowStyle}>
-              <span style={trackingTimerLabelStyle}>Elapsed</span>
+              <span style={trackingTimerLabelStyle}>{t('tracking.elapsed')}</span>
               <span style={trackingTimerValueStyle}>{elapsedLabel}</span>
             </div>
           )}
           {(plannedLabel || actualLabel) && (
             <div style={trackingTimerMetaRowStyle}>
-              {plannedLabel && <span style={trackingTimerMetaStyle}>Planned: {plannedLabel}</span>}
-              {actualLabel && <span style={trackingTimerMetaStyle}>Actual: {actualLabel}</span>}
+              {plannedLabel && <span style={trackingTimerMetaStyle}>{t('tracking.planned')}: {plannedLabel}</span>}
+              {actualLabel && <span style={trackingTimerMetaStyle}>{t('tracking.actual')}: {actualLabel}</span>}
             </div>
           )}
         </div>
@@ -2354,7 +2407,7 @@ function TrackingCard({
       {isArrivalPending && onConfirmArrival && (
         <div style={{ marginTop: 16 }}>
           <ActionButton
-            label={confirmingArrival ? 'Confirming...' : 'Confirm arrival'}
+            label={confirmingArrival ? t('tracking.confirmingArrival') : t('tracking.confirmArrival')}
             onClick={onConfirmArrival}
             loading={!!confirmingArrival}
             disabled={!!confirmingArrival}
@@ -2400,7 +2453,7 @@ function parseDateTimeFlexible(value: string | null | undefined): Date | null {
 
 function formatScheduledDate(value: string | null | undefined): string {
   const dt = parseDateTimeFlexible(value)
-  if (!dt) return 'Scheduled walk'
+  if (!dt) return i18n.t('menu.scheduledWalk')
   return dt.toLocaleString([], {
     weekday: 'short',
     month: 'short',
@@ -2438,16 +2491,17 @@ function formatEta(
   displayEtaSeconds: number | null,
   isArrived: boolean,
 ): string {
-  if (isArrived) return 'Arrived'
+  const isHebrew = i18n.resolvedLanguage === 'he'
+  if (isArrived) return i18n.t('tracking.arrived')
   if (displayEtaSeconds != null && displayEtaSeconds >= 0 && displayEtaSeconds < 60) {
-    return `${displayEtaSeconds}s`
+    return isHebrew ? `${displayEtaSeconds} שנ׳` : `${displayEtaSeconds}s`
   }
-  if (etaMinutes != null && etaMinutes >= 0) return `${etaMinutes} min`
+  if (etaMinutes != null && etaMinutes >= 0) return isHebrew ? `${etaMinutes} דק׳` : `${etaMinutes} min`
   return '—'
 }
 
 function formatDistance(distanceMeters: number | null, isArrived: boolean): string {
-  if (isArrived) return 'Here'
+  if (isArrived) return i18n.t('tracking.here')
   if (distanceMeters == null || Number.isNaN(distanceMeters)) return '—'
   if (distanceMeters < 1000) return `${Math.round(distanceMeters)} m`
   return `${(distanceMeters / 1000).toFixed(1)} km`
@@ -2456,13 +2510,13 @@ function formatDistance(distanceMeters: number | null, isArrived: boolean): stri
 function formatGpsQuality(gpsQuality: GpsQuality): string {
   switch (gpsQuality) {
     case 'live':
-      return 'Live'
+      return i18n.t('tracking.live')
     case 'delayed':
-      return 'Delayed'
+      return i18n.t('tracking.delayed')
     case 'offline':
-      return 'Offline'
+      return i18n.t('tracking.offline')
     default:
-      return 'Live'
+      return i18n.t('tracking.live')
   }
 }
 
@@ -3397,6 +3451,12 @@ const trackingStatCardStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
+const trackingEtaStatCardStyle: React.CSSProperties = {
+  background: '#EFF6FF',
+  borderColor: '#BFDBFE',
+  boxShadow: '0 6px 18px rgba(37, 99, 235, 0.08)',
+}
+
 const trackingStatLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
@@ -3606,6 +3666,31 @@ const burgerSectionStyle: React.CSSProperties = {
   display: 'grid',
   gap: 2,
   paddingBottom: 14,
+}
+
+const languageSelectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  marginTop: 10,
+}
+
+const languageButtonStyle: React.CSSProperties = {
+  minWidth: 92,
+  height: 36,
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const languageButtonActiveStyle: React.CSSProperties = {
+  borderColor: '#5B7CFA',
+  background: '#EEF4FF',
+  color: '#3152C8',
 }
 
 
