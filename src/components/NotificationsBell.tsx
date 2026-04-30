@@ -132,7 +132,7 @@ export default function NotificationsBell({
   const ref = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; right?: number; left?: number } | null>(null)
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
 
@@ -265,10 +265,18 @@ export default function NotificationsBell({
   const handleToggle = useCallback(() => {
     if (!open && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect()
-      setDropdownPos({
-        top: rect.bottom + 8,
-        right: Math.max(8, window.innerWidth - rect.right),
-      })
+      const isRtl = document.documentElement.dir === 'rtl'
+      setDropdownPos(
+        isRtl
+          ? {
+              top: rect.bottom + 8,
+              left: Math.max(8, rect.left),
+            }
+          : {
+              top: rect.bottom + 8,
+              right: Math.max(8, window.innerWidth - rect.right),
+            },
+      )
     }
     setOpen((prev) => !prev)
   }, [open])
@@ -361,7 +369,8 @@ export default function NotificationsBell({
           style={{
             position: 'fixed',
             top: dropdownPos.top,
-            right: dropdownPos.right,
+            ...(dropdownPos.left != null ? { left: dropdownPos.left } : null),
+            ...(dropdownPos.right != null ? { right: dropdownPos.right } : null),
             width: 'min(340px, calc(100% - 24px))',
             maxWidth: 'calc(100% - 24px)',
             maxHeight: 440,

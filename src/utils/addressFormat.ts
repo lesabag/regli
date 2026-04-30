@@ -93,6 +93,17 @@ function fromString(value: string): string {
   const firstTokens = first.split(' ').filter(Boolean)
   const lastToken = firstTokens[firstTokens.length - 1] ?? ''
 
+  if (looksLikeHouseNumber(first) && second) {
+    return third ? `${second} ${first}, ${third}` : `${second} ${first}`
+  }
+
+  const secondTokens = second?.split(' ').filter(Boolean) ?? []
+  const secondLastToken = secondTokens[secondTokens.length - 1] ?? ''
+
+  if (!looksLikeHouseNumber(lastToken) && looksLikeHouseNumber(secondLastToken)) {
+    return third ? `${second}, ${first}` : second
+  }
+
   if (looksLikeHouseNumber(second)) {
     return third ? `${first} ${second}, ${third}` : `${first} ${second}`
   }
