@@ -1,13 +1,18 @@
 type AddressParts = {
   house_number?: string | null
+  street_number?: string | null
   houseNumber?: string | null
+  number?: string | null
+  'addr:housenumber'?: string | null
   road?: string | null
+  route?: string | null
   street?: string | null
   pedestrian?: string | null
   footway?: string | null
   neighbourhood?: string | null
   suburb?: string | null
   city?: string | null
+  locality?: string | null
   town?: string | null
   village?: string | null
   municipality?: string | null
@@ -50,14 +55,23 @@ function uniqueParts(parts: string[]): string[] {
 function fromObject(address: AddressParts): string {
   const street = cleanPart(
     address.road ??
+      address.route ??
       address.street ??
       address.pedestrian ??
       address.footway ??
       address.neighbourhood ??
       address.suburb,
   )
-  const houseNumber = cleanPart(address.house_number ?? address.houseNumber)
-  const city = cleanPart(address.city ?? address.town ?? address.village ?? address.municipality)
+  const houseNumber = cleanPart(
+    address.house_number ??
+      address.street_number ??
+      address.houseNumber ??
+      address.number ??
+      address['addr:housenumber'],
+  )
+  const city = cleanPart(
+    address.city ?? address.locality ?? address.town ?? address.village ?? address.municipality,
+  )
 
   if (street && houseNumber && city) return `${street} ${houseNumber}, ${city}`
   if (street && city) return `${street}, ${city}`
@@ -102,6 +116,10 @@ function fromString(value: string): string {
 
   if (!looksLikeHouseNumber(lastToken) && looksLikeHouseNumber(secondLastToken)) {
     return third ? `${second}, ${first}` : second
+  }
+
+  if (third && looksLikeHouseNumber(third)) {
+    return `${first} ${third}, ${second}`
   }
 
   if (looksLikeHouseNumber(second)) {

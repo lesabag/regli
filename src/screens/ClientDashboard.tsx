@@ -792,8 +792,17 @@ export default function ClientDashboard({
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
 
+  const localizedDurationOptions = useMemo(
+    () =>
+      DURATION_OPTIONS.map((option) => ({
+        ...option,
+        label: formatDurationLabelFromMinutes(option.minutes) || option.label,
+      })),
+    [i18n.resolvedLanguage],
+  )
+
   const requestDurationLabel = formatDurationLabelFromMinutes(flow.currentJob?.duration_minutes) ||
-    flow.selectedDuration.label ||
+    localizeMinuteUnitLabel(flow.selectedDuration.label) ||
     t('booking.walkFallback')
   const requestPriceLabel =
     flow.currentJob?.price != null && flow.currentJob.price > 0
@@ -839,13 +848,19 @@ export default function ClientDashboard({
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
     if (completionDurationSummary.plannedLabel) {
-      rows.push({ label: t('tracking.planned'), value: completionDurationSummary.plannedLabel })
+      rows.push({
+        label: t('tracking.planned'),
+        value: localizeMinuteUnitLabel(completionDurationSummary.plannedLabel) || completionDurationSummary.plannedLabel,
+      })
     }
     if (completionDurationSummary.actualLabel) {
-      rows.push({ label: t('tracking.actual'), value: completionDurationSummary.actualLabel })
+      rows.push({
+        label: t('tracking.actual'),
+        value: localizeMinuteUnitLabel(completionDurationSummary.actualLabel) || completionDurationSummary.actualLabel,
+      })
     }
     return rows
-  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel, t])
+  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel, i18n.resolvedLanguage, t])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -1163,8 +1178,8 @@ export default function ClientDashboard({
           ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
         }}
       >
-        <DurationPicker
-          options={DURATION_OPTIONS}
+                <DurationPicker
+          options={localizedDurationOptions}
           selected={flow.duration ?? ''}
           onSelect={(v) => handleDurationSelect(v as DurationType)}
           surgeMultiplier={flow.surgeMultiplier}
@@ -1791,9 +1806,9 @@ export default function ClientDashboard({
                 activeTitle={t('tracking.walkInProgress')}
                 onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                 confirmingArrival={flow.arrivalConfirming}
-                elapsedLabel={trackingDurationSummary.elapsedLabel}
-                plannedLabel={trackingDurationSummary.plannedLabel}
-                actualLabel={trackingDurationSummary.actualLabel}
+                elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
+                plannedLabel={localizeMinuteUnitLabel(trackingDurationSummary.plannedLabel)}
+                actualLabel={localizeMinuteUnitLabel(trackingDurationSummary.actualLabel)}
               />
             </div>
           )}
@@ -2481,8 +2496,21 @@ function getScheduledDispatchWindowLabel(value: string | null | undefined): stri
   return formatScheduledTime(matchingTime.toISOString())
 }
 
+function localizeMinuteUnitLabel(value: string | null | undefined): string | null {
+  if (!value) return value ?? null
+  if (i18n.resolvedLanguage !== 'he') return value
+
+  return value
+    .replace(/\bmin\b/gi, 'דק׳')
+    .replace(/\bmins\b/gi, 'דק׳')
+    .replace(/\bminutes\b/gi, 'דק׳')
+    .replace(/\bminute\b/gi, 'דק׳')
+}
+
 function formatDurationLabelFromMinutes(minutes: number | null | undefined): string {
-  if (minutes === 20 || minutes === 40 || minutes === 60) return `${minutes} min`
+  if (minutes === 20 || minutes === 40 || minutes === 60) {
+    return i18n.resolvedLanguage === 'he' ? `${minutes} דק׳` : `${minutes} min`
+  }
   return ''
 }
 
