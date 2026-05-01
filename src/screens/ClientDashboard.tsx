@@ -8,7 +8,6 @@ import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
 import CardSetupForm from '../components/CardSetupForm'
 import MessageBanner from '../components/MessageBanner'
-import IOSDateTimeSheet from '../components/IOSDateTimeSheet'
 import ProfileAvatar from '../components/ProfileAvatar'
 import GroupedHistory from '../components/GroupedHistory'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -53,10 +52,25 @@ function getNowPlus15LocalInput(): string {
   return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
 }
 
-function shouldResetScheduledValue(value: string | null | undefined): boolean {
-  const dt = parseLocalDateTime(value)
-  if (!dt) return true
-  return dt.getTime() < Date.now() + 15 * 60 * 1000
+function clampScheduledDraft(value: string | null | undefined, minValue?: string): string {
+  const nextValue = value || getNowPlus15LocalInput()
+  const parsedValue = parseLocalDateTime(nextValue)
+  const parsedMin = parseLocalDateTime(minValue || getNowPlus15LocalInput())
+  if (!parsedValue || !parsedMin) return nextValue
+  return parsedValue.getTime() < parsedMin.getTime() ? (minValue || getNowPlus15LocalInput()) : nextValue
+}
+
+function splitScheduledDraft(value: string): { date: string; time: string } {
+  const parsed = parseLocalDateTime(value) || new Date()
+  return {
+    date: `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`,
+    time: `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`,
+  }
+}
+
+function mergeScheduledDraft(datePart: string, timePart: string): string {
+  if (!datePart || !timePart) return ''
+  return `${datePart}T${timePart}`
 }
 
 function dogNamesStorageKey(profileId: string): string {
@@ -69,6 +83,7 @@ function normalizeDogName(value: string): string {
 
 type AppRole = 'client' | 'walker' | 'admin'
 type SheetSnap = 'collapsed' | 'default'
+type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
 
 interface ClientDashboardProps {
   profile: {
@@ -97,16 +112,16 @@ export default function ClientDashboard({
   showOnboardingWowToken = 0,
 }: ClientDashboardProps) {
   const { t, i18n } = useTranslation()
+  const isRtl = i18n.resolvedLanguage === 'he'
   const clientName = profile.full_name || profile.email || t('common.client')
   const flow = useClientFlow(profile.id, clientName)
   const photo = useProfilePhoto(profile.id)
   usePushNotifications(profile.id)
 
   const [burgerOpen, setBurgerOpen] = useState(false)
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [walkHistoryOpen, setWalkHistoryOpen] = useState(true)
-  const [historyView, setHistoryView] = useState<'menu' | 'all'>('menu')
-  const [showScheduleSheet, setShowScheduleSheet] = useState(false)
+  const [menuPage, setMenuPage] = useState<MenuPage>('main')
+  const [showSchedulePage, setShowSchedulePage] = useState(false)
+  const [scheduleDraft, setScheduleDraft] = useState(getNowPlus15LocalInput())
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
@@ -123,7 +138,6 @@ export default function ClientDashboard({
   const [viewportHeight, setViewportHeight] = useState(() =>
     typeof window === 'undefined' ? 844 : window.innerHeight,
   )
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const locationInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
@@ -195,6 +209,16 @@ export default function ClientDashboard({
           box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
         }
       }
+
+      @keyframes regliMenuSlideInLeft {
+        0% { opacity: 0; transform: translateX(-28px); }
+        100% { opacity: 1; transform: translateX(0); }
+      }
+
+      @keyframes regliMenuSlideInRight {
+        0% { opacity: 0; transform: translateX(28px); }
+        100% { opacity: 1; transform: translateX(0); }
+      }
     `
     document.head.appendChild(style)
 
@@ -242,21 +266,6 @@ export default function ClientDashboard({
     }
   }, [])
 
-
-  useEffect(() => {
-    if (flow.bookingTiming === 'asap') {
-      setShowScheduleSheet(false)
-    }
-  }, [flow.bookingTiming])
-
-  useEffect(() => {
-    if (!showScheduleSheet) return
-    if (flow.bookingTiming !== 'scheduled') return
-    if (shouldResetScheduledValue(flow.scheduledFor)) {
-      flow.setScheduledFor(getNowPlus15LocalInput())
-    }
-  }, [flow.bookingTiming, flow.scheduledFor, flow.setScheduledFor, showScheduleSheet])
-
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(dogNamesStorageKey(profile.id))
@@ -278,6 +287,11 @@ export default function ClientDashboard({
   useEffect(() => {
     if (!showDogNameSheet) return
   }, [flow.dogName, showDogNameSheet])
+
+  useEffect(() => {
+    if (!showSchedulePage) return
+    setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
+  }, [flow.scheduledFor, showSchedulePage])
 
   const playArrivalBeep = useCallback(() => {
     if (!hasUserInteractedRef.current || typeof window === 'undefined') return
@@ -612,8 +626,8 @@ export default function ClientDashboard({
     t,
   ])
 
-  const visibleHistoryItems = useMemo(
-    () => allHistoryItems.filter((item) => item.hidden_by_client !== true).slice(0, 7),
+  const menuHistoryPreviewItems = useMemo(
+    () => allHistoryItems.filter((item) => item.hidden_by_client !== true).slice(0, 5),
     [allHistoryItems],
   )
 
@@ -864,8 +878,7 @@ export default function ClientDashboard({
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
-    setProfileOpen(false)
-    setHistoryView('menu')
+    setMenuPage('main')
   }, [])
 
   const handleBookAgain = useCallback(
@@ -919,14 +932,9 @@ export default function ClientDashboard({
   )
 
   const openScheduleSheet = useCallback(() => {
-    setShowScheduleSheet(true)
-    requestAnimationFrame(() => {
-      flow.setBookingTiming('scheduled')
-      if (shouldResetScheduledValue(flow.scheduledFor)) {
-        flow.setScheduledFor(getNowPlus15LocalInput())
-      }
-    })
-  }, [flow])
+    setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
+    setShowSchedulePage(true)
+  }, [flow.scheduledFor])
 
   const openLocationDetails = useCallback(() => {
     setSheetSnap('default')
@@ -939,11 +947,6 @@ export default function ClientDashboard({
     setSheetSnap((current) => (current === 'collapsed' ? 'default' : 'collapsed'))
     setDragOffsetY(0)
   }, [])
-
-  const clearScheduleToAsap = useCallback(() => {
-    flow.setBookingTiming('asap')
-    setShowScheduleSheet(false)
-  }, [flow])
 
   const handleMatchingTryAgain = useCallback(() => {
     flow.clearAvailabilityNotice()
@@ -964,27 +967,13 @@ export default function ClientDashboard({
   )
 
   const openFavoritesMenu = useCallback(() => {
-    setProfileOpen(false)
-    setHistoryView('menu')
     setBurgerOpen(true)
-    requestAnimationFrame(() => {
-      document.getElementById('client-favorites-section')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    })
+    setMenuPage('settings')
   }, [])
 
   const openFutureOrdersMenu = useCallback(() => {
-    setProfileOpen(false)
-    setHistoryView('menu')
     setBurgerOpen(true)
-    window.setTimeout(() => {
-      document.getElementById('future-orders-section')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    }, 0)
+    setMenuPage('futureOrders')
   }, [])
 
   const currentMapStyle: React.CSSProperties = isTrackingState
@@ -992,6 +981,12 @@ export default function ClientDashboard({
     : isSearching
       ? searchingMapContainerStyle
       : idleMapContainerStyle
+
+  const scheduleMinValue = getNowPlus15LocalInput()
+  const scheduleDraftParts = splitScheduledDraft(clampScheduledDraft(scheduleDraft, scheduleMinValue))
+  const scheduleMinDate = scheduleMinValue.slice(0, 10)
+  const scheduleMinTimeForSameDay =
+    scheduleDraftParts.date === scheduleMinDate ? scheduleMinValue.slice(11, 16) : undefined
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
     ? trackingSheetStyle
@@ -1199,15 +1194,13 @@ export default function ClientDashboard({
               onPointerUp={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                setProfileOpen(false)
-                setHistoryView('menu')
+                setMenuPage('main')
                 setBurgerOpen((v) => !v)
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
-                  setProfileOpen(false)
-                  setHistoryView('menu')
+                  setMenuPage('main')
                   setBurgerOpen((v) => !v)
                 }
               }}
@@ -1343,30 +1336,46 @@ export default function ClientDashboard({
       {burgerOpen && (
         <>
           <div style={menuOverlayStyle} onClick={closeAll} />
-          <div style={menuPanelStyle}>
+          <div
+            style={{
+              ...menuPanelStyle,
+              ...(isRtl ? menuPanelRtlStyle : menuPanelLtrStyle),
+              animation: isRtl
+                ? 'regliMenuSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1)'
+                : 'regliMenuSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          >
             <div style={menuHeaderRowStyle}>
               <div style={menuHeaderLeftStyle}>
                 <button
                   type="button"
                   onClick={() => {
-                    if (historyView === 'all') {
-                      setHistoryView('menu')
+                    if (menuPage !== 'main') {
+                      setMenuPage('main')
                     } else {
                       closeAll()
                     }
                   }}
                   style={menuBackButtonStyle}
-                  aria-label={historyView === 'all' ? t('common.back') : t('common.close')}
+                  aria-label={menuPage !== 'main' ? t('common.back') : t('common.close')}
                 >
-                  {historyView === 'all' ? '‹' : '☰'}
+                  {menuPage !== 'main' ? '‹' : '✕'}
                 </button>
-                <span style={menuTitleStyle}>{historyView === 'all' ? t('menu.allHistory') : t('menu.menu')}</span>
+                <span style={menuTitleStyle}>
+                  {menuPage === 'settings'
+                    ? t('menu.settings')
+                    : menuPage === 'history'
+                      ? t('menu.tripHistory')
+                      : menuPage === 'futureOrders'
+                        ? t('menu.futureOrders')
+                        : t('menu.menu')}
+                </span>
               </div>
             </div>
 
             <div style={menuScrollAreaStyle}>
-              {historyView === 'all' ? (
-                <BurgerSection title={t('menu.allHistory')} subtitle={t('menu.allHistorySubtitle')}>
+              {menuPage === 'history' ? (
+                <BurgerSection title={t('menu.tripHistory')} subtitle={t('menu.allHistorySubtitle')}>
                   <GroupedHistory
                     items={allHistoryItems}
                     role="client"
@@ -1379,31 +1388,8 @@ export default function ClientDashboard({
                     emptySubtitle={t('menu.noWalkHistorySubtitle')}
                   />
                 </BurgerSection>
-              ) : (
+              ) : menuPage === 'settings' ? (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBurgerOpen(false)
-                      setProfileOpen(true)
-                    }}
-                    style={menuProfileButtonStyle}
-                  >
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
-                      <ProfileAvatar url={photo.avatarUrl} name={clientName} size={48} borderRadius={16} />
-                    </div>
-                    <div style={menuProfileTextStyle}>
-                      <div style={profileNameStyle}>{clientName}</div>
-                      {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
-                      {flow.avgRating !== null && (
-                        <div style={profileRatingStyle}>
-                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
-                        </div>
-                      )}
-                    </div>
-                    <div style={menuProfileChevronStyle}>›</div>
-                  </button>
-
                   <section style={burgerSectionStyle}>
                     <div style={burgerSectionHeaderStyle}>
                       <div style={burgerSectionTitleStyle}>{t('common.language')}</div>
@@ -1437,131 +1423,183 @@ export default function ClientDashboard({
                   </section>
 
                   <BurgerSection
-                    id="future-orders-section"
-                    title={t('menu.futureOrders')}
-                    subtitle={t('menu.futureOrdersSubtitle')}
+                    id="client-favorites-section"
+                    title={t('menu.preferredWalkers')}
+                    subtitle={t('menu.preferredWalkersSubtitle')}
                   >
-                  <BurgerUpcomingList
-                      items={upcomingScheduledItems}
-                      onCancel={flow.cancelScheduledJob}
+                    <FavoriteWalkerMenuList
+                      favorites={flow.favoriteWalkers}
+                      fallbackNames={flow.walkerNameById}
+                      onToggleFavorite={flow.toggleFavoriteWalker}
                     />
                   </BurgerSection>
+                </>
+              ) : menuPage === 'futureOrders' ? (
+                <BurgerSection
+                  id="future-orders-section"
+                  title={t('menu.futureOrders')}
+                  subtitle={t('menu.futureOrdersSubtitle')}
+                >
+                  <BurgerUpcomingList
+                    items={upcomingScheduledItems}
+                    onCancel={flow.cancelScheduledJob}
+                    limit={null}
+                  />
+                </BurgerSection>
+              ) : (
+                <>
+                  <div style={menuProfileButtonStyle}>
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <ProfileAvatar url={photo.avatarUrl} name={clientName} size={48} borderRadius={16} />
+                    </div>
+                    <div style={menuProfileTextStyle}>
+                      <div style={profileNameStyle}>{clientName}</div>
+                      {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                      {flow.avgRating !== null && (
+                        <div style={profileRatingStyle}>
+                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-                  {flow.favoriteWalkers.length > 0 && (
-                    <BurgerSection
-                      id="client-favorites-section"
-                      title={t('menu.preferredWalkers')}
-                      subtitle={t('menu.preferredWalkersSubtitle')}
-                    >
-                      <FavoriteWalkerMenuList
-                        favorites={flow.favoriteWalkers}
-                        fallbackNames={flow.walkerNameById}
-                        onToggleFavorite={flow.toggleFavoriteWalker}
-                      />
-                    </BurgerSection>
-                  )}
+                  <div style={menuRowListStyle}>
+                    <MenuNavRow
+                      icon="⚙️"
+                      label={t('menu.settings')}
+                      onClick={() => setMenuPage('settings')}
+                    />
+                    <MenuNavRow
+                      icon="🕘"
+                      label={t('menu.tripHistory')}
+                      onClick={() => setMenuPage('history')}
+                    />
+                    <MenuNavRow
+                      icon="📅"
+                      label={t('menu.futureOrders')}
+                      onClick={() => setMenuPage('futureOrders')}
+                    />
+                    <MenuNavRow
+                      icon="↪"
+                      label={t('menu.signOut')}
+                      destructive
+                      onClick={() => {
+                        closeAll()
+                        void handleSignOut()
+                      }}
+                    />
+                  </div>
 
-                  <section style={burgerSectionStyle}>
-                    <button
-                      type="button"
-                      onClick={() => setWalkHistoryOpen((v) => !v)}
-                      style={accordionButtonStyle}
-                    >
-                      <div>
-                        <div style={burgerSectionTitleStyle}>{t('menu.walkHistory')}</div>
-                        <div style={burgerSectionSubtitleStyle}>{t('menu.walkHistorySubtitle')}</div>
-                      </div>
-                      <div style={accordionChevronStyle}>{walkHistoryOpen ? '−' : '+'}</div>
-                    </button>
-
-                    {walkHistoryOpen && (
-                      <div style={{ marginTop: 10 }}>
-                        <GroupedHistory
-                          items={visibleHistoryItems}
-                          role="client"
-                          compact
-                          onBookAgain={handleBookAgain}
-                          onHide={anyFlow.hideHistoryItem}
-                          favoriteWalkerIds={flow.favoriteWalkerIds}
-                          onToggleFavoriteWalker={flow.toggleFavoriteWalker}
-                          emptyTitle={t('menu.noWalkHistory')}
-                          emptySubtitle={t('menu.noWalkHistorySubtitle')}
-                        />
-                        {allHistoryItems.length > 7 && (
-                          <div style={{ marginTop: 10, textAlign: 'center' }}>
-                            <button
-                              type="button"
-                              onClick={() => setHistoryView('all')}
-                              style={viewAllButtonStyle}
-                            >
-                              {t('menu.viewAll')}
-                            </button>
-                          </div>
-                        )}
+                  <BurgerSection title={t('menu.latestTrips')} subtitle={t('menu.walkHistorySubtitle')}>
+                    <GroupedHistory
+                      items={menuHistoryPreviewItems}
+                      role="client"
+                      compact
+                      onBookAgain={handleBookAgain}
+                      onHide={anyFlow.hideHistoryItem}
+                      favoriteWalkerIds={flow.favoriteWalkerIds}
+                      onToggleFavoriteWalker={flow.toggleFavoriteWalker}
+                      emptyTitle={t('menu.noWalkHistory')}
+                      emptySubtitle={t('menu.noWalkHistorySubtitle')}
+                    />
+                    {allHistoryItems.length > 5 && (
+                      <div style={{ marginTop: 10, textAlign: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => setMenuPage('history')}
+                          style={viewAllButtonStyle}
+                        >
+                          {t('menu.viewAll')}
+                        </button>
                       </div>
                     )}
-                  </section>
+                  </BurgerSection>
                 </>
               )}
             </div>
-
-            <div style={menuDividerStyle} />
-
-            <button
-              type="button"
-              onClick={() => {
-                closeAll()
-                void handleSignOut()
-              }}
-              style={menuActionStyle}
-            >
-              {t('menu.signOut')}
-            </button>
           </div>
         </>
       )}
 
-      {profileOpen && (
+      {showSchedulePage && (
         <>
-          <div style={menuOverlayStyle} onClick={closeAll} />
-          <div style={profilePanelStyle}>
-            <div style={profileSectionStyle}>
-              <div style={{ position: 'relative' }}>
-                <ProfileAvatar
-                  url={photo.avatarUrl}
-                  name={clientName}
-                  size={56}
-                  borderRadius={18}
-                  onClick={() => fileInputRef.current?.click()}
-                />
-                <div style={cameraIconStyle}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="#FFFFFF">
-                    <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
-                    <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
-                  </svg>
-                </div>
+          <div style={menuOverlayStyle} onClick={() => setShowSchedulePage(false)} />
+          <div
+            style={{
+              ...drawerPageStyle,
+              ...(isRtl ? drawerPageRtlStyle : drawerPageLtrStyle),
+              animation: isRtl
+                ? 'regliMenuSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1)'
+                : 'regliMenuSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          >
+            <div style={drawerPageHeaderStyle}>
+              <div style={drawerPageTitleStyle}>{t('booking.scheduleOrder')}</div>
+              <button
+                type="button"
+                onClick={() => setShowSchedulePage(false)}
+                style={drawerPageCloseButtonStyle}
+                aria-label={t('common.close')}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={drawerPageScrollStyle}>
+              <div style={drawerPageSectionStyle}>
+                <div style={drawerPagePreviewStyle}>{formatScheduledDate(scheduleDraft)}</div>
+                <div style={drawerPageHelperStyle}>{t('booking.dispatchStartsAutomatically')}</div>
+              </div>
+
+              <div style={drawerPageSectionStyle}>
+                <div style={compactFieldLabelStyle}>{t('common.date')}</div>
                 <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) photo.uploadAvatar(file)
-                    e.target.value = ''
+                  type="date"
+                  value={scheduleDraftParts.date}
+                  min={scheduleMinDate}
+                  onChange={(event) => {
+                    setScheduleDraft(
+                      clampScheduledDraft(
+                        mergeScheduledDraft(event.target.value, scheduleDraftParts.time),
+                        scheduleMinValue,
+                      ),
+                    )
                   }}
+                  style={schedulePageInputStyle}
                 />
               </div>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={profileNameStyle}>{clientName}</div>
-                {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
-                {flow.avgRating !== null && (
-                  <div style={profileRatingStyle}>
-                    <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
-                  </div>
-                )}
+              <div style={drawerPageSectionStyle}>
+                <div style={compactFieldLabelStyle}>{t('common.time')}</div>
+                <input
+                  type="time"
+                  value={scheduleDraftParts.time}
+                  min={scheduleMinTimeForSameDay}
+                  step={60}
+                  onChange={(event) => {
+                    setScheduleDraft(
+                      clampScheduledDraft(
+                        mergeScheduledDraft(scheduleDraftParts.date, event.target.value),
+                        scheduleMinValue,
+                      ),
+                    )
+                  }}
+                  style={schedulePageInputStyle}
+                />
               </div>
+            </div>
+
+            <div style={drawerPageFooterStyle}>
+              <ActionButton
+                label={t('booking.confirmSchedule')}
+                onClick={() => {
+                  const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
+                  flow.setBookingTiming('scheduled')
+                  flow.setScheduledFor(nextValue)
+                  setScheduleDraft(nextValue)
+                  setShowSchedulePage(false)
+                }}
+              />
             </div>
           </div>
         </>
@@ -1605,11 +1643,11 @@ export default function ClientDashboard({
               }}
             >
               <div style={bookingCardStyle}>
-                <div style={sheetHeaderRowStyle}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <span style={sheetGreetingStyle}>{t('booking.greeting', { name: clientName.split(' ')[0] })}</span>
+                  <div style={sheetHeaderRowStyle}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <span style={sheetGreetingStyle}>{t('booking.greeting', { name: clientName.split(' ')[0] })}</span>
+                    </div>
                   </div>
-                </div>
 
                 <div style={compactFormGridStyle}>
                   {dogSelectorBlock}
@@ -1639,91 +1677,6 @@ export default function ClientDashboard({
 
                   {!isSheetCollapsed && (
                     <>
-                      <div style={compactFieldStyle}>
-                        <div style={scheduledHeaderRowStyle}>
-                          <label style={scheduledLabelStyle}>{t('booking.bookingLabel')}</label>
-                          
-                          {flow.bookingTiming === 'scheduled' ? (
-                            <div style={scheduledActionsStyle}>
-                              <button
-                                type="button"
-                                onClick={clearScheduleToAsap}
-                                style={scheduledAsapBtnStyle}
-                              >
-                                {t('booking.bookNow')}
-                              </button>
-                              <button
-                                type="button"
-                                onPointerUp={(event) => {
-                                  event.preventDefault()
-                                  event.stopPropagation()
-                                  openScheduleSheet()
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter' || event.key === ' ') {
-                                    event.preventDefault()
-                                    openScheduleSheet()
-                                  }
-                                }}
-                                style={scheduledEditBtnStyle}
-                              >
-                                {t('booking.change')}
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onPointerUp={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                openScheduleSheet()
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault()
-                                  openScheduleSheet()
-                                }
-                              }}
-                              style={scheduledEditBtnStyle}
-                            >
-                              {t('booking.schedule')}
-                            </button>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          onPointerUp={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            openScheduleSheet()
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              openScheduleSheet()
-                            }
-                          }}
-                          style={{
-                            ...scheduledSummaryCardStyle,
-                            ...(flow.bookingTiming === 'scheduled'
-                              ? scheduledSummaryCardActiveStyle
-                              : null),
-                          }}
-                        >
-                          <div style={scheduledSummaryMainStyle}>
-                            {flow.bookingTiming === 'scheduled'
-                              ? formatScheduledDate(flow.scheduledFor)
-                              : t('booking.now')}
-                          </div>
-                          <div style={scheduledSummarySubStyle}>
-                            {flow.bookingTiming === 'scheduled'
-                              ? t('booking.dispatchStartsAutomatically')
-                              : t('booking.startFindingRightAway')}
-                          </div>
-                        </button>
-                      </div>
-
                       <div style={compactFieldStyle}>
                         {isPaymentGuided && (
                           <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
@@ -1820,31 +1773,71 @@ export default function ClientDashboard({
             {shouldShowGuidanceCtaHelper && (
               <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
             )}
-            <div style={stickyMainActionStyle}>
-              <ActionButton
-                label={
-                  flow.loading
-                    ? flow.bookingTiming === 'scheduled'
-                      ? t('booking.scheduling')
-                      : t('booking.requesting')
-                    : flow.cardLoading
-                      ? t('booking.loadingPayment')
-                      : !flow.savedCard
-                        ? t('booking.addCard')
-                        : flow.bookingTiming === 'scheduled'
-                          ? t('booking.scheduleWalk')
-                          : t('booking.findNearbyProviders')
-                }
-                onClick={handleFindWalker}
-                loading={flow.loading || flow.cardLoading}
-                disabled={
-                  !flow.dogName.trim() ||
-                  !flow.location.trim() ||
-                  !flow.duration ||
-                  !flow.savedCard ||
-                  (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
-                }
-              />
+            <div
+              style={{
+                ...stickyActionRowStyle,
+                flexDirection: isRtl ? 'row-reverse' : 'row',
+              }}
+            >
+              <div style={stickyMainActionStyle}>
+                <ActionButton
+                  label={
+                    flow.loading
+                      ? flow.bookingTiming === 'scheduled'
+                        ? t('booking.scheduling')
+                        : t('booking.requesting')
+                      : flow.cardLoading
+                        ? t('booking.loadingPayment')
+                        : !flow.savedCard
+                          ? t('booking.addCard')
+                          : t('booking.orderNow')
+                  }
+                  onClick={handleFindWalker}
+                  loading={flow.loading || flow.cardLoading}
+                  disabled={
+                    !flow.dogName.trim() ||
+                    !flow.location.trim() ||
+                    !flow.duration ||
+                    !flow.savedCard ||
+                    (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
+                  }
+                />
+              </div>
+              <button
+                type="button"
+                onPointerUp={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  openScheduleSheet()
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    openScheduleSheet()
+                  }
+                }}
+                style={{
+                  ...stickyCalendarButtonStyle,
+                  ...(flow.bookingTiming === 'scheduled' ? stickyCalendarButtonActiveStyle : null),
+                }}
+                aria-label={t('booking.schedule')}
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
+                  <line x1="8" y1="3.75" x2="8" y2="7.25" />
+                  <line x1="16" y1="3.75" x2="16" y2="7.25" />
+                  <line x1="3.5" y1="9" x2="20.5" y2="9" />
+                </svg>
+              </button>
             </div>
           </div>
         )}
@@ -2017,24 +2010,6 @@ export default function ClientDashboard({
         </>
       )}
 
-      <IOSDateTimeSheet
-        open={showScheduleSheet}
-        value={flow.scheduledFor || getNowPlus15LocalInput()}
-        minValue={getNowPlus15LocalInput()}
-        title={t('booking.schedule')}
-        subtitle=""
-        onChange={flow.setScheduledFor}
-        onClose={() => setShowScheduleSheet(false)}
-        onConfirm={(val) => {
-          flow.setBookingTiming('scheduled')
-          flow.setScheduledFor(val)
-          setShowScheduleSheet(false)
-        }}
-        onBackToNow={() => {
-          flow.setBookingTiming('asap')
-          setShowScheduleSheet(false)
-        }}
-      />
     </div>
   )
 }
@@ -2127,6 +2102,52 @@ function BurgerSection({
       {subtitle && <div style={burgerSectionSubtitleStyle}>{subtitle}</div>}
       <div style={{ marginTop: 10 }}>{children}</div>
     </section>
+  )
+}
+
+function MenuNavRow({
+  icon,
+  label,
+  onClick,
+  destructive = false,
+}: {
+  icon: string
+  label: string
+  onClick: () => void
+  destructive?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...menuNavRowStyle,
+        ...(destructive ? menuNavRowDestructiveStyle : null),
+      }}
+    >
+      <div style={menuNavLeadingStyle}>
+        <span style={menuNavIconStyle} aria-hidden="true">
+          {icon}
+        </span>
+        <span
+          style={{
+            ...menuNavLabelStyle,
+            ...(destructive ? menuNavLabelDestructiveStyle : null),
+          }}
+        >
+          {label}
+        </span>
+      </div>
+      <span
+        style={{
+          ...menuNavChevronStyle,
+          ...(destructive ? menuNavChevronDestructiveStyle : null),
+        }}
+        aria-hidden="true"
+      >
+        ›
+      </span>
+    </button>
   )
 }
 
@@ -2259,18 +2280,22 @@ function TipPromptCard({
 function BurgerUpcomingList({
   items,
   onCancel,
+  limit = 3,
 }: {
   items: UpcomingBookingItem[]
   onCancel?: (id: string) => void
+  limit?: number | null
 }) {
   const { t } = useTranslation()
   if (items.length === 0) {
     return <div style={burgerEmptyStateStyle}>{t('menu.noFutureOrders')}</div>
   }
 
+  const visibleItems = limit == null ? items : items.slice(0, limit)
+
   return (
     <div style={burgerListStyle}>
-      {items.slice(0, 3).map((item) => (
+      {visibleItems.map((item) => (
         <div key={item.id} style={burgerListCardStyle}>
           <div style={burgerListCardHeaderStyle}>
             <div style={{ minWidth: 0, flex: 1 }}>
@@ -3137,80 +3162,6 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const scheduledHeaderRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  marginBottom: 0,
-}
-
-const scheduledLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: 0.6,
-  textTransform: 'uppercase',
-  color: '#64748B',
-}
-
-const scheduledActionsStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-}
-
-const scheduledAsapBtnStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'none',
-  color: '#0F172A',
-  fontSize: 12,
-  fontWeight: 800,
-  cursor: 'pointer',
-  padding: 0,
-}
-
-const scheduledEditBtnStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'none',
-  color: '#2563EB',
-  fontSize: 12,
-  fontWeight: 800,
-  cursor: 'pointer',
-  padding: 0,
-}
-
-const scheduledSummaryCardStyle: React.CSSProperties = {
-  width: '100%',
-  textAlign: 'left',
-  border: '1px solid #E2E8F0',
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  borderRadius: 16,
-  padding: '9px 12px',
-  cursor: 'pointer',
-  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.04)',
-}
-
-const scheduledSummaryCardActiveStyle: React.CSSProperties = {
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: 'rgba(37, 99, 235, 0.28)',
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #EFF6FF 100%)',
-}
-
-const scheduledSummaryMainStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  color: '#0F172A',
-  lineHeight: 1.3,
-}
-
-const scheduledSummarySubStyle: React.CSSProperties = {
-  marginTop: 3,
-  fontSize: 11,
-  color: '#64748B',
-  lineHeight: 1.35,
-}
-
 const compactDurationWrapStyle: React.CSSProperties = {
   marginTop: 0,
   border: '2px solid transparent',
@@ -3277,6 +3228,33 @@ const guidedCtaHelperStyle: React.CSSProperties = {
 const stickyMainActionStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
+}
+
+const stickyActionRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: 10,
+}
+
+const stickyCalendarButtonStyle: React.CSSProperties = {
+  width: 56,
+  minWidth: 56,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.08)',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const stickyCalendarButtonActiveStyle: React.CSSProperties = {
+  borderColor: '#BFDBFE',
+  background: '#EFF6FF',
+  color: '#1D4ED8',
 }
 
 const completionOverlayStyle: React.CSSProperties = {
@@ -3556,12 +3534,10 @@ const menuOverlayStyle: React.CSSProperties = {
 
 const menuPanelStyle: React.CSSProperties = {
   position: 'fixed',
-  top: 'calc(22px + env(safe-area-inset-top))',
-  left: 'max(14px, env(safe-area-inset-left, 0px))',
-  bottom: 'calc(18px + env(safe-area-inset-bottom))',
-  width: 'min(344px, calc(100% - 28px))',
-  maxWidth: 'calc(100% - 28px)',
-  borderRadius: 28,
+  top: 0,
+  bottom: 0,
+  width: 'min(380px, calc(100% - 44px))',
+  maxWidth: 'calc(100% - 44px)',
   background: '#FFFFFF',
   boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
   zIndex: 40001,
@@ -3569,10 +3545,24 @@ const menuPanelStyle: React.CSSProperties = {
   flexDirection: 'column',
   overflow: 'hidden',
   boxSizing: 'border-box',
+  paddingTop: 'calc(22px + env(safe-area-inset-top))',
+  paddingBottom: 'calc(18px + env(safe-area-inset-bottom))',
+}
+
+const menuPanelLtrStyle: React.CSSProperties = {
+  left: 0,
+  borderTopRightRadius: 28,
+  borderBottomRightRadius: 28,
+}
+
+const menuPanelRtlStyle: React.CSSProperties = {
+  right: 0,
+  borderTopLeftRadius: 28,
+  borderBottomLeftRadius: 28,
 }
 
 const menuHeaderRowStyle: React.CSSProperties = {
-  padding: '16px 16px 10px',
+  padding: '0 16px 10px',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -3668,26 +3658,64 @@ const menuProfileTextStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-const menuProfileChevronStyle: React.CSSProperties = {
-  color: '#94A3B8',
-  fontSize: 24,
+const menuRowListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  marginBottom: 16,
+}
+
+const menuNavRowStyle: React.CSSProperties = {
+  width: '100%',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 18,
+  padding: '14px 16px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  cursor: 'pointer',
+  textAlign: 'left',
+  fontFamily: 'inherit',
+}
+
+const menuNavRowDestructiveStyle: React.CSSProperties = {
+  borderColor: 'rgba(239, 68, 68, 0.16)',
+  background: '#FFF7F7',
+}
+
+const menuNavLeadingStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minWidth: 0,
+}
+
+const menuNavIconStyle: React.CSSProperties = {
+  fontSize: 18,
   lineHeight: 1,
   flexShrink: 0,
 }
 
-const menuDividerStyle: React.CSSProperties = {
-  height: 1,
-  background: '#E2E8F0',
-}
-
-const menuActionStyle: React.CSSProperties = {
-  height: 52,
-  border: 'none',
-  background: '#FFFFFF',
-  color: '#DC2626',
+const menuNavLabelStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
-  cursor: 'pointer',
+  color: '#0F172A',
+}
+
+const menuNavLabelDestructiveStyle: React.CSSProperties = {
+  color: '#DC2626',
+}
+
+const menuNavChevronStyle: React.CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 22,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
+const menuNavChevronDestructiveStyle: React.CSSProperties = {
+  color: '#F87171',
 }
 
 const burgerSectionStyle: React.CSSProperties = {
@@ -3741,6 +3769,111 @@ const burgerSectionSubtitleStyle: React.CSSProperties = {
   lineHeight: 1.45,
 }
 
+const drawerPageStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  bottom: 0,
+  width: 'min(420px, calc(100% - 12px))',
+  maxWidth: 'calc(100% - 12px)',
+  background: '#FFFFFF',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
+  zIndex: 40002,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+  paddingTop: 'calc(22px + env(safe-area-inset-top))',
+  paddingBottom: 'calc(18px + env(safe-area-inset-bottom))',
+}
+
+const drawerPageLtrStyle: React.CSSProperties = {
+  left: 0,
+  borderTopRightRadius: 28,
+  borderBottomRightRadius: 28,
+}
+
+const drawerPageRtlStyle: React.CSSProperties = {
+  right: 0,
+  borderTopLeftRadius: 28,
+  borderBottomLeftRadius: 28,
+}
+
+const drawerPageHeaderStyle: React.CSSProperties = {
+  padding: '0 16px 14px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const drawerPageTitleStyle: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const drawerPageCloseButtonStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 18,
+  fontWeight: 800,
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
+const drawerPageScrollStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '0 16px 12px',
+  display: 'grid',
+  gap: 14,
+}
+
+const drawerPageSectionStyle: React.CSSProperties = {
+  borderRadius: 20,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 14,
+  display: 'grid',
+  gap: 10,
+}
+
+const drawerPagePreviewStyle: React.CSSProperties = {
+  fontSize: 20,
+  lineHeight: 1.2,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const drawerPageHelperStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: '#64748B',
+}
+
+const schedulePageInputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 52,
+  borderRadius: 16,
+  border: '1px solid #CBD5E1',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 16,
+  fontWeight: 700,
+  padding: '0 14px',
+  boxSizing: 'border-box',
+  fontFamily: 'inherit',
+}
+
+const drawerPageFooterStyle: React.CSSProperties = {
+  padding: '12px 16px 0',
+}
+
 const viewAllButtonStyle: React.CSSProperties = {
   border: 'none',
   background: 'none',
@@ -3749,34 +3882,6 @@ const viewAllButtonStyle: React.CSSProperties = {
   fontWeight: 800,
   cursor: 'pointer',
   padding: 0,
-}
-
-const accordionButtonStyle: React.CSSProperties = {
-  width: '100%',
-  border: 'none',
-  background: 'transparent',
-  padding: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-  cursor: 'pointer',
-  textAlign: 'left',
-}
-
-const accordionChevronStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 999,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#0F172A',
-  fontSize: 18,
-  fontWeight: 800,
-  flexShrink: 0,
 }
 
 const burgerListStyle: React.CSSProperties = {
@@ -3925,41 +4030,6 @@ const burgerEmptyStateStyle: React.CSSProperties = {
   padding: 14,
   fontSize: 13,
   color: '#64748B',
-}
-
-const profilePanelStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 'calc(72px + env(safe-area-inset-top))',
-  right: 'max(14px, env(safe-area-inset-right, 0px))',
-  width: 'min(320px, calc(100% - 28px))',
-  maxWidth: 'calc(100% - 28px)',
-  borderRadius: 24,
-  background: '#FFFFFF',
-  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
-  zIndex: 40001,
-  overflow: 'hidden',
-  boxSizing: 'border-box',
-}
-
-const profileSectionStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  padding: 16,
-}
-
-const cameraIconStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: -2,
-  bottom: -2,
-  width: 18,
-  height: 18,
-  borderRadius: 999,
-  background: '#2563EB',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)',
 }
 
 const profileNameStyle: React.CSSProperties = {
