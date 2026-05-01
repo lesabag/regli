@@ -266,15 +266,16 @@ export default function NotificationsBell({
     if (!open && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect()
       const isRtl = document.documentElement.dir === 'rtl'
+      const safeTop = Math.max(rect.bottom + 8, 52)
       setDropdownPos(
         isRtl
           ? {
-              top: rect.bottom + 8,
-              left: Math.max(8, rect.left),
+              top: safeTop,
+              left: Math.max(12, rect.left),
             }
           : {
-              top: rect.bottom + 8,
-              right: Math.max(8, window.innerWidth - rect.right),
+              top: safeTop,
+              right: Math.max(12, window.innerWidth - rect.right),
             },
       )
     }
@@ -371,9 +372,9 @@ export default function NotificationsBell({
             top: dropdownPos.top,
             ...(dropdownPos.left != null ? { left: dropdownPos.left } : null),
             ...(dropdownPos.right != null ? { right: dropdownPos.right } : null),
-            width: 'min(340px, calc(100% - 24px))',
-            maxWidth: 'calc(100% - 24px)',
-            maxHeight: 440,
+            width: 'min(340px, calc(100vw - 24px))',
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'min(440px, calc(100dvh - 80px))',
             background: '#FFFFFF',
             borderRadius: 18,
             boxShadow: '0 16px 48px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.04)',
@@ -468,9 +469,8 @@ export default function NotificationsBell({
                               lineHeight: 1.3,
                               flex: 1,
                               minWidth: 0,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'break-word',
                               letterSpacing: -0.1,
                             }}>
                               {n.title}

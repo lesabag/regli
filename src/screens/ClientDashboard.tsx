@@ -81,9 +81,17 @@ function normalizeDogName(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
 }
 
+function capitalize(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value
+}
+
 type AppRole = 'client' | 'walker' | 'admin'
 type SheetSnap = 'collapsed' | 'default'
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
+type WheelOption = {
+  value: string
+  label: string
+}
 
 interface ClientDashboardProps {
   profile: {
@@ -104,6 +112,35 @@ interface UpcomingBookingItem {
   startsInMin: number | null
   price: number | null
   findingProviderAt: string | null
+}
+
+function buildDateWheelOptions(
+  minValue: string,
+  language: string,
+  t: (key: string) => string,
+): WheelOption[] {
+  const baseDate = parseLocalDateTime(minValue) ?? new Date()
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate())
+
+  return Array.from({ length: 14 }, (_, index) => {
+    const nextDate = new Date(start)
+    nextDate.setDate(start.getDate() + index)
+    const value = `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`
+
+    let label = nextDate.toLocaleDateString(language === 'he' ? 'he-IL' : 'en-US', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    })
+
+    if (index === 0) {
+      label = `${t('common.today')} · ${label}`
+    } else if (index === 1) {
+      label = `${t('common.tomorrow')} · ${label}`
+    }
+
+    return { value, label }
+  })
 }
 
 export default function ClientDashboard({
@@ -130,9 +167,8 @@ export default function ClientDashboard({
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
-  const [isCalendarPressed, setIsCalendarPressed] = useState(false)
   const [isDogNameButtonPressed, setIsDogNameButtonPressed] = useState(false)
-  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('collapsed')
+  const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [dragOffsetY, setDragOffsetY] = useState(0)
   const [isDraggingSheet, setIsDraggingSheet] = useState(false)
   const [viewportHeight, setViewportHeight] = useState(() =>
@@ -627,7 +663,7 @@ export default function ClientDashboard({
   ])
 
   const menuHistoryPreviewItems = useMemo(
-    () => allHistoryItems.filter((item) => item.hidden_by_client !== true).slice(0, 5),
+    () => allHistoryItems.filter((item) => item.hidden_by_client !== true).slice(0, 3),
     [allHistoryItems],
   )
 
@@ -984,13 +1020,41 @@ export default function ClientDashboard({
 
   const scheduleMinValue = getNowPlus15LocalInput()
   const scheduleDraftParts = splitScheduledDraft(clampScheduledDraft(scheduleDraft, scheduleMinValue))
-  const scheduleMinDate = scheduleMinValue.slice(0, 10)
-  const scheduleMinTimeForSameDay =
-    scheduleDraftParts.date === scheduleMinDate ? scheduleMinValue.slice(11, 16) : undefined
+  const dateWheelOptions = useMemo(
+    () => buildDateWheelOptions(scheduleMinValue, i18n.resolvedLanguage || 'en', t),
+    [i18n.resolvedLanguage, scheduleMinValue, t],
+  )
+  const hourWheelOptions = useMemo<WheelOption[]>(
+    () =>
+      Array.from({ length: 24 }, (_, hour) => ({
+        value: pad(hour),
+        label: pad(hour),
+      })),
+    [],
+  )
+  const minuteWheelOptions = useMemo<WheelOption[]>(
+    () =>
+      Array.from({ length: 60 }, (_, minute) => ({
+        value: pad(minute),
+        label: pad(minute),
+      })),
+    [],
+  )
+
+  const updateScheduledDraftFromWheel = useCallback(
+    (nextDate: string, nextHour: string, nextMinute: string) => {
+      setScheduleDraft(
+        clampScheduledDraft(mergeScheduledDraft(nextDate, `${nextHour}:${nextMinute}`), scheduleMinValue),
+      )
+    },
+    [scheduleMinValue],
+  )
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
     ? trackingSheetStyle
-    : sheetStyle
+    : isIdleState
+      ? idleSheetStyle
+      : sheetStyle
 
   const currentSheetScrollStyle: React.CSSProperties = isIdleState
     ? idleSheetScrollStyle
@@ -1014,7 +1078,7 @@ export default function ClientDashboard({
     return defaultPadding
   }, [sheetSnap, viewportHeight])
 
-  const activeSheetOffset = isDraggingSheet ? dragOffsetY : sheetSnapOffsets[sheetSnap]
+  const activeSheetOffset = !isSearching ? 0 : isDraggingSheet ? dragOffsetY : sheetSnapOffsets[sheetSnap]
 
   const snapSheetToNearest = useCallback(
     (offset: number) => {
@@ -1026,7 +1090,7 @@ export default function ClientDashboard({
 
   const handleSheetPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!canInteractWithSheet) return
+      if (!canInteractWithSheet || !isSearching) return
       event.preventDefault()
       event.stopPropagation()
       dragStartYRef.current = event.clientY
@@ -1036,7 +1100,7 @@ export default function ClientDashboard({
       setIsDraggingSheet(true)
       event.currentTarget.setPointerCapture(event.pointerId)
     },
-    [canInteractWithSheet, sheetSnap, sheetSnapOffsets],
+    [canInteractWithSheet, isSearching, sheetSnap, sheetSnapOffsets],
   )
 
   const handleSheetPointerMove = useCallback(
@@ -1184,6 +1248,20 @@ export default function ClientDashboard({
     </div>
   )
 
+  const compactSavedCardSummary =
+    flow.savedCard && !flow.setupClientSecret && !flow.cardLoading ? (
+      <button type="button" onClick={flow.changeCard} style={compactSavedCardRowStyle}>
+        <div style={compactSavedCardMainStyle}>
+          <span style={compactSavedCardBrandStyle}>
+            {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
+          </span>
+        </div>
+        <span style={compactSavedCardIconStyle} aria-hidden="true">
+          ˅
+        </span>
+      </button>
+    ) : null
+
   return (
     <div className="regli-client-screen" style={screenStyle}>
       <div style={topUiLayerStyle}>
@@ -1221,50 +1299,7 @@ export default function ClientDashboard({
                 <line x1="4" y1="17" x2="20" y2="17" />
               </svg>
             </button>
-            {hasFutureOrders && (
-              <div
-                role="button"
-                tabIndex={0}
-                onPointerUp={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setIsCalendarPressed(false)
-                  openFutureOrdersMenu()
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    openFutureOrdersMenu()
-                  }
-                }}
-                onPointerDown={() => setIsCalendarPressed(true)}
-                onPointerCancel={() => setIsCalendarPressed(false)}
-                onPointerLeave={() => setIsCalendarPressed(false)}
-                style={{
-                  ...calendarWrapStyle,
-                  transform: isCalendarPressed ? 'scale(0.96)' : 'scale(1)',
-                }}
-                aria-label={t('menu.openFutureOrders')}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#1E3A8A"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
-                  <line x1="8" y1="3.75" x2="8" y2="7.25" />
-                  <line x1="16" y1="3.75" x2="16" y2="7.25" />
-                  <line x1="3.5" y1="9" x2="20.5" y2="9" />
-                </svg>
-                <span style={menuCalendarDotStyle} aria-hidden="true" />
-              </div>
-            )}
+            {/* Old floating calendar icon removed — red dot moved to bottom CTA calendar */}
           </div>
 
           <div style={topRightGroupStyle}>
@@ -1479,15 +1514,6 @@ export default function ClientDashboard({
                       label={t('menu.futureOrders')}
                       onClick={() => setMenuPage('futureOrders')}
                     />
-                    <MenuNavRow
-                      icon="↪"
-                      label={t('menu.signOut')}
-                      destructive
-                      onClick={() => {
-                        closeAll()
-                        void handleSignOut()
-                      }}
-                    />
                   </div>
 
                   <BurgerSection title={t('menu.latestTrips')} subtitle={t('menu.walkHistorySubtitle')}>
@@ -1502,18 +1528,19 @@ export default function ClientDashboard({
                       emptyTitle={t('menu.noWalkHistory')}
                       emptySubtitle={t('menu.noWalkHistorySubtitle')}
                     />
-                    {allHistoryItems.length > 5 && (
-                      <div style={{ marginTop: 10, textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          onClick={() => setMenuPage('history')}
-                          style={viewAllButtonStyle}
-                        >
-                          {t('menu.viewAll')}
-                        </button>
-                      </div>
-                    )}
                   </BurgerSection>
+
+                  <div style={menuFooterActionWrapStyle}>
+                    <MenuNavRow
+                      icon="↪"
+                      label={t('menu.signOut')}
+                      destructive
+                      onClick={() => {
+                        closeAll()
+                        void handleSignOut()
+                      }}
+                    />
+                  </div>
                 </>
               )}
             </div>
@@ -1546,46 +1573,59 @@ export default function ClientDashboard({
             </div>
 
             <div style={drawerPageScrollStyle}>
-              <div style={drawerPageSectionStyle}>
-                <div style={drawerPagePreviewStyle}>{formatScheduledDate(scheduleDraft)}</div>
-                <div style={drawerPageHelperStyle}>{t('booking.dispatchStartsAutomatically')}</div>
-              </div>
+              <div style={schedulePageContentStyle}>
+                <div style={schedulePageIntroStyle}>
+                  <div style={scheduleDispatchNoticeStyle}>
+                    {t('booking.dispatchStartsAutomatically')}
+                  </div>
+                </div>
 
-              <div style={drawerPageSectionStyle}>
-                <div style={compactFieldLabelStyle}>{t('common.date')}</div>
-                <input
-                  type="date"
-                  value={scheduleDraftParts.date}
-                  min={scheduleMinDate}
-                  onChange={(event) => {
-                    setScheduleDraft(
-                      clampScheduledDraft(
-                        mergeScheduledDraft(event.target.value, scheduleDraftParts.time),
-                        scheduleMinValue,
-                      ),
-                    )
-                  }}
-                  style={schedulePageInputStyle}
-                />
-              </div>
+                <div style={schedulePickerCardStyle}>
+                  <div style={scheduleWheelWrapStyle}>
+                    <div style={scheduleWheelHighlightStyle} />
+                    <div style={scheduleWheelColumnsStyle}>
+                      <WheelPickerColumn
+                        options={dateWheelOptions}
+                        value={scheduleDraftParts.date}
+                        onChange={(nextDate) =>
+                          updateScheduledDraftFromWheel(
+                            nextDate,
+                            scheduleDraftParts.time.slice(0, 2),
+                            scheduleDraftParts.time.slice(3, 5),
+                          )
+                        }
+                        isWide
+                      />
+                      <WheelPickerColumn
+                        options={hourWheelOptions}
+                        value={scheduleDraftParts.time.slice(0, 2)}
+                        onChange={(nextHour) =>
+                          updateScheduledDraftFromWheel(
+                            scheduleDraftParts.date,
+                            nextHour,
+                            scheduleDraftParts.time.slice(3, 5),
+                          )
+                        }
+                      />
+                      <WheelPickerColumn
+                        options={minuteWheelOptions}
+                        value={scheduleDraftParts.time.slice(3, 5)}
+                        onChange={(nextMinute) =>
+                          updateScheduledDraftFromWheel(
+                            scheduleDraftParts.date,
+                            scheduleDraftParts.time.slice(0, 2),
+                            nextMinute,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
 
-              <div style={drawerPageSectionStyle}>
-                <div style={compactFieldLabelStyle}>{t('common.time')}</div>
-                <input
-                  type="time"
-                  value={scheduleDraftParts.time}
-                  min={scheduleMinTimeForSameDay}
-                  step={60}
-                  onChange={(event) => {
-                    setScheduleDraft(
-                      clampScheduledDraft(
-                        mergeScheduledDraft(scheduleDraftParts.date, event.target.value),
-                        scheduleMinValue,
-                      ),
-                    )
-                  }}
-                  style={schedulePageInputStyle}
-                />
+                <div style={scheduleSummaryCardStyle}>
+                  <div style={scheduleSummaryLabelStyle}>{t('menu.scheduledFor', { time: formatScheduledTime(scheduleDraft) })}</div>
+                  <div style={drawerPagePreviewStyle}>{formatScheduledDate(scheduleDraft)}</div>
+                </div>
               </div>
             </div>
 
@@ -1624,14 +1664,16 @@ export default function ClientDashboard({
           onPointerCancel={handleSheetPointerUp}
         >
           <div style={sheetHandleStyle} />
-          <div style={sheetHandleHintStyle}>
-            <span style={sheetHandleHintIconStyle}>
-              {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
-            </span>
-            <span>
-              {sheetSnap === 'collapsed' ? t('booking.pullUp') : t('booking.pullDown')}
-            </span>
-          </div>
+          {isSearching && (
+            <div style={sheetHandleHintStyle}>
+              <span style={sheetHandleHintIconStyle}>
+                {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
+              </span>
+              <span>
+                {sheetSnap === 'collapsed' ? t('booking.pullUp') : t('booking.pullDown')}
+              </span>
+            </div>
+          )}
         </div>
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
@@ -1688,17 +1730,19 @@ export default function ClientDashboard({
                             ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
                           }}
                         >
-                          <CardSetupForm
-                            savedCard={flow.savedCard}
-                            setupClientSecret={flow.setupClientSecret}
-                            loadingCard={flow.cardLoading}
-                            loadError={flow.cardError}
-                            onRequestSetup={flow.requestCardSetup}
-                            onChangeCard={flow.changeCard}
-                            onSetupComplete={flow.onCardSetupComplete}
-                            onCancelSetup={flow.cancelCardSetup}
-                            onRetry={flow.retryLoadCard}
-                          />
+                          {compactSavedCardSummary ?? (
+                            <CardSetupForm
+                              savedCard={flow.savedCard}
+                              setupClientSecret={flow.setupClientSecret}
+                              loadingCard={flow.cardLoading}
+                              loadError={flow.cardError}
+                              onRequestSetup={flow.requestCardSetup}
+                              onChangeCard={flow.changeCard}
+                              onSetupComplete={flow.onCardSetupComplete}
+                              onCancelSetup={flow.cancelCardSetup}
+                              onRetry={flow.retryLoadCard}
+                            />
+                          )}
                         </div>
                       </div>
                     </>
@@ -1808,19 +1852,28 @@ export default function ClientDashboard({
                 onPointerUp={(event) => {
                   event.preventDefault()
                   event.stopPropagation()
-                  openScheduleSheet()
+                  if (hasFutureOrders) {
+                    openFutureOrdersMenu()
+                  } else {
+                    openScheduleSheet()
+                  }
                 }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
-                    openScheduleSheet()
+                    if (hasFutureOrders) {
+                      openFutureOrdersMenu()
+                    } else {
+                      openScheduleSheet()
+                    }
                   }
                 }}
                 style={{
                   ...stickyCalendarButtonStyle,
-                  ...(flow.bookingTiming === 'scheduled' ? stickyCalendarButtonActiveStyle : null),
+                  ...(flow.bookingTiming === 'scheduled' || hasFutureOrders ? stickyCalendarButtonActiveStyle : null),
+                  position: 'relative' as const,
                 }}
-                aria-label={t('booking.schedule')}
+                aria-label={hasFutureOrders ? t('menu.openFutureOrders') : t('booking.schedule')}
               >
                 <svg
                   width="20"
@@ -1837,6 +1890,9 @@ export default function ClientDashboard({
                   <line x1="16" y1="3.75" x2="16" y2="7.25" />
                   <line x1="3.5" y1="9" x2="20.5" y2="9" />
                 </svg>
+                {hasFutureOrders && (
+                  <span style={stickyCalendarDotStyle} aria-hidden="true" />
+                )}
               </button>
             </div>
           </div>
@@ -2102,6 +2158,95 @@ function BurgerSection({
       {subtitle && <div style={burgerSectionSubtitleStyle}>{subtitle}</div>}
       <div style={{ marginTop: 10 }}>{children}</div>
     </section>
+  )
+}
+
+function WheelPickerColumn({
+  options,
+  value,
+  onChange,
+  isWide = false,
+}: {
+  options: WheelOption[]
+  value: string
+  onChange: (value: string) => void
+  isWide?: boolean
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollTimeoutRef = useRef<number | null>(null)
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  )
+
+  useEffect(() => {
+    const node = scrollRef.current
+    if (!node) return
+    const targetTop = selectedIndex * WHEEL_ROW_HEIGHT
+    if (Math.abs(node.scrollTop - targetTop) > 2) {
+      node.scrollTo({ top: targetTop, behavior: 'smooth' })
+    }
+  }, [selectedIndex])
+
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current != null) {
+        window.clearTimeout(scrollTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  return (
+    <div
+      ref={scrollRef}
+      style={{
+        ...wheelPickerColumnStyle,
+        ...(isWide ? wheelPickerColumnWideStyle : null),
+      }}
+      onScroll={(event) => {
+        if (scrollTimeoutRef.current != null) {
+          window.clearTimeout(scrollTimeoutRef.current)
+        }
+
+        const nextTop = event.currentTarget.scrollTop
+        scrollTimeoutRef.current = window.setTimeout(() => {
+          const nextIndex = Math.max(
+            0,
+            Math.min(options.length - 1, Math.round(nextTop / WHEEL_ROW_HEIGHT)),
+          )
+          const nextValue = options[nextIndex]?.value
+          if (nextValue && nextValue !== value) {
+            onChange(nextValue)
+          }
+          event.currentTarget.scrollTo({
+            top: nextIndex * WHEEL_ROW_HEIGHT,
+            behavior: 'smooth',
+          })
+        }, 70)
+      }}
+    >
+      <div style={wheelPickerSpacerStyle} />
+      {options.map((option, index) => {
+        const distance = Math.abs(index - selectedIndex)
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            style={{
+              ...wheelPickerOptionStyle,
+              opacity: distance === 0 ? 1 : distance === 1 ? 0.72 : distance === 2 ? 0.42 : 0.22,
+              transform: distance === 0 ? 'scale(1)' : 'scale(0.96)',
+              fontWeight: distance === 0 ? 900 : 700,
+              color: distance === 0 ? '#0F172A' : '#64748B',
+            }}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+      <div style={wheelPickerSpacerStyle} />
+    </div>
   )
 }
 
@@ -2702,6 +2847,13 @@ const sheetStyle: React.CSSProperties = {
   willChange: 'transform',
 }
 
+const idleSheetStyle: React.CSSProperties = {
+  ...sheetStyle,
+  top: 'auto',
+  height: 'auto',
+  maxHeight: 'calc(100dvh - 92px)',
+}
+
 const trackingSheetStyle: React.CSSProperties = {
   ...sheetStyle,
   top: 'auto',
@@ -2781,7 +2933,7 @@ const trackingSheetScrollStyle: React.CSSProperties = {
 
 const idleSheetScrollStyle: React.CSSProperties = {
   overflowY: 'auto',
-  flex: 1,
+  flex: '0 1 auto',
   minHeight: 0,
   overflowX: 'hidden',
   paddingTop: 0,
@@ -2802,7 +2954,7 @@ const sheetContentStyle: React.CSSProperties = {
 }
 
 const idleSheetContentStyle: React.CSSProperties = {
-  paddingBottom: 6,
+  paddingBottom: 1,
 }
 
 const idleSheetContentCollapsedStyle: React.CSSProperties = {
@@ -2812,7 +2964,7 @@ const idleSheetContentCollapsedStyle: React.CSSProperties = {
 
 const bookingCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 6,
 }
 
 const sheetHeaderRowStyle: React.CSSProperties = {
@@ -2832,7 +2984,7 @@ const sheetGreetingStyle: React.CSSProperties = {
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 5,
 }
 
 const preferredWalkerIndicatorStyle: React.CSSProperties = {
@@ -2864,7 +3016,7 @@ const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
 
 const compactFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 3,
+  gap: 2,
 }
 
 const guidedFieldButtonStyle: React.CSSProperties = {
@@ -2890,7 +3042,7 @@ const guidedFieldHelperStyle: React.CSSProperties = {
 const guidedFieldHintAboveStyle: React.CSSProperties = {
   ...guidedFieldHelperStyle,
   marginTop: 0,
-  marginBottom: 3,
+  marginBottom: 2,
 }
 
 const compactFieldLabelStyle: React.CSSProperties = {
@@ -3184,7 +3336,8 @@ const guidedFieldAnimationStyle: React.CSSProperties = {
 }
 
 const compactPaymentWrapStyle: React.CSSProperties = {
-  marginTop: 0,
+  marginTop: 3,
+  marginBottom: -1,
   border: '2px solid transparent',
   borderRadius: 24,
   padding: 2,
@@ -3192,6 +3345,38 @@ const compactPaymentWrapStyle: React.CSSProperties = {
   transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
   transformOrigin: 'center top',
   willChange: 'transform, box-shadow, opacity',
+}
+
+const compactSavedCardRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const compactSavedCardMainStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+  flex: 1,
+}
+
+const compactSavedCardIconStyle: React.CSSProperties = {
+  fontSize: 18,
+  lineHeight: 1,
+  flexShrink: 0,
+  color: '#3B82F6',
+  fontWeight: 700,
+}
+
+const compactSavedCardBrandStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const paymentGuidedFieldShellStyle: React.CSSProperties = {
@@ -3206,10 +3391,11 @@ const feeLabelStyle: React.CSSProperties = {
   lineHeight: 1.3,
   textAlign: 'center',
   paddingTop: 0,
+  marginTop: -2,
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
-  padding: '6px 14px calc(8px + env(safe-area-inset-bottom))',
+  padding: '2px 14px calc(4px + env(safe-area-inset-bottom))',
   borderTop: '1px solid rgba(226, 232, 240, 0.9)',
   background: 'rgba(255,255,255,0.96)',
   backdropFilter: 'blur(10px)',
@@ -3217,7 +3403,7 @@ const stickyCtaWrapStyle: React.CSSProperties = {
 }
 
 const guidedCtaHelperStyle: React.CSSProperties = {
-  marginBottom: 8,
+  marginBottom: 5,
   fontSize: 12,
   fontWeight: 700,
   lineHeight: 1.35,
@@ -3255,6 +3441,18 @@ const stickyCalendarButtonActiveStyle: React.CSSProperties = {
   borderColor: '#BFDBFE',
   background: '#EFF6FF',
   color: '#1D4ED8',
+}
+
+const stickyCalendarDotStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: 8,
+  top: 8,
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: '#EF4444',
+  border: '2px solid #FFFFFF',
+  boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)',
 }
 
 const completionOverlayStyle: React.CSSProperties = {
@@ -3597,6 +3795,8 @@ const menuScrollAreaStyle: React.CSSProperties = {
   minHeight: 0,
   overflowY: 'auto',
   padding: '0 16px 12px',
+  display: 'flex',
+  flexDirection: 'column',
 }
 
 const menuButtonWrapStyle: React.CSSProperties = {
@@ -3604,39 +3804,6 @@ const menuButtonWrapStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'flex-start',
   pointerEvents: 'auto',
-}
-
-const calendarWrapStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 54,
-  left: 2,
-  width: 40,
-  height: 40,
-  borderRadius: 12,
-  border: '1px solid rgba(226, 232, 240, 0.92)',
-  background: '#FFFFFF',
-  color: '#1E3A8A',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-  zIndex: 50,
-  cursor: 'pointer',
-  pointerEvents: 'auto',
-  WebkitTapHighlightColor: 'transparent',
-  transition: 'transform 0.1s ease',
-}
-
-const menuCalendarDotStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: 5,
-  top: 5,
-  width: 9,
-  height: 9,
-  borderRadius: 999,
-  background: '#EF4444',
-  border: '2px solid #FFFFFF',
-  boxShadow: '0 6px 14px rgba(239, 68, 68, 0.22)',
 }
 
 const menuProfileButtonStyle: React.CSSProperties = {
@@ -3773,8 +3940,8 @@ const drawerPageStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
   bottom: 0,
-  width: 'min(420px, calc(100% - 12px))',
-  maxWidth: 'calc(100% - 12px)',
+  width: 'min(420px, 100%)',
+  maxWidth: '100%',
   background: '#FFFFFF',
   boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
   zIndex: 40002,
@@ -3789,17 +3956,15 @@ const drawerPageStyle: React.CSSProperties = {
 const drawerPageLtrStyle: React.CSSProperties = {
   left: 0,
   borderTopRightRadius: 28,
-  borderBottomRightRadius: 28,
 }
 
 const drawerPageRtlStyle: React.CSSProperties = {
   right: 0,
   borderTopLeftRadius: 28,
-  borderBottomLeftRadius: 28,
 }
 
 const drawerPageHeaderStyle: React.CSSProperties = {
-  padding: '0 16px 14px',
+  padding: '0 16px 10px',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -3829,18 +3994,9 @@ const drawerPageScrollStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: 'auto',
-  padding: '0 16px 12px',
-  display: 'grid',
-  gap: 14,
-}
-
-const drawerPageSectionStyle: React.CSSProperties = {
-  borderRadius: 20,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  padding: 14,
-  display: 'grid',
-  gap: 10,
+  padding: '0 16px 10px',
+  display: 'flex',
+  alignItems: 'stretch',
 }
 
 const drawerPagePreviewStyle: React.CSSProperties = {
@@ -3850,38 +4006,130 @@ const drawerPagePreviewStyle: React.CSSProperties = {
   color: '#0F172A',
 }
 
-const drawerPageHelperStyle: React.CSSProperties = {
+const drawerPageFooterStyle: React.CSSProperties = {
+  padding: '8px 16px 0',
+}
+
+const menuFooterActionWrapStyle: React.CSSProperties = {
+  marginTop: 'auto',
+  paddingTop: 6,
+}
+
+const schedulePageContentStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: 360,
+  margin: '0 auto',
+  minHeight: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: 12,
+}
+
+const schedulePageIntroStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  textAlign: 'center',
+}
+
+const scheduleDispatchNoticeStyle: React.CSSProperties = {
+  borderRadius: 16,
+  background: '#EFF6FF',
+  border: '1px solid #BFDBFE',
+  color: '#1D4ED8',
   fontSize: 13,
-  lineHeight: 1.5,
+  lineHeight: 1.45,
+  fontWeight: 800,
+  padding: '10px 12px',
+  boxShadow: '0 8px 18px rgba(37, 99, 235, 0.08)',
+}
+
+const schedulePickerCardStyle: React.CSSProperties = {
+  borderRadius: 24,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 14,
+  boxShadow: '0 14px 34px rgba(15, 23, 42, 0.08)',
+}
+
+const WHEEL_ROW_HEIGHT = 44
+
+const scheduleWheelWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  height: 206,
+}
+
+const scheduleWheelColumnsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
+  gap: 8,
+  height: '100%',
+}
+
+const scheduleWheelHighlightStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  top: '50%',
+  height: WHEEL_ROW_HEIGHT,
+  transform: 'translateY(-50%)',
+  borderRadius: 18,
+  background: 'rgba(239, 244, 255, 0.96)',
+  border: '1px solid rgba(191, 219, 254, 0.92)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.85)',
+  pointerEvents: 'none',
+}
+
+const scheduleSummaryCardStyle: React.CSSProperties = {
+  borderRadius: 20,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  padding: 12,
+  display: 'grid',
+  gap: 4,
+  textAlign: 'center',
+}
+
+const scheduleSummaryLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
   color: '#64748B',
 }
 
-const schedulePageInputStyle: React.CSSProperties = {
+const wheelPickerColumnStyle: React.CSSProperties = {
+  position: 'relative',
+  height: '100%',
+  overflowY: 'auto',
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
+  WebkitOverflowScrolling: 'touch',
+  scrollSnapType: 'y mandatory',
+}
+
+const wheelPickerColumnWideStyle: React.CSSProperties = {
+  paddingInline: 4,
+}
+
+const wheelPickerSpacerStyle: React.CSSProperties = {
+  height: WHEEL_ROW_HEIGHT * 2,
+  flexShrink: 0,
+}
+
+const wheelPickerOptionStyle: React.CSSProperties = {
   width: '100%',
-  height: 52,
-  borderRadius: 16,
-  border: '1px solid #CBD5E1',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 16,
-  fontWeight: 700,
-  padding: '0 14px',
-  boxSizing: 'border-box',
-  fontFamily: 'inherit',
-}
-
-const drawerPageFooterStyle: React.CSSProperties = {
-  padding: '12px 16px 0',
-}
-
-const viewAllButtonStyle: React.CSSProperties = {
+  height: WHEEL_ROW_HEIGHT,
   border: 'none',
-  background: 'none',
-  color: '#2563EB',
-  fontSize: 12,
-  fontWeight: 800,
+  background: 'transparent',
+  padding: '0 8px',
+  fontSize: 17,
+  lineHeight: 1,
   cursor: 'pointer',
-  padding: 0,
+  fontFamily: 'inherit',
+  transition: 'opacity 120ms ease, transform 120ms ease, color 120ms ease',
+  scrollSnapAlign: 'center',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const burgerListStyle: React.CSSProperties = {
