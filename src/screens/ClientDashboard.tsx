@@ -20,6 +20,7 @@ import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
+import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -424,6 +425,7 @@ export default function ClientDashboard({
 
   const handleFindWalker = useCallback(() => {
     if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
+    void hapticMedium()
     flow.clearAvailabilityNotice()
     flow.clearError()
     setMatchingUiState(null)
@@ -968,6 +970,7 @@ export default function ClientDashboard({
   )
 
   const openScheduleSheet = useCallback(() => {
+    void hapticLight()
     setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
     setShowSchedulePage(true)
   }, [flow.scheduledFor])
@@ -996,6 +999,7 @@ export default function ClientDashboard({
 
   const handleDurationSelect = useCallback(
     (value: DurationType) => {
+      void hapticLight()
       flow.setDuration(value)
       setSheetSnap('default')
     },
@@ -1272,6 +1276,7 @@ export default function ClientDashboard({
               onPointerUp={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
+                void hapticLight()
                 setMenuPage('main')
                 setBurgerOpen((v) => !v)
               }}
@@ -1633,6 +1638,7 @@ export default function ClientDashboard({
               <ActionButton
                 label={t('booking.confirmSchedule')}
                 onClick={() => {
+                  void hapticSuccess()
                   const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
                   flow.setBookingTiming('scheduled')
                   flow.setScheduledFor(nextValue)
@@ -1830,7 +1836,7 @@ export default function ClientDashboard({
                     flow.loading
                       ? flow.bookingTiming === 'scheduled'
                         ? t('booking.scheduling')
-                        : t('booking.requesting')
+                        : t('booking.ordering')
                       : flow.cardLoading
                         ? t('booking.loadingPayment')
                         : !flow.savedCard
@@ -1855,6 +1861,9 @@ export default function ClientDashboard({
                   event.stopPropagation()
                   if (hasFutureOrders) {
                     openFutureOrdersMenu()
+                  } else if (!flow.duration) {
+                    void hapticLight()
+                    setGuidedBookingField('duration')
                   } else {
                     openScheduleSheet()
                   }
@@ -1864,6 +1873,8 @@ export default function ClientDashboard({
                     event.preventDefault()
                     if (hasFutureOrders) {
                       openFutureOrdersMenu()
+                    } else if (!flow.duration) {
+                      setGuidedBookingField('duration')
                     } else {
                       openScheduleSheet()
                     }

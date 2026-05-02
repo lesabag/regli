@@ -35,8 +35,18 @@ export default function ActionButton({
     onClick()
   }
 
-  const bg = isDisabled
+  const showLoadingVisual = loading && !disabled
+
+  const bg = disabled
     ? '#E2E8F0'
+    : showLoadingVisual
+    ? variant === 'success'
+      ? '#1a9d4a'
+      : variant === 'danger'
+      ? '#e03e3e'
+      : variant === 'secondary'
+      ? '#F8FAFC'
+      : '#1E293B'
     : variant === 'success'
     ? '#15803D'
     : variant === 'danger'
@@ -45,7 +55,7 @@ export default function ActionButton({
     ? '#FFFFFF'
     : '#0F172A'
 
-  const color = isDisabled
+  const color = disabled
     ? '#94A3B8'
     : variant === 'secondary'
     ? '#0F172A'
@@ -70,6 +80,7 @@ export default function ActionButton({
         onClick={handleClick}
         onTouchEnd={touchSafe ? handleTouchEnd : undefined}
         disabled={isDisabled}
+        className="regli-action-btn"
         style={{
           width: '100%',
           padding: '15px 24px',
@@ -84,7 +95,7 @@ export default function ActionButton({
           transition: 'opacity 0.15s ease, transform 0.1s ease, background 0.15s ease',
           boxShadow: shadow,
           WebkitTapHighlightColor: 'transparent',
-          touchAction: touchSafe ? 'manipulation' : 'auto',
+          touchAction: 'manipulation',
         }}
       >
         {loading ? (
@@ -110,10 +121,11 @@ const stickyWrapperStyle: React.CSSProperties = {
 
 const spinnerStyle: React.CSSProperties = {
   display: 'inline-block',
-  width: 16,
-  height: 16,
-  border: '2px solid rgba(255,255,255,0.3)',
+  width: 18,
+  height: 18,
+  border: '2.5px solid rgba(255,255,255,0.3)',
   borderTopColor: '#FFFFFF',
   borderRadius: '50%',
   animation: 'completionSpin 0.6s linear infinite',
+  flexShrink: 0,
 }

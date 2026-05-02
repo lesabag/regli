@@ -146,6 +146,10 @@ button:active:not(:disabled) {
   to { transform: rotate(360deg); }
 }
 
+.regli-action-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 /* Menu animations */
 @keyframes menuFadeIn {
   from { opacity: 0; }

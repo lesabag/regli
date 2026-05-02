@@ -1905,6 +1905,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         : location.trim()
 
     const bookingLocation = formatShortAddress(preferredLiveLocation) || preferredLiveLocation
+    let createdJobId: string | null = null
 
     try {
       setLoading(true)
@@ -1946,6 +1947,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const jobId = response.data.jobId
+      createdJobId = jobId
       saveReusableServiceName(dogName)
       const durationMinutes = durationToMinutes(duration)
       const shouldSearchNow = bookingTiming === 'asap'
@@ -2092,7 +2094,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
       void fetchCurrentAndLists()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to request walk'
-      if (isDispatchUnavailableMessage(message)) {
+      const wasCancelled =
+        message.toLowerCase().includes('request is not open') &&
+        createdJobId != null &&
+        suppressedActiveRequestIdsRef.current.has(createdJobId)
+      if (wasCancelled) {
+        // Suppress — user already cancelled; showing this would overwrite the success message
+      } else if (isDispatchUnavailableMessage(message)) {
         setError(null)
         setAvailabilityNotice({
           title: 'No providers available right now',
