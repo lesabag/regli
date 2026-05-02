@@ -130,9 +130,7 @@ export default function NotificationsBell({
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const ref = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; right?: number; left?: number } | null>(null)
 
   const unreadCount = notifications.filter((n) => !n.is_read).length
 
@@ -241,46 +239,10 @@ export default function NotificationsBell({
     }
   }, [authUserId, fetchNotifications, addToast])
 
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: PointerEvent) => {
-      const target = e.target as Node
-      if (
-        ref.current &&
-        !ref.current.contains(target) &&
-        panelRef.current &&
-        !panelRef.current.contains(target)
-      ) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [open])
-
-  useEffect(() => {
-    if (!open) setDropdownPos(null)
-  }, [open])
 
   const handleToggle = useCallback(() => {
-    if (!open && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect()
-      const isRtl = document.documentElement.dir === 'rtl'
-      const safeTop = Math.max(rect.bottom + 8, 52)
-      setDropdownPos(
-        isRtl
-          ? {
-              top: safeTop,
-              left: Math.max(12, rect.left),
-            }
-          : {
-              top: safeTop,
-              right: Math.max(12, window.innerWidth - rect.right),
-            },
-      )
-    }
     setOpen((prev) => !prev)
-  }, [open])
+  }, [])
 
   const markAsRead = async (id: string) => {
     const { error } = await supabase
@@ -362,132 +324,128 @@ export default function NotificationsBell({
         )}
       </button>
 
-      {/* Dropdown panel */}
-      {portalRoot && open && dropdownPos && createPortal(
-        <div
-          ref={panelRef}
-          className="notif-panel-enter"
-          style={{
-            position: 'fixed',
-            top: dropdownPos.top,
-            ...(dropdownPos.left != null ? { left: dropdownPos.left } : null),
-            ...(dropdownPos.right != null ? { right: dropdownPos.right } : null),
-            width: 'min(340px, calc(100vw - 24px))',
-            maxWidth: 'calc(100vw - 24px)',
-            maxHeight: 'min(440px, calc(100dvh - 80px))',
-            background: '#FFFFFF',
-            borderRadius: 18,
-            boxShadow: '0 16px 48px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.04)',
-            zIndex: 9999,
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-            boxSizing: 'border-box',
-          }}
-        >
-          {/* Header */}
-          <div style={panelHeaderStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={panelTitleStyle}>Notifications</span>
+      {/* Drawer panel */}
+      {portalRoot && open && createPortal(
+        <>
+          <div style={drawerOverlayStyle} onClick={() => setOpen(false)} />
+          <div
+            style={{
+              ...drawerPanelBaseStyle,
+              ...(document.documentElement.dir === 'rtl' ? drawerPanelRtlStyle : drawerPanelLtrStyle),
+              animation: document.documentElement.dir === 'rtl'
+                ? 'regliMenuSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1)'
+                : 'regliMenuSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          >
+            {/* Header */}
+            <div style={drawerHeaderRowStyle}>
+              <div style={drawerHeaderLeftStyle}>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  style={drawerCloseButtonStyle}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+                <span style={drawerTitleStyle}>Notifications</span>
+                {unreadCount > 0 && (
+                  <span style={headerBadgeStyle}>{unreadCount}</span>
+                )}
+              </div>
               {unreadCount > 0 && (
-                <span style={headerBadgeStyle}>{unreadCount}</span>
+                <button
+                  type="button"
+                  onClick={markAllAsRead}
+                  style={markAllStyle}
+                >
+                  Mark all read
+                </button>
               )}
             </div>
-            {unreadCount > 0 && (
-              <button
-                type="button"
-                onClick={markAllAsRead}
-                style={markAllStyle}
-              >
-                Mark all read
-              </button>
-            )}
-          </div>
 
-          {/* Items */}
-          <div style={scrollAreaStyle}>
-            {notifications.length === 0 ? (
-              <div style={emptyStateStyle}>
-                <div style={emptyIconWrapStyle}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-                  </svg>
+            {/* Items */}
+            <div style={scrollAreaStyle}>
+              {notifications.length === 0 ? (
+                <div style={emptyStateStyle}>
+                  <div style={emptyIconWrapStyle}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                    </svg>
+                  </div>
+                  <p style={emptyTitleStyle}>No notifications yet</p>
+                  <p style={emptySubStyle}>You'll see updates about your walks here</p>
                 </div>
-                <p style={emptyTitleStyle}>No notifications yet</p>
-                <p style={emptySubStyle}>You'll see updates about your walks here</p>
-              </div>
-            ) : (
-              grouped.map((group) => (
-                <div key={group.label}>
-                  {/* Time group header */}
-                  <div style={groupHeaderStyle}>{group.label}</div>
+              ) : (
+                grouped.map((group) => (
+                  <div key={group.label}>
+                    <div style={groupHeaderStyle}>{group.label}</div>
 
-                  {group.items.map((n, i) => {
-                    const cfg = getTypeConfig(n.type)
-                    return (
-                      <div
-                        key={n.id}
-                        className="notif-item-enter"
-                        onClick={() => !n.is_read && markAsRead(n.id)}
-                        style={{
-                          ...itemStyle,
-                          background: n.is_read ? 'transparent' : '#F8FAFF',
-                          cursor: n.is_read ? 'default' : 'pointer',
-                          animationDelay: `${Math.min(i, 6) * 25}ms`,
-                        }}
-                      >
-                        {/* Type icon */}
-                        <div style={{
-                          ...iconCircleStyle,
-                          background: cfg.bg,
-                          border: `1.5px solid ${cfg.border}`,
-                        }}>
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox={cfg.iconViewBox || '0 0 24 24'}
-                            fill="none"
-                            stroke={cfg.color}
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            {cfg.iconPath.split(' M').map((seg, idx) => (
-                              <path key={idx} d={idx === 0 ? seg : `M${seg}`} />
-                            ))}
-                          </svg>
-                        </div>
-
-                        {/* Content */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{
-                              fontWeight: n.is_read ? 500 : 700,
-                              fontSize: 13,
-                              color: '#0F172A',
-                              lineHeight: 1.3,
-                              flex: 1,
-                              minWidth: 0,
-                              overflowWrap: 'anywhere',
-                              wordBreak: 'break-word',
-                              letterSpacing: -0.1,
-                            }}>
-                              {n.title}
-                            </span>
-                            {!n.is_read && <div style={unreadDotStyle} />}
+                    {group.items.map((n, i) => {
+                      const cfg = getTypeConfig(n.type)
+                      return (
+                        <div
+                          key={n.id}
+                          className="notif-item-enter"
+                          onClick={() => !n.is_read && markAsRead(n.id)}
+                          style={{
+                            ...itemStyle,
+                            background: n.is_read ? 'transparent' : '#F8FAFF',
+                            cursor: n.is_read ? 'default' : 'pointer',
+                            animationDelay: `${Math.min(i, 6) * 25}ms`,
+                          }}
+                        >
+                          <div style={{
+                            ...iconCircleStyle,
+                            background: cfg.bg,
+                            border: `1.5px solid ${cfg.border}`,
+                          }}>
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox={cfg.iconViewBox || '0 0 24 24'}
+                              fill="none"
+                              stroke={cfg.color}
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              {cfg.iconPath.split(' M').map((seg, idx) => (
+                                <path key={idx} d={idx === 0 ? seg : `M${seg}`} />
+                              ))}
+                            </svg>
                           </div>
-                          <div style={messageStyle}>{n.message}</div>
-                          <div style={timeStyle}>{formatRelativeDate(n.created_at)}</div>
+
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{
+                                fontWeight: n.is_read ? 500 : 700,
+                                fontSize: 13,
+                                color: '#0F172A',
+                                lineHeight: 1.3,
+                                flex: 1,
+                                minWidth: 0,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                                letterSpacing: -0.1,
+                              }}>
+                                {n.title}
+                              </span>
+                              {!n.is_read && <div style={unreadDotStyle} />}
+                            </div>
+                            <div style={messageStyle}>{n.message}</div>
+                            <div style={timeStyle}>{formatRelativeDate(n.created_at)}</div>
+                          </div>
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              ))
-            )}
+                      )
+                    })}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-        </div>
+        </>
         ,
         portalRoot,
       )}
@@ -610,20 +568,75 @@ const badgeStyle: React.CSSProperties = {
   lineHeight: 1,
 }
 
-const panelHeaderStyle: React.CSSProperties = {
-  padding: '16px 18px 14px',
-  borderBottom: '1px solid #F1F5F9',
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  flexShrink: 0,
+const drawerOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.26)',
+  zIndex: 40000,
+  overflow: 'hidden',
 }
 
-const panelTitleStyle: React.CSSProperties = {
-  fontWeight: 800,
-  fontSize: 16,
+const drawerPanelBaseStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  bottom: 0,
+  width: 'min(380px, calc(100% - 44px))',
+  maxWidth: 'calc(100% - 44px)',
+  background: '#FFFFFF',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
+  zIndex: 40001,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+  paddingTop: 'calc(22px + env(safe-area-inset-top))',
+  paddingBottom: 'calc(18px + env(safe-area-inset-bottom))',
+}
+
+const drawerPanelLtrStyle: React.CSSProperties = {
+  left: 0,
+  borderTopRightRadius: 28,
+  borderBottomRightRadius: 28,
+}
+
+const drawerPanelRtlStyle: React.CSSProperties = {
+  right: 0,
+  borderTopLeftRadius: 28,
+  borderBottomLeftRadius: 28,
+}
+
+const drawerHeaderRowStyle: React.CSSProperties = {
+  padding: '0 16px 10px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+}
+
+const drawerHeaderLeftStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+}
+
+const drawerCloseButtonStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
   color: '#0F172A',
-  letterSpacing: -0.3,
+  fontSize: 18,
+  fontWeight: 800,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
+
+const drawerTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#0F172A',
 }
 
 const headerBadgeStyle: React.CSSProperties = {
@@ -653,8 +666,9 @@ const markAllStyle: React.CSSProperties = {
 }
 
 const scrollAreaStyle: React.CSSProperties = {
-  overflowY: 'auto',
   flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
   WebkitOverflowScrolling: 'touch',
 }
 

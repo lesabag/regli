@@ -1657,6 +1657,7 @@ export default function ClientDashboard({
         <div
           style={{
             ...sheetHandleTouchAreaStyle,
+            ...(isIdleState || isTrackingState ? idleHandleOverrideStyle : null),
           }}
           onPointerDown={handleSheetPointerDown}
           onPointerMove={handleSheetPointerMove}
@@ -2881,6 +2882,12 @@ const sheetHandleTouchAreaStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
 }
 
+const idleHandleOverrideStyle: React.CSSProperties = {
+  padding: '8px 0 4px',
+  gap: 0,
+  cursor: 'default',
+}
+
 const sheetHandleStyle: React.CSSProperties = {
   width: 40,
   height: 4,
@@ -2938,7 +2945,7 @@ const idleSheetScrollStyle: React.CSSProperties = {
   overflowX: 'hidden',
   paddingTop: 0,
   paddingRight: 14,
-  paddingBottom: 6,
+  paddingBottom: 2,
   paddingLeft: 14,
   WebkitOverflowScrolling: 'touch',
   width: '100%',
