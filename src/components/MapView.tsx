@@ -8,7 +8,7 @@ import {
   Marker,
   useMap,
 } from 'react-leaflet'
-import { Fragment, useEffect, useMemo, useRef, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpsQuality, ProximityLevel } from '../hooks/useJobTracking'
@@ -32,6 +32,45 @@ interface MapViewProps {
   isSearching?: boolean
   nearbyWalkers?: NearbyWalkerMarker[]
   bottomViewportPadding?: number
+  onRecenter?: () => void
+}
+
+function RecenterControl({
+  userLocation,
+  bottomViewportPadding,
+  onRecenter,
+}: {
+  userLocation: [number, number]
+  bottomViewportPadding: number
+  onRecenter?: () => void
+}) {
+  const map = useMap()
+
+  const handleClick = useCallback(() => {
+    if (onRecenter) onRecenter()
+
+    const projectedPoint = map.project(userLocation, 15)
+    const adjustedCenter = map.unproject(
+      L.point(projectedPoint.x, projectedPoint.y + Math.max(0, bottomViewportPadding) / 2),
+      15,
+    )
+    map.flyTo([adjustedCenter.lat, adjustedCenter.lng], 15, {
+      animate: true,
+      duration: 0.6,
+    })
+  }, [map, userLocation, bottomViewportPadding, onRecenter])
+
+  return (
+    <div style={recenterBtnStyle} onClick={handleClick} role="button" tabIndex={0}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <line x1="12" y1="2" x2="12" y2="5" />
+        <line x1="12" y1="19" x2="12" y2="22" />
+        <line x1="2" y1="12" x2="5" y2="12" />
+        <line x1="19" y1="12" x2="22" y2="12" />
+      </svg>
+    </div>
+  )
 }
 
 function FitAndFollow({
@@ -41,6 +80,7 @@ function FitAndFollow({
   isArrived,
   proximityLevel = 'far',
   bottomViewportPadding = 0,
+  routePolyline = [],
 }: {
   userLocation: [number, number]
   walkerLocation?: [number, number]
@@ -48,6 +88,7 @@ function FitAndFollow({
   isArrived: boolean
   proximityLevel?: ProximityLevel
   bottomViewportPadding?: number
+  routePolyline?: [number, number][]
 }) {
   const map = useMap()
   const hasInitializedRef = useRef(false)
@@ -143,9 +184,14 @@ function FitAndFollow({
     if (!walkerLocation || isArrived) return
     if (userInteractedRef.current) return
 
+    const boundsPoints: [number, number][] = [userLocation, walkerLocation]
+    if (routePolyline.length > 0) {
+      boundsPoints.push(...routePolyline)
+    }
+
     if (!hasFittedTrackingRef.current) {
       hasFittedTrackingRef.current = true
-      const bounds = L.latLngBounds([userLocation, walkerLocation])
+      const bounds = L.latLngBounds(boundsPoints)
       map.fitBounds(bounds, {
         paddingTopLeft: [50, 50],
         paddingBottomRight: [50, Math.max(50, bottomViewportPadding)],
@@ -182,7 +228,7 @@ function FitAndFollow({
     return () => {
       if (flyTimeoutRef.current) clearTimeout(flyTimeoutRef.current)
     }
-  }, [bottomViewportPadding, walkerLocation, userLocation, isArrived, proximityLevel, map])
+  }, [bottomViewportPadding, walkerLocation, userLocation, isArrived, proximityLevel, map, routePolyline])
 
   useEffect(() => {
     if (!walkerLocation) {
@@ -298,6 +344,21 @@ function injectMarkerStyles() {
         opacity: 0;
       }
     }
+
+    .client-marker-pin {
+      animation: clientMarkerAppear 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes clientMarkerAppear {
+      0% {
+        transform: scale(0) translateY(8px);
+        opacity: 0;
+      }
+      100% {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+      }
+    }
   `
   document.head.appendChild(style)
 }
@@ -397,15 +458,15 @@ function createWalkerIcon(
   })
 }
 
-const USER_HEAD = 26
-const USER_STEM = 28
-const USER_DOT = 7
+const USER_HEAD = 18
+const USER_STEM = 14
+const USER_DOT = 5
 const USER_GAP_STEM = 2
 const USER_GAP_DOT = 1
 const USER_TOTAL_H = USER_HEAD + USER_GAP_STEM + USER_STEM + USER_GAP_DOT + USER_DOT
 
 const userLocationIcon = L.divIcon({
-  html: `<div style="
+  html: `<div class="client-marker-pin" style="
     width:${USER_HEAD}px;
     height:${USER_TOTAL_H}px;
     display:flex;
@@ -416,25 +477,14 @@ const userLocationIcon = L.divIcon({
       width:${USER_HEAD}px;
       height:${USER_HEAD}px;
       border-radius:50%;
-      background:#FFCD00;
-      border:2px solid #FFFFFF;
-      box-shadow:0 2px 6px rgba(0,0,0,0.12), 0 0 0 3px rgba(255,205,0,0.08);
-      display:flex;
-      align-items:center;
-      justify-content:center;
-    ">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="#FFFFFF" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="6.5" cy="4" r="2.2"/>
-        <circle cx="17.5" cy="4" r="2.2"/>
-        <circle cx="3.5" cy="10" r="2.2"/>
-        <circle cx="20.5" cy="10" r="2.2"/>
-        <path d="M12 9.5c-3.5 0-6 2-6 4.8 0 1.8 1 3.5 2.8 4.6.8.5 1.8.8 3.2.8s2.4-.3 3.2-.8c1.8-1.1 2.8-2.8 2.8-4.6 0-2.8-2.5-4.8-6-4.8z"/>
-      </svg>
-    </div>
+      background:#3B82F6;
+      border:3px solid #FFFFFF;
+      box-shadow:0 2px 8px rgba(0,0,0,0.18);
+    "></div>
     <div style="
       width:2px;
       height:${USER_STEM}px;
-      background:rgba(100,116,139,0.85);
+      background:#3B82F6;
       margin-top:${USER_GAP_STEM}px;
       border-radius:999px;
     "></div>
@@ -442,31 +492,15 @@ const userLocationIcon = L.divIcon({
       width:${USER_DOT}px;
       height:${USER_DOT}px;
       border-radius:50%;
-      background:rgba(100,116,139,0.95);
+      background:#3B82F6;
       margin-top:${USER_GAP_DOT}px;
-      box-shadow:0 1px 3px rgba(0,0,0,0.18);
+      box-shadow:0 1px 3px rgba(0,0,0,0.15);
     "></div>
   </div>`,
   className: '',
   iconSize: [USER_HEAD, USER_TOTAL_H],
   iconAnchor: [USER_HEAD / 2, USER_TOTAL_H],
 })
-
-const tooltipLabelStyle: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.92)',
-  backdropFilter: 'blur(10px)',
-  WebkitBackdropFilter: 'blur(10px)',
-  padding: '3px 8px',
-  borderRadius: 8,
-  fontSize: 10,
-  fontWeight: 700,
-  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-  color: '#1E293B',
-  whiteSpace: 'nowrap',
-  display: 'inline-flex',
-  alignItems: 'center',
-  letterSpacing: 0.3,
-}
 
 function walkerTooltipBg(gpsQuality: GpsQuality, arrived: boolean): React.CSSProperties {
   const base: React.CSSProperties = {
@@ -578,9 +612,13 @@ export default function MapView({
   isSearching = false,
   nearbyWalkers = [],
   bottomViewportPadding = 0,
+  onRecenter,
 }: MapViewProps) {
   useEffect(() => {
     injectMarkerStyles()
+    if (import.meta.env.DEV) {
+      console.log(`[perf] MapView mounted at ${Math.round(performance.now())}ms`)
+    }
   }, [])
 
   const walkerIcon = useMemo(
@@ -629,6 +667,13 @@ export default function MapView({
           isArrived={isArrived}
           proximityLevel={proximityLevel}
           bottomViewportPadding={bottomViewportPadding}
+          routePolyline={routePolyline}
+        />
+
+        <RecenterControl
+          userLocation={userLocation}
+          bottomViewportPadding={bottomViewportPadding}
+          onRecenter={onRecenter}
         />
 
         <RouteLine routePolyline={routePolyline} />
@@ -694,22 +739,7 @@ export default function MapView({
             icon={userLocationIcon}
             interactive={false}
             zIndexOffset={650}
-          >
-            <Tooltip permanent direction="bottom" offset={[0, 8]}>
-              <div style={tooltipLabelStyle}>
-                <svg
-                  width="9"
-                  height="9"
-                  viewBox="0 0 512 512"
-                  fill="#475569"
-                  style={{ marginRight: 3, flexShrink: 0 }}
-                >
-                  <path d="M226.5 92.9c14.3 42.9-.3 86.2-32.6 96.8s-70.1-15.6-84.4-58.5s.3-86.2 32.6-96.8s70.1 15.6 84.4 58.5zM100.4 198.6c18.9 32.4 14.3 70.1-10.2 84.1s-59.7-.9-78.5-33.3S-2.7 179.3 21.8 165.3s59.7.9 78.5 33.3zM69.2 401.2C121.6 259.9 214.7 224 256 224s134.4 35.9 186.8 177.2c3.6 9.7 5.2 20.1 5.2 30.5v1.6c0 25.8-20.9 46.7-46.7 46.7c-11.5 0-22.9-1.4-34-4.2l-88-22c-15.3-3.8-31.3-3.8-46.6 0l-88 22c-11.1 2.8-22.5 4.2-34 4.2C84.9 480 64 459.1 64 433.3v-1.6c0-10.4 1.6-20.8 5.2-30.5zM421.8 282.7c-24.5-14-29.1-51.7-10.2-84.1s54-47.3 78.5-33.3s29.1 51.7 10.2 84.1s-54 47.3-78.5 33.3zM310.1 189.7c-32.3-10.6-46.9-53.9-32.6-96.8s52.1-69.1 84.4-58.5s46.9 53.9 32.6 96.8s-52.1 69.1-84.4 58.5z" />
-                </svg>
-                You
-              </div>
-            </Tooltip>
-          </Marker>
+          />
         )}
 
         {walkerLocation && (
@@ -756,4 +786,24 @@ const mapContainerStyle: CSSProperties = {
   maxWidth: '100%',
   boxSizing: 'border-box',
   overflow: 'hidden',
+}
+
+const recenterBtnStyle: CSSProperties = {
+  position: 'absolute',
+  top: 12,
+  right: 12,
+  zIndex: 1000,
+  width: 36,
+  height: 36,
+  borderRadius: 8,
+  background: 'rgba(255,255,255,0.92)',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+  boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  border: 'none',
+  touchAction: 'manipulation',
 }

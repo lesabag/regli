@@ -129,6 +129,7 @@ export default function NotificationsBell({
   const [open, setOpen] = useState(false)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [mountReady, setMountReady] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -193,6 +194,12 @@ export default function NotificationsBell({
   }, [])
 
   useEffect(() => {
+    const raf = requestAnimationFrame(() => setMountReady(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  useEffect(() => {
+    if (!mountReady) return
     let cancelled = false
 
     async function init() {
@@ -209,7 +216,7 @@ export default function NotificationsBell({
 
     init()
     return () => { cancelled = true }
-  }, [fetchNotifications])
+  }, [mountReady, fetchNotifications])
 
   useEffect(() => {
     if (!authUserId) return

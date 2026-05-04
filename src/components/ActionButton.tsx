@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import { markFirstInteractionHandler, markFirstInteractionVisual } from '../utils/firstInteractionPerf'
 
 interface ActionButtonProps {
   label: string
@@ -20,19 +21,45 @@ export default function ActionButton({
   touchSafe = false,
 }: ActionButtonProps) {
   const isDisabled = disabled || loading
-  const lastTouchTriggeredAtRef = useRef(0)
+  const lastTriggeredAtRef = useRef(0)
+  const lastPointerUpHandledAtRef = useRef(0)
+  const activePointerIdRef = useRef<number | null>(null)
 
-  const handleTouchEnd = (event: React.TouchEvent<HTMLButtonElement>) => {
-    if (!touchSafe || isDisabled || !onClick) return
-    event.preventDefault()
-    lastTouchTriggeredAtRef.current = Date.now()
+  const invokeOnce = () => {
+    if (!onClick || isDisabled) return
+    const now = Date.now()
+    if (now - lastTriggeredAtRef.current < 700) return
+    lastTriggeredAtRef.current = now
     onClick()
+  }
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!touchSafe || isDisabled || !onClick) return
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    activePointerIdRef.current = event.pointerId
+    markFirstInteractionHandler('action-button:pointerdown', { label })
+  }
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!touchSafe || isDisabled || !onClick) return
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== event.pointerId) return
+    event.preventDefault()
+    activePointerIdRef.current = null
+    lastPointerUpHandledAtRef.current = Date.now()
+    markFirstInteractionVisual('action-button:pointerup', { label })
+    invokeOnce()
+  }
+
+  const handlePointerCancel = () => {
+    activePointerIdRef.current = null
   }
 
   const handleClick = () => {
     if (!onClick || isDisabled) return
-    if (touchSafe && Date.now() - lastTouchTriggeredAtRef.current < 700) return
-    onClick()
+    if (touchSafe && Date.now() - lastPointerUpHandledAtRef.current < 700) return
+    markFirstInteractionHandler('action-button:click', { label })
+    invokeOnce()
   }
 
   const showLoadingVisual = loading && !disabled
@@ -77,10 +104,12 @@ export default function ActionButton({
     >
       <button
         type="button"
+        data-control={`action-button:${label}`}
         onClick={handleClick}
-        onTouchEnd={touchSafe ? handleTouchEnd : undefined}
+        onPointerDown={touchSafe ? handlePointerDown : undefined}
+        onPointerUp={touchSafe ? handlePointerUp : undefined}
+        onPointerCancel={touchSafe ? handlePointerCancel : undefined}
         disabled={isDisabled}
-        className="regli-action-btn"
         style={{
           width: '100%',
           padding: '15px 24px',
@@ -92,10 +121,10 @@ export default function ActionButton({
           fontSize: 16,
           letterSpacing: -0.2,
           cursor: isDisabled ? 'not-allowed' : 'pointer',
-          transition: 'opacity 0.15s ease, transform 0.1s ease, background 0.15s ease',
+          transition: 'background 0.15s ease',
           boxShadow: shadow,
-          WebkitTapHighlightColor: 'transparent',
           touchAction: 'manipulation',
+          WebkitTapHighlightColor: 'transparent',
         }}
       >
         {loading ? (

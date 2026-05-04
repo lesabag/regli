@@ -1,42 +1,75 @@
 import type { ImpactStyle, NotificationType } from '@capacitor/haptics'
+import { markFirstInteractionAsync } from './firstInteractionPerf'
 
 let _haptics: typeof import('@capacitor/haptics') | null = null
+let _hapticsPromise: Promise<typeof import('@capacitor/haptics') | null> | null = null
+let _hapticsWarm = false
 
 async function getHaptics() {
-  if (!_haptics) {
-    try {
-      _haptics = await import('@capacitor/haptics')
-    } catch {
-      return null
-    }
+  if (_haptics) return _haptics
+  if (!_hapticsPromise) {
+    _hapticsPromise = import('@capacitor/haptics')
+      .then((module) => {
+        _haptics = module
+        _hapticsWarm = true
+        return module
+      })
+      .catch(() => null)
   }
-  return _haptics
+  const module = await _hapticsPromise
+  if (module) {
+    _haptics = module
+    _hapticsWarm = true
+  }
+  return module
 }
 
-export async function hapticLight() {
-  try {
-    const m = await getHaptics()
-    if (m) await m.Haptics.impact({ style: 'LIGHT' as ImpactStyle })
-  } catch {}
+function scheduleHaptic(task: (module: typeof import('@capacitor/haptics')) => Promise<void>) {
+  if (!_hapticsWarm) {
+    markFirstInteractionAsync('haptics-cold-warmup', 'start')
+    void getHaptics()
+    return Promise.resolve()
+  }
+
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        markFirstInteractionAsync('haptics', 'start')
+        const module = await getHaptics()
+        if (module) await task(module)
+        markFirstInteractionAsync('haptics', 'end')
+      } catch {}
+    })()
+  }, 0)
+
+  return Promise.resolve()
 }
 
-export async function hapticMedium() {
-  try {
-    const m = await getHaptics()
-    if (m) await m.Haptics.impact({ style: 'MEDIUM' as ImpactStyle })
-  } catch {}
+export function warmHapticsBridge() {
+  markFirstInteractionAsync('haptics-bridge-warm', 'start')
+  void getHaptics()
 }
 
-export async function hapticHeavy() {
-  try {
-    const m = await getHaptics()
-    if (m) await m.Haptics.impact({ style: 'HEAVY' as ImpactStyle })
-  } catch {}
+export function hapticLight() {
+  return scheduleHaptic(async (module) => {
+    await module.Haptics.impact({ style: 'LIGHT' as ImpactStyle })
+  })
 }
 
-export async function hapticSuccess() {
-  try {
-    const m = await getHaptics()
-    if (m) await m.Haptics.notification({ type: 'SUCCESS' as NotificationType })
-  } catch {}
+export function hapticMedium() {
+  return scheduleHaptic(async (module) => {
+    await module.Haptics.impact({ style: 'MEDIUM' as ImpactStyle })
+  })
+}
+
+export function hapticHeavy() {
+  return scheduleHaptic(async (module) => {
+    await module.Haptics.impact({ style: 'HEAVY' as ImpactStyle })
+  })
+}
+
+export function hapticSuccess() {
+  return scheduleHaptic(async (module) => {
+    await module.Haptics.notification({ type: 'SUCCESS' as NotificationType })
+  })
 }

@@ -4,6 +4,8 @@ import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
+import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
+import { warmHapticsBridge } from './utils/haptics'
 
 const isStripeReturn =
   typeof window !== 'undefined' &&
@@ -104,6 +106,47 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    initFirstInteractionPerf()
+    return () => {
+      disposeFirstInteractionPerf()
+    }
+  }, [])
+
+  useEffect(() => {
+    const win = window as Window &
+      typeof globalThis & {
+        requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number
+        cancelIdleCallback?: (handle: number) => void
+      }
+    let rafId = 0
+    let timeoutId = 0
+    let fallbackTimeoutId = 0
+    let idleId: number | null = null
+
+    const warm = () => {
+      warmHapticsBridge()
+    }
+
+    rafId = win.requestAnimationFrame(() => {
+      timeoutId = win.setTimeout(warm, 100)
+      if (typeof win.requestIdleCallback === 'function') {
+        idleId = win.requestIdleCallback(warm, { timeout: 500 })
+      } else {
+        fallbackTimeoutId = win.setTimeout(warm, 0)
+      }
+    })
+
+    return () => {
+      win.cancelAnimationFrame(rafId)
+      win.clearTimeout(timeoutId)
+      win.clearTimeout(fallbackTimeoutId)
+      if (idleId != null && typeof win.cancelIdleCallback === 'function') {
+        win.cancelIdleCallback(idleId)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (profile && !identifiedRef.current) {
       identifiedRef.current = true
       identify(profile.id, profile.role)
@@ -156,8 +199,8 @@ export default function App() {
   // If profile bootstrap failed, let the splash exit so the error/fallback UI can render.
   const isInitializing = loading
 
-  // Resolve dashboard component as soon as profile is available —
-  // this lets the map mount BEHIND the splash for a seamless morph transition
+  // Resolve dashboard only after splash teardown so heavy dashboard/map mount
+  // cannot compete with the user's first visible interaction on cold launch.
   const Dashboard = profile
     ? profile.role === 'admin'
       ? AdminDashboard
@@ -192,9 +235,7 @@ export default function App() {
     <>
       {/* ── Layer 1: Main content (renders behind splash) ──────── */}
 
-      {/* Dashboard pre-renders during splash so the map is already painted
-          when the splash dissolves — no white flash, no remount */}
-      {Dashboard && (
+      {splashDone && Dashboard && (
         <Suspense
           fallback={
             <div

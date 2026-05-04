@@ -6,6 +6,7 @@ import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
+import i18n from '../i18n'
 
 type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
 type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
@@ -153,7 +154,7 @@ const JOB_SELECT =
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
-const LOCATION_REFRESH_METERS = 75
+const LOCATION_REFRESH_METERS = 50
 
 
 function pad(n: number): string {
@@ -558,41 +559,37 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
   }, [currentJob, dogName, profileId, screenState])
 
+  const geoDistanceMeters = useCallback((from: [number, number], to: [number, number]) => {
+    const toRad = (deg: number) => (deg * Math.PI) / 180
+    const earthRadius = 6371000
+    const dLat = toRad(to[0] - from[0])
+    const dLng = toRad(to[1] - from[1])
+    const lat1 = toRad(from[0])
+    const lat2 = toRad(to[0])
+    const h =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
+    return 2 * earthRadius * Math.asin(Math.sqrt(h))
+  }, [])
+
+  const reverseGeocodeRef = useRef<((lat: number, lng: number) => Promise<void>) | null>(null)
+
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setGpsQualityBase('offline')
-      setLocationLoading(false)
-      return
-    }
-
     let cancelled = false
-    let watchId: number | null = null
 
-    const distanceMeters = (from: [number, number], to: [number, number]) => {
-      const toRad = (deg: number) => (deg * Math.PI) / 180
-      const earthRadius = 6371000
-      const dLat = toRad(to[0] - from[0])
-      const dLng = toRad(to[1] - from[1])
-      const lat1 = toRad(from[0])
-      const lat2 = toRad(to[0])
-      const h =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
-      return 2 * earthRadius * Math.asin(Math.sqrt(h))
-    }
-
-    const maybeReverseGeocode = async (lat: number, lng: number) => {
+    reverseGeocodeRef.current = async (lat: number, lng: number) => {
       const nextCoords: [number, number] = [lat, lng]
       const lastCoords = lastGeocodeCoordsRef.current
-      if (lastCoords && distanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
+      if (lastCoords && geoDistanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
         return
       }
 
       lastGeocodeCoordsRef.current = nextCoords
 
       try {
+        const lang = i18n.resolvedLanguage || 'he'
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}`,
+          `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}&accept-language=${lang}`,
         )
         const data = await res.json()
         if (cancelled) return
@@ -605,6 +602,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
         _setLocation((prev) => {
           const trimmedPrev = prev.trim()
           if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
+            const prevHasNumber = /\d/.test(trimmedPrev)
+            const nextHasNumber = /\d/.test(address)
+            if (prevHasNumber && !nextHasNumber) {
+              latestResolvedLocationRef.current = trimmedPrev
+              return prev
+            }
             lastAutoLocationRef.current = address
             latestResolvedLocationRef.current = address
             return address
@@ -626,6 +629,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
     }
 
+    return () => { cancelled = true }
+  }, [geoDistanceMeters])
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsQualityBase('offline')
+      setLocationLoading(false)
+      return
+    }
+
+    let cancelled = false
+
     const onSuccess = (pos: GeolocationPosition) => {
       if (cancelled) return
       const lat = pos.coords.latitude
@@ -633,7 +648,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setUserLocationBase([lat, lng])
       setGpsQualityBase('live')
       setLocationLoading(false)
-      void maybeReverseGeocode(lat, lng)
+      if (reverseGeocodeRef.current) void reverseGeocodeRef.current(lat, lng)
     }
 
     const onError = () => {
@@ -648,16 +663,47 @@ export function useClientFlow(profileId: string, _profileName: string) {
       timeout: 8_000,
     })
 
-    watchId = navigator.geolocation.watchPosition(onSuccess, onError, {
+    const watchId = navigator.geolocation.watchPosition(onSuccess, onError, {
       enableHighAccuracy: true,
       maximumAge: 15_000,
       timeout: 15_000,
     })
 
+    const onResume = () => {
+      if (document.visibilityState === 'hidden') return
+      navigator.geolocation.getCurrentPosition(onSuccess, () => {}, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10_000,
+      })
+    }
+
+    document.addEventListener('visibilitychange', onResume)
+    window.addEventListener('focus', onResume)
+
     return () => {
       cancelled = true
-      if (watchId != null) navigator.geolocation.clearWatch(watchId)
+      navigator.geolocation.clearWatch(watchId)
+      document.removeEventListener('visibilitychange', onResume)
+      window.removeEventListener('focus', onResume)
     }
+  }, [])
+
+  const refreshLocation = useCallback(() => {
+    if (!navigator.geolocation) return
+    lastAutoLocationRef.current = ''
+    lastGeocodeCoordsRef.current = null
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude
+        const lng = pos.coords.longitude
+        setUserLocationBase([lat, lng])
+        setGpsQualityBase('live')
+        if (reverseGeocodeRef.current) void reverseGeocodeRef.current(lat, lng)
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
+    )
   }, [])
 
   const clearError = useCallback(() => setError(null), [])
@@ -2143,6 +2189,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     location,
     setLocation,
+    refreshLocation,
     locationLoading,
 
     userLocation,

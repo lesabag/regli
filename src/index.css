@@ -37,11 +37,15 @@ body {
   display: none !important;
 }
 
-/* iOS tap feedback — premium press feel */
+/* iOS tap feedback — instant press feel, no transition delay */
 button:active:not(:disabled) {
-  opacity: 0.75;
+  opacity: 0.78;
   transform: scale(0.97);
-  transition: opacity 0.08s ease, transform 0.08s ease;
+}
+
+button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Hover states for desktop — subtle lift */
@@ -144,10 +148,6 @@ button:active:not(:disabled) {
 
 @keyframes completionSpin {
   to { transform: rotate(360deg); }
-}
-
-.regli-action-btn:active:not(:disabled) {
-  transform: scale(0.97);
 }
 
 /* Menu animations */
@@ -490,4 +490,13 @@ textarea:focus {
     transform: scale(1.08);
     opacity: 0;
   }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes durationPriceChange {
+  0% { opacity: 0.4; transform: scale(0.96); }
+  100% { opacity: 1; transform: scale(1); }
 }

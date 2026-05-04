@@ -4,6 +4,7 @@ import babyImg from '../assets/matching/baby.svg'
 import cleaningImg from '../assets/matching/cleaning.svg'
 import defaultImg from '../assets/matching/default.svg'
 import dogCharacterImg from '../assets/matching/dog.svg'
+import technicianImg from '../assets/matching/technician.svg'
 
 interface SearchingSheetProps {
   elapsedSeconds: number
@@ -19,12 +20,7 @@ interface SearchingSheetProps {
 
 type MatchingVisual = {
   asset: string
-  label: string
   title: string
-  support: string
-  stageLabel: string
-  stages: readonly string[]
-  emptyAsset: string
   emptyTitle: string
   emptySubtitle: string
   tone: 'pet' | 'sitter' | 'cleaning' | 'default'
@@ -43,17 +39,7 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
   ) {
     return {
       asset: dogCharacterImg,
-      label: 'Pet care matching',
-      title: 'Finding a pet care provider near you...',
-      support: 'We’re checking nearby pet care providers in real time.',
-      stageLabel: 'Nearby pet providers',
-      stages: [
-        'Sniffing around nearby...',
-        'Asking nearby pet providers...',
-        'Waiting for a reply...',
-        'Trying the next best match...',
-      ],
-      emptyAsset: dogCharacterImg,
+      title: 'Finding a provider near you…',
       emptyTitle: 'No providers available right now',
       emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'pet',
@@ -68,37 +54,32 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
   ) {
     return {
       asset: babyImg,
-      label: 'Sitter matching',
-      title: 'Finding a trusted sitter near you...',
-      support: 'We’re checking nearby trusted sitters in real time.',
-      stageLabel: 'Trusted sitters nearby',
-      stages: [
-        'Checking trusted sitters nearby...',
-        'Asking an available sitter...',
-        'Waiting for a reply...',
-        'Trying the next trusted match...',
-      ],
-      emptyAsset: babyImg,
+      title: 'Finding a sitter near you…',
       emptyTitle: 'No providers available right now',
       emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'sitter',
     }
   }
 
+  if (
+    normalized.includes('tech') ||
+    normalized.includes('repair') ||
+    normalized.includes('fix') ||
+    normalized.includes('handyman')
+  ) {
+    return {
+      asset: technicianImg,
+      title: 'Finding a technician near you…',
+      emptyTitle: 'No providers available right now',
+      emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
+      tone: 'default',
+    }
+  }
+
   if (normalized.includes('clean')) {
     return {
       asset: cleaningImg,
-      label: 'Cleaner matching',
-      title: 'Finding a cleaner near you...',
-      support: 'We’re checking nearby available cleaners in real time.',
-      stageLabel: 'Available cleaners nearby',
-      stages: [
-        'Checking cleaners nearby...',
-        'Asking an available cleaner...',
-        'Waiting for a reply...',
-        'Trying the next best match...',
-      ],
-      emptyAsset: cleaningImg,
+      title: 'Finding a cleaner near you…',
       emptyTitle: 'No providers available right now',
       emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'cleaning',
@@ -107,17 +88,7 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
 
   return {
     asset: defaultImg,
-    label: 'Live matching',
-    title: 'Finding a provider near you...',
-    support: 'We’re checking nearby providers in real time.',
-    stageLabel: 'Available providers nearby',
-    stages: [
-      'Looking nearby...',
-      'Asking available providers...',
-      'Waiting for a reply...',
-      'Trying the next best match...',
-    ],
-    emptyAsset: defaultImg,
+    title: 'Finding a provider near you…',
     emptyTitle: 'No providers available right now',
     emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
     tone: 'default',
@@ -129,14 +100,6 @@ function formatElapsed(seconds: number): string {
   const mins = Math.floor(safe / 60)
   const secs = safe % 60
   return `${mins}:${String(secs).padStart(2, '0')}`
-}
-
-function getStageIndex(elapsedSeconds: number, stageCount: number): number {
-  if (stageCount <= 1) return 0
-  if (elapsedSeconds < 4) return 0
-  if (elapsedSeconds < 9) return Math.min(1, stageCount - 1)
-  if (elapsedSeconds < 16) return Math.min(2, stageCount - 1)
-  return stageCount - 1
 }
 
 export default function SearchingSheet({
@@ -151,47 +114,34 @@ export default function SearchingSheet({
   onTryAgain,
 }: SearchingSheetProps) {
   const visual = useMemo(() => getMatchingVisual(serviceType), [serviceType])
-  const stageIndex = getStageIndex(elapsedSeconds, visual.stages.length)
-  const currentMessage = visual.stages[stageIndex]
 
   const progressWidth = useMemo(() => {
     const capped = Math.min(elapsedSeconds, 18)
     return `${Math.max(18, (capped / 18) * 100)}%`
   }, [elapsedSeconds])
 
-  const detailChips = useMemo(
-    () => [
-      { label: 'Search time', value: formatElapsed(elapsedSeconds), icon: '⏱' },
-      { label: 'Duration', value: durationLabel || 'Service', icon: '⌛' },
-      { label: 'Price', value: priceLabel || '—', icon: '₪' },
-    ],
-    [durationLabel, elapsedSeconds, priceLabel],
-  )
-
   if (mode === 'empty') {
     return (
       <div style={sheetStyle}>
         <style>{matchingAnimations}</style>
         <div style={emptyWrapStyle}>
-          <MatchingRadar asset={visual.emptyAsset} tone={visual.tone} muted />
+          <CompactRadar asset={visual.asset} tone={visual.tone} muted />
 
           <div style={emptyCopyStyle}>
             <div style={emptyTitleStyle}>{emptyTitle || visual.emptyTitle}</div>
             <div style={emptySubtitleStyle}>{emptySubtitle || visual.emptySubtitle}</div>
           </div>
 
-          <div style={infoRowStyle}>
-            {detailChips.slice(1).map((chip) => (
-              <div key={chip.label} style={compactInfoCardStyle}>
-                <div style={compactInfoLabelStyle}>{chip.label}</div>
-                <div style={compactInfoValueStyle}>{chip.value}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={emptyTipStyle}>
-            <span style={tipIconStyle}>💡</span>
-            <span>Tip: demand is high right now — try again in a few minutes or schedule ahead.</span>
+          <div style={detailRowStyle}>
+            <div style={detailChipStyle}>
+              <span style={detailChipLabelStyle}>Duration</span>
+              <span style={detailChipValueStyle}>{durationLabel || 'Service'}</span>
+            </div>
+            <div style={detailDividerStyle} />
+            <div style={detailChipStyle}>
+              <span style={detailChipLabelStyle}>Price</span>
+              <span style={detailChipValueStyle}>{priceLabel || '—'}</span>
+            </div>
           </div>
 
           <button type="button" onClick={onTryAgain} style={primaryButtonStyle}>
@@ -207,75 +157,31 @@ export default function SearchingSheet({
     <div style={sheetStyle}>
       <style>{matchingAnimations}</style>
 
-      <div style={matchingWrapStyle}>
-        <div style={visualStageStyle}>
-          <div style={shimmerOrbStyle} />
-          <MatchingRadar asset={visual.asset} tone={visual.tone} />
-        </div>
+      <div style={matchingRowStyle}>
+        <CompactRadar asset={visual.asset} tone={visual.tone} />
 
-        <div style={contentStyle}>
-          <div style={eyebrowRowStyle}>
-            <span style={liveDotStyle} />
-            <span style={eyebrowStyle}>{visual.label}</span>
-          </div>
-
+        <div style={matchingContentStyle}>
           <h2 style={titleStyle}>{visual.title}</h2>
-
-          <div style={statusCardStyle}>
-            <div style={statusIconBubbleStyle}>{stageIndex >= 2 ? '⏳' : stageIndex === 1 ? '📨' : '📡'}</div>
-            <div style={statusTextStyle}>
-              <p key={currentMessage} style={matchingMessageStyle}>
-                {currentMessage}
-              </p>
-              <p style={statusSubcopyStyle}>{visual.stageLabel}</p>
-            </div>
+          <div style={timerRowStyle}>
+            <span style={liveDotStyle} />
+            <span style={timerValueStyle}>{formatElapsed(elapsedSeconds)}</span>
           </div>
+        </div>
+      </div>
 
-          <div style={stageDotsStyle} aria-hidden="true">
-            {visual.stages.map((stage, index) => (
-              <span
-                key={stage}
-                style={{
-                  ...stageDotStyle,
-                  ...(index <= stageIndex ? stageDotActiveStyle : null),
-                }}
-              />
-            ))}
-          </div>
+      <div style={progressTrackStyle}>
+        <div style={{ ...progressFillStyle, width: progressWidth }} />
+      </div>
 
-          <div style={progressTrackStyle}>
-            <div style={{ ...progressFillStyle, width: progressWidth }} />
-          </div>
-
-          <div style={infoGridStyle}>
-            {detailChips.map((chip, index) => (
-              <div
-                key={chip.label}
-                style={{
-                  ...infoCardStyle,
-                  ...(index === 0 ? infoCardHighlightStyle : null),
-                }}
-              >
-                <div style={infoCardTopStyle}>
-                  <span style={infoIconStyle}>{chip.icon}</span>
-                  <span style={infoLabelStyle}>{chip.label}</span>
-                </div>
-                <div
-                  style={{
-                    ...infoValueStyle,
-                    ...(index === 0 ? infoValueHighlightStyle : null),
-                  }}
-                >
-                  {chip.value}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={supportCopyStyle}>
-            <span style={shieldIconStyle}>✓</span>
-            <span>{visual.support}</span>
-          </div>
+      <div style={detailRowStyle}>
+        <div style={detailChipStyle}>
+          <span style={detailChipLabelStyle}>Duration</span>
+          <span style={detailChipValueStyle}>{durationLabel || 'Service'}</span>
+        </div>
+        <div style={detailDividerStyle} />
+        <div style={detailChipStyle}>
+          <span style={detailChipLabelStyle}>Price</span>
+          <span style={detailChipValueStyle}>{priceLabel || '—'}</span>
         </div>
       </div>
 
@@ -286,7 +192,7 @@ export default function SearchingSheet({
   )
 }
 
-function MatchingRadar({
+function CompactRadar({
   asset,
   tone,
   muted = false,
@@ -295,412 +201,162 @@ function MatchingRadar({
   tone: MatchingVisual['tone']
   muted?: boolean
 }) {
-  const toneStyles = getToneStyles(tone)
-  const wrapStyle = muted ? { ...radarWrapStyle, width: 128, height: 102 } : radarWrapStyle
-  const centerStyle = muted ? { ...radarCenterStyle, width: 102, height: 76 } : radarCenterStyle
-  const assetStyle = muted ? { ...radarAssetStyle, width: 114, height: 82 } : radarAssetStyle
+  const toneColors = getToneColors(tone)
+  const size = muted ? 64 : 80
 
   return (
-    <div style={wrapStyle}>
+    <div style={{ ...radarWrapStyle, width: size, height: size }}>
       <div
         style={{
-          ...radarSoftGlowStyle,
-          background: muted ? mutedGlow : toneStyles.glow,
+          ...radarGlowStyle,
+          background: muted ? mutedGlow : toneColors.glow,
         }}
       />
-      <div style={{ ...radarOrbitStyle, borderColor: muted ? mutedBorder : toneStyles.borderSoft }} />
-      <div style={{ ...radarOrbitMidStyle, borderColor: muted ? mutedBorder : toneStyles.borderSoft }} />
-      <div style={{ ...radarOrbitSmallStyle, borderColor: muted ? mutedBorder : toneStyles.borderSoft }} />
-      <div style={{ ...radarRingStyle, borderColor: muted ? mutedBorder : toneStyles.border, animationDelay: '0ms' }} />
-      <div style={{ ...radarRingStyle, borderColor: muted ? mutedBorder : toneStyles.border, animationDelay: '520ms' }} />
-      <div style={{ ...radarRingStyle, borderColor: muted ? mutedBorder : toneStyles.border, animationDelay: '1040ms' }} />
-      {!muted && <div style={{ ...radarSweepStyle, background: toneStyles.sweep }} />}
-      {!muted && <div style={{ ...providerPingStyle, ...providerPingOneStyle }} />}
-      {!muted && <div style={{ ...providerPingStyle, ...providerPingTwoStyle }} />}
-      {!muted && <div style={{ ...providerPingStyle, ...providerPingThreeStyle }} />}
-      <div
+      <div style={{ ...radarOrbitStyle, borderColor: muted ? mutedBorder : toneColors.borderSoft }} />
+      {!muted && (
+        <div
+          style={{
+            ...radarRingStyle,
+            borderColor: toneColors.border,
+            width: size - 6,
+            height: size - 6,
+          }}
+        />
+      )}
+      {!muted && (
+        <div
+          style={{
+            ...radarRingStyle,
+            borderColor: toneColors.border,
+            width: size - 6,
+            height: size - 6,
+            animationDelay: '650ms',
+          }}
+        />
+      )}
+      <img
+        src={asset}
+        alt=""
         style={{
-          ...centerStyle,
-          ...(muted ? radarCenterMutedStyle : null),
+          ...radarAssetStyle,
+          width: size * 0.7,
+          height: size * 0.7,
+          animation: muted ? 'none' : 'radarAssetBounce 2.2s ease-in-out infinite',
         }}
-      >
-        <img src={asset} alt="Matching service" style={assetStyle} />
-      </div>
+      />
     </div>
   )
 }
 
-function getToneStyles(tone: MatchingVisual['tone']) {
+function getToneColors(tone: MatchingVisual['tone']) {
   if (tone === 'sitter') {
     return {
-      glow:
-        'radial-gradient(circle, rgba(168, 85, 247, 0.20) 0%, rgba(168, 85, 247, 0.07) 48%, rgba(168, 85, 247, 0) 74%)',
-      sweep:
-        'conic-gradient(from 0deg, rgba(168,85,247,0.24), rgba(168,85,247,0.05) 18%, rgba(168,85,247,0) 30%, rgba(168,85,247,0) 100%)',
-      border: 'rgba(168, 85, 247, 0.34)',
-      borderSoft: 'rgba(168, 85, 247, 0.16)',
+      glow: 'radial-gradient(circle, rgba(168,85,247,0.18) 0%, rgba(168,85,247,0) 70%)',
+      border: 'rgba(168,85,247,0.30)',
+      borderSoft: 'rgba(168,85,247,0.14)',
     }
   }
-
   if (tone === 'cleaning') {
     return {
-      glow:
-        'radial-gradient(circle, rgba(20, 184, 166, 0.20) 0%, rgba(20, 184, 166, 0.07) 48%, rgba(20, 184, 166, 0) 74%)',
-      sweep:
-        'conic-gradient(from 0deg, rgba(20,184,166,0.24), rgba(20,184,166,0.05) 18%, rgba(20,184,166,0) 30%, rgba(20,184,166,0) 100%)',
-      border: 'rgba(20, 184, 166, 0.34)',
-      borderSoft: 'rgba(20, 184, 166, 0.16)',
+      glow: 'radial-gradient(circle, rgba(20,184,166,0.18) 0%, rgba(20,184,166,0) 70%)',
+      border: 'rgba(20,184,166,0.30)',
+      borderSoft: 'rgba(20,184,166,0.14)',
     }
   }
-
   return {
-    glow:
-      'radial-gradient(circle, rgba(37, 99, 235, 0.22) 0%, rgba(37, 99, 235, 0.08) 48%, rgba(37, 99, 235, 0) 74%)',
-    sweep:
-      'conic-gradient(from 0deg, rgba(37,99,235,0.24), rgba(37,99,235,0.05) 18%, rgba(37,99,235,0) 30%, rgba(37,99,235,0) 100%)',
-    border: 'rgba(37, 99, 235, 0.32)',
-    borderSoft: 'rgba(37, 99, 235, 0.14)',
+    glow: 'radial-gradient(circle, rgba(37,99,235,0.20) 0%, rgba(37,99,235,0) 70%)',
+    border: 'rgba(37,99,235,0.28)',
+    borderSoft: 'rgba(37,99,235,0.12)',
   }
 }
 
 const matchingAnimations = `
   @keyframes matchingSheetEnter {
-    0% { opacity: 0; transform: translateY(24px); }
+    0% { opacity: 0; transform: translateY(16px); }
     100% { opacity: 1; transform: translateY(0); }
   }
 
-  @keyframes matchingShimmer {
-    0% { transform: translateX(-120%) rotate(8deg); opacity: 0; }
-    30% { opacity: 0.42; }
-    100% { transform: translateX(120%) rotate(8deg); opacity: 0; }
-  }
-
   @keyframes radarRing {
-    0% { transform: translate(-50%, -50%) scale(0.38); opacity: 0.42; }
-    72% { opacity: 0.08; }
-    100% { transform: translate(-50%, -50%) scale(1.08); opacity: 0; }
-  }
-
-  @keyframes radarSweep {
-    0% { transform: translate(-50%, -50%) rotate(0deg); }
-    100% { transform: translate(-50%, -50%) rotate(360deg); }
-  }
-
-  @keyframes radarHeroFloat {
-    0%, 100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-4px) scale(1.035); }
+    0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0.4; }
+    70% { opacity: 0.06; }
+    100% { transform: translate(-50%, -50%) scale(1.1); opacity: 0; }
   }
 
   @keyframes radarAssetBounce {
-    0%, 100% { transform: scale(0.985) rotate(-1deg); }
-    50% { transform: scale(1.045) rotate(1deg); }
-  }
-
-  @keyframes providerOrbitOne {
-    0% { transform: rotate(0deg) translateX(62px) rotate(0deg) scale(0.86); opacity: 0.48; }
-    50% { opacity: 1; }
-    100% { transform: rotate(360deg) translateX(62px) rotate(-360deg) scale(0.86); opacity: 0.48; }
-  }
-
-  @keyframes providerOrbitTwo {
-    0% { transform: rotate(130deg) translateX(50px) rotate(-130deg) scale(0.72); opacity: 0.38; }
-    50% { opacity: 0.9; }
-    100% { transform: rotate(490deg) translateX(50px) rotate(-490deg) scale(0.72); opacity: 0.38; }
-  }
-
-  @keyframes providerOrbitThree {
-    0% { transform: rotate(250deg) translateX(68px) rotate(-250deg) scale(0.64); opacity: 0.24; }
-    50% { opacity: 0.76; }
-    100% { transform: rotate(610deg) translateX(68px) rotate(-610deg) scale(0.64); opacity: 0.24; }
+    0%, 100% { transform: scale(0.97) rotate(-1deg); }
+    50% { transform: scale(1.04) rotate(1deg); }
   }
 
   @keyframes matchingMessageEnter {
-    0% { opacity: 0; transform: translateY(8px); }
+    0% { opacity: 0; transform: translateY(6px); }
     100% { opacity: 1; transform: translateY(0); }
   }
 `
 
-const mutedGlow =
-  'radial-gradient(circle, rgba(148, 163, 184, 0.20) 0%, rgba(148, 163, 184, 0.07) 48%, rgba(148, 163, 184, 0) 74%)'
-const mutedBorder = 'rgba(148, 163, 184, 0.18)'
+const mutedGlow = 'radial-gradient(circle, rgba(148,163,184,0.16) 0%, rgba(148,163,184,0) 70%)'
+const mutedBorder = 'rgba(148,163,184,0.16)'
 
 const sheetStyle: CSSProperties = {
-  height: '100%',
-  minHeight: 0,
-  maxHeight:
-    'calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 148px)',
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
-  border: '1px solid rgba(226, 232, 240, 0.95)',
-  borderRadius: 28,
-  padding: '14px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
-  boxShadow: '0 20px 48px rgba(15, 23, 42, 0.10)',
+  background: '#FFFFFF',
+  borderRadius: 22,
+  padding: '12px 14px 14px',
   display: 'flex',
   flexDirection: 'column',
-  justifyContent: 'space-between',
-  gap: 8,
-  animation: 'matchingSheetEnter 260ms cubic-bezier(0.22, 1, 0.36, 1)',
-  overflow: 'hidden',
+  gap: 10,
+  animation: 'matchingSheetEnter 240ms cubic-bezier(0.22, 1, 0.36, 1)',
   boxSizing: 'border-box',
 }
 
-const matchingWrapStyle: CSSProperties = {
-  display: 'grid',
-  gap: 8,
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto',
-  overscrollBehavior: 'contain',
-  WebkitOverflowScrolling: 'touch',
-  paddingRight: 2,
-}
-
-const visualStageStyle: CSSProperties = {
-  position: 'relative',
-  minHeight: 132,
-  borderRadius: 22,
-  overflow: 'hidden',
-  background:
-    'radial-gradient(circle at 50% 48%, #FFFFFF 0%, #EEF4FF 42%, #F8FBFF 100%)',
-  border: '1px solid rgba(191, 219, 254, 0.9)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.72)',
-  display: 'grid',
-  placeItems: 'center',
-}
-
-const shimmerOrbStyle: CSSProperties = {
-  position: 'absolute',
-  top: '-10%',
-  left: '-20%',
-  width: '50%',
-  height: '120%',
-  background:
-    'linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.44) 50%, rgba(255,255,255,0) 100%)',
-  animation: 'matchingShimmer 2.4s ease-in-out infinite',
-}
-
-const radarWrapStyle: CSSProperties = {
-  position: 'relative',
-  width: 148,
-  height: 118,
-  display: 'grid',
-  placeItems: 'center',
-}
-
-const radarSoftGlowStyle: CSSProperties = {
-  position: 'absolute',
-  inset: 1,
-  borderRadius: '50%',
-  filter: 'blur(5px)',
-  opacity: 0.62,
-}
-
-const radarOrbitStyle: CSSProperties = {
-  position: 'absolute',
-  inset: 7,
-  borderRadius: '50%',
-  border: '1px solid',
-}
-
-const radarOrbitMidStyle: CSSProperties = {
-  position: 'absolute',
-  inset: 24,
-  borderRadius: '50%',
-  border: '1px solid',
-}
-
-const radarOrbitSmallStyle: CSSProperties = {
-  position: 'absolute',
-  inset: 42,
-  borderRadius: '50%',
-  border: '1px solid',
-}
-
-const radarRingStyle: CSSProperties = {
-  position: 'absolute',
-  top: '50%',
-  left: '50%',
-  width: 142,
-  height: 142,
-  borderRadius: '50%',
-  border: '1.5px solid',
-  animation: 'radarRing 1.95s ease-out infinite',
-}
-
-const radarSweepStyle: CSSProperties = {
-  position: 'absolute',
-  top: '50%',
-  left: '50%',
-  width: 134,
-  height: 134,
-  borderRadius: '50%',
-  transform: 'translate(-50%, -50%)',
-  animation: 'radarSweep 2.6s linear infinite',
-}
-
-const providerPingStyle: CSSProperties = {
-  position: 'absolute',
-  top: '50%',
-  left: '50%',
-  width: 12,
-  height: 12,
-  marginTop: -6,
-  marginLeft: -6,
-  borderRadius: '50%',
-  background: '#2563EB',
-  boxShadow: '0 0 0 7px rgba(37,99,235,0.10)',
-}
-
-const providerPingOneStyle: CSSProperties = {
-  animation: 'providerOrbitOne 5.4s linear infinite',
-}
-
-const providerPingTwoStyle: CSSProperties = {
-  width: 10,
-  height: 10,
-  marginTop: -5,
-  marginLeft: -5,
-  background: '#38BDF8',
-  boxShadow: '0 0 0 6px rgba(56,189,248,0.10)',
-  animation: 'providerOrbitTwo 6.8s linear infinite',
-}
-
-const providerPingThreeStyle: CSSProperties = {
-  width: 8,
-  height: 8,
-  marginTop: -4,
-  marginLeft: -4,
-  background: '#93C5FD',
-  boxShadow: '0 0 0 5px rgba(147,197,253,0.10)',
-  animation: 'providerOrbitThree 7.7s linear infinite',
-}
-
-const radarCenterStyle: CSSProperties = {
-  position: 'relative',
-  width: 118,
-  height: 90,
-  display: 'grid',
-  placeItems: 'center',
-  background: 'transparent',
-  border: 'none',
-  borderRadius: 0,
-  boxShadow: 'none',
-  animation: 'radarHeroFloat 2.1s ease-in-out infinite',
-}
-
-const radarCenterMutedStyle: CSSProperties = {
-  border: 'none',
-  boxShadow: 'none',
-  animation: 'none',
-}
-
-const radarAssetStyle: CSSProperties = {
-  width: 132,
-  height: 94,
-  objectFit: 'contain',
-  display: 'block',
-  background: 'transparent',
-  filter: 'none',
-  animation: 'radarAssetBounce 1.9s ease-in-out infinite',
-}
-
-const contentStyle: CSSProperties = {
-  display: 'grid',
-  gap: 7,
-}
-
-const eyebrowRowStyle: CSSProperties = {
-  display: 'inline-flex',
+const matchingRowStyle: CSSProperties = {
+  display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 14,
 }
 
-const liveDotStyle: CSSProperties = {
-  width: 7,
-  height: 7,
-  borderRadius: '50%',
-  background: '#2563EB',
-  boxShadow: '0 0 0 5px rgba(37,99,235,0.10)',
-}
-
-const eyebrowStyle: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: 0.5,
-  textTransform: 'uppercase',
-  color: '#2563EB',
+const matchingContentStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
 }
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 21,
-  lineHeight: 1.06,
+  fontSize: 17,
+  lineHeight: 1.18,
   fontWeight: 900,
   color: '#0F172A',
 }
 
-const statusCardStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '34px 1fr',
-  gap: 8,
-  alignItems: 'center',
-}
-
-const statusIconBubbleStyle: CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: '50%',
-  background: '#EFF6FF',
-  display: 'grid',
-  placeItems: 'center',
-  fontSize: 18,
-}
-
-const statusTextStyle: CSSProperties = {
-  minWidth: 0,
-}
-
-const matchingMessageStyle: CSSProperties = {
-  margin: 0,
-  minHeight: 18,
-  fontSize: 14,
-  lineHeight: 1.35,
-  fontWeight: 800,
-  color: '#475569',
-  animation: 'matchingMessageEnter 220ms ease',
-}
-
-const statusSubcopyStyle: CSSProperties = {
-  margin: '2px 0 0',
-  fontSize: 12,
-  color: '#94A3B8',
-  fontWeight: 700,
-}
-
-const stageDotsStyle: CSSProperties = {
+const timerRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 7,
 }
 
-const stageDotStyle: CSSProperties = {
-  width: 7,
-  height: 7,
-  borderRadius: 999,
-  background: '#CBD5E1',
-  transition: 'background 220ms ease, width 220ms ease',
-}
-
-const stageDotActiveStyle: CSSProperties = {
-  width: 18,
+const liveDotStyle: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: '50%',
   background: '#2563EB',
+  boxShadow: '0 0 0 4px rgba(37,99,235,0.10)',
+  flexShrink: 0,
+}
+
+const timerValueStyle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#64748B',
+  fontVariantNumeric: 'tabular-nums',
 }
 
 const progressTrackStyle: CSSProperties = {
   position: 'relative',
   overflow: 'hidden',
-  height: 8,
+  height: 5,
   borderRadius: 999,
-  background: 'rgba(226, 232, 240, 0.95)',
+  background: 'rgba(226,232,240,0.95)',
 }
 
 const progressFillStyle: CSSProperties = {
@@ -710,89 +366,52 @@ const progressFillStyle: CSSProperties = {
   transition: 'width 420ms ease',
 }
 
-const infoGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gap: 8,
-}
-
-const infoCardStyle: CSSProperties = {
-  minWidth: 0,
-  borderRadius: 16,
-  border: '1px solid rgba(226, 232, 240, 0.95)',
-  background: '#FFFFFF',
-  padding: '8px 7px',
-  display: 'grid',
-  gap: 3,
-}
-
-const infoCardHighlightStyle: CSSProperties = {
-  background: 'linear-gradient(180deg, #EFF6FF 0%, #F8FBFF 100%)',
-  border: '1px solid rgba(96, 165, 250, 0.4)',
-}
-
-const infoCardTopStyle: CSSProperties = {
+const detailRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 4,
-  minWidth: 0,
+  gap: 0,
+  borderRadius: 14,
+  border: '1px solid rgba(226,232,240,0.95)',
+  background: '#FAFBFC',
+  overflow: 'hidden',
 }
 
-const infoIconStyle: CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1,
+const detailChipStyle: CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 2,
+  padding: '8px 6px',
 }
 
-const infoLabelStyle: CSSProperties = {
-  minWidth: 0,
-  fontSize: 11,
+const detailDividerStyle: CSSProperties = {
+  width: 1,
+  alignSelf: 'stretch',
+  background: 'rgba(226,232,240,0.95)',
+}
+
+const detailChipLabelStyle: CSSProperties = {
+  fontSize: 10,
   fontWeight: 800,
   textTransform: 'uppercase',
-  letterSpacing: 0.5,
+  letterSpacing: 0.4,
   color: '#94A3B8',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
 }
 
-const infoValueStyle: CSSProperties = {
+const detailChipValueStyle: CSSProperties = {
   fontSize: 14,
   fontWeight: 800,
   color: '#0F172A',
 }
 
-const infoValueHighlightStyle: CSSProperties = {
-  color: '#1D4ED8',
-}
-
-const supportCopyStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '24px 1fr',
-  gap: 8,
-  alignItems: 'start',
-  fontSize: 12,
-  lineHeight: 1.45,
-  color: '#475569',
-}
-
-const shieldIconStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  borderRadius: '50%',
-  display: 'grid',
-  placeItems: 'center',
-  background: '#EFF6FF',
-  color: '#2563EB',
-  fontWeight: 900,
-}
-
 const cancelButtonStyle: CSSProperties = {
   appearance: 'none',
-  border: '1px solid rgba(226, 232, 240, 0.98)',
+  border: '1px solid rgba(226,232,240,0.98)',
   background: '#FFFFFF',
   color: '#0F172A',
-  minHeight: 40,
-  borderRadius: 16,
+  minHeight: 38,
+  borderRadius: 14,
   fontSize: 13,
   fontWeight: 800,
   cursor: 'pointer',
@@ -800,109 +419,90 @@ const cancelButtonStyle: CSSProperties = {
 }
 
 const emptyWrapStyle: CSSProperties = {
-  flex: 1,
-  display: 'grid',
-  alignContent: 'center',
-  justifyItems: 'center',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
   gap: 12,
   textAlign: 'center',
-  padding: '10px 6px',
+  padding: '4px 4px',
 }
 
 const emptyCopyStyle: CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
 const emptyTitleStyle: CSSProperties = {
-  fontSize: 25,
-  lineHeight: 1.06,
+  fontSize: 18,
+  lineHeight: 1.15,
   fontWeight: 900,
   color: '#0F172A',
 }
 
 const emptySubtitleStyle: CSSProperties = {
-  maxWidth: 300,
-  fontSize: 14,
-  lineHeight: 1.45,
+  maxWidth: 280,
+  fontSize: 13,
+  lineHeight: 1.4,
   color: '#64748B',
-}
-
-const infoRowStyle: CSSProperties = {
-  width: '100%',
-  display: 'grid',
-  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 8,
-}
-
-const compactInfoCardStyle: CSSProperties = {
-  borderRadius: 18,
-  border: '1px solid rgba(226, 232, 240, 0.95)',
-  background: '#FFFFFF',
-  padding: '10px 9px',
-  display: 'grid',
-  gap: 4,
-}
-
-const compactInfoLabelStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-  color: '#94A3B8',
-}
-
-const compactInfoValueStyle: CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const emptyTipStyle: CSSProperties = {
-  width: '100%',
-  border: '1px solid rgba(226,232,240,0.95)',
-  borderRadius: 18,
-  background: 'linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)',
-  padding: '10px 11px',
-  display: 'grid',
-  gridTemplateColumns: '28px 1fr',
-  alignItems: 'center',
-  gap: 8,
-  textAlign: 'left',
-  color: '#64748B',
-  fontSize: 12.5,
-  lineHeight: 1.35,
-}
-
-const tipIconStyle: CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: '50%',
-  background: '#EFF6FF',
-  display: 'grid',
-  placeItems: 'center',
 }
 
 const primaryButtonStyle: CSSProperties = {
   appearance: 'none',
   border: 'none',
-  minHeight: 48,
-  borderRadius: 18,
+  minHeight: 44,
+  borderRadius: 14,
   background: 'linear-gradient(180deg, #2563EB 0%, #1D4ED8 100%)',
   color: '#FFFFFF',
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 900,
-  padding: '0 22px',
+  padding: '0 20px',
   cursor: 'pointer',
-  boxShadow: '0 18px 34px rgba(37, 99, 235, 0.20)',
+  boxShadow: '0 12px 28px rgba(37,99,235,0.18)',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 8,
+  gap: 7,
   width: '100%',
 }
 
 const buttonIconStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: 16,
   lineHeight: 1,
+}
+
+const radarWrapStyle: CSSProperties = {
+  position: 'relative',
+  display: 'grid',
+  placeItems: 'center',
+  flexShrink: 0,
+}
+
+const radarGlowStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  borderRadius: '50%',
+  filter: 'blur(4px)',
+  opacity: 0.6,
+}
+
+const radarOrbitStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 4,
+  borderRadius: '50%',
+  border: '1px solid',
+}
+
+const radarRingStyle: CSSProperties = {
+  position: 'absolute',
+  top: '50%',
+  left: '50%',
+  borderRadius: '50%',
+  border: '1.5px solid',
+  animation: 'radarRing 1.9s ease-out infinite',
+}
+
+const radarAssetStyle: CSSProperties = {
+  position: 'relative',
+  objectFit: 'contain',
+  display: 'block',
 }

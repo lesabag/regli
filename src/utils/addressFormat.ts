@@ -2,6 +2,7 @@ type AddressParts = {
   house_number?: string | null
   street_number?: string | null
   houseNumber?: string | null
+  housenumber?: string | null
   number?: string | null
   'addr:housenumber'?: string | null
   road?: string | null
@@ -66,6 +67,7 @@ function fromObject(address: AddressParts): string {
     address.house_number ??
       address.street_number ??
       address.houseNumber ??
+      address.housenumber ??
       address.number ??
       address['addr:housenumber'],
   )
@@ -105,10 +107,17 @@ function fromString(value: string): string {
 
   const [first, second, third] = parts
   const firstTokens = first.split(' ').filter(Boolean)
+  const firstToken = firstTokens[0] ?? ''
   const lastToken = firstTokens[firstTokens.length - 1] ?? ''
 
   if (looksLikeHouseNumber(first) && second) {
     return third ? `${second} ${first}, ${third}` : `${second} ${first}`
+  }
+
+  if (firstTokens.length >= 2 && looksLikeHouseNumber(firstToken) && !looksLikeHouseNumber(lastToken)) {
+    const street = firstTokens.slice(1).join(' ')
+    const reordered = `${street} ${firstToken}`
+    return second ? `${reordered}, ${second}` : reordered
   }
 
   const secondTokens = second?.split(' ').filter(Boolean) ?? []
@@ -138,10 +147,16 @@ export function formatShortAddress(
   addressParts?: AddressParts | null,
 ): string {
   const objectValue = addressParts ? fromObject(addressParts) : ''
-  if (objectValue) return objectValue
 
   const raw = cleanPart(value)
-  if (!raw) return ''
+  const stringValue = raw ? fromString(raw) : ''
 
-  return fromString(raw)
+  if (objectValue && stringValue) {
+    const objectHasNumber = /\d/.test(objectValue)
+    const stringHasNumber = /\d/.test(stringValue)
+    if (!objectHasNumber && stringHasNumber) return stringValue
+    return objectValue
+  }
+
+  return objectValue || stringValue
 }

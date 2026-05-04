@@ -7,7 +7,6 @@ import ActionButton from '../components/ActionButton'
 import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
 import CardSetupForm from '../components/CardSetupForm'
-import MessageBanner from '../components/MessageBanner'
 import ProfileAvatar from '../components/ProfileAvatar'
 import GroupedHistory from '../components/GroupedHistory'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -21,6 +20,13 @@ import { formatShortAddress } from '../utils/addressFormat'
 import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
+import { CreditCard } from 'lucide-react'
+import { flushSync } from 'react-dom'
+import AddressPickerSheet from '../components/AddressPickerSheet'
+import {
+  markFirstInteractionHandler,
+  markFirstInteractionVisual,
+} from '../utils/firstInteractionPerf'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -149,6 +155,11 @@ export default function ClientDashboard({
   onSignOut,
   showOnboardingWowToken = 0,
 }: ClientDashboardProps) {
+  const getAppViewportHeight = useCallback(() => {
+    if (typeof window === 'undefined') return 844
+    return Math.round(window.visualViewport?.height ?? window.innerHeight)
+  }, [])
+
   const { t, i18n } = useTranslation()
   const isRtl = i18n.resolvedLanguage === 'he'
   const clientName = profile.full_name || profile.email || t('common.client')
@@ -167,24 +178,52 @@ export default function ClientDashboard({
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
-  const [matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
-  const [isDogNameButtonPressed, setIsDogNameButtonPressed] = useState(false)
+  const [_matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
+  const [selectedService, setSelectedService] = useState<'dogWalk' | 'babysitter' | 'technician'>('dogWalk')
+  const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
-  const [dragOffsetY, setDragOffsetY] = useState(0)
-  const [isDraggingSheet, setIsDraggingSheet] = useState(false)
-  const [viewportHeight, setViewportHeight] = useState(() =>
-    typeof window === 'undefined' ? 844 : window.innerHeight,
-  )
-  const locationInputRef = useRef<HTMLInputElement>(null)
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
+  const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
+  const appViewportHeightRef = useRef(appViewportHeight)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
-  const dragStartYRef = useRef(0)
-  const dragStartOffsetRef = useRef(0)
-  const sheetDidDragRef = useRef(false)
   const suppressDogNameOpenUntilRef = useRef(0)
   const lastCurrentJobIdRef = useRef<string | null>(null)
   const hasUserInteractedRef = useRef(false)
   const arrivalBeepPlayedJobIdRef = useRef<string | null>(null)
+  const [mapMounted, setMapMounted] = useState(false)
+
+  const debugFlags = useRef(() => {
+    if (typeof window === 'undefined') return { interactionDebug: false, delayMap: false }
+    const params = new URLSearchParams(window.location.search)
+    return {
+      interactionDebug: import.meta.env.DEV && params.get('interactionDebug') === '1',
+      delayMap: import.meta.env.DEV && params.get('delayMap') === '1',
+    }
+  }).current
+
+  useEffect(() => {
+    if (!debugFlags().interactionDebug) return
+    const t0 = performance.now()
+    console.log(`[perf] ClientDashboard mounted at ${Math.round(t0)}ms`)
+
+    if (typeof PerformanceObserver === 'undefined') return
+    let observer: PerformanceObserver | null = null
+    try {
+      observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration < 50) continue
+          const since = Math.round(performance.now() - t0)
+          if (since > 8000) { observer?.disconnect(); return }
+          console.warn(
+            `[perf] longtask ${Math.round(entry.duration)}ms at +${since}ms (start ${Math.round(entry.startTime)}ms)`,
+          )
+        }
+      })
+      observer.observe({ entryTypes: ['longtask'] })
+    } catch { /* unsupported */ }
+    return () => observer?.disconnect()
+  }, [])
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -220,6 +259,27 @@ export default function ClientDashboard({
         max-width: 100%;
         overflow-x: hidden;
         box-sizing: border-box;
+        height: var(--regli-client-app-height, 100vh);
+        min-height: var(--regli-client-app-height, 100vh);
+        max-height: var(--regli-client-app-height, 100vh);
+      }
+
+      @supports (height: 100dvh) {
+        .regli-client-screen {
+          height: 100dvh;
+          min-height: 100dvh;
+          max-height: 100dvh;
+        }
+
+        .regli-client-dashboard-sheet {
+          max-height: calc(100dvh - 92px) !important;
+        }
+      }
+
+      @supports not (height: 100dvh) {
+        .regli-client-dashboard-sheet {
+          max-height: calc(var(--regli-client-app-height, 100vh) - 92px) !important;
+        }
       }
 
       .regli-client-screen > * {
@@ -261,13 +321,20 @@ export default function ClientDashboard({
 
     const previousBodyOverflowX = document.body.style.overflowX
     const previousDocumentOverflowX = document.documentElement.style.overflowX
+    const previousAppHeightVar = document.documentElement.style.getPropertyValue('--regli-client-app-height')
     document.body.style.overflowX = 'hidden'
     document.documentElement.style.overflowX = 'hidden'
+    document.documentElement.style.setProperty('--regli-client-app-height', `${appViewportHeightRef.current}px`)
 
     return () => {
       document.head.removeChild(style)
       document.body.style.overflowX = previousBodyOverflowX
       document.documentElement.style.overflowX = previousDocumentOverflowX
+      if (previousAppHeightVar) {
+        document.documentElement.style.setProperty('--regli-client-app-height', previousAppHeightVar)
+      } else {
+        document.documentElement.style.removeProperty('--regli-client-app-height')
+      }
     }
   }, [])
 
@@ -275,15 +342,78 @@ export default function ClientDashboard({
     if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [flow.screenState, flow.bookingTiming])
 
+  const hasOverlayOpen = addressPickerOpen || paymentSheetOpen
+  const hadOverlayRef = useRef(false)
+
   useEffect(() => {
+    const syncAppViewportHeight = (nextHeight: number, force = false) => {
+      if (!Number.isFinite(nextHeight) || nextHeight <= 0) return
+      if (!force && nextHeight < appViewportHeightRef.current) return
+      appViewportHeightRef.current = nextHeight
+      setAppViewportHeight((prev) => (prev === nextHeight ? prev : nextHeight))
+      document.documentElement.style.setProperty('--regli-client-app-height', `${nextHeight}px`)
+    }
+
     const updateViewportHeight = () => {
-      setViewportHeight(window.innerHeight)
+      if (hasOverlayOpen) return
+      syncAppViewportHeight(getAppViewportHeight())
     }
 
     updateViewportHeight()
+    const visualViewport = window.visualViewport
     window.addEventListener('resize', updateViewportHeight)
-    return () => window.removeEventListener('resize', updateViewportHeight)
-  }, [])
+    visualViewport?.addEventListener('resize', updateViewportHeight)
+
+    let orientationRaf1 = 0
+    let orientationRaf2 = 0
+    let orientationTimeout = 0
+    const handleOrientationChange = () => {
+      const commitOrientationHeight = () => {
+        syncAppViewportHeight(getAppViewportHeight(), true)
+        window.scrollTo(0, 0)
+      }
+
+      cancelAnimationFrame(orientationRaf1)
+      cancelAnimationFrame(orientationRaf2)
+      clearTimeout(orientationTimeout)
+
+      orientationRaf1 = requestAnimationFrame(() => {
+        orientationRaf2 = requestAnimationFrame(commitOrientationHeight)
+      })
+      orientationTimeout = window.setTimeout(commitOrientationHeight, 240)
+    }
+
+    window.addEventListener('orientationchange', handleOrientationChange)
+    return () => {
+      window.removeEventListener('resize', updateViewportHeight)
+      visualViewport?.removeEventListener('resize', updateViewportHeight)
+      window.removeEventListener('orientationchange', handleOrientationChange)
+      cancelAnimationFrame(orientationRaf1)
+      cancelAnimationFrame(orientationRaf2)
+      clearTimeout(orientationTimeout)
+    }
+  }, [getAppViewportHeight, hasOverlayOpen])
+
+  useEffect(() => {
+    if (!hadOverlayRef.current || hasOverlayOpen) {
+      hadOverlayRef.current = hasOverlayOpen
+      return
+    }
+
+    const restoreScrollPosition = () => {
+      window.scrollTo(0, 0)
+    }
+
+    restoreScrollPosition()
+    const raf = requestAnimationFrame(restoreScrollPosition)
+    const timeout = window.setTimeout(restoreScrollPosition, 120)
+    hadOverlayRef.current = hasOverlayOpen
+
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(timeout)
+    }
+  }, [hasOverlayOpen])
 
   useEffect(() => {
     if (scrollRef.current && flow.completionJob) scrollRef.current.scrollTop = 0
@@ -291,6 +421,9 @@ export default function ClientDashboard({
 
   useEffect(() => {
     const markInteracted = () => {
+      if (!hasUserInteractedRef.current) {
+        markFirstInteractionHandler('client-dashboard:first-interaction')
+      }
       hasUserInteractedRef.current = true
     }
 
@@ -302,6 +435,33 @@ export default function ClientDashboard({
       window.removeEventListener('keydown', markInteracted, { capture: true } as EventListenerOptions)
     }
   }, [])
+
+  useEffect(() => {
+    if (mapMounted) return
+    if (debugFlags().delayMap) {
+      const timeout = window.setTimeout(() => {
+        console.log('[perf] delayMap: mounting MapView now (8s delay)')
+        setMapMounted(true)
+      }, 8000)
+      return () => clearTimeout(timeout)
+    }
+
+    const mount = () => {
+      if (debugFlags().interactionDebug) {
+        console.log(`[perf] mounting MapView at ${Math.round(performance.now())}ms`)
+      }
+      setMapMounted(true)
+    }
+
+    const win = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void }
+    if (win.requestIdleCallback) {
+      const idleId = win.requestIdleCallback(mount, { timeout: 2500 })
+      return () => win.cancelIdleCallback?.(idleId)
+    }
+
+    const timeout = window.setTimeout(mount, 1400)
+    return () => clearTimeout(timeout)
+  }, [mapMounted])
 
   useEffect(() => {
     try {
@@ -425,11 +585,13 @@ export default function ClientDashboard({
 
   const handleFindWalker = useCallback(() => {
     if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
-    void hapticMedium()
+    markFirstInteractionHandler('client-dashboard:find-walker')
     flow.clearAvailabilityNotice()
     flow.clearError()
     setMatchingUiState(null)
+    markFirstInteractionVisual('client-dashboard:find-walker')
     flow.requestWalk()
+    void hapticMedium()
   }, [
     flow,
     flow.dogName,
@@ -684,10 +846,6 @@ export default function ClientDashboard({
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const hasFutureOrders = upcomingScheduledItems.length > 0
-  const isScheduledDispatchSearching =
-    flow.screenState === 'searching' &&
-    flow.currentJob?.booking_timing === 'scheduled' &&
-    flow.currentJob?.dispatch_state === 'dispatched'
   const isActivelyMatchingExhaustedJob = (
     job:
       | {
@@ -723,7 +881,6 @@ export default function ClientDashboard({
     !shouldShowNoProvidersEmptyState
   const shouldRenderSearchingSheet =
     flow.screenState === 'searching' || isDispatchExhausted || shouldShowNoProvidersEmptyState
-  const canInteractWithSheet = true
   const isSheetCollapsed = sheetSnap === 'collapsed'
   const shouldShowFirstBookingWow =
     showFirstBookingWow && isIdleState && !flow.completionJob && !flow.tipJob
@@ -749,12 +906,6 @@ export default function ClientDashboard({
   const isDurationGuided = guidedBookingField === 'duration'
   const isPaymentGuided = guidedBookingField === 'payment'
   const shouldShowGuidanceCtaHelper = guidedBookingField !== null && !flow.loading && !flow.cardLoading
-  const showBanners =
-    (flow.screenState === 'idle' ||
-      flow.screenState === 'searching' ||
-      flow.screenState === 'tracking' ||
-      flow.screenState === 'active') &&
-    matchingUiState === null
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
   const matchingEmptyTitle = isDispatchExhausted
     ? t('booking.noProvidersAvailable')
@@ -970,22 +1121,26 @@ export default function ClientDashboard({
   )
 
   const openScheduleSheet = useCallback(() => {
-    void hapticLight()
+    markFirstInteractionHandler('client-dashboard:open-schedule')
     setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
     setShowSchedulePage(true)
+    markFirstInteractionVisual('client-dashboard:open-schedule')
+    void hapticLight()
   }, [flow.scheduledFor])
 
-  const openLocationDetails = useCallback(() => {
-    setSheetSnap('default')
-    window.setTimeout(() => {
-      locationInputRef.current?.focus()
-    }, 0)
+  const openAddressPicker = useCallback(() => {
+    markFirstInteractionHandler('client-dashboard:open-address-picker')
+    setAddressPickerOpen(true)
+    markFirstInteractionVisual('client-dashboard:open-address-picker')
   }, [])
 
-  const toggleSheetSnap = useCallback(() => {
-    setSheetSnap((current) => (current === 'collapsed' ? 'default' : 'collapsed'))
-    setDragOffsetY(0)
-  }, [])
+  const handleAddressConfirm = useCallback((address: string) => {
+    flow.setLocation(address)
+  }, [flow])
+
+  const handleAddressUseCurrentLocation = useCallback(() => {
+    flow.refreshLocation()
+  }, [flow])
 
   const handleMatchingTryAgain = useCallback(() => {
     flow.clearAvailabilityNotice()
@@ -997,11 +1152,78 @@ export default function ClientDashboard({
     })
   }, [flow])
 
-  const handleDurationSelect = useCallback(
+  const [selectedDurationUi, setSelectedDurationUi] = useState<DurationType | ''>(flow.duration ?? '')
+  const hasDurationUiInteractedRef = useRef(false)
+  const lastRequestedDurationRef = useRef<DurationType | ''>(flow.duration ?? '')
+  const previousFlowDurationRef = useRef<DurationType | ''>(flow.duration ?? '')
+
+  useEffect(() => {
+    const nextFlowDuration = (flow.duration ?? '') as DurationType | ''
+    const previousFlowDuration = previousFlowDurationRef.current
+
+    if (!hasDurationUiInteractedRef.current) {
+      setSelectedDurationUi(nextFlowDuration)
+      lastRequestedDurationRef.current = nextFlowDuration
+    } else if (
+      nextFlowDuration &&
+      nextFlowDuration !== previousFlowDuration &&
+      nextFlowDuration !== lastRequestedDurationRef.current
+    ) {
+      setSelectedDurationUi(nextFlowDuration)
+      lastRequestedDurationRef.current = nextFlowDuration
+    }
+
+    previousFlowDurationRef.current = nextFlowDuration
+  }, [flow.duration])
+
+  const eagerDurationFiredRef = useRef(false)
+  const lastDurationIntentRef = useRef<{ value: DurationType; at: number } | null>(null)
+
+  const handleDurationEager = useCallback(
     (value: DurationType) => {
-      void hapticLight()
+      const lastIntent = lastDurationIntentRef.current
+      const now = Date.now()
+      if (lastIntent && lastIntent.value === value && now - lastIntent.at < 700) return
+      lastDurationIntentRef.current = { value, at: now }
+      eagerDurationFiredRef.current = true
+      hasDurationUiInteractedRef.current = true
+      lastRequestedDurationRef.current = value
+      markFirstInteractionHandler('client-dashboard:duration-eager', {
+        value,
+        currentUi: selectedDurationUi,
+      })
+      flushSync(() => {
+        setSelectedDurationUi(value)
+      })
+      markFirstInteractionVisual('client-dashboard:duration-ui', { value })
       flow.setDuration(value)
       setSheetSnap('default')
+      void hapticLight()
+    },
+    [flow],
+  )
+
+  const handleDurationSelect = useCallback(
+    (value: DurationType) => {
+      if (eagerDurationFiredRef.current) {
+        eagerDurationFiredRef.current = false
+        return
+      }
+      const lastIntent = lastDurationIntentRef.current
+      const now = Date.now()
+      if (lastIntent && lastIntent.value === value && now - lastIntent.at < 700) return
+      lastDurationIntentRef.current = { value, at: now }
+      hasDurationUiInteractedRef.current = true
+      lastRequestedDurationRef.current = value
+      markFirstInteractionHandler('client-dashboard:duration-select', {
+        value,
+        currentUi: selectedDurationUi,
+      })
+      setSelectedDurationUi(value)
+      markFirstInteractionVisual('client-dashboard:duration-ui', { value })
+      flow.setDuration(value)
+      setSheetSnap('default')
+      void hapticLight()
     },
     [flow],
   )
@@ -1058,108 +1280,77 @@ export default function ClientDashboard({
     ? trackingSheetStyle
     : isIdleState
       ? idleSheetStyle
-      : sheetStyle
+      : searchingSheetStyle
 
   const currentSheetScrollStyle: React.CSSProperties = isIdleState
     ? idleSheetScrollStyle
     : isTrackingState
       ? trackingSheetScrollStyle
-      : sheetScrollStyle
+      : searchingSheetScrollStyle
   const sheetSnapOffsets = useMemo(
     () =>
       ({
-        collapsed: Math.min(360, Math.max(220, viewportHeight * 0.28)),
+        collapsed: Math.min(360, Math.max(220, appViewportHeight * 0.28)),
         default: 0,
       }) satisfies Record<SheetSnap, number>,
-    [viewportHeight],
+    [appViewportHeight],
   )
 
   const mapBottomViewportPadding = useMemo(() => {
-    const collapsedPadding = Math.round(Math.min(220, Math.max(140, viewportHeight * 0.2)))
-    const defaultPadding = Math.round(Math.min(320, Math.max(220, viewportHeight * 0.3)))
+    const vh = Math.max(appViewportHeight, appViewportHeightRef.current)
+    const collapsedPadding = Math.round(Math.min(220, Math.max(140, vh * 0.2)))
+    const defaultPadding = Math.round(Math.min(320, Math.max(220, vh * 0.3)))
 
     if (sheetSnap === 'collapsed') return collapsedPadding
     return defaultPadding
-  }, [sheetSnap, viewportHeight])
+  }, [appViewportHeight, sheetSnap])
 
-  const activeSheetOffset = !isSearching ? 0 : isDraggingSheet ? dragOffsetY : sheetSnapOffsets[sheetSnap]
+  const activeSheetOffset = !isSearching ? 0 : sheetSnapOffsets[sheetSnap]
 
-  const snapSheetToNearest = useCallback(
-    (offset: number) => {
-      setSheetSnap(offset > sheetSnapOffsets.collapsed * 0.35 ? 'collapsed' : 'default')
-      setDragOffsetY(0)
-    },
-    [sheetSnapOffsets],
+  const serviceOptions = [
+    { id: 'dogWalk' as const, icon: '🐾', label: t('services.dogWalk') },
+    { id: 'babysitter' as const, icon: '👶', label: t('services.babysitter') },
+    { id: 'technician' as const, icon: '🔧', label: t('services.technician') },
+  ]
+
+  const serviceSelectorBlock = (
+    <div style={serviceSelectorRowStyle}>
+      {serviceOptions.map((svc) => {
+        const isActive = selectedService === svc.id
+        return (
+          <button
+            key={svc.id}
+            type="button"
+            onClick={() => setSelectedService(svc.id)}
+            style={{
+              ...servicePillStyle,
+              background: isActive ? '#0F172A' : '#F4F6F8',
+              color: isActive ? '#FFFFFF' : '#475569',
+              border: isActive ? '1.5px solid #0F172A' : '1.5px solid transparent',
+            }}
+          >
+            <span>{svc.icon}</span>
+            <span style={{ fontSize: 12, fontWeight: 700 }}>{svc.label}</span>
+          </button>
+        )
+      })}
+    </div>
   )
 
-  const handleSheetPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!canInteractWithSheet || !isSearching) return
-      event.preventDefault()
-      event.stopPropagation()
-      dragStartYRef.current = event.clientY
-      dragStartOffsetRef.current = sheetSnapOffsets[sheetSnap]
-      sheetDidDragRef.current = false
-      setDragOffsetY(sheetSnapOffsets[sheetSnap])
-      setIsDraggingSheet(true)
-      event.currentTarget.setPointerCapture(event.pointerId)
-    },
-    [canInteractWithSheet, isSearching, sheetSnap, sheetSnapOffsets],
-  )
-
-  const handleSheetPointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!canInteractWithSheet || !isDraggingSheet) return
-      const deltaY = event.clientY - dragStartYRef.current
-      if (Math.abs(deltaY) > 8) {
-        sheetDidDragRef.current = true
-      }
-      const nextOffset = dragStartOffsetRef.current + deltaY
-      const clampedOffset = Math.max(0, Math.min(sheetSnapOffsets.collapsed, nextOffset))
-      setDragOffsetY(clampedOffset)
-    },
-    [canInteractWithSheet, isDraggingSheet, sheetSnapOffsets],
-  )
-
-  const handleSheetPointerUp = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!isDraggingSheet) return
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId)
-      }
-      const didDrag = sheetDidDragRef.current
-      if (didDrag) {
-        suppressDogNameOpenUntilRef.current = Date.now() + 220
-        snapSheetToNearest(dragOffsetY)
-      } else {
-        toggleSheetSnap()
-      }
-      setIsDraggingSheet(false)
-    },
-    [dragOffsetY, isDraggingSheet, snapSheetToNearest, toggleSheetSnap],
-  )
+  const isServiceAvailable = selectedService === 'dogWalk'
 
   const dogSelectorBlock = (
     <div style={compactFieldStyle}>
       <button
         type="button"
-        onPointerDown={() => setIsDogNameButtonPressed(true)}
-        onPointerUp={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-          setIsDogNameButtonPressed(false)
-          if (Date.now() < suppressDogNameOpenUntilRef.current) {
-            return
-          }
+        onClick={() => {
+          if (Date.now() < suppressDogNameOpenUntilRef.current) return
           openDogNameSheet()
         }}
-        onPointerCancel={() => setIsDogNameButtonPressed(false)}
-        onPointerLeave={() => setIsDogNameButtonPressed(false)}
         style={{
           ...dogInputButtonStyle,
           ...(isDogNameGuided ? guidedFieldButtonStyle : null),
           ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-          transform: isDogNameButtonPressed ? 'scale(0.98)' : 'scale(1)',
         }}
       >
         <div
@@ -1168,7 +1359,7 @@ export default function ClientDashboard({
             ...(isDogNameGuided ? guidedFieldShellStyle : null),
           }}
         >
-          <div style={dogThumbStyle}>🐶</div>
+          <div style={dogThumbStyle}>📋</div>
           <div style={dogInputButtonContentStyle}>
             <div
               style={
@@ -1177,7 +1368,7 @@ export default function ClientDashboard({
                   : dogInputPlaceholderTextStyle
               }
             >
-              {flow.dogName.trim() || "Dog's name"}
+              {flow.dogName.trim() || t('booking.dogNamePlaceholder')}
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -1192,39 +1383,29 @@ export default function ClientDashboard({
   const pickupSelectorBlock = (
     <div style={compactFieldStyle}>
       <div style={compactFieldLabelStyle}>{t('booking.pickupFrom')}</div>
-      <button
-        type="button"
-        onPointerUp={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-          openLocationDetails()
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            openLocationDetails()
-          }
-        }}
-        style={pickupSelectorButtonStyle}
+      <div
+        style={pickupSelectorShellStyle}
+        onClick={openAddressPicker}
+        data-control="address-row"
       >
-        <div style={pickupSelectorShellStyle}>
-          <span style={pickupSelectorInlineIconStyle} aria-hidden="true">
-            📍
-          </span>
-          <span
-            style={
-              flow.location.trim()
-                ? pickupSelectorValueStyle
-                : pickupSelectorPlaceholderStyle
-            }
-          >
-            {flow.locationLoading
-              ? 'Finding your location...'
-              : flow.location.trim() || 'Pickup location'}
-          </span>
-          <div style={pickupSelectorChevronStyle}>˅</div>
-        </div>
-      </button>
+        <span style={pickupSelectorInlineIconStyle} aria-hidden="true">
+          📍
+        </span>
+        <span
+          style={
+            flow.location.trim()
+              ? pickupSelectorValueStyle
+              : pickupSelectorPlaceholderStyle
+          }
+        >
+          {flow.locationLoading
+            ? t('booking.findingLocation')
+            : flow.location.trim() || t('booking.pickupLocation')}
+        </span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </div>
     </div>
   )
 
@@ -1232,7 +1413,7 @@ export default function ClientDashboard({
     <div style={compactFieldStyle}>
       <div style={compactFieldLabelStyle}>{t('booking.durationQuestion')}</div>
       {isDurationGuided && (
-        <div style={guidedFieldHintAboveStyle}>Choose a duration</div>
+        <div style={guidedFieldHintAboveStyle}>{t('booking.chooseDuration')}</div>
       )}
       <div
         style={{
@@ -1241,51 +1422,119 @@ export default function ClientDashboard({
           ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
         }}
       >
-                <DurationPicker
+        <DurationPicker
           options={localizedDurationOptions}
-          selected={flow.duration ?? ''}
+          selected={selectedDurationUi}
           onSelect={(v) => handleDurationSelect(v as DurationType)}
+          onEagerSelect={(v) => handleDurationEager(v as DurationType)}
           surgeMultiplier={flow.surgeMultiplier}
           surgeLevel={flow.surgeLevel}
+          hidePrice
         />
       </div>
     </div>
   )
 
+  const compactDisplayPrice = useMemo(() => {
+    if (flow.adjustedPriceILS <= 0) return null
+    const hasSurge = flow.surgeMultiplier > 1
+    const price = hasSurge
+      ? Math.round(flow.adjustedPriceILS * flow.surgeMultiplier)
+      : flow.adjustedPriceILS
+    return { price, original: hasSurge ? flow.adjustedPriceILS : null }
+  }, [flow.adjustedPriceILS, flow.surgeMultiplier])
+
   const compactSavedCardSummary =
     flow.savedCard && !flow.setupClientSecret && !flow.cardLoading ? (
-      <button type="button" onClick={flow.changeCard} style={compactSavedCardRowStyle}>
+      <button
+        type="button"
+        data-control="payment-row"
+        onClick={() => {
+          markFirstInteractionHandler('client-dashboard:open-payment-row')
+          setPaymentSheetOpen(true)
+          markFirstInteractionVisual('client-dashboard:open-payment-row')
+        }}
+        style={compactSavedCardRowStyle}
+      >
         <div style={compactSavedCardMainStyle}>
+          <CreditCard size={16} color="#3B82F6" style={{ flexShrink: 0 }} />
           <span style={compactSavedCardBrandStyle}>
             {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
           </span>
         </div>
-        <span style={compactSavedCardIconStyle} aria-hidden="true">
-          ˅
-        </span>
+        <div style={compactPriceEndStyle}>
+          {compactDisplayPrice && (
+            <>
+              <span style={compactPriceValueStyle}>₪{compactDisplayPrice.price}</span>
+              {compactDisplayPrice.original != null && (
+                <span style={compactPriceOriginalStyle}>₪{compactDisplayPrice.original}</span>
+              )}
+            </>
+          )}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </div>
       </button>
     ) : null
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
+      {debugFlags().interactionDebug && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 60,
+            left: 8,
+            zIndex: 99999,
+            pointerEvents: 'auto',
+          }}
+        >
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              const t = performance.now()
+              console.log(`[perf] debug-btn pointerdown at ${Math.round(t)}ms`)
+              ;(e.currentTarget as HTMLButtonElement).style.background = '#22C55E'
+            }}
+            onClick={(e) => {
+              const t = performance.now()
+              console.log(`[perf] debug-btn click at ${Math.round(t)}ms`)
+              ;(e.currentTarget as HTMLButtonElement).style.background = '#EF4444'
+              setTimeout(() => {
+                ;(e.currentTarget as HTMLButtonElement).style.background = '#3B82F6'
+              }, 400)
+            }}
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              border: '2px solid #1E40AF',
+              background: '#3B82F6',
+              color: '#FFF',
+              fontSize: 10,
+              fontWeight: 900,
+              cursor: 'pointer',
+              WebkitTapHighlightColor: 'transparent',
+              touchAction: 'manipulation',
+            }}
+          >
+            TAP
+          </button>
+        </div>
+      )}
       <div style={topUiLayerStyle}>
         <div style={floatingTopBarStyle}>
           <div style={menuButtonWrapStyle}>
             <button
               type="button"
-              onPointerUp={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                void hapticLight()
+              data-control="menu-button"
+              onClick={() => {
+                markFirstInteractionHandler('client-dashboard:menu-button')
                 setMenuPage('main')
                 setBurgerOpen((v) => !v)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  setMenuPage('main')
-                  setBurgerOpen((v) => !v)
-                }
+                markFirstInteractionVisual('client-dashboard:menu-button')
+                void hapticLight()
               }}
               style={controlBtnStyle}
               aria-label={t('menu.menu')}
@@ -1314,63 +1563,31 @@ export default function ClientDashboard({
           </div>
         </div>
 
-        {showBanners && (flow.error || flow.successMessage || flow.availabilityNotice) && (
-          <div style={floatingMessagesStyle}>
-            {flow.availabilityNotice && (
-              <MessageBanner
-                text={flow.availabilityNotice.title}
-                title={flow.availabilityNotice.title}
-                subtitle={flow.availabilityNotice.subtitle}
-                kind="info"
-                onDismiss={flow.clearAvailabilityNotice}
-                icon={
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="7" />
-                    <line x1="16.65" y1="16.65" x2="21" y2="21" />
-                  </svg>
-                }
-              />
-            )}
-            {flow.error && (
-              <MessageBanner text={flow.error} kind="error" onDismiss={flow.clearError} />
-            )}
-            {flow.successMessage && (
-              <MessageBanner
-                text={flow.successMessage}
-                kind="success"
-                onDismiss={flow.clearSuccess}
-              />
-            )}
-            {isScheduledDispatchSearching && (
-              <MessageBanner
-                text={t('booking.findingYourProvider')}
-                title={t('booking.findingYourProvider')}
-                subtitle={t('booking.findingYourProviderSubtitle')}
-                kind="info"
-              />
-            )}
-          </div>
-        )}
       </div>
 
       <div style={{ ...mapContainerBaseStyle, ...currentMapStyle }}>
-        <MapView
-          userLocation={mapUserLocation}
-          showUserMarker={true}
-          isSearching={isSearching}
-          nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
-          bottomViewportPadding={mapBottomViewportPadding}
-          {...(isTrackingState && flow.walkerLocation
-            ? {
-                walkerLocation: flow.walkerLocation,
-                walkerBearing: flow.walkerBearing,
-                isArrived: flow.isArrived,
-                gpsQuality: trackingGpsQuality,
-                proximityLevel: flow.proximityLevel,
-                routePolyline: flow.routePolyline ?? undefined,
-              }
-            : {})}
-        />
+        {mapMounted ? (
+          <MapView
+            userLocation={mapUserLocation}
+            showUserMarker={true}
+            isSearching={isSearching}
+            nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
+            bottomViewportPadding={mapBottomViewportPadding}
+            onRecenter={flow.refreshLocation}
+            {...(isTrackingState && flow.walkerLocation
+              ? {
+                  walkerLocation: flow.walkerLocation,
+                  walkerBearing: flow.walkerBearing,
+                  isArrived: flow.isArrived,
+                  gpsQuality: trackingGpsQuality,
+                  proximityLevel: flow.proximityLevel,
+                  routePolyline: flow.routePolyline ?? undefined,
+                }
+              : {})}
+          />
+        ) : (
+          <div style={deferredMapPlaceholderStyle} />
+        )}
       </div>
 
       {burgerOpen && (
@@ -1638,12 +1855,12 @@ export default function ClientDashboard({
               <ActionButton
                 label={t('booking.confirmSchedule')}
                 onClick={() => {
-                  void hapticSuccess()
                   const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
                   flow.setBookingTiming('scheduled')
                   flow.setScheduledFor(nextValue)
                   setScheduleDraft(nextValue)
                   setShowSchedulePage(false)
+                  void hapticSuccess()
                 }}
               />
             </div>
@@ -1652,36 +1869,14 @@ export default function ClientDashboard({
       )}
 
       <div
+        className="regli-client-dashboard-sheet"
         style={{
           ...currentSheetStyle,
           transform: `translateY(${activeSheetOffset}px)`,
-          transition: isDraggingSheet
-            ? 'none'
-            : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+          transition: 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
       >
-        <div
-          style={{
-            ...sheetHandleTouchAreaStyle,
-            ...(isIdleState || isTrackingState ? idleHandleOverrideStyle : null),
-          }}
-          onPointerDown={handleSheetPointerDown}
-          onPointerMove={handleSheetPointerMove}
-          onPointerUp={handleSheetPointerUp}
-          onPointerCancel={handleSheetPointerUp}
-        >
-          <div style={sheetHandleStyle} />
-          {isSearching && (
-            <div style={sheetHandleHintStyle}>
-              <span style={sheetHandleHintIconStyle}>
-                {sheetSnap === 'collapsed' ? '⌃' : '⌄'}
-              </span>
-              <span>
-                {sheetSnap === 'collapsed' ? t('booking.pullUp') : t('booking.pullDown')}
-              </span>
-            </div>
-          )}
-        </div>
+        <div style={{ ...sheetTopPadStyle, height: isIdleState ? 12 : 8 }} />
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
           {shouldRenderIdleSheet && (
@@ -1698,6 +1893,17 @@ export default function ClientDashboard({
                     </div>
                   </div>
 
+                {serviceSelectorBlock}
+
+                {!isServiceAvailable ? (
+                  <div style={comingSoonOverlayStyle}>
+                    <span style={{ fontSize: 28 }}>
+                      {serviceOptions.find((s) => s.id === selectedService)?.icon}
+                    </span>
+                    <span style={comingSoonTextStyle}>{t('services.comingSoon')}</span>
+                  </div>
+                ) : (
+                <>
                 <div style={compactFormGridStyle}>
                   {dogSelectorBlock}
 
@@ -1762,6 +1968,8 @@ export default function ClientDashboard({
                       ? t('booking.priceLockedNow')
                       : t('booking.serviceFeeIncluded')}
                   </div>
+                )}
+                </>
                 )}
               </div>
             </div>
@@ -1846,6 +2054,7 @@ export default function ClientDashboard({
                   onClick={handleFindWalker}
                   loading={flow.loading || flow.cardLoading}
                   disabled={
+                    !isServiceAvailable ||
                     !flow.dogName.trim() ||
                     !flow.location.trim() ||
                     !flow.duration ||
@@ -1856,28 +2065,17 @@ export default function ClientDashboard({
               </div>
               <button
                 type="button"
-                onPointerUp={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
+                data-control="calendar-button"
+                onClick={() => {
+                  markFirstInteractionHandler('client-dashboard:calendar-button')
                   if (hasFutureOrders) {
                     openFutureOrdersMenu()
                   } else if (!flow.duration) {
-                    void hapticLight()
                     setGuidedBookingField('duration')
+                    markFirstInteractionVisual('client-dashboard:calendar-button')
+                    void hapticLight()
                   } else {
                     openScheduleSheet()
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    if (hasFutureOrders) {
-                      openFutureOrdersMenu()
-                    } else if (!flow.duration) {
-                      setGuidedBookingField('duration')
-                    } else {
-                      openScheduleSheet()
-                    }
                   }
                 }}
                 style={{
@@ -2028,19 +2226,34 @@ export default function ClientDashboard({
             {!!recentDogNames.length && (
               <div style={dogNameSuggestionsWrapStyle}>
                 {recentDogNames.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => {
-                      setDogNameDraft(name)
-                      commitDogName(name)
-                      setShowDogNameSheet(false)
-                    }}
-                    style={dogNameChipStyle}
-                  >
-                    <span>🐶</span>
-                    <span>{name}</span>
-                  </button>
+                  <div key={name} style={dogNameChipWrapStyle}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDogNameDraft(name)
+                        commitDogName(name)
+                        setShowDogNameSheet(false)
+                      }}
+                      style={dogNameChipStyle}
+                    >
+                      <span>🐶</span>
+                      <span>{name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        const next = recentDogNames.filter((n) => n !== name)
+                        persistRecentDogNames(next)
+                      }}
+                      style={dogNameChipDeleteStyle}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -2076,6 +2289,87 @@ export default function ClientDashboard({
             </div>
           </div>
         </>
+      )}
+
+      {paymentSheetOpen && (
+        <>
+          <div style={paymentSheetOverlayStyle} onClick={() => setPaymentSheetOpen(false)} />
+          <div style={paymentSheetStyle}>
+            <div style={paymentSheetHeaderStyle}>
+              <span style={paymentSheetTitleStyle}>{t('paymentMethods.title')}</span>
+              <button type="button" onClick={() => setPaymentSheetOpen(false)} style={paymentSheetCloseStyle}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {flow.savedCard && (
+              <div style={paymentSheetCardRowStyle}>
+                <div style={paymentSheetCardLeftStyle}>
+                  <CreditCard size={20} color="#3B82F6" />
+                  <div>
+                    <div style={paymentSheetCardBrandStyle}>
+                      {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
+                    </div>
+                    {flow.savedCard.expMonth != null && flow.savedCard.expYear != null && (
+                      <div style={paymentSheetCardExpStyle}>
+                        {pad(flow.savedCard.expMonth)}/{String(flow.savedCard.expYear).slice(-2)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <span style={paymentSheetDefaultBadgeStyle}>{t('paymentMethods.defaultCard')}</span>
+              </div>
+            )}
+
+            <div style={paymentSheetActionsStyle}>
+              <button
+                type="button"
+                onClick={() => { setPaymentSheetOpen(false); flow.changeCard() }}
+                style={paymentSheetActionBtnStyle}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                  <line x1="1" y1="10" x2="23" y2="10" />
+                </svg>
+                <span>{t('paymentMethods.addCard')}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setPaymentSheetOpen(false); flow.changeCard() }}
+                style={paymentSheetActionBtnStyle}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+                <span>{t('paymentMethods.manageCards')}</span>
+              </button>
+
+              <div style={paymentSheetActionDisabledStyle}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="1" x2="12" y2="23" />
+                  <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                </svg>
+                <span>{t('paymentMethods.cashPayment')}</span>
+                <span style={paymentSheetComingSoonStyle}>{t('paymentMethods.comingSoon')}</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {addressPickerOpen && (
+        <AddressPickerSheet
+          currentAddress={flow.location}
+          onConfirm={handleAddressConfirm}
+          onUseCurrentLocation={handleAddressUseCurrentLocation}
+          onClose={() => setAddressPickerOpen(false)}
+          locationLoading={flow.locationLoading}
+        />
       )}
 
     </div>
@@ -2781,6 +3075,13 @@ const trackingMapContainerStyle: React.CSSProperties = {
   height: '100%',
 }
 
+const deferredMapPlaceholderStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background:
+    'radial-gradient(circle at 50% 38%, rgba(59,130,246,0.12) 0%, rgba(59,130,246,0.05) 18%, rgba(248,250,252,0) 42%), linear-gradient(180deg, #EEF4FF 0%, #F8FAFC 46%, #F1F5F9 100%)',
+}
+
 const floatingTopBarStyle: React.CSSProperties = {
   position: 'fixed',
   top: 'calc(16px + env(safe-area-inset-top))',
@@ -2801,16 +3102,13 @@ const controlBtnStyle: React.CSSProperties = {
   height: 44,
   borderRadius: 16,
   border: '1px solid rgba(255,255,255,0.9)',
-  background: 'rgba(255,255,255,0.96)',
+  background: 'rgba(255,255,255,0.97)',
   boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
   pointerEvents: 'auto',
-  touchAction: 'manipulation',
-  WebkitTapHighlightColor: 'transparent',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
-  backdropFilter: 'blur(10px)',
 }
 
 const topRightGroupStyle: React.CSSProperties = {
@@ -2827,19 +3125,6 @@ const bellWrapStyle: React.CSSProperties = {
   placeItems: 'center',
 }
 
-const floatingMessagesStyle: React.CSSProperties = {
-  position: 'fixed',
-  left: 'max(14px, env(safe-area-inset-left, 0px))',
-  right: 'max(14px, env(safe-area-inset-right, 0px))',
-  top: 'calc(74px + env(safe-area-inset-top))',
-  zIndex: 3000,
-  display: 'grid',
-  gap: 8,
-  pointerEvents: 'none',
-  boxSizing: 'border-box',
-  minWidth: 0,
-  maxWidth: 'none',
-}
 
 const sheetStyle: React.CSSProperties = {
   position: 'absolute',
@@ -2866,6 +3151,13 @@ const idleSheetStyle: React.CSSProperties = {
   maxHeight: 'calc(100dvh - 92px)',
 }
 
+const searchingSheetStyle: React.CSSProperties = {
+  ...sheetStyle,
+  top: 'auto',
+  height: 'auto',
+  maxHeight: 'calc(100dvh - 92px)',
+}
+
 const trackingSheetStyle: React.CSSProperties = {
   ...sheetStyle,
   top: 'auto',
@@ -2873,63 +3165,22 @@ const trackingSheetStyle: React.CSSProperties = {
   maxHeight: 'calc(100dvh - 92px)',
 }
 
-const sheetHandleTouchAreaStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '12px 0 18px',
+const sheetTopPadStyle: React.CSSProperties = {
+  height: 12,
   flexShrink: 0,
-  touchAction: 'none',
-  pointerEvents: 'auto',
-  cursor: 'grab',
-  userSelect: 'none',
-  WebkitUserSelect: 'none',
-  position: 'relative',
-  zIndex: 2,
   borderTopLeftRadius: 28,
   borderTopRightRadius: 28,
   background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
 }
 
-const idleHandleOverrideStyle: React.CSSProperties = {
-  padding: '8px 0 4px',
-  gap: 0,
-  cursor: 'default',
-}
 
-const sheetHandleStyle: React.CSSProperties = {
-  width: 40,
-  height: 4,
-  borderRadius: 999,
-  background: '#CBD5E1',
-}
 
-const sheetHandleHintStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: 11,
-  fontWeight: 800,
-  color: '#5B7CFA',
-  lineHeight: 1,
-  pointerEvents: 'none',
-}
-
-const sheetHandleHintIconStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: '#475569',
-  transform: 'translateY(-1px)',
-}
-
-const sheetScrollStyle: React.CSSProperties = {
-  flex: 1,
+const searchingSheetScrollStyle: React.CSSProperties = {
+  flex: '0 1 auto',
   minHeight: 0,
-  overflowY: 'auto',
+  overflowY: 'visible',
   overflowX: 'hidden',
-  padding: '0 14px 12px',
-  WebkitOverflowScrolling: 'touch',
+  padding: '0 14px 8px',
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
@@ -2965,7 +3216,7 @@ const idleSheetScrollStyle: React.CSSProperties = {
 }
 
 const sheetContentStyle: React.CSSProperties = {
-  paddingBottom: 12,
+  paddingBottom: 'env(safe-area-inset-bottom, 0px)',
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
@@ -3002,7 +3253,39 @@ const sheetGreetingStyle: React.CSSProperties = {
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
+  gap: 4,
+}
+
+const serviceSelectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+}
+
+const servicePillStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
   gap: 5,
+  padding: '8px 4px',
+  borderRadius: 12,
+  cursor: 'pointer',
+  transition: 'background 0.15s ease',
+}
+
+const comingSoonOverlayStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '32px 16px',
+}
+
+const comingSoonTextStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 700,
+  color: '#94A3B8',
 }
 
 const preferredWalkerIndicatorStyle: React.CSSProperties = {
@@ -3071,16 +3354,6 @@ const compactFieldLabelStyle: React.CSSProperties = {
   color: '#64748B',
 }
 
-const pickupSelectorButtonStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  padding: 0,
-  textAlign: 'left',
-  cursor: 'pointer',
-  width: '100%',
-  WebkitTapHighlightColor: 'transparent',
-}
-
 const pickupSelectorShellStyle: React.CSSProperties = {
   height: 45,
   borderRadius: 15,
@@ -3093,6 +3366,7 @@ const pickupSelectorShellStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '0 12px',
+  cursor: 'pointer',
 }
 
 const pickupSelectorInlineIconStyle: React.CSSProperties = {
@@ -3128,15 +3402,7 @@ const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
 }
 
-const pickupSelectorChevronStyle: React.CSSProperties = {
-  color: '#94A3B8',
-  fontSize: 16,
-  lineHeight: 1,
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-}
+
 
 const dogInputShellStyle: React.CSSProperties = {
   height: 45,
@@ -3216,13 +3482,13 @@ const dogNameSheetStyle: React.CSSProperties = {
   right: 'env(safe-area-inset-right, 0px)',
   bottom: 0,
   zIndex: 121,
-  borderTopLeftRadius: 28,
-  borderTopRightRadius: 28,
+  borderTopLeftRadius: 24,
+  borderTopRightRadius: 24,
   background: '#FFFFFF',
-  boxShadow: '0 -16px 44px rgba(15, 23, 42, 0.20)',
-  padding: '10px 16px calc(18px + env(safe-area-inset-bottom))',
+  boxShadow: '0 -8px 32px rgba(15, 23, 42, 0.12)',
+  padding: '8px 16px calc(12px + env(safe-area-inset-bottom))',
   display: 'grid',
-  gap: 14,
+  gap: 10,
   boxSizing: 'border-box',
   maxWidth: '100%',
   overflowX: 'hidden',
@@ -3259,28 +3525,49 @@ const dogNameSuggestionsWrapStyle: React.CSSProperties = {
   gap: 10,
 }
 
+const dogNameChipWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+}
+
 const dogNameChipStyle: React.CSSProperties = {
-  height: 40,
+  height: 36,
   borderRadius: 999,
   border: '1px solid #DBEAFE',
   background: '#EFF6FF',
   color: '#1D4ED8',
   fontSize: 14,
   fontWeight: 800,
-  padding: '0 14px',
+  padding: '0 28px 0 12px',
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 6,
   cursor: 'pointer',
 }
 
+const dogNameChipDeleteStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -4,
+  right: -4,
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  border: '1.5px solid #DBEAFE',
+  background: '#FFFFFF',
+  color: '#94A3B8',
+  display: 'grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+  padding: 0,
+}
+
 const dogNameInputCardStyle: React.CSSProperties = {
-  borderRadius: 18,
+  borderRadius: 14,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
-  padding: 12,
+  padding: '8px 12px',
   display: 'grid',
-  gap: 8,
+  gap: 6,
 }
 
 const dogNameInputLabelStyle: React.CSSProperties = {
@@ -3293,13 +3580,13 @@ const dogNameInputLabelStyle: React.CSSProperties = {
 
 const dogNameSheetInputStyle: React.CSSProperties = {
   width: '100%',
-  height: 48,
-  borderRadius: 14,
+  height: 44,
+  borderRadius: 12,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   outline: 'none',
-  padding: '0 14px',
-  fontSize: 17,
+  padding: '0 12px',
+  fontSize: 16,
   color: '#0F172A',
   boxSizing: 'border-box',
 }
@@ -3311,8 +3598,8 @@ const dogNameSheetActionsStyle: React.CSSProperties = {
 }
 
 const dogNameSecondaryBtnStyle: React.CSSProperties = {
-  height: 48,
-  borderRadius: 16,
+  height: 44,
+  borderRadius: 14,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#0F172A',
@@ -3322,8 +3609,8 @@ const dogNameSecondaryBtnStyle: React.CSSProperties = {
 }
 
 const dogNamePrimaryBtnStyle: React.CSSProperties = {
-  height: 48,
-  borderRadius: 16,
+  height: 44,
+  borderRadius: 14,
   border: 'none',
   background: '#2563EB',
   color: '#FFFFFF',
@@ -3333,14 +3620,12 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
 }
 
 const compactDurationWrapStyle: React.CSSProperties = {
-  marginTop: 0,
+  marginTop: -1,
   border: '2px solid transparent',
-  borderRadius: 24,
-  padding: 2,
+  borderRadius: 18,
+  padding: 0,
   boxSizing: 'border-box',
-  transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
   transformOrigin: 'center top',
-  willChange: 'transform, box-shadow, opacity',
 }
 
 const durationGuidedFieldShellStyle: React.CSSProperties = {
@@ -3354,7 +3639,7 @@ const guidedFieldAnimationStyle: React.CSSProperties = {
 }
 
 const compactPaymentWrapStyle: React.CSSProperties = {
-  marginTop: 3,
+  marginTop: 0,
   marginBottom: -1,
   border: '2px solid transparent',
   borderRadius: 24,
@@ -3366,10 +3651,17 @@ const compactPaymentWrapStyle: React.CSSProperties = {
 }
 
 const compactSavedCardRowStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  width: '100%',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
+  gap: 8,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const compactSavedCardMainStyle: React.CSSProperties = {
@@ -3380,13 +3672,7 @@ const compactSavedCardMainStyle: React.CSSProperties = {
   flex: 1,
 }
 
-const compactSavedCardIconStyle: React.CSSProperties = {
-  fontSize: 18,
-  lineHeight: 1,
-  flexShrink: 0,
-  color: '#3B82F6',
-  fontWeight: 700,
-}
+
 
 const compactSavedCardBrandStyle: React.CSSProperties = {
   fontSize: 14,
@@ -3397,6 +3683,26 @@ const compactSavedCardBrandStyle: React.CSSProperties = {
   textOverflow: 'ellipsis',
 }
 
+const compactPriceEndStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flexShrink: 0,
+}
+
+const compactPriceValueStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const compactPriceOriginalStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#94A3B8',
+  textDecoration: 'line-through',
+}
+
 const paymentGuidedFieldShellStyle: React.CSSProperties = {
   border: '2px solid #3B82F6',
   background: 'rgba(59,130,246,0.06)',
@@ -3405,18 +3711,21 @@ const paymentGuidedFieldShellStyle: React.CSSProperties = {
 
 const feeLabelStyle: React.CSSProperties = {
   fontSize: 11,
-  color: '#64748B',
+  color: '#2563EB',
   lineHeight: 1.3,
   textAlign: 'center',
   paddingTop: 0,
   marginTop: -2,
+  background: 'rgba(59,130,246,0.08)',
+  padding: '4px 10px',
+  borderRadius: 8,
+  fontWeight: 600,
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
-  padding: '2px 14px calc(4px + env(safe-area-inset-bottom))',
+  padding: '2px 14px env(safe-area-inset-bottom, 0px)',
   borderTop: '1px solid rgba(226, 232, 240, 0.9)',
-  background: 'rgba(255,255,255,0.96)',
-  backdropFilter: 'blur(10px)',
+  background: '#FFFFFF',
   flexShrink: 0,
 }
 
@@ -3625,6 +3934,7 @@ const trackingCardStyle: React.CSSProperties = {
   gap: 12,
   boxSizing: 'border-box',
   overflow: 'hidden',
+  pointerEvents: 'auto',
 }
 
 const trackingTopBadgeStyle: React.CSSProperties = {
@@ -4316,4 +4626,142 @@ const profileRatingStyle: React.CSSProperties = {
   fontSize: 12,
   color: '#64748B',
   fontWeight: 800,
+}
+
+const paymentSheetOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15,23,42,0.4)',
+  zIndex: 9998,
+  animation: 'regliMenuFadeIn 180ms ease',
+}
+
+const paymentSheetStyle: React.CSSProperties = {
+  position: 'fixed',
+  bottom: 0,
+  left: 0,
+  right: 0,
+  zIndex: 9999,
+  background: '#FFFFFF',
+  borderTopLeftRadius: 24,
+  borderTopRightRadius: 24,
+  boxShadow: '0 -8px 32px rgba(15,23,42,0.12)',
+  padding: '20px 20px calc(20px + env(safe-area-inset-bottom, 0px))',
+  animation: 'regliMenuSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+}
+
+const paymentSheetHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+}
+
+const paymentSheetTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const paymentSheetCloseStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'rgba(241,245,249,0.9)',
+  borderRadius: 999,
+  width: 32,
+  height: 32,
+  display: 'grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+  color: '#64748B',
+  padding: 0,
+}
+
+const paymentSheetCardRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: '14px 16px',
+  borderRadius: 16,
+  border: '1.5px solid rgba(59,130,246,0.25)',
+  background: 'rgba(239,246,255,0.5)',
+}
+
+const paymentSheetCardLeftStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minWidth: 0,
+  flex: 1,
+}
+
+const paymentSheetCardBrandStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const paymentSheetCardExpStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#94A3B8',
+  fontWeight: 600,
+  marginTop: 2,
+}
+
+const paymentSheetDefaultBadgeStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#2563EB',
+  background: 'rgba(59,130,246,0.1)',
+  borderRadius: 999,
+  padding: '4px 10px',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+}
+
+const paymentSheetActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+}
+
+const paymentSheetActionBtnStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '12px 16px',
+  borderRadius: 12,
+  fontSize: 15,
+  fontWeight: 700,
+  color: '#0F172A',
+  cursor: 'pointer',
+  textAlign: 'start',
+}
+
+const paymentSheetActionDisabledStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '12px 16px',
+  borderRadius: 12,
+  fontSize: 15,
+  fontWeight: 700,
+  color: '#CBD5E1',
+  opacity: 0.7,
+}
+
+const paymentSheetComingSoonStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#94A3B8',
+  background: 'rgba(241,245,249,0.9)',
+  borderRadius: 999,
+  padding: '3px 8px',
+  marginInlineStart: 'auto',
 }
