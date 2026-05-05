@@ -5,6 +5,7 @@ import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
+import { isCompletionReviewRequired } from '../utils/completionReview'
 
 export type WalkerScreenState =
   | 'offline'
@@ -200,6 +201,10 @@ function completionDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_dismissed_${profileId}`
 }
 
+function completionReviewDismissStorageKey(profileId: string): string {
+  return `regli_walker_completion_review_dismissed_${profileId}`
+}
+
 function sendClientLiveOrderEvent(params: {
   clientId: string | null | undefined
   jobId: string
@@ -254,6 +259,10 @@ function isRecentCompletion(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>)
   const ts = getJobEventTime(job)
   if (!ts) return false
   return Date.now() - ts <= COMPLETION_PROMPT_RECENT_MS
+}
+
+function isCompletionReviewJob(job: Pick<WalkRequestRow, 'status' | 'notes'> | null | undefined): boolean {
+  return !!job && job.status === 'accepted' && isCompletionReviewRequired(job.notes)
 }
 
 function getCompletionPromptJob(
@@ -346,6 +355,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   } | null>(null)
 
   const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
+  const [dismissedReviewRequiredIds, setDismissedReviewRequiredIds] = useState<Set<string>>(new Set())
 
   const [isOnline, setIsOnline] = useState(false)
   const [onlineLoading, setOnlineLoading] = useState(true)
@@ -398,6 +408,31 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   }, [profileId])
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(completionReviewDismissStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      setDismissedReviewRequiredIds(new Set(Array.isArray(parsed) ? parsed : []))
+    } catch {
+      setDismissedReviewRequiredIds(new Set())
+    }
+  }, [profileId])
+
+  const persistDismissedReviewRequiredIds = useCallback(
+    (nextIds: Set<string>) => {
+      setDismissedReviewRequiredIds(nextIds)
+      try {
+        window.localStorage.setItem(
+          completionReviewDismissStorageKey(profileId),
+          JSON.stringify(Array.from(nextIds)),
+        )
+      } catch {
+        // noop
+      }
+    },
+    [profileId],
+  )
+
+  useEffect(() => {
     if (typeof document === 'undefined') return
 
     const handleVisibilityChange = () => {
@@ -428,6 +463,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const futureJobs = useMemo(() => visibleMyJobs.filter((j) => isFutureJob(j)), [visibleMyJobs])
 
+  const reviewRequiredJobs = useMemo(
+    () =>
+      visibleMyJobs.filter(
+        (j) => j.status === 'accepted' && isDispatchedScheduledJob(j) && !isFutureJob(j) && isCompletionReviewJob(j),
+      ),
+    [visibleMyJobs],
+  )
+
   const onTheWayJobs = useMemo(
     () =>
       visibleMyJobs.filter(
@@ -435,6 +478,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           j.status === 'accepted' &&
           isDispatchedScheduledJob(j) &&
           !isFutureJob(j) &&
+          !isCompletionReviewJob(j) &&
           !j.service_started_at,
       ),
     [visibleMyJobs],
@@ -447,9 +491,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           j.status === 'accepted' &&
           isDispatchedScheduledJob(j) &&
           !isFutureJob(j) &&
+          !isCompletionReviewJob(j) &&
           !!j.service_started_at,
       ),
     [visibleMyJobs],
+  )
+
+  const reviewRequiredJob = useMemo(
+    () => reviewRequiredJobs.find((job) => !dismissedReviewRequiredIds.has(job.id)) ?? null,
+    [reviewRequiredJobs, dismissedReviewRequiredIds],
   )
 
   useEffect(() => {
@@ -779,7 +829,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     const confirmed = completedJobs.find((j) => j.id === pendingClientConfirmation)
     if (!confirmed) {
       const stillActive = myJobs.find((j) => j.id === pendingClientConfirmation && j.status === 'accepted')
-      if (stillActive && !stillActive.service_completed_at) {
+      if (stillActive && (!stillActive.service_completed_at || isCompletionReviewJob(stillActive))) {
         setPendingClientConfirmation(null)
       }
       return
@@ -802,12 +852,26 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   useEffect(() => {
     if (pendingClientConfirmation) return
     const pendingJob = myJobs.find(
-      (j) => j.status === 'accepted' && !!j.service_completed_at && !!j.service_started_at,
+      (j) =>
+        j.status === 'accepted' &&
+        !!j.service_completed_at &&
+        !!j.service_started_at &&
+        !isCompletionReviewJob(j),
     )
     if (pendingJob) {
       setPendingClientConfirmation(pendingJob.id)
     }
   }, [pendingClientConfirmation, myJobs])
+
+  useEffect(() => {
+    if (reviewRequiredJobs.length === 0 && dismissedReviewRequiredIds.size === 0) return
+    const activeReviewIds = new Set(reviewRequiredJobs.map((job) => job.id))
+    const nextDismissedIds = new Set(
+      Array.from(dismissedReviewRequiredIds).filter((jobId) => activeReviewIds.has(jobId)),
+    )
+    if (nextDismissedIds.size === dismissedReviewRequiredIds.size) return
+    persistDismissedReviewRequiredIds(nextDismissedIds)
+  }, [reviewRequiredJobs, dismissedReviewRequiredIds, persistDismissedReviewRequiredIds])
 
   useEffect(() => {
     const futureIds = new Set(futureJobs.map((j) => j.id))
@@ -1803,6 +1867,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setError('Start the service after client arrival confirmation before completing it.')
         return
       }
+      if (isCompletionReviewJob(job)) {
+        setError('Issue reported - this service is under review.')
+        return
+      }
 
       if (pendingClientConfirmation === id) return
 
@@ -2040,6 +2108,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return null
     })
   }, [profileId])
+  const dismissReviewRequired = useCallback(() => {
+    if (!reviewRequiredJob) return
+    const nextIds = new Set(dismissedReviewRequiredIds)
+    nextIds.add(reviewRequiredJob.id)
+    persistDismissedReviewRequiredIds(nextIds)
+    setPendingClientConfirmation((prev) => (prev === reviewRequiredJob.id ? null : prev))
+    setSuccessMessage(null)
+  }, [
+    reviewRequiredJob,
+    dismissedReviewRequiredIds,
+    persistDismissedReviewRequiredIds,
+  ])
   const clearError = useCallback(() => setError(null), [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const dismissTakenNotice = useCallback(() => setTakenNotice(false), [])
@@ -2149,6 +2229,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     activeJobs,
     onTheWayJobs,
     futureJobs,
+    reviewRequiredJob,
+    reviewRequiredJobs,
     completedJobs,
     recentJobs,
     recentRatings,
@@ -2172,6 +2254,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
     completingJobId,
     pendingClientConfirmation,
+    reviewRequiredJobIds: new Set(
+      myJobs.filter((job) => isCompletionReviewJob(job)).map((job) => job.id),
+    ),
+    dismissReviewRequired,
     completionSuccess,
     completionPaymentError,
     completionRatingSubmitting,

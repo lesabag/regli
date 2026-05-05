@@ -6,6 +6,10 @@ import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
+import {
+  appendCompletionReviewMarker,
+  isCompletionReviewRequired,
+} from '../utils/completionReview'
 import i18n from '../i18n'
 
 type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
@@ -64,6 +68,12 @@ type PendingCompletionConfirmation = {
   walkerId: string | null
 } | null
 
+type CompletionReviewJob = {
+  jobId: string
+  walkerName: string
+  walkerId: string | null
+} | null
+
 type CapturePaymentResponse = {
   success?: boolean
   error?: string
@@ -92,6 +102,7 @@ type WalkRequestRow = {
   dog_name: string | null
   location: string | null
   address?: string | null
+  notes?: string | null
   price: number | null
   scheduled_fee_snapshot: number | null
   duration_minutes: number | null
@@ -174,7 +185,7 @@ type QueryResult<T> = {
 }
 
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
+  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
@@ -255,11 +266,19 @@ function completionDismissStorageKey(profileId: string): string {
   return `regli_client_completion_dismissed_${profileId}`
 }
 
+function completionReviewDismissStorageKey(profileId: string): string {
+  return `regli_client_completion_review_dismissed_${profileId}`
+}
+
 function getLifecycleEventRank(type: 'accepted' | 'arrived' | 'start_walk' | 'complete'): number {
   if (type === 'complete') return 4
   if (type === 'start_walk') return 3
   if (type === 'arrived') return 2
   return 1
+}
+
+function isCompletionReviewJob(job: Pick<WalkRequestRow, 'status' | 'notes'> | null | undefined): boolean {
+  return !!job && job.status === 'accepted' && isCompletionReviewRequired(job.notes)
 }
 
 function getJobEventTime(job: WalkRequestRow): number {
@@ -474,6 +493,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [pendingCompletionConfirmation, setPendingCompletionConfirmation] = useState<PendingCompletionConfirmation>(null)
   const [completionConfirming, setCompletionConfirming] = useState(false)
   const [completionConfirmError, setCompletionConfirmError] = useState<string | null>(null)
+  const [completionReviewJob, setCompletionReviewJob] = useState<CompletionReviewJob>(null)
   const [tipJob, setTipJob] = useState<TipJob>(null)
   const [tipSubmitting, setTipSubmitting] = useState(false)
 
@@ -489,6 +509,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
   const [favoriteWalkers, setFavoriteWalkers] = useState<FavoriteWalkerRow[]>([])
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
+  const [dismissedCompletionReviewIds, setDismissedCompletionReviewIds] = useState<Set<string>>(new Set())
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
   const arriveNotifiedRef = useRef<Set<string>>(new Set())
@@ -543,6 +564,36 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setSearchStartTime(null)
     setSearchClockNow(Date.now())
   }, [])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(completionReviewDismissStorageKey(profileId))
+      const parsed = raw ? (JSON.parse(raw) as string[]) : []
+      setDismissedCompletionReviewIds(new Set(Array.isArray(parsed) ? parsed : []))
+    } catch {
+      setDismissedCompletionReviewIds(new Set())
+    }
+  }, [profileId])
+
+  const persistDismissedCompletionReviewIds = useCallback(
+    (nextIds: Set<string>) => {
+      setDismissedCompletionReviewIds(nextIds)
+      try {
+        window.localStorage.setItem(
+          completionReviewDismissStorageKey(profileId),
+          JSON.stringify(Array.from(nextIds)),
+        )
+      } catch {
+        // noop
+      }
+    },
+    [profileId],
+  )
+
+  const shouldShowCompletionReview = useCallback(
+    (jobId: string) => !dismissedCompletionReviewIds.has(jobId),
+    [dismissedCompletionReviewIds],
+  )
 
   useEffect(() => {
     try {
@@ -1220,6 +1271,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const activeJob =
     currentJob &&
     currentJob.status === 'accepted' &&
+    !isCompletionReviewJob(currentJob) &&
     (
       screenPhase === 'on_the_way' ||
       screenPhase === 'arrived_pending_confirmation' ||
@@ -1232,6 +1284,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const clearActiveState = useCallback(() => {
     setScreenState('idle')
     setScreenPhase('idle')
+    setCompletionReviewJob(null)
     setCurrentJob(null)
     setCurrentJobId(null)
     clearSearchAttempt()
@@ -1266,6 +1319,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     )
 
     if (!row) {
+      setCompletionReviewJob(null)
       if (screenState === 'searching' && currentJobId) {
         return
       }
@@ -1297,6 +1351,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setCurrentJobId(row.id)
     lastActiveJobIdRef.current = row.id
     if (row.walker_id) void loadWalkerName(row.walker_id)
+    if (isCompletionReviewJob(row)) {
+      const walkerLabel = row.walker_id ? walkerNameById.get(row.walker_id) || 'Provider' : 'Provider'
+      setCompletionReviewJob(
+        shouldShowCompletionReview(row.id)
+          ? {
+              jobId: row.id,
+              walkerId: row.walker_id,
+              walkerName: walkerLabel,
+            }
+          : null,
+      )
+      setPendingCompletionConfirmation(null)
+      setScreenPhase('idle')
+      setScreenState('idle')
+      clearSearchAttempt()
+      return
+    }
+    setCompletionReviewJob(null)
     setScreenPhase(nextPhase)
     setScreenState(mapScreenStateFromPhase(nextPhase))
     if (row.status === 'accepted') {
@@ -1309,6 +1381,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     loadWalkerName,
     screenState,
     showDispatchExhaustedMessage,
+    walkerNameById,
+    shouldShowCompletionReview,
   ])
 
   const fetchCurrentJobState = useCallback(async () => {
@@ -1643,6 +1717,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
             clearSearchAttempt()
+            if (isCompletionReviewJob(updated)) {
+              const walkerLabel = updated.walker_id
+                ? walkerNameById.get(updated.walker_id) || 'Provider'
+                : 'Provider'
+              setCompletionReviewJob(
+                shouldShowCompletionReview(updated.id)
+                  ? {
+                      jobId: updated.id,
+                      walkerId: updated.walker_id,
+                      walkerName: walkerLabel,
+                    }
+                  : null,
+              )
+              setPendingCompletionConfirmation(null)
+              setScreenPhase('idle')
+              setScreenState('idle')
+              void fetchCurrentAndLists()
+              return
+            }
+            setCompletionReviewJob(null)
             setScreenPhase(nextPhase)
             setScreenState(mapScreenStateFromPhase(nextPhase))
 
@@ -1676,6 +1770,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             updated.status === 'accepted' &&
             updated.service_completed_at &&
             updated.service_started_at &&
+            !isCompletionReviewJob(updated) &&
             (updated.id === currentJobId || updated.id === lastActiveJobIdRef.current)
           ) {
             const walkerLabel = updated.walker_id
@@ -1692,6 +1787,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }
 
           if (updated.status === 'completed') {
+            setCompletionReviewJob(null)
             const belongsToCurrentFlow =
               updated.id === currentJobId || updated.id === lastActiveJobIdRef.current
 
@@ -1721,6 +1817,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }
 
           if (updated.status === 'cancelled') {
+            setCompletionReviewJob(null)
             if (updated.id === currentJobId) {
               if (
                 typeof updated.smart_dispatch_last_error === 'string' &&
@@ -1778,6 +1875,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             showLifecycleBanner(event.jobId, 'arrived', event.message || 'Provider has arrived.')
             void fetchCurrentAndLists()
           } else if (event.type === 'completion_pending') {
+            if (currentJob?.id === event.jobId && isCompletionReviewJob(currentJob)) return
             const walkerLabel = event.walkerName || (event.walkerId ? walkerNameById.get(event.walkerId) : null) || 'Provider'
             setPendingCompletionConfirmation({
               jobId: event.jobId,
@@ -1796,6 +1894,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               !ratedJobIds.has(event.jobId) &&
               !dismissedCompletionIdsRef.current.has(event.jobId)
             ) {
+              setCompletionReviewJob(null)
               setCompletionJob({
                 jobId: event.jobId,
                 walkerId: event.walkerId,
@@ -1828,6 +1927,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [
     profileId,
     currentJobId,
+    currentJob,
     walkerNameById,
     fetchCurrentAndLists,
     loadWalkerName,
@@ -1836,6 +1936,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     showLifecycleBanner,
     screenState,
     showDispatchExhaustedMessage,
+    shouldShowCompletionReview,
   ])
 
   useEffect(() => {
@@ -1852,7 +1953,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
       currentJob &&
       currentJob.status === 'accepted' &&
       currentJob.service_started_at &&
-      currentJob.service_completed_at
+      currentJob.service_completed_at &&
+      !isCompletionReviewJob(currentJob)
     ) {
       setPendingCompletionConfirmation((prev) => {
         if (prev?.jobId === currentJob.id) return prev
@@ -1868,14 +1970,33 @@ export function useClientFlow(profileId: string, _profileName: string) {
     } else if (
       currentJob &&
       currentJob.status === 'accepted' &&
-      !currentJob.service_completed_at
+      (!currentJob.service_completed_at || isCompletionReviewJob(currentJob))
     ) {
       setPendingCompletionConfirmation((prev) => {
         if (prev?.jobId === currentJob.id) return null
         return prev
       })
     }
-  }, [currentJob, walkerNameById])
+    if (currentJob && isCompletionReviewJob(currentJob)) {
+      const walkerLabel = currentJob.walker_id
+        ? walkerNameById.get(currentJob.walker_id) || 'Provider'
+        : 'Provider'
+      setCompletionReviewJob(
+        shouldShowCompletionReview(currentJob.id)
+          ? {
+              jobId: currentJob.id,
+              walkerId: currentJob.walker_id,
+              walkerName: walkerLabel,
+            }
+          : null,
+      )
+      return
+    }
+    setCompletionReviewJob((prev) => {
+      if (prev?.jobId === currentJob?.id) return null
+      return prev
+    })
+  }, [currentJob, walkerNameById, shouldShowCompletionReview])
 
   const confirmArrival = useCallback(async () => {
     if (!currentJobId) return
@@ -2019,6 +2140,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
       setPendingCompletionConfirmation(null)
       setCompletionConfirmError(null)
+      setCompletionReviewJob(null)
       flowCompletedJobIdsRef.current.add(pending.jobId)
       lifecyclePhaseRef.current.set(pending.jobId, 'completed')
 
@@ -2075,22 +2197,77 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     setError(null)
     setCompletionConfirmError(null)
+    const now = new Date().toISOString()
+    const targetJob =
+      (currentJob?.id === pending.jobId ? currentJob : null) ?? (await fetchJobById(pending.jobId))
+    const nextNotes = appendCompletionReviewMarker(targetJob?.notes, now)
+    const nextDismissedIds = new Set(dismissedCompletionReviewIds)
+    nextDismissedIds.delete(pending.jobId)
+    persistDismissedCompletionReviewIds(nextDismissedIds)
 
-    const { error: updateErr } = await supabase
+    const { data, error: updateErr } = await supabase
       .from('walk_requests')
-      .update({ service_completed_at: null })
+      .update({ notes: nextNotes })
       .eq('id', pending.jobId)
       .eq('client_id', profileId)
       .eq('status', 'accepted')
+      .select(JOB_SELECT)
+      .maybeSingle()
 
     if (updateErr) {
       setError(updateErr.message)
       return
     }
 
+    const updatedJob = (data as WalkRequestRow | null) ?? null
     setPendingCompletionConfirmation(null)
+    setCompletionConfirmError(null)
+    setCompletionJob(null)
+    setTipJob(null)
+    if (updatedJob?.walker_id) {
+      void loadWalkerName(updatedJob.walker_id)
+    }
+    if (updatedJob) {
+      setCurrentJob((prev) => mergeWalkRequest(prev, updatedJob))
+      setCurrentJobId(updatedJob.id)
+      lastActiveJobIdRef.current = updatedJob.id
+      setCompletionReviewJob({
+        jobId: updatedJob.id,
+        walkerId: updatedJob.walker_id,
+        walkerName: updatedJob.walker_id
+          ? walkerNameById.get(updatedJob.walker_id) || pending.walkerName
+          : pending.walkerName,
+      })
+    }
+    setScreenPhase('idle')
+    setScreenState('idle')
+    clearSearchAttempt()
     void fetchCurrentAndLists()
-  }, [pendingCompletionConfirmation, profileId, fetchCurrentAndLists])
+  }, [
+    pendingCompletionConfirmation,
+    profileId,
+    currentJob,
+    dismissedCompletionReviewIds,
+    fetchJobById,
+    fetchCurrentAndLists,
+    loadWalkerName,
+    persistDismissedCompletionReviewIds,
+    walkerNameById,
+    clearSearchAttempt,
+  ])
+
+  const dismissCompletionReview = useCallback(() => {
+    if (!completionReviewJob) return
+    const nextIds = new Set(dismissedCompletionReviewIds)
+    nextIds.add(completionReviewJob.jobId)
+    persistDismissedCompletionReviewIds(nextIds)
+    setCompletionReviewJob(null)
+    setPendingCompletionConfirmation(null)
+    setCompletionJob(null)
+    setTipJob(null)
+    setScreenPhase('idle')
+    setScreenState('idle')
+  }, [completionReviewJob, dismissedCompletionReviewIds, persistDismissedCompletionReviewIds])
 
   const cancelSearch = useCallback(async () => {
     if (!currentJobId) {
@@ -2635,6 +2812,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     recentRatingsReceived: ratingsReceived.slice(0, 8),
     walkerNameById,
     completionJob,
+    completionReviewJob,
     tipJob,
 
     activeJob,
@@ -2669,6 +2847,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     pendingCompletionConfirmation,
     confirmCompletion,
     rejectCompletion,
+    dismissCompletionReview,
     tipSubmitting,
     ratedJobIds,
 

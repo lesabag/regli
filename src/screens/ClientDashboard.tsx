@@ -2255,6 +2255,26 @@ export default function ClientDashboard({
         </div>
       )}
 
+      {!flow.pendingCompletionConfirmation && flow.completionReviewJob && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <div style={pendingConfirmCardStyle}>
+              <div style={pendingConfirmIconStyle}>⚠️</div>
+              <div style={pendingConfirmTitleStyle}>{t('completion.issueReported')}</div>
+              <div style={pendingConfirmSubtitleStyle}>{t('completion.reviewPendingSubtitle')}</div>
+              <button
+                type="button"
+                onClick={flow.dismissCompletionReview}
+                style={pendingConfirmBtnStyle}
+              >
+                {t('completion.closeReviewNotice')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {hasCompletionPrompt && flow.completionJob && (
         <div style={completionOverlayStyle}>
           <div style={completionOverlayBackdropStyle} />

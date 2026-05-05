@@ -1205,6 +1205,30 @@ export default function WalkerDashboard({
         </div>
       )}
 
+      {flow.reviewRequiredJob && !flow.completionSuccess && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <div
+              style={{
+                padding: '20px',
+                borderRadius: 28,
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
+              }}
+            >
+              <div style={{ ...checkStyle, background: '#FEF3C7', color: '#B45309' }}>⚠️</div>
+              <div style={completionTitleStyle}>{t('completion.issueUnderReview')}</div>
+              <div style={completionSubStyle}>{t('completion.reviewPendingSubtitle')}</div>
+              <button onClick={flow.dismissReviewRequired} style={dismissBtnStyle}>
+                {t('completion.backToDashboard')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {flow.completionSuccess && (
         <div style={completionOverlayStyle}>
           <div style={completionOverlayBackdropStyle} />
