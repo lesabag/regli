@@ -394,6 +394,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const lastAcceptedJobIdRef = useRef<string | null>(null)
   const candidateRequestIdsRef = useRef<Set<string>>(new Set())
   const assignedJobIdsRef = useRef<Set<string>>(new Set())
+  const currentWalkerIdRef = useRef<string | null>(profileId || null)
   const firstName = (profileName || '').split(' ')[0] || profileName
   const [isDocumentVisible, setIsDocumentVisible] = useState(() =>
     typeof document === 'undefined' ? true : !document.hidden,
@@ -1326,14 +1327,20 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const fetchAllRef = useRef(fetchAll)
   const isDocumentVisibleRef = useRef(isDocumentVisible)
+  const refreshOffersRef = useRef(fetchAll)
 
   useEffect(() => {
     fetchAllRef.current = fetchAll
+    refreshOffersRef.current = fetchAll
   }, [fetchAll])
 
   useEffect(() => {
     isDocumentVisibleRef.current = isDocumentVisible
   }, [isDocumentVisible])
+
+  useEffect(() => {
+    currentWalkerIdRef.current = profileId || null
+  }, [profileId])
 
   useEffect(() => {
     console.log('[useWalkerFlow] walker id state', {
@@ -1360,105 +1367,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (!isOnline || !isDocumentVisible) return
     void fetchAll()
   }, [fetchAll, isDocumentVisible, isOnline])
-
-  const handleDispatchAttemptRealtimeEvent = useCallback(
-    (
-      eventType: string,
-      payload:
-        | { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }
-        | undefined,
-    ) => {
-      const nextRecord =
-        typeof payload?.new === 'object' && payload.new ? payload.new : null
-      const previousRecord =
-        typeof payload?.old === 'object' && payload.old ? payload.old : null
-
-      const walkerId =
-        (typeof nextRecord?.walker_id === 'string' ? nextRecord.walker_id : null) ??
-        (typeof previousRecord?.walker_id === 'string' ? previousRecord.walker_id : null)
-      const requestId =
-        (typeof nextRecord?.request_id === 'string' ? nextRecord.request_id : null) ??
-        (typeof previousRecord?.request_id === 'string' ? previousRecord.request_id : null)
-      const status =
-        (typeof nextRecord?.status === 'string' ? nextRecord.status : null) ??
-        (typeof previousRecord?.status === 'string' ? previousRecord.status : null)
-      const matchedWalker = !!walkerId && walkerId === profileId
-
-      logDispatchRealtime('Realtime event received', {
-        profileId,
-        eventType,
-        payloadNew: nextRecord,
-        payloadOld: previousRecord,
-        walkerId,
-        requestId,
-        status,
-        matchedWalker,
-        attemptId:
-          (typeof nextRecord?.id === 'string' ? nextRecord.id : null) ??
-          (typeof previousRecord?.id === 'string' ? previousRecord.id : null),
-      })
-
-      if (!walkerId) {
-        logDispatchRealtime('ignored event reason: missing walker_id', {
-          profileId,
-          eventType,
-          requestId,
-          status,
-        })
-        return
-      }
-
-      if (walkerId !== profileId) {
-        logDispatchRealtime('ignored event reason: walker_id mismatch', {
-          profileId,
-          walkerId,
-          eventType,
-          requestId,
-          status,
-        })
-        return
-      }
-
-      if (!requestId) {
-        logDispatchRealtime('ignored event reason: missing request_id', {
-          profileId,
-          eventType,
-          status,
-        })
-        return
-      }
-
-      if (status !== 'pending') {
-        logDispatchRealtime('ignored event reason: irrelevant status', {
-          profileId,
-          eventType,
-          requestId,
-          status,
-        })
-        return
-      }
-
-      if (!isDocumentVisibleRef.current) {
-        logDispatchRealtime('ignored event reason: document hidden', {
-          profileId,
-          eventType,
-          requestId,
-          status,
-        })
-        return
-      }
-
-      logDispatchRealtime('Triggering refresh from realtime', {
-        eventType,
-        rowWalkerId: walkerId,
-        currentWalkerId: profileId,
-        requestId,
-      })
-      void fetchAllRef.current()
-    },
-    [profileId],
-  )
-
   const fetchRatings = useCallback(async () => {
     const { data: received } = await supabase.from('ratings').select('*').eq('to_user_id', profileId)
     setRatingsReceived((received as RatingRow[]) || [])
@@ -1691,18 +1599,20 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return
     }
 
-    const channelName = 'dispatch_attempts_global'
+    const walkerId = profileId
+    const channelName = `dispatch_attempts_provider_${walkerId}`
 
     console.log('[useWalkerFlow] realtime subscription created', {
-      currentUserProfileId: profileId,
-      currentWalkerIdCandidate: profileId,
+      currentUserProfileId: walkerId,
+      currentWalkerIdCandidate: walkerId,
       channelName,
     })
     logDispatchRealtime('subscription created with walker_id', {
-      currentWalkerId: profileId,
+      currentWalkerId: walkerId,
       channelName,
     })
 
+    let cleanedUp = false
     const channel = supabase
       .channel(channelName)
       .on(
@@ -1713,36 +1623,98 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           table: 'dispatch_attempts',
         },
         (payload) => {
-          handleDispatchAttemptRealtimeEvent(payload.eventType, payload)
+          const nextRecord =
+            typeof payload?.new === 'object' && payload.new ? payload.new : null
+          const previousRecord =
+            typeof payload?.old === 'object' && payload.old ? payload.old : null
+          const row = (nextRecord ?? previousRecord) as Record<string, unknown> | null
+          const rowWalkerId = typeof row?.['walker_id'] === 'string' ? row['walker_id'] : null
+          const requestId = typeof row?.['request_id'] === 'string' ? row['request_id'] : null
+          const status = typeof row?.['status'] === 'string' ? row['status'] : null
+          const currentWalkerId = currentWalkerIdRef.current
+          const matchedWalker = !!rowWalkerId && rowWalkerId === currentWalkerId
+
+          console.log('[useWalkerFlow] realtime event received', {
+            channelName,
+            eventType: payload.eventType,
+            currentWalkerId,
+            rowWalkerId,
+            requestId,
+            status,
+            matchedWalker,
+          })
+
+          logDispatchRealtime('Realtime event received', {
+            currentWalkerId,
+            channelName,
+            eventType: payload.eventType,
+            payloadNew: nextRecord,
+            payloadOld: previousRecord,
+            rowWalkerId,
+            requestId,
+            status,
+            matchedWalker,
+          })
+
+          if (!matchedWalker) {
+            return
+          }
+
+          console.log('[useWalkerFlow] matched walker id', {
+            channelName,
+            currentWalkerId,
+            rowWalkerId,
+            requestId,
+          })
+
+          if (status !== 'pending') {
+            return
+          }
+
+          console.log('[useWalkerFlow] refresh triggered', {
+            channelName,
+            currentWalkerId,
+            requestId,
+          })
+          logDispatchRealtime('refresh triggered', {
+            channelName,
+            currentWalkerId,
+            requestId,
+          })
+          void refreshOffersRef.current()
         },
       )
       .subscribe((status) => {
         console.log('[useWalkerFlow] realtime subscribe status', {
-          currentUserProfileId: profileId,
-          currentWalkerIdCandidate: profileId,
+          currentUserProfileId: walkerId,
+          currentWalkerIdCandidate: walkerId,
           channelName,
           status,
         })
         logDispatchRealtime('subscription status callback', {
-          currentWalkerId: profileId,
+          currentWalkerId: walkerId,
           channelName,
           status,
         })
       })
 
     return () => {
+      const cleanupReason = cleanedUp ? 'duplicate_cleanup' : currentWalkerIdRef.current === walkerId ? 'unmount' : 'walker_id_changed'
+      cleanedUp = true
       console.log('[useWalkerFlow] realtime subscription cleanup', {
-        currentUserProfileId: profileId,
-        currentWalkerIdCandidate: profileId,
+        currentUserProfileId: walkerId,
+        currentWalkerIdCandidate: walkerId,
         channelName,
+        cleanupReason,
       })
       logDispatchRealtime('subscription cleanup', {
-        currentWalkerId: profileId,
+        currentWalkerId: walkerId,
         channelName,
+        cleanupReason,
       })
       void supabase.removeChannel(channel)
     }
-  }, [profileId, handleDispatchAttemptRealtimeEvent])
+  }, [profileId])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
