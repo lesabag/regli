@@ -116,12 +116,19 @@ export default function SearchingSheet({
   onTryAgain,
 }: SearchingSheetProps) {
   const visual = useMemo(() => getMatchingVisual(serviceType), [serviceType])
-  const safeElapsedSeconds = searchStartedAt ? elapsedSeconds : 0
+  const hasSearchStarted = typeof searchStartedAt === 'number'
+  const initialElapsedSeconds = hasSearchStarted
+    ? Math.max(0, Math.floor((Date.now() - searchStartedAt) / 1000))
+    : 0
+  const safeElapsedSeconds = hasSearchStarted
+    ? Math.max(elapsedSeconds, initialElapsedSeconds)
+    : 0
 
   const progressWidth = useMemo(() => {
+    if (!hasSearchStarted) return '0%'
     const capped = Math.min(safeElapsedSeconds, 18)
     return `${Math.max(18, (capped / 18) * 100)}%`
-  }, [safeElapsedSeconds])
+  }, [hasSearchStarted, safeElapsedSeconds])
 
   if (mode === 'empty') {
     return (
