@@ -7,6 +7,19 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function normalizeCurrency(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z]{3}$/.test(normalized) ? normalized : null
+}
+
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
+}
+
 /**
  * Standalone transfer creation / retry.
  * Called manually (admin retry) or automatically after capture.
@@ -178,26 +191,83 @@ serve(async (req: Request) => {
     const netAmount = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
     const grossAmount = job.price ?? (job.amount != null ? job.amount / 100 : 0)
     const platformFee = job.platform_fee ?? Math.round(grossAmount * 0.2 * 100) / 100
-    const transferAmountSmallest = Math.round(netAmount * 100)
-
-    if (transferAmountSmallest <= 0) {
-      return new Response(
-        JSON.stringify({ error: 'Transfer amount is zero' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
     // Get charge ID and real currency directly from Stripe PI
     // CRITICAL: Do NOT use job.currency — it may be wrong (e.g. 'ils' when Stripe charge is 'usd')
     const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
-    let chargeId: string | undefined
-    let transferCurrency = 'usd' // safe default matching production Stripe account currency
+    const paymentIntentId = job.stripe_payment_intent_id
+    let paymentIntentCurrency: string | null = null
+    let latestChargeId: string | null = null
+    let chargeCurrency: string | null = null
+    let balanceTransactionCurrency: string | null = null
+    let balanceTransactionAmountSmallest: number | null = null
+    let transferCurrencyUsed: string | null = null
+    let sourceTransactionUsed: string | null = null
+    let stripeTransferAmountUsed: number | null = null
 
     if (job.stripe_payment_intent_id) {
       try {
-        const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
-        chargeId = pi.latest_charge as string | undefined
-        transferCurrency = pi.currency // authoritative currency from Stripe
+        const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id, {
+          expand: ['latest_charge.balance_transaction'],
+        })
+        paymentIntentCurrency = normalizeCurrency(pi.currency)
+        const latestCharge = typeof pi.latest_charge === 'string' ? null : pi.latest_charge
+        const balanceTransaction =
+          latestCharge && typeof latestCharge.balance_transaction !== 'string'
+            ? latestCharge.balance_transaction
+            : null
+
+        latestChargeId = latestCharge?.id ?? (typeof pi.latest_charge === 'string' ? pi.latest_charge : null)
+        chargeCurrency = normalizeCurrency(latestCharge?.currency)
+        balanceTransactionCurrency = normalizeCurrency(balanceTransaction?.currency)
+        balanceTransactionAmountSmallest =
+          typeof balanceTransaction?.amount === 'number' ? Math.abs(balanceTransaction.amount) : null
+        transferCurrencyUsed = balanceTransactionCurrency ?? chargeCurrency ?? paymentIntentCurrency
+        sourceTransactionUsed = latestChargeId
+        const normalizedJobCurrency = normalizeCurrency(job.currency)
+        if (normalizedJobCurrency && transferCurrencyUsed && normalizedJobCurrency !== transferCurrencyUsed) {
+          console.error('[create-transfer] CURRENCY MISMATCH detected:', {
+            jobId,
+            jobCurrency: normalizedJobCurrency,
+            paymentIntentId,
+            paymentIntentCurrency,
+            latestChargeId,
+            chargeCurrency,
+            balanceTransactionCurrency,
+            transferCurrencyUsed,
+            sourceTransactionUsed,
+          })
+          return new Response(
+            JSON.stringify({
+              error: 'Stripe source transaction currency does not match job currency',
+              paymentIntentId,
+              paymentIntentCurrency,
+              latestChargeId,
+              chargeCurrency,
+              balanceTransactionCurrency,
+              balanceTransactionAmountSmallest,
+              transferCurrencyUsed,
+              sourceTransactionUsed,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
+        }
+
+        if (!latestChargeId || !transferCurrencyUsed || !balanceTransactionAmountSmallest) {
+          return new Response(
+            JSON.stringify({
+              error: 'Missing Stripe charge or balance transaction details for transfer',
+              paymentIntentId,
+              paymentIntentCurrency,
+              latestChargeId,
+              chargeCurrency,
+              balanceTransactionCurrency,
+              balanceTransactionAmountSmallest,
+              transferCurrencyUsed,
+              sourceTransactionUsed,
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
+        }
       } catch (err) {
         console.error('[create-transfer] Failed to get PI — cannot determine currency:', err)
         return new Response(
@@ -212,6 +282,44 @@ serve(async (req: Request) => {
       )
     }
 
+    if (!transferCurrencyUsed) {
+      return new Response(
+        JSON.stringify({
+          error: 'Job has no currency — cannot determine transfer currency',
+          paymentIntentId,
+          paymentIntentCurrency,
+          latestChargeId,
+          chargeCurrency,
+          balanceTransactionCurrency,
+          balanceTransactionAmountSmallest,
+          transferCurrencyUsed,
+          sourceTransactionUsed,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const netRatio = clampRatio(netAmount / grossAmount)
+    stripeTransferAmountUsed = Math.round((balanceTransactionAmountSmallest ?? 0) * netRatio)
+
+    if (!(stripeTransferAmountUsed > 0)) {
+      return new Response(
+        JSON.stringify({
+          error: 'Derived transfer amount is zero',
+          paymentIntentId,
+          paymentIntentCurrency,
+          latestChargeId,
+          chargeCurrency,
+          balanceTransactionCurrency,
+          balanceTransactionAmountSmallest,
+          transferCurrencyUsed,
+          stripeTransferAmountUsed,
+          sourceTransactionUsed,
+        }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     // Ensure payout record exists with processing lock
     if (!existing) {
       await supabaseAdmin
@@ -222,7 +330,7 @@ serve(async (req: Request) => {
           gross_amount: grossAmount,
           platform_fee: platformFee,
           net_amount: netAmount,
-          currency: transferCurrency,
+          currency: transferCurrencyUsed,
           status: 'processing',
         })
         .then(({ error: insErr }) => {
@@ -235,7 +343,7 @@ serve(async (req: Request) => {
         .from('walker_payouts')
         .update({
           status: 'processing',
-          currency: transferCurrency,
+          currency: transferCurrencyUsed,
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id)
@@ -243,43 +351,66 @@ serve(async (req: Request) => {
     }
 
     console.log('[FINAL TRANSFER CALL]', {
-      transferCurrency,
+      paymentIntentId,
+      paymentIntentCurrency,
+      latestChargeId,
+      chargeCurrency,
+      balanceTransactionCurrency,
+      balanceTransactionAmountSmallest,
+      transferCurrencyUsed,
+      stripeTransferAmountUsed,
+      sourceTransactionUsed,
       jobCurrency: job.currency,
-      amount: transferAmountSmallest,
-      chargeId: chargeId || 'none',
       destination: walkerProfile.stripe_connect_account_id,
-      hasSourceTransaction: !!chargeId,
+      hasSourceTransaction: !!sourceTransactionUsed,
     })
 
     const transferParams: Stripe.TransferCreateParams = {
-      amount: transferAmountSmallest,
-      currency: transferCurrency,
+      amount: stripeTransferAmountUsed,
+      currency: transferCurrencyUsed,
       destination: walkerProfile.stripe_connect_account_id,
       metadata: {
         job_id: jobId,
         walker_id: walkerId,
         payment_intent_id: job.stripe_payment_intent_id,
+        payment_intent_currency: paymentIntentCurrency ?? '',
+        charge_currency: chargeCurrency ?? '',
+        balance_transaction_currency: balanceTransactionCurrency ?? '',
+        balance_transaction_amount: String(balanceTransactionAmountSmallest ?? ''),
+        stripe_transfer_amount_used: String(stripeTransferAmountUsed),
+        job_currency: normalizeCurrency(job.currency) ?? '',
+        job_gross_amount: grossAmount.toFixed(2),
+        job_net_amount: netAmount.toFixed(2),
       },
     }
 
-    // source_transaction links transfer to the specific charge.
-    // Stripe inherits transfer_group from the charge, so we must NOT set it again.
-    if (chargeId) {
-      transferParams.source_transaction = chargeId
-    } else {
-      transferParams.transfer_group = jobId
+    if (!sourceTransactionUsed) {
+      return new Response(
+        JSON.stringify({
+          error: 'Missing source transaction for transfer',
+          paymentIntentId,
+          paymentIntentCurrency,
+          latestChargeId,
+          chargeCurrency,
+          balanceTransactionCurrency,
+          transferCurrencyUsed,
+          sourceTransactionUsed,
+        }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
+    transferParams.source_transaction = sourceTransactionUsed
 
     const transfer = await stripe.transfers.create(transferParams)
 
-    console.log('[create-transfer] Created:', transfer.id, 'for job', jobId, 'currency', transferCurrency)
+    console.log('[create-transfer] Created:', transfer.id, 'for job', jobId, 'amount', stripeTransferAmountUsed, 'currency', transferCurrencyUsed)
 
     await supabaseAdmin
       .from('walker_payouts')
       .update({
         stripe_transfer_id: transfer.id,
         status: 'transferred',
-        currency: transferCurrency,
+        currency: transferCurrencyUsed,
         failure_reason: null,
         updated_at: new Date().toISOString(),
       })
@@ -289,8 +420,17 @@ serve(async (req: Request) => {
       JSON.stringify({
         success: true,
         transferId: transfer.id,
-        amount: transferAmountSmallest,
-        currency: transferCurrency,
+        amount: stripeTransferAmountUsed,
+        currency: transferCurrencyUsed,
+        paymentIntentId,
+        paymentIntentCurrency,
+        latestChargeId,
+        chargeCurrency,
+        balanceTransactionCurrency,
+        balanceTransactionAmountSmallest,
+        transferCurrencyUsed,
+        stripeTransferAmountUsed,
+        sourceTransactionUsed,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v4_require_authorized_pi_2026_04_22'
+const FUNCTION_VERSION = 'v_currency_pi_source_2026_05_05'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,8 +16,18 @@ const SERVICE_PRICES: Record<string, number> = {
 }
 
 const PLATFORM_FEE_PERCENT = 20
-const CURRENCY = 'ils'
 const SCHEDULE_TIMEZONE = 'Asia/Jerusalem'
+const DEFAULT_MARKET_CURRENCY = 'ils'
+
+function normalizeCurrency(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z]{3}$/.test(normalized) ? normalized : null
+}
+
+function resolveJobCurrency(value: string | null | undefined): string {
+  return normalizeCurrency(value) ?? DEFAULT_MARKET_CURRENCY
+}
 
 function parseTimeZoneOffsetMinutes(offsetLabel: string): number | null {
   const normalized = offsetLabel.replace('UTC', 'GMT')
@@ -154,6 +164,7 @@ serve(async (req: Request) => {
       location?: string
       notes?: string
       serviceType?: string
+      currency?: string
       walkerId?: string
       customerId?: string
       paymentMethodId?: string
@@ -176,6 +187,7 @@ serve(async (req: Request) => {
       location,
       notes,
       serviceType,
+      currency: requestedCurrency,
       walkerId,
       customerId,
       paymentMethodId,
@@ -336,6 +348,7 @@ serve(async (req: Request) => {
     const amount = Math.round(baseAmount * surgeMultiplier)
     const platformFee = Math.round((amount * PLATFORM_FEE_PERCENT) / 100)
     const walkerAmount = amount - platformFee
+    const jobCurrency = resolveJobCurrency(requestedCurrency)
 
     if (!customerId || !paymentMethodId) {
       console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing saved payment method`, {
@@ -393,7 +406,7 @@ serve(async (req: Request) => {
     const sixtySecondsAgo = new Date(Date.now() - 60_000).toISOString()
     let dupQuery = supabaseAdmin
       .from('walk_requests')
-      .select('id, stripe_payment_intent_id, stripe_client_secret')
+      .select('id, stripe_payment_intent_id, stripe_client_secret, currency')
       .eq('client_id', user.id)
       .eq('dog_name', dogName.trim())
       .eq('status', 'awaiting_payment')
@@ -410,16 +423,20 @@ serve(async (req: Request) => {
 
     if (existingJob) {
       let actualPaymentStatus = 'requires_payment_method'
+      let stripeCurrencyUsed = normalizeCurrency(existingJob.currency) ?? jobCurrency
 
       if (existingJob.stripe_payment_intent_id) {
         try {
           const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
           const pi = await stripe.paymentIntents.retrieve(existingJob.stripe_payment_intent_id)
           actualPaymentStatus = pi.status
+          stripeCurrencyUsed = normalizeCurrency(pi.currency) ?? stripeCurrencyUsed
           console.log(`[create-payment-intent][${FUNCTION_VERSION}] Idempotent duplicate found:`, {
             jobId: existingJob.id,
             piId: pi.id,
             actualStatus: pi.status,
+            requestCurrency: jobCurrency,
+            stripeCurrencyUsed,
             paymentMethodAttached: !!pi.payment_method,
           })
         } catch (err) {
@@ -458,6 +475,8 @@ serve(async (req: Request) => {
             amount,
             platformFee,
             walkerAmount,
+            requestCurrency: jobCurrency,
+            stripeCurrencyUsed,
             paymentStatus: actualPaymentStatus,
             duplicate: true,
             _v: FUNCTION_VERSION,
@@ -472,6 +491,7 @@ serve(async (req: Request) => {
       service_type: serviceType,
       dog_name: dogName.trim(),
       booking_timing: bookingTiming,
+      currency: jobCurrency,
     }
 
     if (normalizedScheduledFor) {
@@ -485,7 +505,7 @@ serve(async (req: Request) => {
 
     const piParams: Record<string, unknown> = {
       amount,
-      currency: CURRENCY,
+      currency: jobCurrency,
       capture_method: 'manual',
       transfer_group: `job_${Date.now()}`,
       metadata,
@@ -513,6 +533,8 @@ serve(async (req: Request) => {
 
     console.log(`[create-payment-intent][${FUNCTION_VERSION}] PI created:`, {
       id: paymentIntent.id,
+      requestCurrency: jobCurrency,
+      stripeCurrencyUsed: paymentIntent.currency,
       status: paymentIntent.status,
       amount: paymentIntent.amount,
       confirmRequested: true,
@@ -578,7 +600,7 @@ serve(async (req: Request) => {
         requested_window_minutes:
           serviceType === 'quick' ? 20 : serviceType === 'standard' ? 40 : serviceType === 'energy' ? 60 : null,
         amount,
-        currency: CURRENCY,
+        currency: jobCurrency,
         platform_fee_percent: PLATFORM_FEE_PERCENT,
         platform_fee: platformFee / 100,
         walker_amount: walkerAmount / 100,
@@ -607,6 +629,7 @@ serve(async (req: Request) => {
       jobId: job.id,
       paymentIntentId: paymentIntent.id,
       paymentIntentStatus: paymentIntent.status,
+      currency: jobCurrency,
       paymentStatus: initialPaymentStatus,
       paymentMethodAttached: !!paymentIntent.payment_method,
     })
@@ -631,6 +654,9 @@ serve(async (req: Request) => {
         amount,
         platformFee,
         walkerAmount,
+        requestCurrency: jobCurrency,
+        currency: paymentIntent.currency,
+        stripeCurrencyUsed: paymentIntent.currency,
         paymentStatus: paymentIntent.status,
         _v: FUNCTION_VERSION,
       }),

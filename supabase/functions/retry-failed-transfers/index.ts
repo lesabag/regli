@@ -2,6 +2,12 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
+function normalizeCurrency(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z]{3}$/.test(normalized) ? normalized : null
+}
+
 /**
  * Retry failed transfers with exponential backoff.
  * Intended to be called via cron (e.g. every 5 minutes) or manually by admin.
@@ -184,13 +190,23 @@ serve(async (req: Request) => {
       // Get charge ID and real currency directly from Stripe PI
       // CRITICAL: Do NOT use payout.currency or job.currency — may be wrong
       let chargeId: string | undefined
-      let transferCurrency = 'usd' // safe default matching production Stripe account currency
+      let transferCurrency: string | null = normalizeCurrency(job.currency) ?? normalizeCurrency(payout.currency)
 
       if (job.stripe_payment_intent_id) {
         try {
           const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
           chargeId = pi.latest_charge as string | undefined
           transferCurrency = pi.currency // authoritative currency from Stripe
+          const normalizedJobCurrency = normalizeCurrency(job.currency)
+          if (normalizedJobCurrency && normalizedJobCurrency !== pi.currency) {
+            console.error('[retry] CURRENCY MISMATCH detected:', {
+              jobId: payout.job_id,
+              jobCurrency: normalizedJobCurrency,
+              payoutCurrency: payout.currency,
+              stripeCurrency: pi.currency,
+              paymentIntentId: pi.id,
+            })
+          }
         } catch (err) {
           console.error(`[retry] Failed to get PI for job ${payout.job_id}:`, err)
           // Revert to failed — cannot determine currency without PI
@@ -217,6 +233,21 @@ serve(async (req: Request) => {
           })
           .eq('id', payout.id)
         results.push({ job_id: payout.job_id, success: false, error: 'No PI on job' })
+        continue
+      }
+
+      if (!transferCurrency) {
+        await supabaseAdmin
+          .from('walker_payouts')
+          .update({
+            status: 'failed',
+            failure_reason: 'Job has no currency — cannot determine transfer currency',
+            retry_count: payout.retry_count + 1,
+            next_retry_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', payout.id)
+        results.push({ job_id: payout.job_id, success: false, error: 'No currency on job' })
         continue
       }
 
