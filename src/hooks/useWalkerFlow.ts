@@ -194,12 +194,23 @@ function startsInMinutes(value: string | null | undefined): number | null {
 const AUTO_DISPATCH_LEAD_MINUTES = 15
 const AUTO_DISPATCH_POLL_MS = 20_000
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
-const IDLE_WALKER_POLL_MS = 12_000
+const IDLE_WALKER_POLL_MS = 20_000
 const ACTIVE_WALKER_POLL_MS = 4_000
 const IDLE_LOCATION_BROADCAST_MS = 15_000
 const ACTIVE_LOCATION_BROADCAST_MS = 5_000
 const CONNECT_STATUS_RETRY_DELAY_MS = 1_000
 const CONNECT_STATUS_MAX_ATTEMPTS = 3
+
+function logDispatchRealtime(message: string, details?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return
+  console.log('[useWalkerFlow][dispatch-realtime]', message, details ?? {})
+}
+
+declare global {
+  interface Window {
+    __regliRefreshWalkerOffers?: (() => void) | undefined
+  }
+}
 
 function completionDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_dismissed_${profileId}`
@@ -307,6 +318,13 @@ function shouldAutoDispatch(job: {
 }
 
 export function useWalkerFlow(profileId: string, profileName: string) {
+  useEffect(() => {
+    console.log('[useWalkerFlow] mounted', {
+      profileId,
+      profileName,
+    })
+  }, [profileId, profileName])
+
   const [openJobs, setOpenJobs] = useState<WalkRequestRow[]>([])
   const [myJobs, setMyJobs] = useState<WalkRequestRow[]>([])
   const [activeOffers, setActiveOffers] = useState<DispatchOfferRow[]>([])
@@ -1306,6 +1324,27 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setLoading(false)
   }, [profileId, declinedIds, clearRetainedIncomingOffer])
 
+  const fetchAllRef = useRef(fetchAll)
+  const isDocumentVisibleRef = useRef(isDocumentVisible)
+
+  useEffect(() => {
+    fetchAllRef.current = fetchAll
+  }, [fetchAll])
+
+  useEffect(() => {
+    isDocumentVisibleRef.current = isDocumentVisible
+  }, [isDocumentVisible])
+
+  useEffect(() => {
+    console.log('[useWalkerFlow] walker id state', {
+      currentUserProfileId: profileId,
+      currentWalkerIdCandidate: profileId,
+      isDocumentVisible,
+      isOnline,
+      onlineLoading,
+    })
+  }, [profileId, isDocumentVisible, isOnline, onlineLoading])
+
 
   useEffect(() => {
     if (!isOnline || !isDocumentVisible) return
@@ -1321,6 +1360,104 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (!isOnline || !isDocumentVisible) return
     void fetchAll()
   }, [fetchAll, isDocumentVisible, isOnline])
+
+  const handleDispatchAttemptRealtimeEvent = useCallback(
+    (
+      eventType: string,
+      payload:
+        | { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }
+        | undefined,
+    ) => {
+      const nextRecord =
+        typeof payload?.new === 'object' && payload.new ? payload.new : null
+      const previousRecord =
+        typeof payload?.old === 'object' && payload.old ? payload.old : null
+
+      const walkerId =
+        (typeof nextRecord?.walker_id === 'string' ? nextRecord.walker_id : null) ??
+        (typeof previousRecord?.walker_id === 'string' ? previousRecord.walker_id : null)
+      const requestId =
+        (typeof nextRecord?.request_id === 'string' ? nextRecord.request_id : null) ??
+        (typeof previousRecord?.request_id === 'string' ? previousRecord.request_id : null)
+      const status =
+        (typeof nextRecord?.status === 'string' ? nextRecord.status : null) ??
+        (typeof previousRecord?.status === 'string' ? previousRecord.status : null)
+      const matchedWalker = !!walkerId && walkerId === profileId
+
+      logDispatchRealtime('Realtime event received', {
+        profileId,
+        eventType,
+        payloadNew: nextRecord,
+        payloadOld: previousRecord,
+        walkerId,
+        requestId,
+        status,
+        matchedWalker,
+        attemptId:
+          (typeof nextRecord?.id === 'string' ? nextRecord.id : null) ??
+          (typeof previousRecord?.id === 'string' ? previousRecord.id : null),
+      })
+
+      if (!walkerId) {
+        logDispatchRealtime('ignored event reason: missing walker_id', {
+          profileId,
+          eventType,
+          requestId,
+          status,
+        })
+        return
+      }
+
+      if (walkerId !== profileId) {
+        logDispatchRealtime('ignored event reason: walker_id mismatch', {
+          profileId,
+          walkerId,
+          eventType,
+          requestId,
+          status,
+        })
+        return
+      }
+
+      if (!requestId) {
+        logDispatchRealtime('ignored event reason: missing request_id', {
+          profileId,
+          eventType,
+          status,
+        })
+        return
+      }
+
+      if (status !== 'pending') {
+        logDispatchRealtime('ignored event reason: irrelevant status', {
+          profileId,
+          eventType,
+          requestId,
+          status,
+        })
+        return
+      }
+
+      if (!isDocumentVisibleRef.current) {
+        logDispatchRealtime('ignored event reason: document hidden', {
+          profileId,
+          eventType,
+          requestId,
+          status,
+        })
+        return
+      }
+
+      logDispatchRealtime('Triggering refresh from realtime', {
+        eventType,
+        rowWalkerId: walkerId,
+        currentWalkerId: profileId,
+        requestId,
+      })
+      void fetchAllRef.current()
+    },
+    [profileId],
+  )
 
   const fetchRatings = useCallback(async () => {
     const { data: received } = await supabase.from('ratings').select('*').eq('to_user_id', profileId)
@@ -1507,29 +1644,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             void fetchAll()
           },
         )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'dispatch_attempts' },
-          (payload) => {
-            if (!isDocumentVisible) return
-            const requestId =
-              (typeof payload.new === 'object' && payload.new && 'request_id' in payload.new
-                ? String(payload.new.request_id ?? '')
-                : '') ||
-              (typeof payload.old === 'object' && payload.old && 'request_id' in payload.old
-                ? String(payload.old.request_id ?? '')
-                : '')
-
-            if (
-              requestId &&
-              !candidateRequestIdsRef.current.has(requestId) &&
-              !assignedJobIdsRef.current.has(requestId)
-            ) {
-              return
-            }
-            void fetchAll()
-          },
-        )
         .subscribe()
 
       ch6 = supabase
@@ -1566,6 +1680,84 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     fetchOnlineStatus,
     isDocumentVisible,
   ])
+
+  useEffect(() => {
+    if (!profileId) {
+      console.log('[useWalkerFlow] realtime setup skipped: missing walker id', {
+        currentUserProfileId: profileId,
+        currentWalkerIdCandidate: profileId,
+      })
+      logDispatchRealtime('subscription skipped: missing walker_id')
+      return
+    }
+
+    const channelName = 'dispatch_attempts_global'
+
+    console.log('[useWalkerFlow] realtime subscription created', {
+      currentUserProfileId: profileId,
+      currentWalkerIdCandidate: profileId,
+      channelName,
+    })
+    logDispatchRealtime('subscription created with walker_id', {
+      currentWalkerId: profileId,
+      channelName,
+    })
+
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'dispatch_attempts',
+        },
+        (payload) => {
+          handleDispatchAttemptRealtimeEvent(payload.eventType, payload)
+        },
+      )
+      .subscribe((status) => {
+        console.log('[useWalkerFlow] realtime subscribe status', {
+          currentUserProfileId: profileId,
+          currentWalkerIdCandidate: profileId,
+          channelName,
+          status,
+        })
+        logDispatchRealtime('subscription status callback', {
+          currentWalkerId: profileId,
+          channelName,
+          status,
+        })
+      })
+
+    return () => {
+      console.log('[useWalkerFlow] realtime subscription cleanup', {
+        currentUserProfileId: profileId,
+        currentWalkerIdCandidate: profileId,
+        channelName,
+      })
+      logDispatchRealtime('subscription cleanup', {
+        currentWalkerId: profileId,
+        channelName,
+      })
+      void supabase.removeChannel(channel)
+    }
+  }, [profileId, handleDispatchAttemptRealtimeEvent])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+
+    window.__regliRefreshWalkerOffers = () => {
+      logDispatchRealtime('manual refresh invoked', { currentWalkerId: profileId })
+      void fetchAllRef.current()
+    }
+
+    return () => {
+      if (window.__regliRefreshWalkerOffers) {
+        delete window.__regliRefreshWalkerOffers
+      }
+    }
+  }, [profileId])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
