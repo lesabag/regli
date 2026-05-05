@@ -7,6 +7,7 @@ import dogCharacterImg from '../assets/matching/dog.svg'
 import technicianImg from '../assets/matching/technician.svg'
 
 interface SearchingSheetProps {
+  searchStartedAt: number | null
   elapsedSeconds: number
   durationLabel: string
   priceLabel: string
@@ -103,6 +104,7 @@ function formatElapsed(seconds: number): string {
 }
 
 export default function SearchingSheet({
+  searchStartedAt,
   elapsedSeconds,
   durationLabel,
   priceLabel,
@@ -114,11 +116,12 @@ export default function SearchingSheet({
   onTryAgain,
 }: SearchingSheetProps) {
   const visual = useMemo(() => getMatchingVisual(serviceType), [serviceType])
+  const safeElapsedSeconds = searchStartedAt ? elapsedSeconds : 0
 
   const progressWidth = useMemo(() => {
-    const capped = Math.min(elapsedSeconds, 18)
+    const capped = Math.min(safeElapsedSeconds, 18)
     return `${Math.max(18, (capped / 18) * 100)}%`
-  }, [elapsedSeconds])
+  }, [safeElapsedSeconds])
 
   if (mode === 'empty') {
     return (
@@ -164,7 +167,7 @@ export default function SearchingSheet({
           <h2 style={titleStyle}>{visual.title}</h2>
           <div style={timerRowStyle}>
             <span style={liveDotStyle} />
-            <span style={timerValueStyle}>{formatElapsed(elapsedSeconds)}</span>
+            <span style={timerValueStyle}>{formatElapsed(safeElapsedSeconds)}</span>
           </div>
         </div>
       </div>

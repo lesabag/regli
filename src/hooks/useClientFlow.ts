@@ -76,6 +76,12 @@ type CapturePaymentResponse = {
   alreadyCaptured?: boolean
 }
 
+type ReverseGeocodeOptions = {
+  force?: boolean
+}
+
+type AddressSource = 'gps' | 'manual'
+
 type WalkRequestRow = {
   id: string
   client_id: string
@@ -377,6 +383,10 @@ function reusableServiceNameStorageKey(profileId: string): string {
   return `regli_client_reusable_service_name_${profileId}`
 }
 
+function addressSourceStorageKey(profileId: string): string {
+  return `regli_client_address_source_${profileId}`
+}
+
 function isFutureScheduledJob(job: WalkRequestRow): boolean {
   if (job.booking_timing !== 'scheduled') return false
   if (job.status === 'completed' || job.status === 'cancelled') return false
@@ -440,6 +450,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
+  const [searchClockNow, setSearchClockNow] = useState(() => Date.now())
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const [currentJob, setCurrentJob] = useState<WalkRequestRow | null>(null)
 
@@ -468,6 +479,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const [userLocationBase, setUserLocationBase] = useState<[number, number] | null>(null)
   const [locationLoading, setLocationLoading] = useState(true)
+  const [locationRefreshing, setLocationRefreshing] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
+  const [addressSource, setAddressSource] = useState<AddressSource>('gps')
   const [walkerNameById, setWalkerNameById] = useState<Map<string, string>>(new Map())
   const [upcomingJobs, setUpcomingJobs] = useState<WalkRequestRow[]>([])
   const [completedJobs, setCompletedJobs] = useState<Array<WalkRequestRow & { hidden_by_client?: boolean; tip_amount?: number | null }>>([])
@@ -497,6 +511,38 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const dismissedExhaustedRequestIdRef = useRef<string | null>(null)
   const fullRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const currentOnlyRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const addressSourceRef = useRef<AddressSource>('gps')
+  const searchStartTimeRef = useRef<number | null>(null)
+
+  const setAddressSourceValue = useCallback(
+    (nextSource: AddressSource) => {
+      addressSourceRef.current = nextSource
+      setAddressSource(nextSource)
+      try {
+        window.localStorage.setItem(addressSourceStorageKey(profileId), nextSource)
+      } catch {
+        // noop
+      }
+    },
+    [profileId],
+  )
+
+  const beginSearchAttempt = useCallback(() => {
+    const startedAt = Date.now()
+    if (import.meta.env.DEV) {
+      console.log('[search timer] start', startedAt, 'request_walk')
+    }
+    searchStartTimeRef.current = startedAt
+    setSearchClockNow(startedAt)
+    setSearchStartTime(startedAt)
+    return startedAt
+  }, [])
+
+  const clearSearchAttempt = useCallback(() => {
+    searchStartTimeRef.current = null
+    setSearchStartTime(null)
+    setSearchClockNow(Date.now())
+  }, [])
 
   useEffect(() => {
     try {
@@ -517,6 +563,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
     } catch {
       // noop
     }
+  }, [profileId])
+
+  useEffect(() => {
+    let nextSource: AddressSource = 'gps'
+    try {
+      const stored = window.localStorage.getItem(addressSourceStorageKey(profileId))
+      if (stored === 'manual' || stored === 'gps') {
+        nextSource = stored
+      }
+    } catch {
+      // noop
+    }
+    addressSourceRef.current = nextSource
+    setAddressSource(nextSource)
   }, [profileId])
 
   useEffect(() => {
@@ -593,16 +653,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
     return 2 * earthRadius * Math.asin(Math.sqrt(h))
   }, [])
 
-  const reverseGeocodeRef = useRef<((lat: number, lng: number) => Promise<void>) | null>(null)
+  const reverseGeocodeRef = useRef<((lat: number, lng: number, options?: ReverseGeocodeOptions) => Promise<string>) | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
-    reverseGeocodeRef.current = async (lat: number, lng: number) => {
+    reverseGeocodeRef.current = async (lat: number, lng: number, options?: ReverseGeocodeOptions) => {
+      const force = options?.force === true
       const nextCoords: [number, number] = [lat, lng]
       const lastCoords = lastGeocodeCoordsRef.current
-      if (lastCoords && geoDistanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
-        return
+      if (!force && lastCoords && geoDistanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
+        return latestResolvedLocationRef.current || location.trim() || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
       }
 
       lastGeocodeCoordsRef.current = nextCoords
@@ -615,12 +676,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
         const data = await res.json()
         if (cancelled) return
 
-        const address =
-          formatShortAddress(data?.display_name, data?.address) ||
-          data?.display_name ||
-          `${lat.toFixed(4)}, ${lng.toFixed(4)}`
+        const formattedAddress = formatShortAddress(data?.display_name, data?.address)
+        const displayAddress =
+          typeof data?.display_name === 'string' &&
+          !/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(data.display_name.trim())
+            ? data.display_name.trim()
+            : ''
+        const address = formattedAddress || displayAddress
+
+        if (!address) {
+          throw new Error('Reverse geocode did not return a human-readable address')
+        }
 
         _setLocation((prev) => {
+          if (force) {
+            lastAutoLocationRef.current = address
+            latestResolvedLocationRef.current = address
+            return address
+          }
           const trimmedPrev = prev.trim()
           if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
             const prevHasNumber = /\d/.test(trimmedPrev)
@@ -635,23 +708,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }
           return prev
         })
+        return address
       } catch {
-        if (cancelled) return
-        _setLocation((prev) => {
-          const fallback = `${lat.toFixed(4)}, ${lng.toFixed(4)}`
-          const trimmedPrev = prev.trim()
-          if (!trimmedPrev || trimmedPrev === lastAutoLocationRef.current) {
-            lastAutoLocationRef.current = fallback
-            latestResolvedLocationRef.current = fallback
-            return fallback
-          }
-          return prev
-        })
+        if (cancelled) return latestResolvedLocationRef.current || location.trim()
+        const previousReadableAddress =
+          latestResolvedLocationRef.current.trim() ||
+          location.trim() ||
+          lastAutoLocationRef.current.trim()
+
+        if (force) {
+          setLocationError(i18n.t('addressPicker.locationError'))
+        }
+
+        return previousReadableAddress
       }
     }
 
     return () => { cancelled = true }
-  }, [geoDistanceMeters])
+  }, [geoDistanceMeters, location])
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -669,7 +743,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setUserLocationBase([lat, lng])
       setGpsQualityBase('live')
       setLocationLoading(false)
-      if (reverseGeocodeRef.current) void reverseGeocodeRef.current(lat, lng)
+      if (addressSourceRef.current === 'gps' && reverseGeocodeRef.current) {
+        void reverseGeocodeRef.current(lat, lng, { force: true })
+      }
     }
 
     const onError = () => {
@@ -710,26 +786,64 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
   }, [])
 
-  const refreshLocation = useCallback(() => {
-    if (!navigator.geolocation) return
+  useEffect(() => {
+    if (screenState !== 'searching' || !searchStartTime) return
+
+    setSearchClockNow(Date.now())
+    const id = window.setInterval(() => {
+      setSearchClockNow(Date.now())
+    }, 1000)
+
+    return () => window.clearInterval(id)
+  }, [screenState, searchStartTime])
+
+  const refreshLocation = useCallback(async () => {
+    if (!navigator.geolocation) {
+      setGpsQualityBase('offline')
+      setLocationError(i18n.t('addressPicker.locationError'))
+      return false
+    }
+
+    setLocationRefreshing(true)
+    setLocationError(null)
+    setError(null)
+    setAddressSourceValue('gps')
     lastAutoLocationRef.current = ''
     lastGeocodeCoordsRef.current = null
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude
-        const lng = pos.coords.longitude
-        setUserLocationBase([lat, lng])
-        setGpsQualityBase('live')
-        if (reverseGeocodeRef.current) void reverseGeocodeRef.current(lat, lng)
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
-    )
-  }, [])
+
+    return await new Promise<boolean>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const lat = pos.coords.latitude
+          const lng = pos.coords.longitude
+          setUserLocationBase([lat, lng])
+          setGpsQualityBase('live')
+          try {
+            if (reverseGeocodeRef.current) {
+              await reverseGeocodeRef.current(lat, lng, { force: true })
+            }
+            resolve(true)
+          } finally {
+            setLocationRefreshing(false)
+          }
+        },
+        () => {
+          setGpsQualityBase('offline')
+          const message = i18n.t('addressPicker.locationError')
+          setLocationError(message)
+          setError(message)
+          setLocationRefreshing(false)
+          resolve(false)
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 },
+      )
+    })
+  }, [setAddressSourceValue])
 
   const clearError = useCallback(() => {
     setError(null)
     setCompletionConfirmError(null)
+    setLocationError(null)
   }, [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const clearAvailabilityNotice = useCallback(() => setAvailabilityNotice(null), [])
@@ -748,8 +862,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setScreenPhase('idle')
     setCurrentJob(null)
     setCurrentJobId(null)
-    setSearchStartTime(null)
-  }, [currentJob, currentJobId])
+    clearSearchAttempt()
+  }, [clearSearchAttempt, currentJob, currentJobId])
   const clearExhaustedRequestForRetry = useCallback(() => {
     dismissExhaustedRequest()
   }, [dismissExhaustedRequest])
@@ -840,10 +954,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const setLocation = useCallback(
     (value: string) => {
       lastAutoLocationRef.current = ''
+      setLocationError(null)
+      setAddressSourceValue('manual')
       _setLocation(value)
       persistBookingDraft({ location: value })
     },
-    [persistBookingDraft],
+    [persistBookingDraft, setAddressSourceValue],
   )
 
   const setDuration = useCallback(
@@ -873,7 +989,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const surgeMultiplier = 1
   const surgeLevel: SurgeLevel = 'normal'
 
-  const elapsedSeconds = searchStartTime ? Math.floor((Date.now() - searchStartTime) / 1000) : 0
+  const elapsedSeconds = searchStartTime ? Math.floor((searchClockNow - searchStartTime) / 1000) : 0
 
   const selectedDuration = { label: duration ?? '' }
   const adjustedPriceILS = duration === '20min' ? 36 : duration === '40min' ? 60 : duration === '60min' ? 80 : 0
@@ -1118,8 +1234,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setScreenPhase('idle')
     setCurrentJob(null)
     setCurrentJobId(null)
-    setSearchStartTime(null)
-  }, [])
+    clearSearchAttempt()
+  }, [clearSearchAttempt])
+
+  const resetBookingComposerAfterCompletion = useCallback(() => {
+    setBookingTiming('asap')
+    setScheduledFor(getNowPlus15LocalInput())
+    _setDuration(null)
+    setLoading(false)
+    setError(null)
+    setSuccessMessage(null)
+    setAvailabilityNotice(null)
+    setPendingCompletionConfirmation(null)
+    setCompletionConfirmError(null)
+    setCompletionConfirming(false)
+    setCompletionRatingSubmitting(false)
+    setTipSubmitting(false)
+    clearActiveState()
+  }, [clearActiveState])
 
   const applyCurrentRows = useCallback((currentRows: WalkRequestRow[]) => {
     const row = getNewestActiveRequest(
@@ -1134,6 +1266,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
     )
 
     if (!row) {
+      if (screenState === 'searching' && currentJobId) {
+        return
+      }
       if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
         const belongsToCurrentFlow =
           exhaustedRow.id === currentJobId ||
@@ -1146,7 +1281,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           lastActiveJobIdRef.current = exhaustedRow.id
           setScreenPhase('idle')
           setScreenState('idle')
-          setSearchStartTime(null)
+          clearSearchAttempt()
           showDispatchExhaustedMessage(exhaustedRow.id)
           return
         }
@@ -1165,11 +1300,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setScreenPhase(nextPhase)
     setScreenState(mapScreenStateFromPhase(nextPhase))
     if (row.status === 'accepted') {
-      setSearchStartTime(null)
-    } else if ((row.status === 'open' || row.status === 'awaiting_payment') && isCurrentClientJob(row)) {
-      setSearchStartTime((prev) => prev ?? Date.now())
+      clearSearchAttempt()
     }
   }, [
+    clearSearchAttempt,
     clearActiveState,
     currentJobId,
     loadWalkerName,
@@ -1481,7 +1615,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             lastActiveJobIdRef.current = updated.id
             setScreenPhase('idle')
             setScreenState('idle')
-            setSearchStartTime(null)
+            clearSearchAttempt()
             showDispatchExhaustedMessage(updated.id)
             void fetchCurrentAndLists()
             return
@@ -1499,7 +1633,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
-            setSearchStartTime((prev) => prev ?? Date.now())
             setScreenPhase(nextPhase)
             setScreenState(mapScreenStateFromPhase(nextPhase))
           }
@@ -1509,7 +1642,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
-            setSearchStartTime(null)
+            clearSearchAttempt()
             setScreenPhase(nextPhase)
             setScreenState(mapScreenStateFromPhase(nextPhase))
 
@@ -1598,7 +1731,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 lastActiveJobIdRef.current = updated.id
                 setScreenPhase('idle')
                 setScreenState('idle')
-                setSearchStartTime(null)
+                clearSearchAttempt()
                 showDispatchExhaustedMessage(updated.id)
                 void fetchCurrentAndLists()
                 return
@@ -2140,10 +2273,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
         } catch {
           // noop
         }
+      } else {
+        resetBookingComposerAfterCompletion()
       }
       return null
     })
-  }, [profileId])
+  }, [profileId, resetBookingComposerAfterCompletion])
 
   const submitTip = useCallback(
     async (amount: number) => {
@@ -2181,17 +2316,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
       setTipSubmitting(false)
       setTipJob(null)
-      _setDuration(null)
+      resetBookingComposerAfterCompletion()
       setSuccessMessage('Tip saved')
       void fetchCurrentAndLists()
     },
-    [fetchCurrentAndLists, profileId, tipJob],
+    [fetchCurrentAndLists, profileId, resetBookingComposerAfterCompletion, tipJob],
   )
 
   const dismissTip = useCallback(() => {
     setTipJob(null)
-    _setDuration(null)
-  }, [])
+    resetBookingComposerAfterCompletion()
+  }, [resetBookingComposerAfterCompletion])
 
   const requestWalk = useCallback(async () => {
     if (!dogName.trim()) {
@@ -2387,7 +2522,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
         }
 
-        setSearchStartTime(Date.now())
+        beginSearchAttempt()
         setScreenState('searching')
         setScreenPhase('searching')
         setSuccessMessage('Searching for a walker...')
@@ -2396,7 +2531,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         dismissedExhaustedRequestIdRef.current = null
         setBookingTiming('asap')
         setScheduledFor(null)
-        setSearchStartTime(null)
+        clearSearchAttempt()
         setScreenState('idle')
         setCurrentJob(null)
         setCurrentJobId(null)
@@ -2424,7 +2559,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setAvailabilityNotice(null)
       }
       setScreenState('idle')
-      setSearchStartTime(null)
+      clearSearchAttempt()
       setCurrentJob(null)
       setCurrentJobId(null)
     } finally {
@@ -2433,6 +2568,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [
     adjustedPriceILS,
     bookingTiming,
+    beginSearchAttempt,
+    clearSearchAttempt,
     dogName,
     duration,
     fetchCurrentAndLists,
@@ -2456,8 +2593,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     location,
     setLocation,
+    addressSource,
     refreshLocation,
     locationLoading,
+    locationRefreshing,
+    locationError,
 
     userLocation,
     hasUserLocation,

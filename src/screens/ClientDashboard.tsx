@@ -1067,6 +1067,24 @@ export default function ClientDashboard({
   )
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
+    if (completionJobDetails?.payment_status === 'paid') {
+      rows.push({
+        label: t('completion.paymentCompleted'),
+        value: t('completion.paymentCompleted'),
+      })
+      if (completionJobDetails.price != null && completionJobDetails.price > 0) {
+        rows.push({
+          label: t('completion.amountCharged'),
+          value: `₪${completionJobDetails.price}`,
+        })
+      }
+      rows.push({
+        label: t('completion.paymentMethod'),
+        value: flow.savedCard
+          ? `${capitalize(flow.savedCard.brand)} ${flow.savedCard.last4}`
+          : t('completion.cardOnFile'),
+      })
+    }
     if (completionDurationSummary.plannedLabel) {
       rows.push({
         label: t('tracking.planned'),
@@ -1080,7 +1098,15 @@ export default function ClientDashboard({
       })
     }
     return rows
-  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel, i18n.resolvedLanguage, t])
+  }, [
+    completionDurationSummary.actualLabel,
+    completionDurationSummary.plannedLabel,
+    completionJobDetails?.payment_status,
+    completionJobDetails?.price,
+    flow.savedCard,
+    i18n.resolvedLanguage,
+    t,
+  ])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -1155,8 +1181,8 @@ export default function ClientDashboard({
     flow.setLocation(address)
   }, [flow])
 
-  const handleAddressUseCurrentLocation = useCallback(() => {
-    flow.refreshLocation()
+  const handleAddressUseCurrentLocation = useCallback(async () => {
+    return await flow.refreshLocation()
   }, [flow])
 
   const [selectedDurationUi, setSelectedDurationUi] = useState<DurationType | ''>(flow.duration ?? '')
@@ -1171,6 +1197,10 @@ export default function ClientDashboard({
     if (!hasDurationUiInteractedRef.current) {
       setSelectedDurationUi(nextFlowDuration)
       lastRequestedDurationRef.current = nextFlowDuration
+    } else if (!nextFlowDuration && previousFlowDuration) {
+      setSelectedDurationUi('')
+      lastRequestedDurationRef.current = ''
+      hasDurationUiInteractedRef.current = false
     } else if (
       nextFlowDuration &&
       nextFlowDuration !== previousFlowDuration &&
@@ -1208,19 +1238,19 @@ export default function ClientDashboard({
       eagerDurationFiredRef.current = true
       hasDurationUiInteractedRef.current = true
       lastRequestedDurationRef.current = value
+      flushSync(() => {
+        setSelectedDurationUi(value)
+        flow.setDuration(value)
+      })
       markFirstInteractionHandler('client-dashboard:duration-eager', {
         value,
         currentUi: selectedDurationUi,
       })
-      flushSync(() => {
-        setSelectedDurationUi(value)
-      })
       markFirstInteractionVisual('client-dashboard:duration-ui', { value })
-      flow.setDuration(value)
       setSheetSnap('default')
       void hapticLight()
     },
-    [flow],
+    [flow, selectedDurationUi],
   )
 
   const handleDurationSelect = useCallback(
@@ -1235,17 +1265,19 @@ export default function ClientDashboard({
       lastDurationIntentRef.current = { value, at: now }
       hasDurationUiInteractedRef.current = true
       lastRequestedDurationRef.current = value
+      flushSync(() => {
+        setSelectedDurationUi(value)
+        flow.setDuration(value)
+      })
       markFirstInteractionHandler('client-dashboard:duration-select', {
         value,
         currentUi: selectedDurationUi,
       })
-      setSelectedDurationUi(value)
       markFirstInteractionVisual('client-dashboard:duration-ui', { value })
-      flow.setDuration(value)
       setSheetSnap('default')
       void hapticLight()
     },
-    [flow],
+    [flow, selectedDurationUi],
   )
 
   const openFavoritesMenu = useCallback(() => {
@@ -1481,7 +1513,7 @@ export default function ClientDashboard({
   }, [flow.adjustedPriceILS, flow.surgeMultiplier])
 
   const compactSavedCardSummary =
-    flow.savedCard && !flow.setupClientSecret && !flow.cardLoading ? (
+    flow.savedCard && !flow.setupClientSecret ? (
       <button
         type="button"
         data-control="payment-row"
@@ -2042,6 +2074,7 @@ export default function ClientDashboard({
           {shouldRenderSearchingSheet && (
             <div style={sheetContentStyle}>
               <SearchingSheet
+                searchStartedAt={flow.searchStartTime}
                 elapsedSeconds={flow.elapsedSeconds}
                 durationLabel={requestDurationLabel}
                 priceLabel={requestPriceLabel}
@@ -2109,14 +2142,14 @@ export default function ClientDashboard({
                       ? flow.bookingTiming === 'scheduled'
                         ? t('booking.scheduling')
                         : t('booking.ordering')
-                      : flow.cardLoading
+                      : flow.cardLoading && !flow.savedCard
                         ? t('booking.loadingPayment')
                         : !flow.savedCard
                           ? t('booking.addCard')
                           : t('booking.orderNow')
                   }
                   onClick={handleFindWalker}
-                  loading={flow.loading || flow.cardLoading}
+                  loading={flow.loading || (flow.cardLoading && !flow.savedCard)}
                   disabled={
                     !isSelectedServiceAvailable ||
                     !flow.dogName.trim() ||
@@ -2488,7 +2521,8 @@ export default function ClientDashboard({
           onConfirm={handleAddressConfirm}
           onUseCurrentLocation={handleAddressUseCurrentLocation}
           onClose={() => setAddressPickerOpen(false)}
-          locationLoading={flow.locationLoading}
+          locationLoading={flow.locationRefreshing || flow.locationLoading}
+          locationError={flow.locationError}
         />
       )}
 
@@ -2947,6 +2981,13 @@ function TrackingCard({
   const isArrivalPending = phase === 'arrived_pending_confirmation'
   const isArrivalConfirmed = phase === 'arrival_confirmed'
   const isOnTheWay = !isServiceActive && !isArrivalPending && !isArrivalConfirmed
+  const statusToneStyle = isServiceActive
+    ? trackingTopBadgeActiveStyle
+    : isArrivalPending
+      ? trackingTopBadgeArrivedStyle
+      : isArrivalConfirmed
+        ? trackingTopBadgeReadyStyle
+        : trackingTopBadgeTravelStyle
   const topBadge = isServiceActive
     ? activeTitle
     : isArrivalPending
@@ -2957,14 +2998,14 @@ function TrackingCard({
   const title = isOnTheWay
     ? t('tracking.headingToYou', { walkerName })
     : isServiceActive
-    ? t('tracking.walkInProgress')
+    ? t('tracking.providerWithYou', { walkerName })
     : isArrivalPending
-      ? t('tracking.providerArrived')
+      ? t('tracking.arrivedTitle', { walkerName })
       : isArrivalConfirmed
-        ? t('tracking.readyToStart')
+        ? t('tracking.readyToBeginTitle', { walkerName })
         : t('tracking.onTheWay')
   const subtitle = isOnTheWay
-    ? ''
+    ? t('tracking.liveRouteSubtitle', { walkerName })
     : isServiceActive
     ? t('tracking.startedSubtitle')
     : isArrivalPending
@@ -2975,7 +3016,7 @@ function TrackingCard({
 
   return (
     <div style={trackingCardStyle}>
-      <div style={trackingTopBadgeStyle}>{topBadge}</div>
+      <div style={{ ...trackingTopBadgeStyle, ...statusToneStyle }}>{topBadge}</div>
       <div style={trackingTitleStyle}>{title}</div>
       {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
 
@@ -4110,10 +4151,29 @@ const trackingTopBadgeStyle: React.CSSProperties = {
   justifySelf: 'start',
   padding: '6px 10px',
   borderRadius: 999,
-  background: 'rgba(37, 99, 235, 0.10)',
-  color: '#1D4ED8',
   fontSize: 12,
   fontWeight: 800,
+  letterSpacing: 0.2,
+}
+
+const trackingTopBadgeTravelStyle: React.CSSProperties = {
+  background: 'rgba(37, 99, 235, 0.10)',
+  color: '#1D4ED8',
+}
+
+const trackingTopBadgeArrivedStyle: React.CSSProperties = {
+  background: 'rgba(217, 119, 6, 0.12)',
+  color: '#B45309',
+}
+
+const trackingTopBadgeReadyStyle: React.CSSProperties = {
+  background: 'rgba(14, 165, 233, 0.10)',
+  color: '#0369A1',
+}
+
+const trackingTopBadgeActiveStyle: React.CSSProperties = {
+  background: 'rgba(22, 163, 74, 0.12)',
+  color: '#15803D',
 }
 
 const trackingTitleStyle: React.CSSProperties = {

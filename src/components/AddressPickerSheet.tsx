@@ -4,9 +4,10 @@ import { useTranslation } from 'react-i18next'
 interface AddressPickerSheetProps {
   currentAddress: string
   onConfirm: (address: string) => void
-  onUseCurrentLocation: () => void
+  onUseCurrentLocation: () => Promise<boolean>
   onClose: () => void
   locationLoading?: boolean
+  locationError?: string | null
 }
 
 function parseAddressParts(address: string): { street: string; houseNumber: string; city: string } {
@@ -53,6 +54,7 @@ export default function AddressPickerSheet({
   onUseCurrentLocation,
   onClose,
   locationLoading = false,
+  locationError = null,
 }: AddressPickerSheetProps) {
   const { t } = useTranslation()
   const isRtl = document.documentElement.dir === 'rtl'
@@ -84,13 +86,6 @@ export default function AddressPickerSheet({
   }, [])
 
 
-  useEffect(() => {
-    if (refreshing && !locationLoading) {
-      setRefreshing(false)
-      safeClose()
-    }
-  }, [locationLoading, refreshing])
-
   const safeClose = useCallback(() => {
     if (closingRef.current) return
     closingRef.current = true
@@ -113,10 +108,14 @@ export default function AddressPickerSheet({
     safeClose()
   }, [street, houseNumber, city, onConfirm, safeClose])
 
-  const handleUseCurrentLocation = useCallback(() => {
+  const handleUseCurrentLocation = useCallback(async () => {
     blurActiveInput()
     setRefreshing(true)
-    onUseCurrentLocation()
+    const updated = await onUseCurrentLocation()
+    setRefreshing(false)
+    if (updated) {
+      safeClose()
+    }
   }, [onUseCurrentLocation])
 
   const canConfirm = street.trim().length > 0
@@ -131,7 +130,7 @@ export default function AddressPickerSheet({
           <div style={titleStyle}>{t('addressPicker.title')}</div>
         </div>
 
-        <button type="button" onClick={handleUseCurrentLocation} style={currentLocationBtnStyle} disabled={refreshing}>
+        <button type="button" onClick={() => void handleUseCurrentLocation()} style={currentLocationBtnStyle} disabled={refreshing || locationLoading}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
             <circle cx="12" cy="12" r="3" />
             <line x1="12" y1="2" x2="12" y2="5" />
@@ -140,10 +139,16 @@ export default function AddressPickerSheet({
             <line x1="19" y1="12" x2="22" y2="12" />
           </svg>
           <span style={{ flex: 1 }}>
-            {refreshing ? t('addressPicker.refreshingLocation') : t('addressPicker.useCurrentLocation')}
+            {refreshing || locationLoading ? t('addressPicker.refreshingLocation') : t('addressPicker.useCurrentLocation')}
           </span>
-          {refreshing && <span style={spinnerStyle} />}
+          {(refreshing || locationLoading) && <span style={spinnerStyle} />}
         </button>
+
+        {locationError && (
+          <div style={locationErrorStyle}>
+            {locationError}
+          </div>
+        )}
 
         <div style={fieldsStyle}>
           <div style={fieldRowStyle}>
@@ -268,6 +273,17 @@ const currentLocationBtnStyle: CSSProperties = {
   cursor: 'pointer',
   textAlign: 'start',
   width: '100%',
+}
+
+const locationErrorStyle: CSSProperties = {
+  borderRadius: 14,
+  border: '1px solid rgba(220,38,38,0.16)',
+  background: 'rgba(254,242,242,0.96)',
+  color: '#B91C1C',
+  padding: '10px 12px',
+  fontSize: 13,
+  lineHeight: 1.45,
+  textAlign: 'start',
 }
 
 const spinnerStyle: CSSProperties = {
