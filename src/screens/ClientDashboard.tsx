@@ -16,6 +16,14 @@ import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
+import {
+  type ServiceType,
+  SERVICE_ICONS,
+  SERVICE_I18N_KEYS,
+  isServiceAvailable as checkServiceAvailable,
+} from '../lib/serviceTypes'
+import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
+import MoreServicesSheet from '../components/MoreServicesSheet'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
@@ -179,7 +187,8 @@ export default function ClientDashboard({
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const [_matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
-  const [selectedService, setSelectedService] = useState<'dogWalk' | 'babysitter' | 'technician'>('dogWalk')
+  const [selectedService, setSelectedService] = useState<ServiceType>('dog_walking')
+  const [moreServicesOpen, setMoreServicesOpen] = useState(false)
   const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
@@ -192,6 +201,9 @@ export default function ClientDashboard({
   const hasUserInteractedRef = useRef(false)
   const arrivalBeepPlayedJobIdRef = useRef<string | null>(null)
   const [mapMounted, setMapMounted] = useState(false)
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false)
+  const sheetDragRef = useRef<{ startY: number; startSnap: SheetSnap; lastDelta: number } | null>(null)
+  const sheetRef = useRef<HTMLDivElement>(null)
 
   const debugFlags = useRef(() => {
     if (typeof window === 'undefined') return { interactionDebug: false, delayMap: false }
@@ -405,6 +417,11 @@ export default function ClientDashboard({
     }
 
     restoreScrollPosition()
+    const restoredHeight = getAppViewportHeight()
+    if (Number.isFinite(restoredHeight) && restoredHeight > 0) {
+      appViewportHeightRef.current = restoredHeight
+      setAppViewportHeight(restoredHeight)
+    }
     const raf = requestAnimationFrame(restoreScrollPosition)
     const timeout = window.setTimeout(restoreScrollPosition, 120)
     hadOverlayRef.current = hasOverlayOpen
@@ -1142,16 +1159,6 @@ export default function ClientDashboard({
     flow.refreshLocation()
   }, [flow])
 
-  const handleMatchingTryAgain = useCallback(() => {
-    flow.clearAvailabilityNotice()
-    flow.clearError()
-    flow.clearExhaustedRequestForRetry?.()
-    setMatchingUiState(null)
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
-    })
-  }, [flow])
-
   const [selectedDurationUi, setSelectedDurationUi] = useState<DurationType | ''>(flow.duration ?? '')
   const hasDurationUiInteractedRef = useRef(false)
   const lastRequestedDurationRef = useRef<DurationType | ''>(flow.duration ?? '')
@@ -1175,6 +1182,19 @@ export default function ClientDashboard({
 
     previousFlowDurationRef.current = nextFlowDuration
   }, [flow.duration])
+
+  const handleMatchingTryAgain = useCallback(() => {
+    flow.clearAvailabilityNotice()
+    flow.clearError()
+    flow.clearExhaustedRequestForRetry?.()
+    setMatchingUiState(null)
+    if (selectedDurationUi) {
+      flow.setDuration(selectedDurationUi)
+    }
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    })
+  }, [flow, selectedDurationUi])
 
   const eagerDurationFiredRef = useRef(false)
   const lastDurationIntentRef = useRef<{ value: DurationType; at: number } | null>(null)
@@ -1287,14 +1307,13 @@ export default function ClientDashboard({
     : isTrackingState
       ? trackingSheetScrollStyle
       : searchingSheetScrollStyle
-  const sheetSnapOffsets = useMemo(
-    () =>
-      ({
-        collapsed: Math.min(360, Math.max(220, appViewportHeight * 0.28)),
-        default: 0,
-      }) satisfies Record<SheetSnap, number>,
-    [appViewportHeight],
-  )
+  const sheetMaxHeights = useMemo(() => {
+    const vh = Math.max(appViewportHeight, 500)
+    return {
+      collapsed: 340,
+      default: vh - 92,
+    } satisfies Record<SheetSnap, number>
+  }, [appViewportHeight])
 
   const mapBottomViewportPadding = useMemo(() => {
     const vh = Math.max(appViewportHeight, appViewportHeightRef.current)
@@ -1305,39 +1324,56 @@ export default function ClientDashboard({
     return defaultPadding
   }, [appViewportHeight, sheetSnap])
 
-  const activeSheetOffset = !isSearching ? 0 : sheetSnapOffsets[sheetSnap]
 
-  const serviceOptions = [
-    { id: 'dogWalk' as const, icon: '🐾', label: t('services.dogWalk') },
-    { id: 'babysitter' as const, icon: '👶', label: t('services.babysitter') },
-    { id: 'technician' as const, icon: '🔧', label: t('services.technician') },
-  ]
-
-  const serviceSelectorBlock = (
-    <div style={serviceSelectorRowStyle}>
-      {serviceOptions.map((svc) => {
-        const isActive = selectedService === svc.id
-        return (
-          <button
-            key={svc.id}
-            type="button"
-            onClick={() => setSelectedService(svc.id)}
-            style={{
-              ...servicePillStyle,
-              background: isActive ? '#0F172A' : '#F4F6F8',
-              color: isActive ? '#FFFFFF' : '#475569',
-              border: isActive ? '1.5px solid #0F172A' : '1.5px solid transparent',
-            }}
-          >
-            <span>{svc.icon}</span>
-            <span style={{ fontSize: 12, fontWeight: 700 }}>{svc.label}</span>
-          </button>
-        )
-      })}
-    </div>
+  const handleSheetDragStart = useCallback(
+    (clientY: number) => {
+      if (!isIdleState) return
+      sheetDragRef.current = { startY: clientY, startSnap: sheetSnap, lastDelta: 0 }
+      setIsDraggingSheet(true)
+      const el = sheetRef.current
+      if (el) el.style.transition = 'none'
+    },
+    [isIdleState, sheetSnap],
   )
 
-  const isServiceAvailable = selectedService === 'dogWalk'
+  const handleSheetDragMove = useCallback(
+    (clientY: number) => {
+      const drag = sheetDragRef.current
+      if (!drag) return
+      const delta = clientY - drag.startY
+      drag.lastDelta = delta
+      const el = sheetRef.current
+      if (!el) return
+      const startH = sheetMaxHeights[drag.startSnap]
+      // Dragging up (negative delta) = expand, dragging down (positive delta) = collapse
+      const raw = startH - delta
+      const clamped = Math.max(sheetMaxHeights.collapsed - 30, Math.min(raw, sheetMaxHeights.default + 30))
+      el.style.maxHeight = `${clamped}px`
+    },
+    [sheetMaxHeights],
+  )
+
+  const handleSheetDragEnd = useCallback(() => {
+    const drag = sheetDragRef.current
+    if (!drag) return
+    sheetDragRef.current = null
+    const delta = drag.lastDelta
+    const el = sheetRef.current
+    if (el) {
+      el.style.transition = 'max-height 280ms cubic-bezier(0.22, 1, 0.36, 1)'
+      el.style.maxHeight = ''
+    }
+
+    if (drag.startSnap === 'default' && delta > 40) {
+      setSheetSnap('collapsed')
+    } else if (drag.startSnap === 'collapsed' && delta < -30) {
+      setSheetSnap('default')
+    }
+    setIsDraggingSheet(false)
+  }, [])
+
+  const serviceKeys = SERVICE_I18N_KEYS[selectedService]
+  const isSelectedServiceAvailable = checkServiceAvailable(selectedService)
 
   const dogSelectorBlock = (
     <div style={compactFieldStyle}>
@@ -1359,7 +1395,7 @@ export default function ClientDashboard({
             ...(isDogNameGuided ? guidedFieldShellStyle : null),
           }}
         >
-          <div style={dogThumbStyle}>📋</div>
+          <div style={dogThumbStyle}>{SERVICE_ICONS[selectedService]}</div>
           <div style={dogInputButtonContentStyle}>
             <div
               style={
@@ -1368,7 +1404,7 @@ export default function ClientDashboard({
                   : dogInputPlaceholderTextStyle
               }
             >
-              {flow.dogName.trim() || t('booking.dogNamePlaceholder')}
+              {flow.dogName.trim() || t(serviceKeys.inputPlaceholder)}
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -1869,36 +1905,66 @@ export default function ClientDashboard({
       )}
 
       <div
+        ref={sheetRef}
         className="regli-client-dashboard-sheet"
         style={{
           ...currentSheetStyle,
-          transform: `translateY(${activeSheetOffset}px)`,
-          transition: 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+          ...(isIdleState ? { maxHeight: `${sheetMaxHeights[sheetSnap]}px`, overflow: 'hidden' } : {}),
+          transition: isDraggingSheet ? 'none' : 'max-height 280ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
       >
-        <div style={{ ...sheetTopPadStyle, height: isIdleState ? 12 : 8 }} />
+        {isIdleState ? (
+          <div
+            style={dragHandleZoneStyle}
+            onTouchStart={(e) => {
+              handleSheetDragStart(e.touches[0].clientY)
+            }}
+            onTouchMove={(e) => {
+              e.preventDefault()
+              handleSheetDragMove(e.touches[0].clientY)
+            }}
+            onTouchEnd={handleSheetDragEnd}
+            onMouseDown={(e) => {
+              e.preventDefault()
+              handleSheetDragStart(e.clientY)
+              const onMove = (ev: MouseEvent) => handleSheetDragMove(ev.clientY)
+              const onUp = () => {
+                handleSheetDragEnd()
+                window.removeEventListener('mousemove', onMove)
+                window.removeEventListener('mouseup', onUp)
+              }
+              window.addEventListener('mousemove', onMove)
+              window.addEventListener('mouseup', onUp)
+            }}
+            onClick={() => {
+              if (isDraggingSheet) return
+              if (isSheetCollapsed) setSheetSnap('default')
+            }}
+          >
+            <div style={dragHandleBarStyle} />
+          </div>
+        ) : (
+          <div style={{ ...sheetTopPadStyle, height: 8 }} />
+        )}
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
           {shouldRenderIdleSheet && (
             <div
               style={{
                 ...idleSheetContentStyle,
-                ...(isSheetCollapsed ? idleSheetContentCollapsedStyle : null),
               }}
             >
               <div style={bookingCardStyle}>
-                  <div style={sheetHeaderRowStyle}>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <span style={sheetGreetingStyle}>{t('booking.greeting', { name: clientName.split(' ')[0] })}</span>
-                    </div>
-                  </div>
+                <ServiceSelectorPanel
+                  selected={selectedService}
+                  onSelect={setSelectedService}
+                  onMorePress={() => setMoreServicesOpen(true)}
+                />
 
-                {serviceSelectorBlock}
-
-                {!isServiceAvailable ? (
+                {!isSelectedServiceAvailable ? (
                   <div style={comingSoonOverlayStyle}>
                     <span style={{ fontSize: 28 }}>
-                      {serviceOptions.find((s) => s.id === selectedService)?.icon}
+                      {SERVICE_ICONS[selectedService]}
                     </span>
                     <span style={comingSoonTextStyle}>{t('services.comingSoon')}</span>
                   </div>
@@ -1928,10 +1994,9 @@ export default function ClientDashboard({
 
                   {pickupSelectorBlock}
 
-                  {durationPickerBlock}
+                  {isSelectedServiceAvailable && durationPickerBlock}
 
-                  {!isSheetCollapsed && (
-                    <>
+                  {!isSheetCollapsed && isSelectedServiceAvailable && (
                       <div style={compactFieldStyle}>
                         {isPaymentGuided && (
                           <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
@@ -1958,7 +2023,6 @@ export default function ClientDashboard({
                           )}
                         </div>
                       </div>
-                    </>
                   )}
                 </div>
 
@@ -2054,7 +2118,7 @@ export default function ClientDashboard({
                   onClick={handleFindWalker}
                   loading={flow.loading || flow.cardLoading}
                   disabled={
-                    !isServiceAvailable ||
+                    !isSelectedServiceAvailable ||
                     !flow.dogName.trim() ||
                     !flow.location.trim() ||
                     !flow.duration ||
@@ -2108,6 +2172,55 @@ export default function ClientDashboard({
           </div>
         )}
       </div>
+
+      {flow.pendingCompletionConfirmation && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} />
+          <div style={completionOverlayCardStyle}>
+            <div style={pendingConfirmCardStyle}>
+              <div style={pendingConfirmIconStyle}>⏳</div>
+              <div style={pendingConfirmTitleStyle}>
+                {t('completion.pendingTitle')}
+              </div>
+              <div style={pendingConfirmSubtitleStyle}>
+                {t('completion.pendingSubtitle', { name: flow.pendingCompletionConfirmation.walkerName })}
+              </div>
+              {flow.completionConfirmError && (
+                <div style={pendingConfirmErrorStyle}>
+                  {flow.completionConfirmError}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => void flow.confirmCompletion()}
+                disabled={flow.completionConfirming}
+                aria-busy={flow.completionConfirming}
+                style={{
+                  ...pendingConfirmBtnStyle,
+                  opacity: flow.completionConfirming ? 0.72 : 1,
+                  cursor: flow.completionConfirming ? 'wait' : 'pointer',
+                }}
+              >
+                {flow.completionConfirming
+                  ? t('completion.confirming')
+                  : t('completion.confirmCompletion')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void flow.rejectCompletion()}
+                disabled={flow.completionConfirming}
+                style={{
+                  ...pendingRejectBtnStyle,
+                  opacity: flow.completionConfirming ? 0.72 : 1,
+                  cursor: flow.completionConfirming ? 'wait' : 'pointer',
+                }}
+              >
+                {t('completion.rejectCompletion')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {hasCompletionPrompt && flow.completionJob && (
         <div style={completionOverlayStyle}>
@@ -2211,15 +2324,22 @@ export default function ClientDashboard({
         </div>
       )}
 
+      {moreServicesOpen && (
+        <MoreServicesSheet
+          onSelect={setSelectedService}
+          onClose={() => setMoreServicesOpen(false)}
+        />
+      )}
+
       {showDogNameSheet && (
         <>
           <div style={bottomSheetOverlayStyle} onClick={closeDogNameSheet} />
           <div style={dogNameSheetStyle}>
             <div style={bottomSheetHandleStyle} />
             <div style={dogNameSheetHeaderStyle}>
-              <div style={dogNameSheetTitleStyle}>{t('dogNameSheet.title')}</div>
+              <div style={dogNameSheetTitleStyle}>{t(serviceKeys.sheetTitle)}</div>
               <div style={dogNameSheetSubtitleStyle}>
-                {t('dogNameSheet.subtitle')}
+                {t(serviceKeys.sheetSubtitle)}
               </div>
             </div>
 
@@ -3148,7 +3268,6 @@ const idleSheetStyle: React.CSSProperties = {
   ...sheetStyle,
   top: 'auto',
   height: 'auto',
-  maxHeight: 'calc(100dvh - 92px)',
 }
 
 const searchingSheetStyle: React.CSSProperties = {
@@ -3173,7 +3292,24 @@ const sheetTopPadStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
 }
 
+const dragHandleZoneStyle: React.CSSProperties = {
+  flexShrink: 0,
+  padding: '18px 0 10px',
+  display: 'flex',
+  justifyContent: 'center',
+  cursor: 'grab',
+  touchAction: 'none',
+  WebkitTapHighlightColor: 'transparent',
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
+}
 
+const dragHandleBarStyle: React.CSSProperties = {
+  width: 36,
+  height: 4,
+  borderRadius: 999,
+  background: '#CBD5E1',
+}
 
 const searchingSheetScrollStyle: React.CSSProperties = {
   flex: '0 1 auto',
@@ -3226,52 +3362,18 @@ const idleSheetContentStyle: React.CSSProperties = {
   paddingBottom: 1,
 }
 
-const idleSheetContentCollapsedStyle: React.CSSProperties = {
-  maxHeight: 232,
-  overflow: 'hidden',
-}
 
 const bookingCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
-const sheetHeaderRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 8,
-}
-
-const sheetGreetingStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#94A3B8',
-  marginBottom: 0,
-}
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 4,
 }
 
-const serviceSelectorRowStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 6,
-}
-
-const servicePillStyle: React.CSSProperties = {
-  flex: 1,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 5,
-  padding: '8px 4px',
-  borderRadius: 12,
-  cursor: 'pointer',
-  transition: 'background 0.15s ease',
-}
 
 const comingSoonOverlayStyle: React.CSSProperties = {
   display: 'flex',
@@ -3355,14 +3457,13 @@ const compactFieldLabelStyle: React.CSSProperties = {
 }
 
 const pickupSelectorShellStyle: React.CSSProperties = {
-  height: 45,
+  minHeight: 52,
   borderRadius: 15,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  overflow: 'hidden',
   width: '100%',
   boxSizing: 'border-box',
   padding: '0 12px',
@@ -3384,7 +3485,7 @@ const pickupSelectorValueStyle: React.CSSProperties = {
   fontSize: 16,
   color: '#0F172A',
   fontWeight: 700,
-  lineHeight: 1.2,
+  lineHeight: 'normal',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -3396,7 +3497,7 @@ const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   fontSize: 16,
   color: '#94A3B8',
   fontWeight: 600,
-  lineHeight: 1.2,
+  lineHeight: 'normal',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -3714,10 +3815,9 @@ const feeLabelStyle: React.CSSProperties = {
   color: '#2563EB',
   lineHeight: 1.3,
   textAlign: 'center',
-  paddingTop: 0,
   marginTop: -2,
   background: 'rgba(59,130,246,0.08)',
-  padding: '4px 10px',
+  padding: '3px 10px',
   borderRadius: 8,
   fontWeight: 600,
 }
@@ -3812,6 +3912,75 @@ const completionOverlayCardStyle: React.CSSProperties = {
   width: 'min(420px, 100%)',
   maxWidth: '100%',
   boxSizing: 'border-box',
+}
+
+const pendingConfirmCardStyle: React.CSSProperties = {
+  background: '#FFFFFF',
+  borderRadius: 24,
+  padding: '28px 24px 24px',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 12,
+  boxShadow: '0 16px 48px rgba(15, 23, 42, 0.18)',
+  textAlign: 'center',
+}
+
+const pendingConfirmIconStyle: React.CSSProperties = {
+  fontSize: 40,
+  lineHeight: 1,
+}
+
+const pendingConfirmTitleStyle: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const pendingConfirmSubtitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 600,
+  color: '#64748B',
+  lineHeight: 1.4,
+}
+
+const pendingConfirmErrorStyle: React.CSSProperties = {
+  width: '100%',
+  borderRadius: 16,
+  border: '1px solid rgba(220, 38, 38, 0.16)',
+  background: 'rgba(254, 242, 242, 0.96)',
+  color: '#B91C1C',
+  padding: '12px 14px',
+  fontSize: 14,
+  lineHeight: 1.5,
+  textAlign: 'center',
+}
+
+const pendingConfirmBtnStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  width: '100%',
+  minHeight: 50,
+  borderRadius: 16,
+  background: 'linear-gradient(180deg, #16A34A 0%, #15803D 100%)',
+  color: '#FFFFFF',
+  fontSize: 16,
+  fontWeight: 900,
+  cursor: 'pointer',
+  marginTop: 4,
+}
+
+const pendingRejectBtnStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1.5px solid #E2E8F0',
+  width: '100%',
+  minHeight: 46,
+  borderRadius: 16,
+  background: '#FFFFFF',
+  color: '#64748B',
+  fontSize: 15,
+  fontWeight: 700,
+  cursor: 'pointer',
 }
 
 const tipCardStyle: React.CSSProperties = {

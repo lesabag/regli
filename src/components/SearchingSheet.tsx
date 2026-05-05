@@ -39,7 +39,7 @@ function getMatchingVisual(serviceType?: string | null): MatchingVisual {
   ) {
     return {
       asset: dogCharacterImg,
-      title: 'Finding a provider near you…',
+      title: 'Finding your provider...',
       emptyTitle: 'No providers available right now',
       emptySubtitle: 'Nearby providers are busy. Try again or schedule for later.',
       tone: 'pet',

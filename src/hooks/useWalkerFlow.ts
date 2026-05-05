@@ -203,7 +203,7 @@ function completionDismissStorageKey(profileId: string): string {
 function sendClientLiveOrderEvent(params: {
   clientId: string | null | undefined
   jobId: string
-  type: 'accepted' | 'arrived' | 'start_walk' | 'complete'
+  type: 'accepted' | 'arrived' | 'start_walk' | 'complete' | 'completion_pending'
   message: string
   walkerId?: string | null
   walkerName?: string | null
@@ -293,22 +293,6 @@ function shouldAutoDispatch(job: {
   return startTs - Date.now() <= AUTO_DISPATCH_LEAD_MINUTES * 60 * 1000
 }
 
-function isPaymentAuthorizationFailure(message: string | null | undefined): boolean {
-  if (!message) return false
-  const normalized = message.toLowerCase()
-  return (
-    normalized.includes('payment_not_authorized') ||
-    normalized.includes('payment was never authorized') ||
-    normalized.includes('requires_payment_method') ||
-    normalized.includes('requires_confirmation') ||
-    normalized.includes('card was never charged')
-  )
-}
-
-function paymentAuthorizationFailureMessage(): string {
-  return "Payment is not authorized for this walk, so it can't be completed yet. The job is still here; ask the client to update their payment method, then try again."
-}
-
 export function useWalkerFlow(profileId: string, profileName: string) {
   const [openJobs, setOpenJobs] = useState<WalkRequestRow[]>([])
   const [myJobs, setMyJobs] = useState<WalkRequestRow[]>([])
@@ -347,6 +331,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const [connectError, setConnectError] = useState<string | null>(null)
 
   const [completingJobId, setCompletingJobId] = useState<string | null>(null)
+  const [pendingClientConfirmation, setPendingClientConfirmation] = useState<string | null>(null)
   const [completionSuccess, setCompletionSuccess] = useState<{
     jobId: string
     clientId: string
@@ -354,8 +339,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     earnings: number | null
     clientName: string
   } | null>(null)
-  const [completionBlockedJob, setCompletionBlockedJob] = useState<WalkRequestRow | null>(null)
-  const [completionPaymentError, setCompletionPaymentError] = useState<{
+  const [completionBlockedJob] = useState<WalkRequestRow | null>(null)
+  const [completionPaymentError] = useState<{
     jobId: string
     message: string
   } | null>(null)
@@ -788,6 +773,41 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return next
     })
   }, [completedJobs, ratedJobIds])
+
+  useEffect(() => {
+    if (!pendingClientConfirmation) return
+    const confirmed = completedJobs.find((j) => j.id === pendingClientConfirmation)
+    if (!confirmed) {
+      const stillActive = myJobs.find((j) => j.id === pendingClientConfirmation && j.status === 'accepted')
+      if (stillActive && !stillActive.service_completed_at) {
+        setPendingClientConfirmation(null)
+      }
+      return
+    }
+    setPendingClientConfirmation(null)
+    flowCompletedJobIdsRef.current.add(confirmed.id)
+    const labels = getServiceLabels(confirmed.service_type)
+    showStateMessage(confirmed.id, 'completed', labels.completedPast)
+    setCompletionSuccess({
+      jobId: confirmed.id,
+      clientId: confirmed.client_id,
+      dogName: confirmed.dog_name || 'the dog',
+      earnings:
+        confirmed.walker_earnings ??
+        (confirmed.price != null ? Math.round(confirmed.price * 0.8 * 100) / 100 : null),
+      clientName: confirmed.client?.full_name || confirmed.client?.email || 'Client',
+    })
+  }, [pendingClientConfirmation, completedJobs, myJobs, showStateMessage])
+
+  useEffect(() => {
+    if (pendingClientConfirmation) return
+    const pendingJob = myJobs.find(
+      (j) => j.status === 'accepted' && !!j.service_completed_at && !!j.service_started_at,
+    )
+    if (pendingJob) {
+      setPendingClientConfirmation(pendingJob.id)
+    }
+  }, [pendingClientConfirmation, myJobs])
 
   useEffect(() => {
     const futureIds = new Set(futureJobs.map((j) => j.id))
@@ -1784,6 +1804,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
+      if (pendingClientConfirmation === id) return
+
       setCompletingJobId(id)
 
       try {
@@ -1801,110 +1823,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           return
         }
 
-        if (job?.stripe_payment_intent_id) {
-          const { data, error: captureErr } = await invokeEdgeFunction<{
-            success?: boolean
-            error?: string
-            details?: string
-            alreadyCompleted?: boolean
-            alreadyCaptured?: boolean
-          }>('capture-payment', { body: { jobId: id } })
+        setPendingClientConfirmation(id)
 
-          if (captureErr) {
-            console.error('[handleComplete] Edge function error:', captureErr)
-            if (isPaymentAuthorizationFailure(captureErr)) {
-              const message = paymentAuthorizationFailureMessage()
-              if (job) setCompletionBlockedJob({ ...job, status: 'accepted', payment_status: 'failed' })
-              setCompletionPaymentError({ jobId: id, message })
-              setError(message)
-              return
-            }
-
-            await fetchAll()
-            const refreshedJob = myJobs.find((j) => j.id === id)
-            if (refreshedJob?.status !== 'completed') {
-              setError(`Completion failed: ${captureErr}. Tap to retry.`)
-              return
-            }
-          } else if (!data?.success) {
-            console.error('[handleComplete] Capture returned failure:', data)
-            const details = data?.details || ''
-
-            if (details.includes('requires_payment_method') || details.includes('requires_confirmation')) {
-              console.error('[handleComplete] Upstream payment authorization failure for job', id)
-              const message = paymentAuthorizationFailureMessage()
-              if (job) setCompletionBlockedJob({ ...job, status: 'accepted', payment_status: 'failed' })
-              setCompletionPaymentError({ jobId: id, message })
-              setError(message)
-              return
-            }
-
-            await fetchAll()
-            const refreshedJob = myJobs.find((j) => j.id === id)
-            if (refreshedJob?.status !== 'completed') {
-              setError(data?.details || data?.error || 'Failed to capture payment. Tap to retry.')
-              return
-            }
-          }
-        } else {
-          const { error } = await supabase
-            .from('walk_requests')
-            .update({
-              status: 'completed',
-              service_completed_at: serviceCompletedAt,
-              walker_lat: null,
-              walker_lng: null,
-              last_location_update: null,
-            })
-            .eq('id', id)
-          if (error) {
-            setError(error.message)
-            return
-          }
-        }
-
-        const earnings =
-          job?.walker_earnings ??
-          (job?.price != null ? Math.round(job.price * 0.8 * 100) / 100 : null)
-
-        track(AnalyticsEvent.SERVICE_COMPLETED, {
-          request_id: id,
-          provider_id: profileId,
-          client_id: job?.client_id ?? undefined,
-          price: job?.price ?? undefined,
-          earnings: earnings ?? undefined,
-          actor_role: 'provider',
-          source_screen: 'walker_dashboard',
-        })
-
-        track(AnalyticsEvent.PAYMENT_CAPTURED, {
-          request_id: id,
-          provider_id: profileId,
-          price: job?.price ?? undefined,
-          payment_intent_id: job?.stripe_payment_intent_id ?? undefined,
-          source_screen: 'walker_dashboard',
-        })
-
-        setCompletionBlockedJob(null)
-        setCompletionPaymentError(null)
-        flowCompletedJobIdsRef.current.add(id)
         const labels = getServiceLabels(job?.service_type)
-        showStateMessage(id, 'completed', labels.completedPast)
-        setCompletionSuccess({
-          jobId: id,
-          clientId: job?.client_id || '',
-          dogName: job?.dog_name || 'the dog',
-          earnings,
-          clientName: job?.client?.full_name || job?.client?.email || 'Client',
-        })
-
-        const dogLabel = job?.dog_name || 'your dog'
 
         if (job?.client_id) {
           sendClientLiveOrderEvent({
             clientId: job.client_id,
             jobId: id,
-            type: 'complete',
+            type: 'completion_pending',
             message: labels.completedPast,
             walkerId: profileId,
             walkerName: profileName,
@@ -1912,47 +1839,24 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
           invokeEdgeFunction('send-push-notification', {
             body: {
-              title: 'Walk Completed',
-              body: `${dogLabel}'s walk with ${profileName} is done!`,
+              title: 'Confirm Service Completion',
+              body: `${profileName} marked the service as complete. Please confirm.`,
               targetUserId: job.client_id,
               data: { jobId: id },
             },
-          }).catch((err) => console.error('[Push] Failed to notify client (completed):', err))
+          }).catch((err) => console.error('[Push] Failed to notify client (completion_pending):', err))
         }
+
+        track(AnalyticsEvent.SERVICE_COMPLETED, {
+          request_id: id,
+          provider_id: profileId,
+          client_id: job?.client_id ?? undefined,
+          price: job?.price ?? undefined,
+          actor_role: 'provider',
+          source_screen: 'walker_dashboard',
+        })
 
         await fetchAll()
-        await fetchWallet()
-
-        const notifyEarnings =
-          job?.walker_earnings ??
-          (job?.price != null ? Math.round((job.price ?? 0) * 0.8) : null)
-
-        await createNotification({
-          userId: profileId,
-          type: 'job_completed_self',
-          title: labels.completedTitle,
-          message: `You completed the ${labels.itemLabel} for ${dogLabel}.`,
-          relatedJobId: id,
-        }).catch(() => {})
-
-        if (notifyEarnings && notifyEarnings > 0) {
-          await createNotification({
-            userId: profileId,
-            type: 'payment_received',
-            title: 'Payment Received',
-            message: `${notifyEarnings} ILS has been added to your wallet for walking ${dogLabel}.`,
-            relatedJobId: id,
-          }).catch(() => {})
-
-          invokeEdgeFunction('send-push-notification', {
-            body: {
-              title: 'Payment Received',
-              body: `₪${notifyEarnings} added to your wallet for walking ${dogLabel}.`,
-              targetUserId: profileId,
-              data: { jobId: id },
-            },
-          }).catch((err) => console.error('[Push] Failed to notify walker (payment):', err))
-        }
       } catch (err) {
         console.error('[handleComplete] Unhandled error:', err)
         try {
@@ -1965,7 +1869,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setCompletingJobId(null)
       }
     },
-    [myJobs, completionBlockedJob, profileId, profileName, fetchAll, fetchWallet, showStateMessage],
+    [myJobs, completionBlockedJob, pendingClientConfirmation, profileId, profileName, fetchAll],
   )
 
   const handleRelease = useCallback(
@@ -2267,6 +2171,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     fetchConnectStatus,
 
     completingJobId,
+    pendingClientConfirmation,
     completionSuccess,
     completionPaymentError,
     completionRatingSubmitting,

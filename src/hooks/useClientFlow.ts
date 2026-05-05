@@ -52,10 +52,28 @@ type AvailabilityNotice = {
 
 type LiveOrderEventPayload = {
   jobId?: string
-  type?: 'accepted' | 'arrived' | 'started' | 'start_walk' | 'complete' | 'completed'
+  type?: 'accepted' | 'arrived' | 'started' | 'start_walk' | 'complete' | 'completed' | 'completion_pending'
   message?: string
   walkerId?: string | null
   walkerName?: string | null
+}
+
+type PendingCompletionConfirmation = {
+  jobId: string
+  walkerName: string
+  walkerId: string | null
+} | null
+
+type CapturePaymentResponse = {
+  success?: boolean
+  error?: string
+  details?: string
+  code?: string
+  jobId?: string
+  paymentStatus?: string
+  paidAt?: string
+  alreadyCompleted?: boolean
+  alreadyCaptured?: boolean
 }
 
 type WalkRequestRow = {
@@ -442,6 +460,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [completionJob, setCompletionJob] = useState<CompletionJob>(null)
   const [completionRatingSubmitting, setCompletionRatingSubmitting] = useState(false)
   const [arrivalConfirming, setArrivalConfirming] = useState(false)
+  const [pendingCompletionConfirmation, setPendingCompletionConfirmation] = useState<PendingCompletionConfirmation>(null)
+  const [completionConfirming, setCompletionConfirming] = useState(false)
+  const [completionConfirmError, setCompletionConfirmError] = useState<string | null>(null)
   const [tipJob, setTipJob] = useState<TipJob>(null)
   const [tipSubmitting, setTipSubmitting] = useState(false)
 
@@ -706,7 +727,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
     )
   }, [])
 
-  const clearError = useCallback(() => setError(null), [])
+  const clearError = useCallback(() => {
+    setError(null)
+    setCompletionConfirmError(null)
+  }, [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const clearAvailabilityNotice = useCallback(() => setAvailabilityNotice(null), [])
   const dismissExhaustedRequest = useCallback(() => {
@@ -1183,6 +1207,25 @@ export function useClientFlow(profileId: string, _profileName: string) {
     await run
   }, [applyCurrentRows, profileId])
 
+  const fetchJobById = useCallback(
+    async (jobId: string) => {
+      const { data, error } = await supabase
+        .from('walk_requests')
+        .select(JOB_SELECT)
+        .eq('id', jobId)
+        .eq('client_id', profileId)
+        .maybeSingle()
+
+      if (error) {
+        console.warn('[useClientFlow] job refresh unavailable:', error.message, 'jobId:', jobId)
+        return null
+      }
+
+      return (data as WalkRequestRow | null) ?? null
+    },
+    [profileId],
+  )
+
   const fetchCurrentAndLists = useCallback(async () => {
     if (fullRefreshInFlightRef.current) {
       await fullRefreshInFlightRef.current
@@ -1496,6 +1539,25 @@ export function useClientFlow(profileId: string, _profileName: string) {
             }
           }
 
+          if (
+            updated.status === 'accepted' &&
+            updated.service_completed_at &&
+            updated.service_started_at &&
+            (updated.id === currentJobId || updated.id === lastActiveJobIdRef.current)
+          ) {
+            const walkerLabel = updated.walker_id
+              ? walkerNameById.get(updated.walker_id) || 'Provider'
+              : 'Provider'
+            setPendingCompletionConfirmation((prev) => {
+              if (prev?.jobId === updated.id) return prev
+              return {
+                jobId: updated.id,
+                walkerName: walkerLabel,
+                walkerId: updated.walker_id,
+              }
+            })
+          }
+
           if (updated.status === 'completed') {
             const belongsToCurrentFlow =
               updated.id === currentJobId || updated.id === lastActiveJobIdRef.current
@@ -1582,6 +1644,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
             }
             showLifecycleBanner(event.jobId, 'arrived', event.message || 'Provider has arrived.')
             void fetchCurrentAndLists()
+          } else if (event.type === 'completion_pending') {
+            const walkerLabel = event.walkerName || (event.walkerId ? walkerNameById.get(event.walkerId) : null) || 'Provider'
+            setPendingCompletionConfirmation({
+              jobId: event.jobId,
+              walkerName: walkerLabel,
+              walkerId: event.walkerId ?? null,
+            })
           } else if (event.type === 'complete' || event.type === 'completed') {
             flowCompletedJobIdsRef.current.add(event.jobId)
             lifecyclePhaseRef.current.set(event.jobId, 'completed')
@@ -1645,6 +1714,36 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setSuccessMessage('Provider has arrived.')
   }, [currentJob])
 
+  useEffect(() => {
+    if (
+      currentJob &&
+      currentJob.status === 'accepted' &&
+      currentJob.service_started_at &&
+      currentJob.service_completed_at
+    ) {
+      setPendingCompletionConfirmation((prev) => {
+        if (prev?.jobId === currentJob.id) return prev
+        const walkerLabel = currentJob.walker_id
+          ? walkerNameById.get(currentJob.walker_id) || 'Provider'
+          : 'Provider'
+        return {
+          jobId: currentJob.id,
+          walkerName: walkerLabel,
+          walkerId: currentJob.walker_id,
+        }
+      })
+    } else if (
+      currentJob &&
+      currentJob.status === 'accepted' &&
+      !currentJob.service_completed_at
+    ) {
+      setPendingCompletionConfirmation((prev) => {
+        if (prev?.jobId === currentJob.id) return null
+        return prev
+      })
+    }
+  }, [currentJob, walkerNameById])
+
   const confirmArrival = useCallback(async () => {
     if (!currentJobId) return
 
@@ -1691,6 +1790,174 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setArrivalConfirming(false)
     void fetchCurrentAndLists()
   }, [currentJobId, fetchCurrentAndLists, profileId])
+
+  const confirmCompletion = useCallback(async () => {
+    const pending =
+      pendingCompletionConfirmation ??
+      (currentJob?.service_completed_at
+        ? {
+            jobId: currentJob.id,
+            walkerId: currentJob.walker_id,
+            walkerName: currentJob.walker_id
+              ? walkerNameById.get(currentJob.walker_id) || 'Provider'
+              : 'Provider',
+          }
+        : null)
+
+    if (!pending) {
+      if (import.meta.env.DEV) {
+        console.error('[confirmCompletion] No pending completion state')
+      }
+      return
+    }
+
+    if (import.meta.env.DEV) {
+      console.log('[confirmCompletion] Starting confirmation', {
+        requestId: pending.jobId,
+        walkerId: pending.walkerId,
+        currentJobId: currentJob?.id ?? null,
+      })
+    }
+
+    const fallbackJob =
+      (currentJob?.id === pending.jobId ? currentJob : null) ??
+      completedJobs.find((job) => job.id === pending.jobId) ??
+      null
+
+    setCompletionConfirming(true)
+    setError(null)
+    setCompletionConfirmError(null)
+
+    try {
+      const payload = { jobId: pending.jobId }
+      if (import.meta.env.DEV) {
+        console.log('[confirmCompletion] Invoking capture-payment', payload)
+      }
+      const { data, error: captureErr } = await invokeEdgeFunction<CapturePaymentResponse>(
+        'capture-payment',
+        { body: payload },
+      )
+
+      if (captureErr) {
+        if (import.meta.env.DEV) {
+          console.error('[confirmCompletion] Capture error:', captureErr)
+        }
+        const message = String(captureErr)
+        setError(message)
+        setCompletionConfirmError(message)
+        return
+      }
+      if (import.meta.env.DEV) {
+        console.log('[confirmCompletion] capture-payment result', data)
+      }
+      if (data && data.jobId && data.jobId !== pending.jobId) {
+        const mismatchMessage = `Completion returned an unexpected job (${data.jobId}). Please refresh and try again.`
+        if (import.meta.env.DEV) {
+          console.error('[confirmCompletion] Job id mismatch', {
+            expected: pending.jobId,
+            received: data.jobId,
+          })
+        }
+        setError(mismatchMessage)
+        setCompletionConfirmError(mismatchMessage)
+        return
+      }
+      if (data && !data.success && !data.alreadyCompleted && !data.alreadyCaptured) {
+        const message = data.details || data.error || 'Payment capture failed.'
+        setError(message)
+        setCompletionConfirmError(message)
+        return
+      }
+
+      const refreshedJob = await fetchJobById(pending.jobId)
+      const paidAt = data?.paidAt ?? new Date().toISOString()
+      const completedJob =
+        refreshedJob?.status === 'completed'
+          ? refreshedJob
+          : fallbackJob
+            ? mergeWalkRequest(fallbackJob, {
+                ...fallbackJob,
+                status: 'completed',
+                payment_status: 'paid',
+                paid_at: paidAt,
+                service_completed_at: fallbackJob.service_completed_at ?? paidAt,
+              })
+            : null
+
+      setPendingCompletionConfirmation(null)
+      setCompletionConfirmError(null)
+      flowCompletedJobIdsRef.current.add(pending.jobId)
+      lifecyclePhaseRef.current.set(pending.jobId, 'completed')
+
+      if (completedJob) {
+        setCompletedJobs((prev) => {
+          const existing = prev.find((job) => job.id === completedJob.id) ?? null
+          const nextJob = {
+            ...(existing ?? {}),
+            ...completedJob,
+            hidden_by_client: hiddenHistoryIds.has(completedJob.id),
+            tip_amount: existing?.tip_amount ?? null,
+          }
+          const remaining = prev.filter((job) => job.id !== completedJob.id)
+          return [nextJob, ...remaining].sort((a, b) => getJobEventTime(b) - getJobEventTime(a))
+        })
+      }
+
+      clearActiveState()
+
+      if (pending.walkerId && !ratedJobIds.has(pending.jobId)) {
+        setCompletionJob({
+          jobId: pending.jobId,
+          walkerId: pending.walkerId,
+          walkerName: pending.walkerName,
+        })
+      }
+
+      void fetchCurrentAndLists()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Payment capture failed.'
+      if (import.meta.env.DEV) {
+        console.error('[confirmCompletion] Unhandled error:', err)
+      }
+      setError(message)
+      setCompletionConfirmError(message)
+    } finally {
+      setCompletionConfirming(false)
+    }
+  }, [
+    pendingCompletionConfirmation,
+    currentJob,
+    walkerNameById,
+    completedJobs,
+    fetchJobById,
+    hiddenHistoryIds,
+    ratedJobIds,
+    clearActiveState,
+    fetchCurrentAndLists,
+  ])
+
+  const rejectCompletion = useCallback(async () => {
+    const pending = pendingCompletionConfirmation
+    if (!pending) return
+
+    setError(null)
+    setCompletionConfirmError(null)
+
+    const { error: updateErr } = await supabase
+      .from('walk_requests')
+      .update({ service_completed_at: null })
+      .eq('id', pending.jobId)
+      .eq('client_id', profileId)
+      .eq('status', 'accepted')
+
+    if (updateErr) {
+      setError(updateErr.message)
+      return
+    }
+
+    setPendingCompletionConfirmation(null)
+    void fetchCurrentAndLists()
+  }, [pendingCompletionConfirmation, profileId, fetchCurrentAndLists])
 
   const cancelSearch = useCallback(async () => {
     if (!currentJobId) {
@@ -2257,6 +2524,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     completionRatingSubmitting,
     arrivalConfirming,
+    completionConfirming,
+    completionConfirmError,
+    pendingCompletionConfirmation,
+    confirmCompletion,
+    rejectCompletion,
     tipSubmitting,
     ratedJobIds,
 

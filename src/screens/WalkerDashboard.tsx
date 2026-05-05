@@ -1,5 +1,6 @@
 import { hapticMedium, hapticSuccess } from '../utils/haptics'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompactRatingList from '../components/CompactRatingList'
@@ -94,6 +95,7 @@ export default function WalkerDashboard({
   showOnboardingWowToken = 0,
   stripeReturnToken = 0,
 }: WalkerDashboardProps) {
+  const { t } = useTranslation()
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
   const photo = useProfilePhoto(profile.id)
@@ -980,18 +982,35 @@ export default function WalkerDashboard({
                   await hapticSuccess()
                   void flow.handleComplete(activeJob.id)
                 }}
-                disabled={flow.completingJobId === activeJob.id || !activeJobCanComplete}
+                disabled={
+                  flow.completingJobId === activeJob.id ||
+                  flow.pendingClientConfirmation === activeJob.id ||
+                  !activeJobCanComplete
+                }
                 style={{
                   ...completeBtnStyle,
-                  opacity: flow.completingJobId === activeJob.id || !activeJobCanComplete ? 0.7 : 1,
-                  cursor: flow.completingJobId === activeJob.id || !activeJobCanComplete ? 'not-allowed' : 'pointer',
+                  ...(flow.pendingClientConfirmation === activeJob.id ? pendingConfirmationBtnStyle : null),
+                  opacity:
+                    flow.completingJobId === activeJob.id ||
+                    flow.pendingClientConfirmation === activeJob.id ||
+                    !activeJobCanComplete
+                      ? 0.7
+                      : 1,
+                  cursor:
+                    flow.completingJobId === activeJob.id ||
+                    flow.pendingClientConfirmation === activeJob.id ||
+                    !activeJobCanComplete
+                      ? 'not-allowed'
+                      : 'pointer',
                 }}
               >
                 {flow.completingJobId === activeJob.id
                   ? 'Completing...'
-                  : activeJobCanComplete
-                    ? activeLabels.completeAction
-                    : 'Available at dispatch time'}
+                  : flow.pendingClientConfirmation === activeJob.id
+                    ? t('completion.walkerWaiting')
+                    : activeJobCanComplete
+                      ? activeLabels.completeAction
+                      : 'Available at dispatch time'}
               </button>
             </div>
           )}
@@ -1962,6 +1981,11 @@ const completeBtnStyle: React.CSSProperties = {
   lineHeight: 1.2,
   boxSizing: 'border-box',
   WebkitTapHighlightColor: 'transparent',
+}
+
+const pendingConfirmationBtnStyle: React.CSSProperties = {
+  background: '#F59E0B',
+  color: '#FFFFFF',
 }
 
 const serviceTimerPanelStyle: React.CSSProperties = {
