@@ -60,6 +60,10 @@ button {
   display: none;
 }
 
+.service-panel-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* ─── Splash screen ─── */
 
 .splash-dot {

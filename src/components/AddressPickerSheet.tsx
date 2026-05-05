@@ -62,7 +62,6 @@ export default function AddressPickerSheet({
   const [houseNumber, setHouseNumber] = useState(parsed.houseNumber)
   const [city, setCity] = useState(parsed.city)
   const [refreshing, setRefreshing] = useState(false)
-  const streetRef = useRef<HTMLInputElement>(null)
   const closingRef = useRef(false)
   const restoreDocumentStylesRef = useRef<(() => void) | null>(null)
 
@@ -84,13 +83,6 @@ export default function AddressPickerSheet({
     }
   }, [])
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (closingRef.current) return
-      streetRef.current?.focus()
-    }, 120)
-    return () => clearTimeout(timeout)
-  }, [])
 
   useEffect(() => {
     if (refreshing && !locationLoading) {
@@ -133,18 +125,14 @@ export default function AddressPickerSheet({
     <>
       <div style={overlayStyle} onClick={safeClose} />
       <div style={sheetStyle}>
+        <div style={handleStyle} />
+
         <div style={headerStyle}>
-          <span style={titleStyle}>{t('addressPicker.title')}</span>
-          <button type="button" onClick={safeClose} style={closeStyle}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+          <div style={titleStyle}>{t('addressPicker.title')}</div>
         </div>
 
         <button type="button" onClick={handleUseCurrentLocation} style={currentLocationBtnStyle} disabled={refreshing}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
             <circle cx="12" cy="12" r="3" />
             <line x1="12" y1="2" x2="12" y2="5" />
             <line x1="12" y1="19" x2="12" y2="22" />
@@ -157,14 +145,11 @@ export default function AddressPickerSheet({
           {refreshing && <span style={spinnerStyle} />}
         </button>
 
-        <div style={dividerStyle} />
-
         <div style={fieldsStyle}>
           <div style={fieldRowStyle}>
             <div style={fieldGroupStyle}>
               <label style={fieldLabelStyle}>{t('addressPicker.street')}</label>
               <input
-                ref={streetRef}
                 type="text"
                 value={street}
                 onChange={(e) => setStreet(e.target.value)}
@@ -227,33 +212,39 @@ export default function AddressPickerSheet({
 const overlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15,23,42,0.4)',
+  background: 'rgba(15,23,42,0.26)',
   zIndex: 9998,
 }
 
 const sheetStyle: CSSProperties = {
   position: 'fixed',
   bottom: 0,
-  left: 0,
-  right: 0,
+  left: 'env(safe-area-inset-left, 0px)',
+  right: 'env(safe-area-inset-right, 0px)',
   zIndex: 9999,
   background: '#FFFFFF',
   borderTopLeftRadius: 24,
   borderTopRightRadius: 24,
   boxShadow: '0 -8px 32px rgba(15,23,42,0.12)',
-  padding: '16px 20px calc(14px + env(safe-area-inset-bottom, 0px))',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 14,
-  maxHeight: '85dvh',
-  overflowY: 'auto',
-  WebkitOverflowScrolling: 'touch',
+  padding: '8px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
+  display: 'grid',
+  gap: 10,
+  boxSizing: 'border-box',
+  maxWidth: '100%',
+  overflowX: 'hidden',
+}
+
+const handleStyle: CSSProperties = {
+  width: 42,
+  height: 4,
+  borderRadius: 999,
+  background: '#CBD5E1',
+  margin: '0 auto 2px',
 }
 
 const headerStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
+  display: 'grid',
+  gap: 4,
 }
 
 const titleStyle: CSSProperties = {
@@ -262,30 +253,16 @@ const titleStyle: CSSProperties = {
   color: '#0F172A',
 }
 
-const closeStyle: CSSProperties = {
-  appearance: 'none',
-  border: 'none',
-  background: 'rgba(241,245,249,0.9)',
-  borderRadius: 999,
-  width: 32,
-  height: 32,
-  display: 'grid',
-  placeItems: 'center',
-  cursor: 'pointer',
-  color: '#64748B',
-  padding: 0,
-}
-
 const currentLocationBtnStyle: CSSProperties = {
   appearance: 'none',
   border: '1px solid rgba(59,130,246,0.2)',
   background: 'rgba(239,246,255,0.5)',
   borderRadius: 14,
-  padding: '12px 14px',
+  padding: '10px 12px',
   display: 'flex',
   alignItems: 'center',
-  gap: 12,
-  fontSize: 15,
+  gap: 10,
+  fontSize: 14,
   fontWeight: 700,
   color: '#1D4ED8',
   cursor: 'pointer',
@@ -294,8 +271,8 @@ const currentLocationBtnStyle: CSSProperties = {
 }
 
 const spinnerStyle: CSSProperties = {
-  width: 16,
-  height: 16,
+  width: 14,
+  height: 14,
   border: '2px solid rgba(59,130,246,0.2)',
   borderTopColor: '#3B82F6',
   borderRadius: '50%',
@@ -303,35 +280,29 @@ const spinnerStyle: CSSProperties = {
   flexShrink: 0,
 }
 
-const dividerStyle: CSSProperties = {
-  height: 1,
-  background: 'rgba(226,232,240,0.8)',
-  margin: '0 -4px',
-}
-
 const fieldsStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
+  gap: 8,
 }
 
 const fieldRowStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 72px',
-  gap: 10,
+  gridTemplateColumns: '1fr 68px',
+  gap: 8,
 }
 
 const fieldGroupStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 3,
 }
 
 const houseNumberGroupStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
-  width: 72,
+  gap: 3,
+  width: 68,
 }
 
 const fieldLabelStyle: CSSProperties = {
@@ -345,7 +316,7 @@ const fieldInputStyle: CSSProperties = {
   appearance: 'none',
   border: '1.5px solid rgba(226,232,240,0.95)',
   borderRadius: 12,
-  padding: '10px 12px',
+  padding: '9px 11px',
   fontSize: 16,
   fontWeight: 600,
   color: '#0F172A',
@@ -360,7 +331,7 @@ const fieldInputStyle: CSSProperties = {
 const confirmBtnStyle: CSSProperties = {
   appearance: 'none',
   border: 'none',
-  minHeight: 48,
+  minHeight: 46,
   borderRadius: 16,
   background: 'linear-gradient(180deg, #2563EB 0%, #1D4ED8 100%)',
   color: '#FFFFFF',

@@ -61,22 +61,31 @@ serve(async (req: Request) => {
     // Service role client for DB
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
 
-    // Verify caller is a walker
+    // Verify caller exists as a client for the client-confirmation completion path
     const { data: callerProfile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single()
 
-    if (profileError || !callerProfile || callerProfile.role !== 'walker') {
+    const callerRole = callerProfile?.role ?? null
+    if (profileError || !callerProfile || callerRole !== 'client') {
+      console.error('[capture-payment] Caller role not allowed:', {
+        request_id: 'unknown',
+        action: 'capture_payment',
+        caller_id: user.id,
+        caller_role: callerRole,
+        result: 'forbidden',
+        error: profileError?.message ?? 'Only the client can confirm completion and capture payment',
+      })
       return new Response(
-        JSON.stringify({ error: 'Only walkers can capture payments', _v: FUNCTION_VERSION }),
+        JSON.stringify({ error: 'Only the client can confirm completion and capture payment', _v: FUNCTION_VERSION }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
     // Parse body
-    let body: { jobId?: string }
+    let body: { jobId?: string; request_id?: string; requestId?: string }
     try {
       body = await req.json()
     } catch {
@@ -86,7 +95,17 @@ serve(async (req: Request) => {
       )
     }
 
-    const { jobId } = body
+    const rawJobId = body.jobId ?? body.request_id ?? body.requestId
+    const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : rawJobId
+
+    console.log(`[capture-payment][${FUNCTION_VERSION}] Parsed body:`, {
+      hasJobId: !!body.jobId,
+      hasRequestIdSnake: !!body.request_id,
+      hasRequestIdCamel: !!body.requestId,
+      jobId,
+      caller_id: user.id,
+    })
+
     if (!jobId) {
       return new Response(
         JSON.stringify({ error: 'Missing jobId', _v: FUNCTION_VERSION }),
@@ -94,34 +113,71 @@ serve(async (req: Request) => {
       )
     }
 
-    // Load the job
+    // Load the job with the service-role client. Use maybeSingle() so that
+    // a true zero-row result can be reported separately from an actual query error.
     const { data: job, error: jobError } = await supabaseAdmin
       .from('walk_requests')
       .select('id, walker_id, selected_walker_id, client_id, status, payment_status, stripe_payment_intent_id, dog_name, price, walker_earnings, walker_amount, platform_fee, amount, currency, service_started_at, service_completed_at')
       .eq('id', jobId)
-      .single()
+      .maybeSingle()
 
-    if (jobError || !job) {
-      console.error('[capture-payment] Job lookup failed:', jobError?.message, 'jobId:', jobId)
+    if (jobError) {
+      console.error('[capture-payment] Job lookup query failed:', {
+        jobId,
+        caller_id: user.id,
+        error: jobError.message,
+      })
       return new Response(
-        JSON.stringify({ error: 'Job not found', _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          error: 'Job lookup failed',
+          details: jobError.message,
+          jobId,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!job) {
+      console.error('[capture-payment] Job not found for id:', {
+        jobId,
+        caller_id: user.id,
+      })
+      return new Response(
+        JSON.stringify({ error: 'Job not found', jobId, _v: FUNCTION_VERSION }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
     console.log(`[capture-payment][${FUNCTION_VERSION}] Job loaded:`, {
+      request_id: job.id,
+      action: 'capture_payment',
+      caller_id: user.id,
+      caller_role: callerRole,
       id: job.id,
       walker_id: job.walker_id,
+      client_id: job.client_id,
       status: job.status,
       payment_status: job.payment_status,
       stripe_payment_intent_id: job.stripe_payment_intent_id,
     })
 
-    // Verify caller is the assigned walker
-    if (job.walker_id !== user.id) {
-      console.warn('[capture-payment] Walker mismatch:', { caller: user.id, walker_id: job.walker_id })
+    const callerIsClient = callerRole === 'client'
+    const callerOwnsJob = callerIsClient && job.client_id === user.id
+
+    // Verify caller is the owning client for this job
+    if (!callerOwnsJob) {
+      console.warn('[capture-payment] Caller mismatch:', {
+        request_id: job.id,
+        action: 'capture_payment',
+        caller: user.id,
+        caller_role: callerRole,
+        walker_id: job.walker_id,
+        client_id: job.client_id,
+        result: 'forbidden',
+      })
       return new Response(
-        JSON.stringify({ error: 'Only the assigned walker can complete this job', _v: FUNCTION_VERSION }),
+        JSON.stringify({ error: 'Only the client for this job can confirm completion', _v: FUNCTION_VERSION }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -137,23 +193,33 @@ serve(async (req: Request) => {
           p_amount: earnings,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
         }).catch((err: unknown) => console.error('[capture-payment] Wallet credit on idempotent path failed:', err))
+        await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+          console.error('[capture-payment] Payment notification on idempotent path failed:', err)
+        )
       }
       await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
         console.error('[capture-payment] Transfer on idempotent path failed:', err)
       )
       return new Response(
-        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCompleted: true, _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          success: true,
+          jobId: job.id,
+          status: 'completed',
+          paymentStatus: 'paid',
+          completedAt: job.service_completed_at,
+          alreadyCompleted: true,
+          _v: FUNCTION_VERSION,
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // ── Validate job is in a completable state ──────────────────
-    // Allow both 'accepted' (normal) and 'completed' (race: status updated but payment not yet captured)
-    if (job.status !== 'accepted' && job.status !== 'completed') {
+    // ── Validate job is in the client-confirmation completion state ────────
+    if (job.status !== 'accepted') {
       return new Response(
         JSON.stringify({
           error: `Job cannot be completed: current status is "${job.status}"`,
-          details: `Expected status 'accepted' or 'completed', got '${job.status}'`,
+          details: `Expected status 'accepted' for client confirmation, got '${job.status}'`,
           _v: FUNCTION_VERSION,
         }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -188,10 +254,23 @@ serve(async (req: Request) => {
       const now = new Date().toISOString()
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
+        .update({
+          status: 'completed',
+          payment_status: 'paid',
+          paid_at: now,
+          service_completed_at: job.service_completed_at ?? now,
+        })
         .eq('id', jobId)
       return new Response(
-        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', noPayment: true, _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          success: true,
+          jobId: job.id,
+          status: 'completed',
+          paymentStatus: 'paid',
+          completedAt: now,
+          noPayment: true,
+          _v: FUNCTION_VERSION,
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -225,7 +304,12 @@ serve(async (req: Request) => {
       const now = new Date().toISOString()
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
+        .update({
+          status: 'completed',
+          payment_status: 'paid',
+          paid_at: now,
+          service_completed_at: job.service_completed_at ?? now,
+        })
         .eq('id', jobId)
 
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
@@ -236,6 +320,9 @@ serve(async (req: Request) => {
           p_amount: earnings,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
         }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+        await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+          console.error('[capture-payment] Payment notification failed:', err)
+        )
       }
 
       await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
@@ -243,16 +330,29 @@ serve(async (req: Request) => {
       )
 
       return new Response(
-        JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCaptured: true, _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          success: true,
+          jobId: job.id,
+          status: 'completed',
+          paymentStatus: 'paid',
+          completedAt: now,
+          alreadyCaptured: true,
+          _v: FUNCTION_VERSION,
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
     if (pi.status === 'canceled') {
       console.warn(`[capture-payment][${FUNCTION_VERSION}] PI is canceled — cannot capture`)
+      const now = new Date().toISOString()
       await supabaseAdmin
         .from('walk_requests')
-        .update({ status: 'completed', payment_status: 'failed', service_completed_at: job.service_completed_at ?? new Date().toISOString() })
+        .update({
+          status: 'completed',
+          payment_status: 'failed',
+          service_completed_at: job.service_completed_at ?? now,
+        })
         .eq('id', jobId)
       return new Response(
         JSON.stringify({
@@ -318,7 +418,12 @@ serve(async (req: Request) => {
             const now = new Date().toISOString()
             await supabaseAdmin
               .from('walk_requests')
-              .update({ status: 'completed', payment_status: 'paid', paid_at: now, service_completed_at: job.service_completed_at ?? now })
+              .update({
+                status: 'completed',
+                payment_status: 'paid',
+                paid_at: now,
+                      service_completed_at: job.service_completed_at ?? now,
+              })
               .eq('id', jobId)
 
             const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
@@ -329,6 +434,9 @@ serve(async (req: Request) => {
                 p_amount: earnings,
                 p_description: `Walk completed: ${job.dog_name || 'walk'}`,
               }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+              await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+                console.error('[capture-payment] Payment notification failed:', err)
+              )
             }
 
             await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
@@ -336,7 +444,15 @@ serve(async (req: Request) => {
             )
 
             return new Response(
-              JSON.stringify({ success: true, jobId: job.id, paymentStatus: 'paid', alreadyCaptured: true, _v: FUNCTION_VERSION }),
+              JSON.stringify({
+                success: true,
+                jobId: job.id,
+                status: 'completed',
+                paymentStatus: 'paid',
+                completedAt: now,
+                alreadyCaptured: true,
+                _v: FUNCTION_VERSION,
+              }),
               { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
           }
@@ -403,6 +519,9 @@ serve(async (req: Request) => {
         console.error('[capture-payment] Wallet credit failed (non-blocking):', walletErr)
       } else {
         console.log('[capture-payment] Wallet credited:', walkerEarnings, 'for walker', job.walker_id)
+        await notifyWalkerPaymentReceived(supabaseAdmin, job, walkerEarnings).catch((err: unknown) =>
+          console.error('[capture-payment] Payment notification failed (non-blocking):', err)
+        )
       }
     }
 
@@ -417,7 +536,9 @@ serve(async (req: Request) => {
       JSON.stringify({
         success: true,
         jobId: job.id,
+        status: 'completed',
         paymentStatus: 'paid',
+        completedAt: now,
         paidAt: now,
         _v: FUNCTION_VERSION,
       }),
@@ -448,6 +569,43 @@ interface JobRow {
   stripe_payment_intent_id: string | null
   service_started_at?: string | null
   service_completed_at?: string | null
+}
+
+function formatIlsAmount(amount: number): string {
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/\.?0+$/, '')
+}
+
+async function notifyWalkerPaymentReceived(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  job: JobRow,
+  amount: number
+) {
+  if (!job.walker_id || !(amount > 0)) return
+
+  const serviceRecipientName = job.dog_name?.trim() || 'your service recipient'
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('notifications')
+    .select('id')
+    .eq('user_id', job.walker_id)
+    .eq('type', 'payment_received')
+    .eq('related_job_id', job.id)
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) throw existingError
+  if (existing) return
+
+  const { error: insertError } = await supabaseAdmin
+    .from('notifications')
+    .insert({
+      user_id: job.walker_id,
+      type: 'payment_received',
+      title: 'Payment Received',
+      message: `${formatIlsAmount(amount)} ILS has been added to your wallet for walking ${serviceRecipientName}.`,
+      related_job_id: job.id,
+    })
+
+  if (insertError) throw insertError
 }
 
 async function tryCreateTransfer(
