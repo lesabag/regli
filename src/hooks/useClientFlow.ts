@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { distanceKm, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
+import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
@@ -24,6 +25,14 @@ type SavedCard = {
   expMonth?: number
   expYear?: number
 } | null
+
+const DURATION_PRICE_BY_TYPE: Record<DurationType, number> = DURATION_OPTIONS.reduce(
+  (map, option) => {
+    map[option.value] = option.priceILS
+    return map
+  },
+  {} as Record<DurationType, number>,
+)
 
 type PaymentMethodsResponse = {
   customerId?: string
@@ -1043,7 +1052,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const elapsedSeconds = searchStartTime ? Math.floor((searchClockNow - searchStartTime) / 1000) : 0
 
   const selectedDuration = { label: duration ?? '' }
-  const adjustedPriceILS = duration === '20min' ? 36 : duration === '40min' ? 60 : duration === '60min' ? 80 : 0
+  const adjustedPriceILS = duration ? DURATION_PRICE_BY_TYPE[duration] ?? 0 : 0
 
   const ratedJobIds = useMemo(() => new Set(ratings.map((r) => r.job_id)), [ratings])
   const favoriteWalkerIds = useMemo(

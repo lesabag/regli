@@ -12,15 +12,15 @@ export const SERVICE_LABELS: Record<ServiceType, string> = {
 /** Prices in agorot (smallest ILS unit) */
 export const SERVICE_PRICES: Record<ServiceType, number> = {
   quick: 3000,
-  standard: 5000,
-  energy: 7000,
+  standard: 5500,
+  energy: 8000,
 }
 
 /** Prices in ILS for display */
 export const SERVICE_PRICES_ILS: Record<ServiceType, number> = {
   quick: 30,
-  standard: 50,
-  energy: 70,
+  standard: 55,
+  energy: 80,
 }
 
 // ─── Duration-based pricing (new UI model) ───────────────────────
@@ -36,8 +36,8 @@ export interface DurationOption {
 
 export const DURATION_OPTIONS: DurationOption[] = [
   { value: '20min', label: '20 min', minutes: 20, priceILS: 30, priceAgorot: 3000 },
-  { value: '40min', label: '40 min', minutes: 40, priceILS: 50, priceAgorot: 5000 },
-  { value: '60min', label: '60 min', minutes: 60, priceILS: 70, priceAgorot: 7000 },
+  { value: '40min', label: '40 min', minutes: 40, priceILS: 55, priceAgorot: 5500 },
+  { value: '60min', label: '60 min', minutes: 60, priceILS: 80, priceAgorot: 8000 },
 ]
 
 /** Map duration to legacy service type for backend compatibility */

@@ -11,8 +11,8 @@ const corsHeaders = {
 
 const SERVICE_PRICES: Record<string, number> = {
   quick: 3000,
-  standard: 5000,
-  energy: 7000,
+  standard: 5500,
+  energy: 8000,
 }
 
 const PLATFORM_FEE_PERCENT = 20
@@ -27,6 +27,13 @@ function normalizeCurrency(value: string | null | undefined): string | null {
 
 function resolveJobCurrency(value: string | null | undefined): string {
   return normalizeCurrency(value) ?? DEFAULT_MARKET_CURRENCY
+}
+
+function getServiceDurationMinutes(serviceType: string): number | null {
+  if (serviceType === 'quick') return 20
+  if (serviceType === 'standard') return 40
+  if (serviceType === 'energy') return 60
+  return null
 }
 
 function parseTimeZoneOffsetMinutes(offsetLabel: string): number | null {
@@ -349,6 +356,7 @@ serve(async (req: Request) => {
     const platformFee = Math.round((amount * PLATFORM_FEE_PERCENT) / 100)
     const walkerAmount = amount - platformFee
     const jobCurrency = resolveJobCurrency(requestedCurrency)
+    const durationMinutes = getServiceDurationMinutes(serviceType)
 
     if (!customerId || !paymentMethodId) {
       console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing saved payment method`, {
@@ -597,8 +605,8 @@ serve(async (req: Request) => {
         scheduled_fee_snapshot: amount / 100,
         scheduled_pricing_multiplier: surgeMultiplier,
         schedule_timezone: SCHEDULE_TIMEZONE,
-        requested_window_minutes:
-          serviceType === 'quick' ? 20 : serviceType === 'standard' ? 40 : serviceType === 'energy' ? 60 : null,
+        duration_minutes: durationMinutes,
+        requested_window_minutes: durationMinutes,
         amount,
         currency: jobCurrency,
         platform_fee_percent: PLATFORM_FEE_PERCENT,

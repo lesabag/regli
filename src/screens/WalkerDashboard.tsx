@@ -61,11 +61,9 @@ function friendlyError(raw: string): string {
   return raw
 }
 
-function durationFromPrice(price: number | null | undefined): string {
-  if (price == null) return '—'
-  if (price <= 30) return '20 min'
-  if (price <= 50) return '40 min'
-  return '60 min'
+function durationFromMinutes(minutes: number | null | undefined): string {
+  if (typeof minutes !== 'number' || minutes <= 0) return '—'
+  return `${minutes} min`
 }
 
 function formatRelativeDate(value: string | null | undefined): string {
@@ -186,7 +184,7 @@ export default function WalkerDashboard({
         : '—'
     : '—'
 
-  const requestDuration = topRequest?.price ? durationFromPrice(topRequest.price) : '—'
+  const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
   const topOffer = flow.activeOffers.find((offer) => offer.request_id === topRequest?.id) ?? null
 
   useEffect(() => {
@@ -203,12 +201,17 @@ export default function WalkerDashboard({
   const activeDurationSummary = useMemo(
     () =>
       getDurationSummary({
-        plannedMinutes: activeJob?.price ? (activeJob.price <= 30 ? 20 : activeJob.price <= 50 ? 40 : 60) : null,
+        plannedMinutes: activeJob?.duration_minutes ?? null,
         startedAt: activeJob?.service_started_at ?? null,
         completedAt: activeJob?.service_completed_at ?? null,
         now: serviceClockNow,
       }),
-    [activeJob?.price, activeJob?.service_started_at, activeJob?.service_completed_at, serviceClockNow],
+    [
+      activeJob?.duration_minutes,
+      activeJob?.service_started_at,
+      activeJob?.service_completed_at,
+      serviceClockNow,
+    ],
   )
 
   const completionJobDetails = useMemo(
@@ -222,18 +225,12 @@ export default function WalkerDashboard({
   const completionDurationSummary = useMemo(
     () =>
       getDurationSummary({
-        plannedMinutes: completionJobDetails?.price
-          ? completionJobDetails.price <= 30
-            ? 20
-            : completionJobDetails.price <= 50
-              ? 40
-              : 60
-          : null,
+        plannedMinutes: completionJobDetails?.duration_minutes ?? null,
         startedAt: completionJobDetails?.service_started_at ?? null,
         completedAt: completionJobDetails?.service_completed_at ?? null,
       }),
     [
-      completionJobDetails?.price,
+      completionJobDetails?.duration_minutes,
       completionJobDetails?.service_started_at,
       completionJobDetails?.service_completed_at,
     ],
@@ -267,6 +264,7 @@ export default function WalkerDashboard({
           rating: ratingInfo?.rating ?? null,
           review: ratingInfo?.review ?? null,
           price: j.walker_earnings ?? (j.price != null ? Math.round(j.price * 0.8) : null),
+          duration_minutes: j.duration_minutes ?? null,
           tip_amount: j.tip_amount ?? null,
           status: j.status,
           created_at: j.created_at,
@@ -1292,7 +1290,7 @@ function ConnectOnboardingCard({
     <div style={connectCardStyle}>
       <div style={connectTitleStyle}>Payout setup</div>
       {loading ? (
-        <div style={connectSubStyle}>Loading payout status...</div>
+        <div style={connectSubStyle}>Checking payout status...</div>
       ) : error ? (
         <div style={connectErrorStyle}>{error}</div>
       ) : status?.connected && status.stripe_connect_onboarding_complete && status.payouts_enabled ? (

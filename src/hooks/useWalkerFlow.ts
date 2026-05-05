@@ -38,6 +38,7 @@ interface WalkRequestRow {
   notes: string | null
   created_at: string | null
   price: number | null
+  duration_minutes?: number | null
   platform_fee: number | null
   walker_earnings: number | null
   payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
@@ -81,6 +82,7 @@ interface DispatchOfferRow {
   notes: string | null
   request_created_at: string | null
   price: number | null
+  duration_minutes?: number | null
   platform_fee: number | null
   walker_earnings: number | null
   payment_status: 'unpaid' | 'authorized' | 'paid' | 'failed' | 'refunded'
@@ -196,6 +198,8 @@ const IDLE_WALKER_POLL_MS = 12_000
 const ACTIVE_WALKER_POLL_MS = 4_000
 const IDLE_LOCATION_BROADCAST_MS = 15_000
 const ACTIVE_LOCATION_BROADCAST_MS = 5_000
+const CONNECT_STATUS_RETRY_DELAY_MS = 1_000
+const CONNECT_STATUS_MAX_ATTEMPTS = 3
 
 function completionDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_dismissed_${profileId}`
@@ -338,6 +342,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const [connectStatus, setConnectStatus] = useState<ConnectStatus | null>(null)
   const [connectLoading, setConnectLoading] = useState(true)
   const [connectError, setConnectError] = useState<string | null>(null)
+  const connectStatusRequestRef = useRef<Promise<ConnectStatus | null> | null>(null)
 
   const [completingJobId, setCompletingJobId] = useState<string | null>(null)
   const [pendingClientConfirmation, setPendingClientConfirmation] = useState<string | null>(null)
@@ -895,7 +900,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setError(null)
 
     const selectFields =
-      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, created_at, price, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
+      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
 
     const now = new Date().toISOString()
     let acceptedJobsFromAttempts: WalkRequestRow[] = []
@@ -917,6 +922,63 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     let offers = ((offersData as DispatchOfferRow[] | null) ?? []).filter(
       (offer) => !declinedIds.has(offer.request_id),
     )
+
+    const offerRequestIds = [...new Set(offers.map((offer) => offer.request_id))]
+    if (offerRequestIds.length > 0) {
+      const { data: offerRequestRowsData, error: offerRequestsErr } = await supabase
+        .from('walk_requests')
+        .select(selectFields)
+        .in('id', offerRequestIds)
+        .in('status', ['open', 'accepted'])
+
+      if (offerRequestsErr) {
+        console.warn('[useWalkerFlow] live offer request details unavailable:', offerRequestsErr.message)
+      } else {
+        const offerRequestById = new Map(
+          (((offerRequestRowsData as Record<string, unknown>[] | null) ?? []).map((row) => ({
+            ...row,
+            client: Array.isArray(row.client) ? row.client[0] || null : row.client,
+          })) as WalkRequestRow[]).map((request) => [request.id, request]),
+        )
+
+        offers = offers.map((offer) => {
+          const request = offerRequestById.get(offer.request_id)
+          if (!request) return offer
+
+          return {
+            ...offer,
+            client_id: request.client_id ?? offer.client_id ?? null,
+            selected_walker_id: request.selected_walker_id ?? offer.selected_walker_id ?? null,
+            dog_name: request.dog_name ?? offer.dog_name ?? null,
+            location: request.location ?? offer.location ?? null,
+            address: request.address ?? offer.address ?? null,
+            notes: request.notes ?? offer.notes ?? null,
+            request_created_at: request.created_at ?? offer.request_created_at ?? null,
+            price: request.price ?? offer.price ?? null,
+            duration_minutes: request.duration_minutes ?? offer.duration_minutes ?? null,
+            platform_fee: request.platform_fee ?? offer.platform_fee ?? null,
+            walker_earnings: request.walker_earnings ?? offer.walker_earnings ?? null,
+            payment_status: request.payment_status ?? offer.payment_status,
+            paid_at: request.paid_at ?? offer.paid_at ?? null,
+            stripe_payment_intent_id:
+              request.stripe_payment_intent_id ?? offer.stripe_payment_intent_id ?? null,
+            service_type: request.service_type ?? offer.service_type ?? null,
+            provider_arrived_at: request.provider_arrived_at ?? offer.provider_arrived_at ?? null,
+            client_arrival_confirmed_at:
+              request.client_arrival_confirmed_at ?? offer.client_arrival_confirmed_at ?? null,
+            service_started_at: request.service_started_at ?? offer.service_started_at ?? null,
+            service_completed_at:
+              request.service_completed_at ?? offer.service_completed_at ?? null,
+            booking_timing: request.booking_timing ?? offer.booking_timing,
+            scheduled_for: request.scheduled_for ?? offer.scheduled_for ?? null,
+            dispatch_state: request.dispatch_state ?? offer.dispatch_state,
+            smart_dispatch_state: request.smart_dispatch_state ?? offer.smart_dispatch_state,
+            client_full_name: request.client?.full_name ?? offer.client_full_name,
+            client_email: request.client?.email ?? offer.client_email,
+          }
+        })
+      }
+    }
 
     const { data: candidateRows, error: candidatesErr } = await supabase
       .from('dispatch_candidates')
@@ -1018,6 +1080,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               notes: request?.notes ?? null,
               request_created_at: request?.created_at ?? attempt.created_at,
               price: request?.price ?? null,
+              duration_minutes: request?.duration_minutes ?? null,
               platform_fee: request?.platform_fee ?? null,
               walker_earnings: request?.walker_earnings ?? null,
               payment_status: request?.payment_status ?? 'authorized',
@@ -1056,11 +1119,17 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             notes: request?.notes ?? null,
             created_at: request?.created_at ?? attempt.created_at,
             price: request?.price ?? null,
+            duration_minutes: request?.duration_minutes ?? null,
             platform_fee: request?.platform_fee ?? null,
             walker_earnings: request?.walker_earnings ?? null,
             payment_status: request?.payment_status ?? 'authorized',
             paid_at: request?.paid_at ?? null,
             stripe_payment_intent_id: request?.stripe_payment_intent_id ?? null,
+            service_type: request?.service_type ?? null,
+            provider_arrived_at: request?.provider_arrived_at ?? null,
+            client_arrival_confirmed_at: request?.client_arrival_confirmed_at ?? null,
+            service_started_at: request?.service_started_at ?? null,
+            service_completed_at: request?.service_completed_at ?? null,
             booking_timing: request?.booking_timing,
             scheduled_for: request?.scheduled_for ?? null,
             dispatch_state:
@@ -1086,6 +1155,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       notes: offer.notes,
       created_at: offer.request_created_at,
       price: offer.price,
+      duration_minutes: offer.duration_minutes ?? null,
       platform_fee: offer.platform_fee,
       walker_earnings: offer.walker_earnings,
       payment_status: offer.payment_status,
@@ -1279,33 +1349,53 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   }, [profileId])
 
   const fetchConnectStatus = useCallback(async () => {
-    setConnectLoading(true)
-    setConnectError(null)
-    try {
-      const hasAuth = await prepareEdgeFunctionAuth()
-      if (!hasAuth) {
-        setConnectError('Authentication issue. Please refresh and try again.')
-        setConnectLoading(false)
-        return null
-      }
-      const { data, error } = await invokeEdgeFunction<ConnectStatus>('get-connect-status')
-      if (error) {
-        setConnectError(error || 'Failed to load payout account status.')
-        setConnectLoading(false)
-        return null
-      }
-      if (!data) {
-        setConnectError('Empty response.')
-        setConnectLoading(false)
-        return null
-      }
-      setConnectStatus(data as ConnectStatus)
+    if (connectStatusRequestRef.current) {
+      return connectStatusRequestRef.current
+    }
+
+    const request = (async () => {
+      setConnectLoading(true)
       setConnectError(null)
-      return data as ConnectStatus
-    } catch {
-      setConnectError('Failed to load payout account status.')
+
+      let lastErrorMessage: string | null = null
+
+      for (let attempt = 1; attempt <= CONNECT_STATUS_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          const hasAuth = await prepareEdgeFunctionAuth()
+          if (!hasAuth) {
+            lastErrorMessage = 'Authentication issue. Please refresh and try again.'
+          } else {
+            const { data, error } = await invokeEdgeFunction<ConnectStatus>('get-connect-status')
+            if (error) {
+              lastErrorMessage = error || 'Failed to load payout account status.'
+            } else if (!data) {
+              lastErrorMessage = 'Failed to load payout account status.'
+            } else {
+              const nextStatus = data as ConnectStatus
+              setConnectStatus(nextStatus)
+              setConnectError(null)
+              return nextStatus
+            }
+          }
+        } catch {
+          lastErrorMessage = 'Failed to load payout account status.'
+        }
+
+        if (attempt < CONNECT_STATUS_MAX_ATTEMPTS) {
+          await new Promise((resolve) => window.setTimeout(resolve, CONNECT_STATUS_RETRY_DELAY_MS))
+        }
+      }
+
+      setConnectError(lastErrorMessage || 'Failed to load payout account status.')
       return null
+    })()
+
+    connectStatusRequestRef.current = request
+
+    try {
+      return await request
     } finally {
+      connectStatusRequestRef.current = null
       setConnectLoading(false)
     }
   }, [])
