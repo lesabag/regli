@@ -193,7 +193,7 @@ async function handlePaymentIntentSucceeded(supabaseAdmin: SupabaseAdmin, event:
 
   const { data: job, error: findErr } = await supabaseAdmin
     .from('walk_requests')
-    .select('id, payment_status, walker_id, walker_amount, walker_earnings, price, dog_name')
+    .select('id, payment_status, walker_id, walker_amount, walker_earnings, price, dog_name, currency')
     .eq('stripe_payment_intent_id', pi.id)
     .single()
 
@@ -232,6 +232,7 @@ async function handlePaymentIntentSucceeded(supabaseAdmin: SupabaseAdmin, event:
         p_walker_id: job.walker_id,
         p_job_id: job.id,
         p_amount: earnings,
+        p_currency: pi.currency || job.currency || 'ils',
         p_description: `Walk completed: ${job.dog_name || 'walk'}`,
       })
       if (walletErr) {

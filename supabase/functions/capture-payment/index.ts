@@ -2,12 +2,14 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v4_service_completion_gate_2026_04_23'
+const FUNCTION_VERSION = 'v5_admin_dispute_capture_2026_05_05'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
+
+const DEFAULT_MARKET_CURRENCY = 'ils'
 
 console.log(`[capture-payment] ====== FUNCTION LOADED — VERSION: ${FUNCTION_VERSION} ======`)
 
@@ -61,7 +63,7 @@ serve(async (req: Request) => {
     // Service role client for DB
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
 
-    // Verify caller exists as a client for the client-confirmation completion path
+    // Verify caller role for the completion path
     const { data: callerProfile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('role')
@@ -69,23 +71,30 @@ serve(async (req: Request) => {
       .single()
 
     const callerRole = callerProfile?.role ?? null
-    if (profileError || !callerProfile || callerRole !== 'client') {
+    const callerIsAdmin = callerRole === 'admin'
+    const callerIsClient = callerRole === 'client'
+    if (profileError || !callerProfile || (!callerIsClient && !callerIsAdmin)) {
       console.error('[capture-payment] Caller role not allowed:', {
         request_id: 'unknown',
         action: 'capture_payment',
         caller_id: user.id,
         caller_role: callerRole,
         result: 'forbidden',
-        error: profileError?.message ?? 'Only the client can confirm completion and capture payment',
+        error: profileError?.message ?? 'Only the client or an admin can capture payment',
       })
       return new Response(
-        JSON.stringify({ error: 'Only the client can confirm completion and capture payment', _v: FUNCTION_VERSION }),
+        JSON.stringify({ error: 'Only the client or an admin can capture payment', _v: FUNCTION_VERSION }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
     // Parse body
-    let body: { jobId?: string; request_id?: string; requestId?: string }
+    let body: {
+      jobId?: string
+      request_id?: string
+      requestId?: string
+      adminDisputeApproval?: boolean
+    }
     try {
       body = await req.json()
     } catch {
@@ -102,6 +111,7 @@ serve(async (req: Request) => {
       hasJobId: !!body.jobId,
       hasRequestIdSnake: !!body.request_id,
       hasRequestIdCamel: !!body.requestId,
+      adminDisputeApproval: body.adminDisputeApproval === true,
       jobId,
       caller_id: user.id,
     })
@@ -117,7 +127,7 @@ serve(async (req: Request) => {
     // a true zero-row result can be reported separately from an actual query error.
     const { data: job, error: jobError } = await supabaseAdmin
       .from('walk_requests')
-      .select('id, walker_id, selected_walker_id, client_id, status, payment_status, stripe_payment_intent_id, dog_name, price, walker_earnings, walker_amount, platform_fee, amount, currency, service_started_at, service_completed_at')
+      .select('id, walker_id, selected_walker_id, client_id, status, payment_status, stripe_payment_intent_id, dog_name, price, walker_earnings, walker_amount, platform_fee, amount, currency, service_started_at, service_completed_at, notes')
       .eq('id', jobId)
       .maybeSingle()
 
@@ -162,11 +172,13 @@ serve(async (req: Request) => {
       stripe_payment_intent_id: job.stripe_payment_intent_id,
     })
 
-    const callerIsClient = callerRole === 'client'
     const callerOwnsJob = callerIsClient && job.client_id === user.id
+    const jobIsDisputed = isCompletionReviewRequired(job.notes)
+    const isAdminApproval = callerIsAdmin || body.adminDisputeApproval === true
+    const canAdminResolveDisputedCapture = isAdminApproval && jobIsDisputed
 
-    // Verify caller is the owning client for this job
-    if (!callerOwnsJob) {
+    // Verify caller is the owning client, or an admin resolving a disputed job
+    if (!callerOwnsJob && !canAdminResolveDisputedCapture) {
       console.warn('[capture-payment] Caller mismatch:', {
         request_id: job.id,
         action: 'capture_payment',
@@ -174,10 +186,15 @@ serve(async (req: Request) => {
         caller_role: callerRole,
         walker_id: job.walker_id,
         client_id: job.client_id,
+        disputed: jobIsDisputed,
+        admin_approval: isAdminApproval,
         result: 'forbidden',
       })
       return new Response(
-        JSON.stringify({ error: 'Only the client for this job can confirm completion', _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          error: 'Only the client can confirm completion and capture payment',
+          _v: FUNCTION_VERSION,
+        }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -185,15 +202,27 @@ serve(async (req: Request) => {
     // ── Idempotent: already completed + paid ────────────────────
     if (job.status === 'completed' && job.payment_status === 'paid') {
       console.log(`[capture-payment][${FUNCTION_VERSION}] Job already completed and paid, ensuring wallet credit`)
+      if (jobIsDisputed) {
+        await supabaseAdmin
+          .from('walk_requests')
+          .update({ notes: removeCompletionReviewMarker(job.notes) })
+          .eq('id', job.id)
+      }
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
       if (earnings > 0) {
         await supabaseAdmin.rpc('credit_walker_wallet', {
           p_walker_id: job.walker_id,
           p_job_id: job.id,
           p_amount: earnings,
+          p_currency: normalizeCurrency(job.currency) ?? DEFAULT_MARKET_CURRENCY,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
         }).catch((err: unknown) => console.error('[capture-payment] Wallet credit on idempotent path failed:', err))
-        await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+        await notifyWalkerPaymentReceived(
+          supabaseAdmin,
+          job,
+          earnings,
+          normalizeCurrency(job.currency) ?? DEFAULT_MARKET_CURRENCY,
+        ).catch((err: unknown) =>
           console.error('[capture-payment] Payment notification on idempotent path failed:', err)
         )
       }
@@ -259,6 +288,8 @@ serve(async (req: Request) => {
           payment_status: 'paid',
           paid_at: now,
           service_completed_at: job.service_completed_at ?? now,
+          currency: normalizeCurrency(job.currency) ?? DEFAULT_MARKET_CURRENCY,
+          notes: removeCompletionReviewMarker(job.notes),
         })
         .eq('id', jobId)
       return new Response(
@@ -309,6 +340,7 @@ serve(async (req: Request) => {
           payment_status: 'paid',
           paid_at: now,
           service_completed_at: job.service_completed_at ?? now,
+          notes: removeCompletionReviewMarker(job.notes),
         })
         .eq('id', jobId)
 
@@ -318,9 +350,10 @@ serve(async (req: Request) => {
           p_walker_id: job.walker_id,
           p_job_id: job.id,
           p_amount: earnings,
+          p_currency: pi.currency,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
         }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
-        await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+        await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings, pi.currency).catch((err: unknown) =>
           console.error('[capture-payment] Payment notification failed:', err)
         )
       }
@@ -422,7 +455,9 @@ serve(async (req: Request) => {
                 status: 'completed',
                 payment_status: 'paid',
                 paid_at: now,
-                      service_completed_at: job.service_completed_at ?? now,
+                service_completed_at: job.service_completed_at ?? now,
+                currency: freshPi.currency,
+                notes: removeCompletionReviewMarker(job.notes),
               })
               .eq('id', jobId)
 
@@ -432,9 +467,10 @@ serve(async (req: Request) => {
                 p_walker_id: job.walker_id,
                 p_job_id: job.id,
                 p_amount: earnings,
+                p_currency: freshPi.currency,
                 p_description: `Walk completed: ${job.dog_name || 'walk'}`,
               }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
-              await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings).catch((err: unknown) =>
+              await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings, freshPi.currency).catch((err: unknown) =>
                 console.error('[capture-payment] Payment notification failed:', err)
               )
             }
@@ -496,7 +532,9 @@ serve(async (req: Request) => {
         status: 'completed',
         payment_status: 'paid',
         paid_at: now,
+        currency: capturedIntent.currency,
         service_completed_at: job.service_completed_at ?? now,
+        notes: removeCompletionReviewMarker(job.notes),
       })
       .eq('id', jobId)
 
@@ -513,13 +551,19 @@ serve(async (req: Request) => {
         p_walker_id: job.walker_id,
         p_job_id: job.id,
         p_amount: walkerEarnings,
+        p_currency: capturedIntent.currency,
         p_description: `Walk completed: ${job.dog_name || 'walk'}`,
       })
       if (walletErr) {
         console.error('[capture-payment] Wallet credit failed (non-blocking):', walletErr)
       } else {
         console.log('[capture-payment] Wallet credited:', walkerEarnings, 'for walker', job.walker_id)
-        await notifyWalkerPaymentReceived(supabaseAdmin, job, walkerEarnings).catch((err: unknown) =>
+        await notifyWalkerPaymentReceived(
+          supabaseAdmin,
+          job,
+          walkerEarnings,
+          capturedIntent.currency,
+        ).catch((err: unknown) =>
           console.error('[capture-payment] Payment notification failed (non-blocking):', err)
         )
       }
@@ -569,20 +613,62 @@ interface JobRow {
   stripe_payment_intent_id: string | null
   service_started_at?: string | null
   service_completed_at?: string | null
+  notes?: string | null
 }
 
-function formatIlsAmount(amount: number): string {
+const COMPLETION_REVIEW_MARKER = '[SYSTEM:COMPLETION_DISPUTED]'
+
+function isCompletionReviewRequired(notes: string | null | undefined): boolean {
+  return typeof notes === 'string'
+    ? notes
+        .split('\n')
+        .some((line) => line.trim().startsWith(COMPLETION_REVIEW_MARKER))
+    : false
+}
+
+function removeCompletionReviewMarker(notes: string | null | undefined): string | null {
+  if (typeof notes !== 'string') return null
+  const nextNotes = notes
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => !line.trim().startsWith(COMPLETION_REVIEW_MARKER))
+    .join('\n')
+    .trim()
+
+  return nextNotes || null
+}
+
+function normalizeCurrency(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z]{3}$/.test(normalized) ? normalized : null
+}
+
+function currencyLabel(value: string | null | undefined): string {
+  return (normalizeCurrency(value) ?? DEFAULT_MARKET_CURRENCY).toUpperCase()
+}
+
+function formatAmount(amount: number): string {
   return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/\.?0+$/, '')
+}
+
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
 }
 
 async function notifyWalkerPaymentReceived(
   supabaseAdmin: ReturnType<typeof createClient>,
   job: JobRow,
-  amount: number
+  amount: number,
+  paymentCurrency: string | null | undefined
 ) {
   if (!job.walker_id || !(amount > 0)) return
 
   const serviceRecipientName = job.dog_name?.trim() || 'your service recipient'
+  const displayCurrency = currencyLabel(paymentCurrency)
   const { data: existing, error: existingError } = await supabaseAdmin
     .from('notifications')
     .select('id')
@@ -601,7 +687,7 @@ async function notifyWalkerPaymentReceived(
       user_id: job.walker_id,
       type: 'payment_received',
       title: 'Payment Received',
-      message: `${formatIlsAmount(amount)} ILS has been added to your wallet for walking ${serviceRecipientName}.`,
+      message: `${formatAmount(amount)} ${displayCurrency} has been added to your wallet for walking ${serviceRecipientName}.`,
       related_job_id: job.id,
     })
 
@@ -665,27 +751,80 @@ async function tryCreateTransfer(
     return
   }
 
-  // Convert to smallest unit (cents/agorot) for Stripe
-  const transferAmountSmallest = Math.round(netAmount * 100)
-
   // Get charge ID and real currency directly from the PaymentIntent
   // CRITICAL: Do NOT use job.currency — it may be wrong (e.g. 'ils' when Stripe charge is 'usd')
   const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
 
-  let chargeId: string | undefined
-  let transferCurrency = 'usd' // safe default matching production Stripe account currency
+  let paymentIntentId: string | null = job.stripe_payment_intent_id
+  let paymentIntentCurrency: string | null = null
+  let latestChargeId: string | null = null
+  let chargeCurrency: string | null = null
+  let balanceTransactionCurrency: string | null = null
+  let balanceTransactionAmountSmallest: number | null = null
+  let transferCurrencyUsed: string | null = null
+  let sourceTransactionUsed: string | null = null
+  let stripeTransferAmountUsed: number | null = null
 
   if (job.stripe_payment_intent_id) {
     try {
-      const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
-      chargeId = pi.latest_charge as string | undefined
-      transferCurrency = pi.currency // authoritative currency from Stripe
+      const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id, {
+        expand: ['latest_charge.balance_transaction'],
+      })
+      paymentIntentCurrency = normalizeCurrency(pi.currency)
+      const latestCharge = typeof pi.latest_charge === 'string' ? null : pi.latest_charge
+      const balanceTransaction =
+        latestCharge && typeof latestCharge.balance_transaction !== 'string'
+          ? latestCharge.balance_transaction
+          : null
+
+      latestChargeId = latestCharge?.id ?? (typeof pi.latest_charge === 'string' ? pi.latest_charge : null)
+      chargeCurrency = normalizeCurrency(latestCharge?.currency)
+      balanceTransactionCurrency = normalizeCurrency(balanceTransaction?.currency)
+      balanceTransactionAmountSmallest =
+        typeof balanceTransaction?.amount === 'number' ? Math.abs(balanceTransaction.amount) : null
+      transferCurrencyUsed = balanceTransactionCurrency ?? chargeCurrency ?? paymentIntentCurrency
+      sourceTransactionUsed = latestChargeId
+      const normalizedJobCurrency = normalizeCurrency(job.currency)
+      if (normalizedJobCurrency && transferCurrencyUsed && normalizedJobCurrency !== transferCurrencyUsed) {
+        console.error('[transfer] CURRENCY MISMATCH detected:', {
+          jobId: job.id,
+          jobCurrency: normalizedJobCurrency,
+          paymentIntentId,
+          paymentIntentCurrency,
+          latestChargeId,
+          chargeCurrency,
+          balanceTransactionCurrency,
+          balanceTransactionAmountSmallest,
+          transferCurrencyUsed,
+          sourceTransactionUsed,
+        })
+      }
+
+      if (!latestChargeId || !transferCurrencyUsed || !balanceTransactionAmountSmallest) {
+        console.error('[transfer] ABORTING transfer — missing charge or balance transaction details', {
+          jobId: job.id,
+          paymentIntentId: pi.id,
+          paymentIntentCurrency,
+          latestChargeId,
+          chargeCurrency,
+          balanceTransactionCurrency,
+          balanceTransactionAmountSmallest,
+          transferCurrencyUsed,
+          sourceTransactionUsed,
+        })
+        return
+      }
 
       console.log('[transfer] PI retrieved:', {
         jobId: job.id,
         piId: pi.id,
-        piCurrency: pi.currency,
-        chargeId: chargeId || 'none',
+        piCurrency: paymentIntentCurrency,
+        latestChargeId,
+        chargeCurrency,
+        balanceTransactionCurrency,
+        balanceTransactionAmountSmallest,
+        transferCurrencyUsed,
+        sourceTransactionUsed,
         jobCurrency: job.currency,
       })
     } catch (err) {
@@ -695,6 +834,28 @@ async function tryCreateTransfer(
     }
   } else {
     console.error('[transfer] No stripe_payment_intent_id on job', job.id, '— cannot determine currency')
+    return
+  }
+
+  const netRatio = clampRatio(netAmount / grossAmount)
+  stripeTransferAmountUsed = Math.round((balanceTransactionAmountSmallest ?? 0) * netRatio)
+
+  if (!(stripeTransferAmountUsed > 0)) {
+    console.error('[transfer] ABORTING transfer — derived transfer amount is zero', {
+      jobId: job.id,
+      grossAmount,
+      netAmount,
+      netRatio,
+      paymentIntentId,
+      paymentIntentCurrency,
+      latestChargeId,
+      chargeCurrency,
+      balanceTransactionCurrency,
+      balanceTransactionAmountSmallest,
+      transferCurrencyUsed,
+      stripeTransferAmountUsed,
+      sourceTransactionUsed,
+    })
     return
   }
 
@@ -708,7 +869,7 @@ async function tryCreateTransfer(
         gross_amount: grossAmount,
         platform_fee: platformFee,
         net_amount: netAmount,
-        currency: transferCurrency,
+        currency: transferCurrencyUsed,
         status: 'processing',
       })
 
@@ -723,7 +884,7 @@ async function tryCreateTransfer(
       .from('walker_payouts')
       .update({
         status: 'processing',
-        currency: transferCurrency,
+        currency: transferCurrencyUsed,
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id)
@@ -738,43 +899,64 @@ async function tryCreateTransfer(
   // Create the Stripe Transfer
   try {
     console.log('[FINAL TRANSFER CALL]', {
-      transferCurrency,
+      paymentIntentId,
+      paymentIntentCurrency,
+      latestChargeId,
+      chargeCurrency,
+      balanceTransactionCurrency,
+      balanceTransactionAmountSmallest,
+      transferCurrencyUsed,
+      stripeTransferAmountUsed,
+      sourceTransactionUsed,
       jobCurrency: job.currency,
-      amount: transferAmountSmallest,
-      chargeId: chargeId || 'none',
       destination: walkerProfile.stripe_connect_account_id,
-      hasSourceTransaction: !!chargeId,
+      hasSourceTransaction: !!sourceTransactionUsed,
     })
 
     const transferParams: Stripe.TransferCreateParams = {
-      amount: transferAmountSmallest,
-      currency: transferCurrency,
+      amount: stripeTransferAmountUsed,
+      currency: transferCurrencyUsed,
       destination: walkerProfile.stripe_connect_account_id,
       metadata: {
         job_id: job.id,
         walker_id: walkerId,
         payment_intent_id: job.stripe_payment_intent_id,
+        payment_intent_currency: paymentIntentCurrency ?? '',
+        charge_currency: chargeCurrency ?? '',
+        balance_transaction_currency: balanceTransactionCurrency ?? '',
+        balance_transaction_amount: String(balanceTransactionAmountSmallest ?? ''),
+        stripe_transfer_amount_used: String(stripeTransferAmountUsed),
+        job_currency: normalizeCurrency(job.currency) ?? '',
+        job_gross_amount: grossAmount.toFixed(2),
+        job_net_amount: netAmount.toFixed(2),
       },
     }
 
-    // source_transaction links transfer to the specific charge.
-    // Stripe inherits transfer_group from the charge, so we must NOT set it again.
-    if (chargeId) {
-      transferParams.source_transaction = chargeId
-    } else {
-      transferParams.transfer_group = job.id
+    if (!sourceTransactionUsed) {
+      console.error('[transfer] ABORTING transfer — missing source_transaction', {
+        jobId: job.id,
+        paymentIntentId,
+        paymentIntentCurrency,
+        latestChargeId,
+        chargeCurrency,
+        balanceTransactionCurrency,
+        transferCurrencyUsed,
+        sourceTransactionUsed,
+      })
+      return
     }
+    transferParams.source_transaction = sourceTransactionUsed
 
     const transfer = await stripe.transfers.create(transferParams)
 
-    console.log('[transfer] Created:', transfer.id, 'for job', job.id, 'amount', transferAmountSmallest, transferCurrency)
+    console.log('[transfer] Created:', transfer.id, 'for job', job.id, 'amount', stripeTransferAmountUsed, transferCurrencyUsed)
 
     await supabaseAdmin
       .from('walker_payouts')
       .update({
         stripe_transfer_id: transfer.id,
         status: 'transferred',
-        currency: transferCurrency,
+        currency: transferCurrencyUsed,
         failure_reason: null,
         updated_at: new Date().toISOString(),
       })

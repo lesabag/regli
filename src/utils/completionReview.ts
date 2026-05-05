@@ -1,4 +1,4 @@
-const COMPLETION_REVIEW_MARKER = '[SYSTEM:COMPLETION_DISPUTED]'
+export const COMPLETION_REVIEW_MARKER = '[SYSTEM:COMPLETION_DISPUTED]'
 
 function normalizeNotes(notes: string | null | undefined): string {
   return typeof notes === 'string' ? notes.trim() : ''
@@ -13,6 +13,8 @@ export function isCompletionReviewRequired(notes: string | null | undefined): bo
     .split('\n')
     .some((line) => line.trim().startsWith(COMPLETION_REVIEW_MARKER))
 }
+
+export const isDisputed = isCompletionReviewRequired
 
 export function appendCompletionReviewMarker(
   notes: string | null | undefined,
@@ -36,4 +38,8 @@ export function removeCompletionReviewMarker(notes: string | null | undefined): 
 
   const nextNotes = remainingLines.join('\n').trim()
   return nextNotes || null
+}
+
+export function cleanCompletionReviewNotes(notes: string | null | undefined): string {
+  return removeCompletionReviewMarker(notes) ?? ''
 }

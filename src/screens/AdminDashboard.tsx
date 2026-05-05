@@ -8,6 +8,7 @@ import AdminKpiPanel from '../components/AdminKpiPanel'
 import AdminPricing from '../components/AdminPricing'
 import AdminRecentFailures from '../components/AdminRecentFailures'
 import AdminRetention from '../components/AdminRetention'
+import AdminDisputes from '../components/AdminDisputes'
 import MatchingDebugV2 from '../components/MatchingDebugV2'
 import AdminDispatchLive from '../components/AdminDispatchLive'
 
@@ -18,6 +19,7 @@ type Tab =
   | 'matching'
   | 'supply'
   | 'pricing'
+  | 'disputes'
   | 'stuck'
   | 'failures'
   | 'retention'
@@ -185,6 +187,7 @@ export default function AdminDashboard() {
           <TabButton label="Matching" active={tab === 'matching'} onClick={() => setTab('matching')} />
           <TabButton label="Supply" active={tab === 'supply'} onClick={() => setTab('supply')} />
           <TabButton label="Pricing" active={tab === 'pricing'} onClick={() => setTab('pricing')} />
+          <TabButton label="Disputes" active={tab === 'disputes'} onClick={() => setTab('disputes')} />
           <TabButton label="Stuck" active={tab === 'stuck'} onClick={() => setTab('stuck')} />
           <TabButton label="Failures" active={tab === 'failures'} onClick={() => setTab('failures')} />
           <TabButton label="Retention" active={tab === 'retention'} onClick={() => setTab('retention')} />
@@ -210,6 +213,7 @@ export default function AdminDashboard() {
         {tab === 'matching' && <MatchingDebugV2 />}
         {tab === 'supply' && <AdminSupplyDemand timeRange={timeRange} />}
         {tab === 'pricing' && <AdminPricing />}
+        {tab === 'disputes' && <AdminDisputes />}
         {tab === 'stuck' && <AdminStuckRequests />}
         {tab === 'failures' && <AdminRecentFailures />}
         {tab === 'retention' && <AdminRetention timeRange={timeRange} />}
