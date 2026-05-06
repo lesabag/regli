@@ -237,6 +237,7 @@ export default function ClientDashboard({
   const serviceTypeErrorLabel = isRtl
     ? 'לא הצלחנו לשמור את סוג השירות.'
     : 'We could not save the service type.'
+  const requestServiceType = profileServiceType ?? normalizeProfileServiceType(profile.service_type)
 
   useEffect(() => {
     setProfileServiceType(normalizeProfileServiceType(profile.service_type))
@@ -660,7 +661,7 @@ export default function ClientDashboard({
     flow.clearError()
     setMatchingUiState(null)
     markFirstInteractionVisual('client-dashboard:find-walker')
-    flow.requestWalk()
+    flow.requestWalk(requestServiceType ?? undefined)
     void hapticMedium()
   }, [
     flow,
@@ -669,6 +670,7 @@ export default function ClientDashboard({
     flow.location,
     flow.requestWalk,
     flow.savedCard,
+    requestServiceType,
   ])
 
   const handleFirstBookingAddPayment = useCallback(() => {

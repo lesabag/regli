@@ -76,6 +76,18 @@ function getPersistedCandidateScore(candidate: RankedCandidate): number {
   return Number((baseScore + affinityScore).toFixed(6))
 }
 
+function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
+    return 'dog_walker'
+  }
+  if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
+    return 'baby_sitter'
+  }
+  return null
+}
+
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
   const meta = candidate.meta ?? {}
   const baseScore = getBaseScore(candidate)
@@ -159,7 +171,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id, service_type')
       .eq('id', requestId)
       .single()
 
@@ -237,6 +249,7 @@ serve(async (req) => {
     }
 
     const clientId = typeof requestRow.client_id === 'string' ? requestRow.client_id : null
+    const requestProviderServiceType = normalizeProviderServiceType(requestRow.service_type)
     const candidateWalkerIds = Array.from(
       new Set(
         rankedCandidates
@@ -247,32 +260,52 @@ serve(async (req) => {
 
     let providerSavedCustomerIds = new Set<string>()
     let customerSavedProviderIds = new Set<string>()
+    let matchingServiceWalkerIds: Set<string> | null = null
 
-    if (clientId && candidateWalkerIds.length > 0) {
+    if (candidateWalkerIds.length > 0) {
       const [
+        { data: walkerProfileRows, error: walkerProfilesError },
         { data: favoriteCustomersRows, error: favoriteCustomersError },
         { data: favoriteWalkersRows, error: favoriteWalkersError },
       ] = await Promise.all([
         supabase
+          .from('profiles')
+          .select('id, service_type')
+          .in('id', candidateWalkerIds),
+        supabase
           .from('favorite_customers')
           .select('walker_id')
-          .eq('client_id', clientId)
+          .eq('client_id', clientId ?? '')
           .in('walker_id', candidateWalkerIds),
         supabase
           .from('favorite_walkers')
           .select('walker_id')
-          .eq('client_id', clientId)
+          .eq('client_id', clientId ?? '')
           .in('walker_id', candidateWalkerIds),
       ])
 
-      if (favoriteCustomersError) {
+      if (walkerProfilesError) {
+        console.error('[start-dispatch] failed loading candidate service types', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: walkerProfilesError.message,
+        })
+      } else if (requestProviderServiceType) {
+        matchingServiceWalkerIds = new Set(
+          ((walkerProfileRows as Array<{ id: string; service_type: string | null }> | null) ?? [])
+            .filter((row) => normalizeProviderServiceType(row.service_type) === requestProviderServiceType)
+            .map((row) => row.id),
+        )
+      }
+
+      if (clientId && favoriteCustomersError) {
         console.error('[start-dispatch] failed loading provider->customer affinity', {
           version: START_DISPATCH_VERSION,
           requestId,
           clientId,
           error: favoriteCustomersError.message,
         })
-      } else {
+      } else if (clientId) {
         providerSavedCustomerIds = new Set(
           (favoriteCustomersRows ?? [])
             .map((row) => row.walker_id)
@@ -280,14 +313,14 @@ serve(async (req) => {
         )
       }
 
-      if (favoriteWalkersError) {
+      if (clientId && favoriteWalkersError) {
         console.error('[start-dispatch] failed loading customer->provider affinity', {
           version: START_DISPATCH_VERSION,
           requestId,
           clientId,
           error: favoriteWalkersError.message,
         })
-      } else {
+      } else if (clientId) {
         customerSavedProviderIds = new Set(
           (favoriteWalkersRows ?? [])
             .map((row) => row.walker_id)
@@ -304,6 +337,10 @@ serve(async (req) => {
     }
 
     const affinityRankedCandidates = rankedCandidates
+      .filter((candidate) => {
+        if (!matchingServiceWalkerIds) return true
+        return matchingServiceWalkerIds.has(candidate.walkerId)
+      })
       .map((candidate) => {
         const providerSavedCustomer = providerSavedCustomerIds.has(candidate.walkerId)
         const customerSavedProvider = customerSavedProviderIds.has(candidate.walkerId)
@@ -348,6 +385,24 @@ serve(async (req) => {
           meta,
         }
       })
+
+    if (requestProviderServiceType && affinityRankedCandidates.length === 0) {
+      console.warn('[start-dispatch] no candidates match request service type', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        requestServiceType: requestRow.service_type,
+        normalizedProviderServiceType: requestProviderServiceType,
+      })
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: 'no providers match the requested service type',
+          requestServiceType: requestRow.service_type,
+        },
+        corsHeaders,
+      )
+    }
 
     const affinityRankedCandidateOrder = rankDispatchCandidatesByFinalScore(
       affinityRankedCandidates.map((candidate) => ({

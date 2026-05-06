@@ -36,6 +36,18 @@ function getServiceDurationMinutes(serviceType: string): number | null {
   return null
 }
 
+function normalizeRequestServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
+    return 'dog_walker'
+  }
+  if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
+    return 'baby_sitter'
+  }
+  return null
+}
+
 function parseTimeZoneOffsetMinutes(offsetLabel: string): number | null {
   const normalized = offsetLabel.replace('UTC', 'GMT')
   if (normalized === 'GMT' || normalized === 'GMT+0' || normalized === 'GMT+00:00') return 0
@@ -171,6 +183,7 @@ serve(async (req: Request) => {
       location?: string
       notes?: string
       serviceType?: string
+      requestServiceType?: string
       currency?: string
       walkerId?: string
       customerId?: string
@@ -194,6 +207,7 @@ serve(async (req: Request) => {
       location,
       notes,
       serviceType,
+      requestServiceType,
       currency: requestedCurrency,
       walkerId,
       customerId,
@@ -275,7 +289,7 @@ serve(async (req: Request) => {
 
     const { data: clientProfile, error: clientError } = await supabaseAdmin
       .from('profiles')
-      .select('id, role')
+      .select('id, role, service_type')
       .eq('id', user.id)
       .single()
 
@@ -292,6 +306,25 @@ serve(async (req: Request) => {
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
+
+    const profileRequestServiceType = normalizeRequestServiceType(clientProfile.service_type)
+    const fallbackRequestServiceType = normalizeRequestServiceType(requestServiceType)
+    const persistedRequestServiceType = profileRequestServiceType ?? fallbackRequestServiceType ?? null
+
+    if (!profileRequestServiceType) {
+      console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing profile service_type; using compatibility fallback if available`, {
+        profileServiceType: clientProfile.service_type ?? null,
+        requestServiceTypeInput: requestServiceType ?? null,
+        fallbackRequestServiceType,
+      })
+    }
+
+    console.log(`[create-payment-intent][${FUNCTION_VERSION}] Request service type resolved:`, {
+      pricingServiceType: serviceType,
+      requestServiceTypeInput: requestServiceType ?? null,
+      profileServiceType: clientProfile.service_type ?? null,
+      persistedRequestServiceType,
+    })
 
     if (walkerId) {
       const { data: walkerProfile, error: walkerError } = await supabaseAdmin
@@ -496,7 +529,8 @@ serve(async (req: Request) => {
 
     const metadata: Record<string, string> = {
       client_id: user.id,
-      service_type: serviceType,
+      service_type: persistedRequestServiceType ?? '',
+      pricing_service_type: serviceType,
       dog_name: dogName.trim(),
       booking_timing: bookingTiming,
       currency: jobCurrency,
@@ -592,7 +626,7 @@ serve(async (req: Request) => {
       .insert({
         client_id: user.id,
         selected_walker_id: walkerId || null,
-        service_type: serviceType,
+        service_type: persistedRequestServiceType,
         dog_name: dogName.trim(),
         location: location.trim(),
         notes: notes?.trim() || null,
@@ -619,6 +653,12 @@ serve(async (req: Request) => {
       })
       .select('id')
       .single()
+
+    console.log(`[create-payment-intent][${FUNCTION_VERSION}] Walk request insert payload:`, {
+      requestServiceTypeReceived: requestServiceType ?? null,
+      profileServiceType: clientProfile.service_type ?? null,
+      insertedWalkRequestServiceType: persistedRequestServiceType,
+    })
 
     if (jobError || !job) {
       console.error('Failed to create job:', jobError)
