@@ -10,6 +10,7 @@ import type { HistoryItem } from '../components/GroupedHistory'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { usePushNotifications } from '../hooks/usePushNotifications'
+import { supabase } from '../services/supabaseClient'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels } from '../utils/serviceLifecycle'
 import { getDurationSummary } from '../utils/serviceTiming'
@@ -92,6 +93,10 @@ function getPreferredCustomerKey(input: {
   return ''
 }
 
+function isPersistableCustomerKey(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 function getCustomerDisplayName(
   input: {
     client?: { full_name?: string | null; email?: string | null } | null
@@ -158,7 +163,8 @@ export default function WalkerDashboard({
   const [compReview, setCompReview] = useState('')
   const [compRatingDone, setCompRatingDone] = useState(false)
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
-  const [favoriteClients, setFavoriteClients] = useState<Map<string, string>>(new Map())
+  const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
+  const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
@@ -521,18 +527,134 @@ export default function WalkerDashboard({
     [],
   )
 
+  const fetchPreferredCustomers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('favorite_customers')
+      .select('client_id, created_at')
+      .eq('walker_id', profile.id)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('[WalkerDashboard] favorite customers unavailable:', error.message)
+      return
+    }
+
+    const rows = ((data as Array<{ client_id: string | null }> | null) ?? []).filter(
+      (row): row is { client_id: string } => typeof row.client_id === 'string' && row.client_id.trim().length > 0,
+    )
+    const ids = rows.map((row) => row.client_id)
+    setPreferredCustomerIds(new Set(ids))
+
+    if (ids.length === 0) {
+      setPreferredCustomerNames(new Map())
+      return
+    }
+
+    const { data: profilesData, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', ids)
+
+    if (profilesError) {
+      console.warn('[WalkerDashboard] favorite customer profiles unavailable:', profilesError.message)
+      setPreferredCustomerNames((current) => {
+        const next = new Map(current)
+        ids.forEach((id) => {
+          if (!next.has(id)) next.set(id, isHebrew ? 'לקוח' : 'Customer')
+        })
+        return next
+      })
+      return
+    }
+
+    const nextNames = new Map<string, string>()
+    ;((profilesData as Array<{ id: string; full_name: string | null; email: string | null }> | null) ?? []).forEach(
+      (profileRow) => {
+        nextNames.set(
+          profileRow.id,
+          getCustomerDisplayName(
+            {
+              client: {
+                full_name: profileRow.full_name,
+                email: profileRow.email,
+              },
+            },
+            isHebrew,
+          ),
+        )
+      },
+    )
+    ids.forEach((id) => {
+      if (!nextNames.has(id)) nextNames.set(id, isHebrew ? 'לקוח' : 'Customer')
+    })
+    setPreferredCustomerNames(nextNames)
+  }, [isHebrew, profile.id])
+
+  useEffect(() => {
+    void fetchPreferredCustomers()
+  }, [fetchPreferredCustomers])
+
   const toggleFavoriteClient = useCallback(async (clientKey: string, clientName: string) => {
     if (!clientKey) return
-    setFavoriteClients((current) => {
-      const next = new Map(current)
-      if (next.has(clientKey)) {
-        next.delete(clientKey)
+    const previousIds = new Set(preferredCustomerIds)
+    const previousNames = new Map(preferredCustomerNames)
+    const nextIsSaved = !preferredCustomerIds.has(clientKey)
+
+    setPreferredCustomerIds((current) => {
+      const next = new Set(current)
+      if (nextIsSaved) {
+        next.add(clientKey)
       } else {
-        next.set(clientKey, clientName)
+        next.delete(clientKey)
       }
       return next
     })
-  }, [])
+    setPreferredCustomerNames((current) => {
+      const next = new Map(current)
+      if (nextIsSaved) {
+        next.set(clientKey, clientName)
+      } else {
+        next.delete(clientKey)
+      }
+      return next
+    })
+
+    if (!isPersistableCustomerKey(clientKey)) {
+      console.warn('[WalkerDashboard] favorite customer missing persistable client_id; keeping local fallback only', {
+        clientKey,
+      })
+      return
+    }
+
+    if (nextIsSaved) {
+      const { error } = await supabase.from('favorite_customers').insert({
+        walker_id: profile.id,
+        client_id: clientKey,
+      })
+
+      if (error && error.code !== '23505') {
+        console.warn('[WalkerDashboard] failed to save favorite customer:', error.message)
+        setPreferredCustomerIds(previousIds)
+        setPreferredCustomerNames(previousNames)
+        return
+      }
+    } else {
+      const { error } = await supabase
+        .from('favorite_customers')
+        .delete()
+        .eq('walker_id', profile.id)
+        .eq('client_id', clientKey)
+
+      if (error) {
+        console.warn('[WalkerDashboard] failed to remove favorite customer:', error.message)
+        setPreferredCustomerIds(previousIds)
+        setPreferredCustomerNames(previousNames)
+        return
+      }
+    }
+
+    void fetchPreferredCustomers()
+  }, [fetchPreferredCustomers, preferredCustomerIds, preferredCustomerNames, profile.id])
 
   const completionClientId = completionJobDetails?.client?.id ?? flow.completionSuccess?.clientId ?? null
   const completionClientName =
@@ -550,10 +672,15 @@ export default function WalkerDashboard({
     clientId: completionClientId,
     clientName: completionClientName,
   })
-  const completionClientSaved = completionClientKey ? favoriteClients.has(completionClientKey) : false
+  const completionClientSaved = completionClientKey ? preferredCustomerIds.has(completionClientKey) : false
   const preferredCustomers = useMemo(() => {
-    return Array.from(favoriteClients.entries()).map(([key, name]) => ({ key, name }))
-  }, [favoriteClients])
+    return Array.from(preferredCustomerIds).map((key) => ({
+      key,
+      name:
+        preferredCustomerNames.get(key) ||
+        (key === completionClientKey ? completionClientName : isHebrew ? 'לקוח' : 'Customer'),
+    }))
+  }, [completionClientKey, completionClientName, isHebrew, preferredCustomerIds, preferredCustomerNames])
 
   const handleOnlineToggle = useCallback(async () => {
     if (!flow.isOnline) {
@@ -903,7 +1030,7 @@ export default function WalkerDashboard({
                         role="walker"
                         compact
                         onHide={hideHistoryItem}
-                        favoriteClientIds={new Set(favoriteClients.keys())}
+                        favoriteClientIds={preferredCustomerIds}
                         onToggleFavoriteClient={toggleFavoriteClient}
                         emptyTitle={t('menu.noWalkHistory')}
                         emptySubtitle={t('menu.noWalkHistorySubtitle')}
@@ -1075,7 +1202,7 @@ export default function WalkerDashboard({
                         role="walker"
                         compact
                         onHide={hideHistoryItem}
-                        favoriteClientIds={new Set(favoriteClients.keys())}
+                        favoriteClientIds={preferredCustomerIds}
                         onToggleFavoriteClient={toggleFavoriteClient}
                         emptyTitle={t('menu.noWalkHistory')}
                         emptySubtitle={t('menu.noWalkHistorySubtitle')}
