@@ -15,6 +15,11 @@ import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels } from '../utils/serviceLifecycle'
 import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
+import {
+  getProfileServiceOptions,
+  normalizeProfileServiceType,
+  type ProfileServiceType,
+} from '../lib/profileServiceTypes'
 
 const REQUEST_TIMEOUT_SECONDS = 20
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
@@ -27,6 +32,7 @@ interface WalkerDashboardProps {
     email: string | null
     full_name: string | null
     role: AppRole
+    service_type?: string | null
   }
   onSignOut: () => Promise<void>
   showOnboardingWowToken?: number
@@ -149,6 +155,16 @@ export default function WalkerDashboard({
     ? 'לקוחות ששמרת לגישה מהירה.'
     : 'Saved customers for quick reference.'
   const noPreferredCustomersLabel = isRtl ? 'אין עדיין לקוחות מועדפים.' : 'No preferred customers yet.'
+  const profileServiceOptions = useMemo(() => getProfileServiceOptions(isHebrew), [isHebrew])
+  const serviceTypeSectionTitle = isHebrew ? 'סוג שירות' : 'Service type'
+  const serviceTypeSectionSubtitle = isHebrew
+    ? 'בחר את סוג השירות הראשי שאתה מציע.'
+    : 'Choose the main service you provide.'
+  const serviceTypeSavedLabel = isHebrew ? 'סוג השירות נשמר.' : 'Service type saved.'
+  const serviceTypeSavingLabel = isHebrew ? 'שומר...' : 'Saving...'
+  const serviceTypeErrorLabel = isHebrew
+    ? 'לא הצלחנו לשמור את סוג השירות.'
+    : 'We could not save the service type.'
 
   const [burgerOpen, setBurgerOpen] = useState(false)
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
@@ -165,6 +181,12 @@ export default function WalkerDashboard({
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
   const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
+  const [profileServiceType, setProfileServiceType] = useState<ProfileServiceType | null>(
+    normalizeProfileServiceType(profile.service_type),
+  )
+  const [serviceTypeSaving, setServiceTypeSaving] = useState<ProfileServiceType | null>(null)
+  const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
+  const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
@@ -173,6 +195,35 @@ export default function WalkerDashboard({
     setBurgerOpen(false)
     setMenuPage('main')
   }, [])
+
+  useEffect(() => {
+    setProfileServiceType(normalizeProfileServiceType(profile.service_type))
+  }, [profile.service_type])
+
+  const handleProfileServiceTypeChange = useCallback(async (nextServiceType: ProfileServiceType) => {
+    if (serviceTypeSaving || profileServiceType === nextServiceType) return
+    const previousServiceType = profileServiceType
+
+    setProfileServiceType(nextServiceType)
+    setServiceTypeSaving(nextServiceType)
+    setServiceTypeSaveError(null)
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ service_type: nextServiceType })
+      .eq('id', profile.id)
+
+    if (error) {
+      console.warn('[WalkerDashboard] failed to update service_type:', error.message)
+      setProfileServiceType(previousServiceType)
+      setServiceTypeSaveError(serviceTypeErrorLabel)
+      setServiceTypeSaving(null)
+      return
+    }
+
+    setServiceTypeSaving(null)
+    setServiceTypeSavedAt(Date.now())
+  }, [profile.id, profileServiceType, serviceTypeErrorLabel, serviceTypeSaving])
 
   const prevCompJobId = useRef<string | null>(null)
   useEffect(() => {
@@ -1107,6 +1158,40 @@ export default function WalkerDashboard({
                           עברית
                         </button>
                       </div>
+                    </BurgerSection>
+
+                    <BurgerSection title={serviceTypeSectionTitle} subtitle={serviceTypeSectionSubtitle}>
+                      <div style={serviceTypeSelectorRowStyle}>
+                        {profileServiceOptions.map((option) => {
+                          const selected = profileServiceType === option.value
+                          const saving = serviceTypeSaving === option.value
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                void handleProfileServiceTypeChange(option.value)
+                              }}
+                              disabled={serviceTypeSaving !== null}
+                              style={{
+                                ...serviceTypeButtonStyle,
+                                ...(selected ? serviceTypeButtonActiveStyle : null),
+                                opacity: serviceTypeSaving !== null && !saving ? 0.72 : 1,
+                              }}
+                            >
+                              <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
+                              <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
+                              <span style={serviceTypeButtonDescriptionStyle}>{option.description}</span>
+                              {saving ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {serviceTypeSaveError ? (
+                        <div style={serviceTypeStatusErrorStyle}>{serviceTypeSaveError}</div>
+                      ) : serviceTypeSaving === null && serviceTypeSavedAt > 0 ? (
+                        <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
+                      ) : null}
                     </BurgerSection>
 
                     <BurgerSection
@@ -2428,6 +2513,71 @@ const languageButtonActiveStyle: React.CSSProperties = {
   background: '#0F172A',
   color: '#FFFFFF',
   borderColor: '#0F172A',
+}
+
+const serviceTypeSelectorRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+}
+
+const serviceTypeButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  minHeight: 116,
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  padding: '14px 12px',
+  display: 'grid',
+  justifyItems: 'start',
+  alignContent: 'start',
+  gap: 6,
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
+const serviceTypeButtonActiveStyle: React.CSSProperties = {
+  borderColor: '#0F172A',
+  background: '#F8FAFC',
+  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+}
+
+const serviceTypeButtonIconStyle: React.CSSProperties = {
+  fontSize: 22,
+  lineHeight: 1,
+}
+
+const serviceTypeButtonLabelStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const serviceTypeButtonDescriptionStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const serviceTypeButtonMetaStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#0F172A',
+}
+
+const serviceTypeStatusSuccessStyle: React.CSSProperties = {
+  marginTop: 10,
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#15803D',
+}
+
+const serviceTypeStatusErrorStyle: React.CSSProperties = {
+  marginTop: 10,
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#DC2626',
 }
 
 const emptyMenuCardStyle: React.CSSProperties = {

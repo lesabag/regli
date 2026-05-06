@@ -24,6 +24,7 @@ type WalkerRow = {
   id: string
   last_lat: number | null
   last_lng: number | null
+  service_type: string | null
 }
 
 type RatingRow = {
@@ -38,6 +39,18 @@ type StartDispatchResponse = {
   requestId?: string
   candidateCount?: number
   advanceResult?: unknown
+}
+
+function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
+    return 'dog_walker'
+  }
+  if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
+    return 'baby_sitter'
+  }
+  return null
 }
 
 serve(async (req) => {
@@ -62,7 +75,9 @@ serve(async (req) => {
       .from('walk_requests')
       .select(`
         id,
+        client_id,
         status,
+        service_type,
         scheduled_for,
         dispatch_state,
         smart_dispatch_state,
@@ -220,7 +235,7 @@ serve(async (req) => {
         // 🔍 fetch online walkers
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id, last_lat, last_lng')
+          .select('id, last_lat, last_lng, service_type')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -258,8 +273,37 @@ serve(async (req) => {
           continue
         }
 
-        const onlineWalkers = (walkers as WalkerRow[] | null) ?? []
+        const requestedProviderServiceType = normalizeProviderServiceType(job.service_type)
+        const onlineWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
+          if (!requestedProviderServiceType) return true
+          return normalizeProviderServiceType(walker.service_type) === requestedProviderServiceType
+        })
         const walkerIds = onlineWalkers.map((walker) => walker.id)
+
+        if (onlineWalkers.length === 0) {
+          const { error: updateError } = await supabase
+            .from('walk_requests')
+            .update({
+              dispatch_state: 'queued',
+              smart_dispatch_state: 'idle',
+            })
+            .eq('id', job.id)
+
+          if (!updateError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_no_matching_service_providers_waiting',
+              p_payload: {
+                retry_later: true,
+                request_service_type: job.service_type ?? null,
+                normalized_provider_service_type: requestedProviderServiceType,
+              },
+            })
+            noCandidates++
+          }
+          continue
+        }
 
         let ratingsByWalker = new Map<string, { total: number; count: number }>()
         if (walkerIds.length > 0) {

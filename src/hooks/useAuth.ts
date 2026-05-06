@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
+import type { ProfileServiceType } from '../lib/profileServiceTypes'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -12,6 +13,7 @@ interface Profile {
   role: ProfileRole
   primary_service?: string | null
   location_address?: string | null
+  service_type?: ProfileServiceType | null
 }
 
 const SESSION_INIT_TIMEOUT_MS = 8000
@@ -41,6 +43,8 @@ function getFallbackProfile(currentUser: User): Profile {
       (currentUser.user_metadata?.full_name as string | undefined) ?? null,
     role:
       (currentUser.user_metadata?.role as ProfileRole | undefined) ?? 'client',
+    service_type:
+      (currentUser.user_metadata?.service_type as ProfileServiceType | undefined) ?? null,
   }
 }
 
@@ -195,6 +199,7 @@ export function useAuth() {
       role,
       primaryService,
       locationAddress,
+      serviceType,
     }: {
       email: string
       password: string
@@ -202,6 +207,7 @@ export function useAuth() {
       role: AppRole
       primaryService?: string
       locationAddress?: string
+      serviceType?: ProfileServiceType
     }) => {
       setAuthError(null)
 
@@ -218,6 +224,7 @@ export function useAuth() {
                 role: safeRole,
                 primary_service: primaryService ?? null,
                 location_address: locationAddress ?? null,
+                service_type: serviceType ?? null,
               },
             },
           }),
@@ -243,6 +250,7 @@ export function useAuth() {
           role: safeRole,
           primary_service: primaryService ?? null,
           location_address: locationAddress ?? null,
+          service_type: serviceType ?? null,
         }
 
         const { error: profileError } = await withTimeout(

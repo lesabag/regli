@@ -181,6 +181,7 @@ type DispatchWalkerProfile = {
   id: string
   last_lat: number | null
   last_lng: number | null
+  service_type?: string | null
 }
 
 type DispatchRatingRow = {
@@ -1064,6 +1065,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (value === '20min') return 20
     if (value === '40min') return 40
     return 60
+  }
+
+  function durationToPricingPackage(value: '20min' | '40min' | '60min'): 'quick' | 'standard' | 'energy' {
+    if (value === '20min') return 'quick'
+    if (value === '40min') return 'standard'
+    return 'energy'
+  }
+
+  function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+    const normalized = (value ?? '').trim().toLowerCase()
+    if (!normalized) return null
+    if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
+      return 'dog_walker'
+    }
+    if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
+      return 'baby_sitter'
+    }
+    return null
   }
 
   const startsInMinutes = useCallback((date: string | null | undefined) => {
@@ -2514,7 +2533,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     resetBookingComposerAfterCompletion()
   }, [resetBookingComposerAfterCompletion])
 
-  const requestWalk = useCallback(async () => {
+  const requestWalk = useCallback(async (requestServiceType?: string) => {
     if (!dogName.trim()) {
       setError('Enter name')
       return
@@ -2541,6 +2560,19 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const bookingLocation = formatShortAddress(preferredLiveLocation) || preferredLiveLocation
     let createdJobId: string | null = null
 
+    const normalizedRequestServiceType = normalizeProviderServiceType(requestServiceType)
+
+    if (!normalizedRequestServiceType) {
+      console.warn('[useClientFlow] missing profile service_type for request creation', {
+        profileId,
+        requestServiceType: requestServiceType ?? null,
+        duration,
+        bookingTiming,
+      })
+      setError('Missing service type. Please update your profile settings and try again.')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -2551,6 +2583,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
         persistBookingDraft({ location: bookingLocation })
       }
 
+      console.log('[useClientFlow] create-payment-intent request', {
+        profileServiceType: requestServiceType ?? null,
+        pricingServiceType: durationToPricingPackage(duration),
+        requestServiceType: normalizedRequestServiceType,
+      })
+
       const response = await invokeEdgeFunction<{
         jobId?: string
         paymentIntentId?: string
@@ -2560,7 +2598,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         body: {
           bookingTiming,
           timing: bookingTiming,
-          serviceType: duration === '20min' ? 'quick' : duration === '40min' ? 'standard' : 'energy',
+          serviceType: durationToPricingPackage(duration),
+          requestServiceType: normalizedRequestServiceType,
           dogName,
           location: bookingLocation,
           customerId: stripeCustomerId,
@@ -2627,7 +2666,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id, last_lat, last_lng')
+          .select('id, last_lat, last_lng, service_type')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -2635,7 +2674,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
           throw new Error(walkersError.message)
         }
 
-        const onlineWalkers = (walkers as DispatchWalkerProfile[] | null) ?? []
+        const requestedProviderServiceType = normalizeProviderServiceType(
+          createdJob.service_type ?? normalizedRequestServiceType,
+        )
+        const onlineWalkers = ((walkers as DispatchWalkerProfile[] | null) ?? []).filter((walker) => {
+          if (!requestedProviderServiceType) return true
+          return normalizeProviderServiceType(walker.service_type) === requestedProviderServiceType
+        })
         const walkerIds = onlineWalkers.map((walker) => walker.id)
 
         let ratingsByWalker = new Map<string, { total: number; count: number }>()
@@ -2772,6 +2817,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
       void fetchCurrentAndLists()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to request walk'
+      if (import.meta.env.DEV) {
+        console.error('[useClientFlow] requestWalk failed', {
+          profileId,
+          requestServiceType: normalizedRequestServiceType,
+          duration,
+          bookingTiming,
+          message,
+          error: err,
+        })
+      }
       const wasCancelled =
         message.toLowerCase().includes('request is not open') &&
         createdJobId != null &&
