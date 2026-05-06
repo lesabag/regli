@@ -94,8 +94,9 @@ function mergeScheduledDraft(datePart: string, timePart: string): string {
   return `${datePart}T${timePart}`
 }
 
-function dogNamesStorageKey(profileId: string): string {
-  return `regli_client_recent_dog_names_${profileId}`
+function bookingSubjectStorageKey(profileId: string, requestServiceType: string | null): string {
+  const normalizedServiceType = (requestServiceType ?? 'default').trim().toLowerCase() || 'default'
+  return `regli_client_recent_subjects_${profileId}_${normalizedServiceType}`
 }
 
 function normalizeDogName(value: string): string {
@@ -536,7 +537,7 @@ export default function ClientDashboard({
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(dogNamesStorageKey(profile.id))
+      const raw = window.localStorage.getItem(bookingSubjectStorageKey(profile.id, requestServiceType))
       if (!raw) return
       const parsed = JSON.parse(raw) as string[]
       if (Array.isArray(parsed)) {
@@ -550,7 +551,7 @@ export default function ClientDashboard({
     } catch {
       // noop
     }
-  }, [profile.id])
+  }, [profile.id, requestServiceType])
 
   useEffect(() => {
     if (!showDogNameSheet) return
@@ -683,12 +684,15 @@ export default function ClientDashboard({
     (names: string[]) => {
       setRecentDogNames(names)
       try {
-        window.localStorage.setItem(dogNamesStorageKey(profile.id), JSON.stringify(names))
+        window.localStorage.setItem(
+          bookingSubjectStorageKey(profile.id, requestServiceType),
+          JSON.stringify(names),
+        )
       } catch {
         // noop
       }
     },
-    [profile.id],
+    [profile.id, requestServiceType],
   )
 
   const commitDogName = useCallback(
@@ -1461,6 +1465,28 @@ export default function ClientDashboard({
 
   const serviceKeys = SERVICE_I18N_KEYS[selectedService]
   const isSelectedServiceAvailable = checkServiceAvailable(selectedService)
+  const isBabySitterMode = requestServiceType === 'baby_sitter'
+  const bookingSubjectLabel = isBabySitterMode
+    ? isRtl ? 'פרטי שירות' : 'Service details'
+    : t(serviceKeys.inputLabel)
+  const bookingSubjectPlaceholder = isBabySitterMode
+    ? isRtl ? 'שם הילד או פרטי השירות' : 'Child name or service details'
+    : t(serviceKeys.inputPlaceholder)
+  const bookingSubjectSheetTitle = isBabySitterMode
+    ? isRtl ? 'פרטי השירות' : 'Service details'
+    : t(serviceKeys.sheetTitle)
+  const bookingSubjectSheetSubtitle = isBabySitterMode
+    ? isRtl
+      ? 'הוסף שם ילד, גיל או כל פרט חשוב להזמנה.'
+      : 'Add a child name, age, or any important detail for the booking.'
+    : t(serviceKeys.sheetSubtitle)
+  const bookingSubjectInputLabel = isBabySitterMode
+    ? isRtl ? 'הוסף פרטים' : 'Add details'
+    : t('dogNameSheet.addNew')
+  const bookingSubjectInputPlaceholder = isBabySitterMode
+    ? isRtl ? 'לדוגמה: נועה, גיל 4' : 'For example: Maya, age 4'
+    : t('dogNameSheet.typePlaceholder')
+  const showBookingSubjectSuggestions = !isBabySitterMode
 
   const dogSelectorBlock = (
     <div style={compactFieldStyle}>
@@ -1484,6 +1510,7 @@ export default function ClientDashboard({
         >
           <div style={dogThumbStyle}>{SERVICE_ICONS[selectedService]}</div>
           <div style={dogInputButtonContentStyle}>
+            <div style={compactFieldLabelMutedStyle}>{bookingSubjectLabel}</div>
             <div
               style={
                 flow.dogName.trim()
@@ -1491,7 +1518,7 @@ export default function ClientDashboard({
                   : dogInputPlaceholderTextStyle
               }
             >
-              {flow.dogName.trim() || t(serviceKeys.inputPlaceholder)}
+              {flow.dogName.trim() || bookingSubjectPlaceholder}
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -2483,13 +2510,13 @@ export default function ClientDashboard({
           <div style={dogNameSheetStyle}>
             <div style={bottomSheetHandleStyle} />
             <div style={dogNameSheetHeaderStyle}>
-              <div style={dogNameSheetTitleStyle}>{t(serviceKeys.sheetTitle)}</div>
+              <div style={dogNameSheetTitleStyle}>{bookingSubjectSheetTitle}</div>
               <div style={dogNameSheetSubtitleStyle}>
-                {t(serviceKeys.sheetSubtitle)}
+                {bookingSubjectSheetSubtitle}
               </div>
             </div>
 
-            {!!recentDogNames.length && (
+            {showBookingSubjectSuggestions && !!recentDogNames.length && (
               <div style={dogNameSuggestionsWrapStyle}>
                 {recentDogNames.map((name) => (
                   <div key={name} style={dogNameChipWrapStyle}>
@@ -2502,7 +2529,7 @@ export default function ClientDashboard({
                       }}
                       style={dogNameChipStyle}
                     >
-                      <span>🐶</span>
+                      <span>{isBabySitterMode ? '🧸' : '🐶'}</span>
                       <span>{name}</span>
                     </button>
                     <button
@@ -2525,11 +2552,11 @@ export default function ClientDashboard({
             )}
 
               <div style={dogNameInputCardStyle}>
-              <div style={dogNameInputLabelStyle}>{t('dogNameSheet.addNew')}</div>
+              <div style={dogNameInputLabelStyle}>{bookingSubjectInputLabel}</div>
               <input
                 value={dogNameDraft}
                 onChange={(e) => setDogNameDraft(e.target.value)}
-                placeholder={t('dogNameSheet.typePlaceholder')}
+                placeholder={bookingSubjectInputPlaceholder}
                 style={dogNameSheetInputStyle}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -3608,6 +3635,14 @@ const compactFieldLabelStyle: React.CSSProperties = {
   letterSpacing: 0.6,
   textTransform: 'uppercase',
   color: '#64748B',
+}
+
+const compactFieldLabelMutedStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 800,
+  letterSpacing: 0.4,
+  textTransform: 'uppercase',
+  color: '#94A3B8',
 }
 
 const pickupSelectorShellStyle: React.CSSProperties = {
