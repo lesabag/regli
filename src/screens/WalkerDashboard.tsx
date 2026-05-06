@@ -1,5 +1,5 @@
 import { hapticMedium, hapticSuccess } from '../utils/haptics'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
@@ -13,8 +13,10 @@ import { usePushNotifications } from '../hooks/usePushNotifications'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels } from '../utils/serviceLifecycle'
 import { getDurationSummary } from '../utils/serviceTiming'
+import i18n from '../i18n'
 
 const REQUEST_TIMEOUT_SECONDS = 20
+type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
 
 type AppRole = 'client' | 'walker' | 'admin'
 
@@ -28,14 +30,6 @@ interface WalkerDashboardProps {
   onSignOut: () => Promise<void>
   showOnboardingWowToken?: number
   stripeReturnToken?: number
-}
-
-interface ConnectStatus {
-  connected: boolean
-  stripe_connect_account_id: string | null
-  stripe_connect_onboarding_complete: boolean
-  payouts_enabled: boolean
-  charges_enabled: boolean
 }
 
 function friendlyError(raw: string): string {
@@ -87,6 +81,50 @@ function providerAutoOnlineStorageKey(profileId: string) {
   return `regli_provider_auto_online_${profileId}`
 }
 
+function getPreferredCustomerKey(input: {
+  clientId?: string | null
+  clientName?: string | null
+}): string {
+  const clientId = input.clientId?.trim()
+  if (clientId) return clientId
+  const clientName = input.clientName?.trim()
+  if (clientName) return `name:${clientName.toLowerCase()}`
+  return ''
+}
+
+function getCustomerDisplayName(
+  input: {
+    client?: { full_name?: string | null; email?: string | null } | null
+    clientName?: string | null
+    customerName?: string | null
+    requesterName?: string | null
+    ownerName?: string | null
+    profileName?: string | null
+    userName?: string | null
+    dogName?: string | null
+    petName?: string | null
+    orderName?: string | null
+  },
+  isHebrew: boolean,
+): string {
+  const humanName =
+    input.client?.full_name?.trim() ||
+    input.client?.email?.trim() ||
+    input.clientName?.trim() ||
+    input.customerName?.trim() ||
+    input.requesterName?.trim() ||
+    input.ownerName?.trim() ||
+    input.profileName?.trim() ||
+    input.userName?.trim()
+
+  if (humanName) return humanName
+
+  const orderName = input.dogName?.trim() || input.petName?.trim() || input.orderName?.trim()
+  if (orderName) return orderName
+
+  return isHebrew ? 'לקוח' : 'Customer'
+}
+
 export default function WalkerDashboard({
   profile,
   onSignOut,
@@ -98,52 +136,37 @@ export default function WalkerDashboard({
   const flow = useWalkerFlow(profile.id, walkerName)
   const photo = useProfilePhoto(profile.id)
   usePushNotifications(profile.id)
+  const isRtl = i18n.resolvedLanguage === 'he'
+  const isHebrew = i18n.resolvedLanguage === 'he'
+  const greetingLabel = isRtl ? `היי, ${walkerName}` : `Hey, ${walkerName}`
+  const preferredCustomersLabel = isRtl ? 'לקוחות מועדפים' : 'Preferred customers'
+  const preferredCustomersSubtitle = isRtl
+    ? 'לקוחות ששמרת לגישה מהירה.'
+    : 'Saved customers for quick reference.'
+  const noPreferredCustomersLabel = isRtl ? 'אין עדיין לקוחות מועדפים.' : 'No preferred customers yet.'
 
   const [burgerOpen, setBurgerOpen] = useState(false)
-  const [profileOpen, setProfileOpen] = useState(false)
-  const [historyView, setHistoryView] = useState<'menu' | 'all'>('menu')
-  const [historyOpen, setHistoryOpen] = useState(true)
+  const [menuPage, setMenuPage] = useState<MenuPage>('main')
   const [showStripeGate, setShowStripeGate] = useState(false)
   const [showOnboardingWow, setShowOnboardingWow] = useState(false)
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
+  const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
+  const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
   const [compRating, setCompRating] = useState(0)
   const [compHover, setCompHover] = useState(0)
   const [compPressed, setCompPressed] = useState(0)
   const [compReview, setCompReview] = useState('')
   const [compRatingDone, setCompRatingDone] = useState(false)
-  const [hiddenHistoryIds, setHiddenHistoryIds] = useState<string[]>([])
+  const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
+  const [favoriteClients, setFavoriteClients] = useState<Map<string, string>>(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
-    setProfileOpen(false)
-    setHistoryView('menu')
+    setMenuPage('main')
   }, [])
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(`regli_walker_history_hidden_${profile.id}`)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as string[]
-      setHiddenHistoryIds(Array.isArray(parsed) ? parsed : [])
-    } catch {
-      // noop
-    }
-  }, [profile.id])
-
-  const persistHiddenIds = useCallback(
-    (ids: string[]) => {
-      setHiddenHistoryIds(ids)
-      try {
-        window.localStorage.setItem(`regli_walker_history_hidden_${profile.id}`, JSON.stringify(ids))
-      } catch {
-        // noop
-      }
-    },
-    [profile.id],
-  )
 
   const prevCompJobId = useRef<string | null>(null)
   useEffect(() => {
@@ -169,8 +192,9 @@ export default function WalkerDashboard({
   const topRequest = flow.openJobs[0] ?? null
   const activeJob = flow.activeJobs[0] ?? null
   const onTheWayJob = flow.onTheWayJobs[0] ?? null
-  const onTheWayLabels = getServiceLabels(onTheWayJob?.service_type)
   const activeLabels = getServiceLabels(activeJob?.service_type)
+  const walkerStartServiceLabel = isHebrew ? 'התחל שירות' : 'Start service'
+  const walkerCompleteServiceLabel = isHebrew ? 'סיים שירות' : 'Complete service'
   const activeJobCanComplete =
     !!activeJob &&
     !!activeJob.service_started_at &&
@@ -259,7 +283,26 @@ export default function WalkerDashboard({
         return {
           id: j.id,
           dog_name: j.dog_name || 'Walk',
-          client_name: j.client?.full_name || j.client?.email || 'Client',
+          client_name: getCustomerDisplayName(
+            {
+              client: j.client,
+              clientName: j.client?.full_name || j.client?.email || null,
+              dogName: j.dog_name,
+            },
+            isHebrew,
+          ),
+          client_id: j.client?.id ?? j.client_id ?? null,
+          client_favorite_key: getPreferredCustomerKey({
+            clientId: j.client?.id ?? j.client_id ?? null,
+            clientName: getCustomerDisplayName(
+              {
+                client: j.client,
+                clientName: j.client?.full_name || j.client?.email || null,
+                dogName: j.dog_name,
+              },
+              isHebrew,
+            ),
+          }),
           address: formatShortAddress(j.location),
           rating: ratingInfo?.rating ?? null,
           review: ratingInfo?.review ?? null,
@@ -269,10 +312,10 @@ export default function WalkerDashboard({
           status: j.status,
           created_at: j.created_at,
           completed_at: j.created_at,
-          hidden_by_walker: hiddenHistoryIds.includes(j.id),
+          hidden_by_walker: hiddenHistoryIds.has(j.id),
         }
       })
-  }, [flow.completedJobs, flow.ratingsReceived, hiddenHistoryIds])
+  }, [flow.completedJobs, flow.ratingsReceived, hiddenHistoryIds, isHebrew])
 
   const visibleHistoryItems = useMemo(
     () => allHistoryItems.filter((item) => item.hidden_by_walker !== true).slice(0, 7),
@@ -283,11 +326,21 @@ export default function WalkerDashboard({
     const map = new Map<string, string>()
     flow.completedJobs.forEach((j) => {
       if (j.client?.id) {
-        map.set(j.client.id, j.client.full_name || j.client.email || 'Client')
+        map.set(
+          j.client.id,
+          getCustomerDisplayName(
+            {
+              client: j.client,
+              clientName: j.client.full_name || j.client.email || null,
+              dogName: j.dog_name,
+            },
+            isHebrew,
+          ),
+        )
       }
     })
     return map
-  }, [flow.completedJobs])
+  }, [flow.completedJobs, isHebrew])
 
   const formattedRatings = useMemo(
     () =>
@@ -295,11 +348,93 @@ export default function WalkerDashboard({
         id: r.id,
         rating: r.rating,
         review: r.review,
-        authorName: clientNameById.get(r.from_user_id) || 'Client',
+        authorName: clientNameById.get(r.from_user_id) || (isHebrew ? 'לקוח' : 'Customer'),
         date: formatRelativeDate(r.created_at),
       })),
-    [flow.ratingsReceived, clientNameById],
+    [flow.ratingsReceived, clientNameById, isHebrew],
   )
+
+  const upcomingFutureItems = useMemo(
+    () =>
+      flow.futureJobs.map((job) => ({
+        id: job.id,
+        dogName: job.dog_name || t('booking.walkFallback'),
+        clientName: getCustomerDisplayName(
+          {
+            client: job.client,
+            clientName: job.client?.full_name || job.client?.email || null,
+            dogName: job.dog_name,
+          },
+          isHebrew,
+        ),
+        address: formatShortAddress(job.address || job.location || ''),
+        scheduledFor: job.scheduled_for,
+        startsInMinutes: flow.startsInMinutes(job.scheduled_for),
+        durationLabel: durationFromMinutes(job.duration_minutes),
+        earningsLabel:
+          job.walker_earnings != null
+            ? `₪${job.walker_earnings.toFixed(0)}`
+            : job.price != null
+              ? `₪${Math.round(job.price * 0.8)}`
+              : null,
+      })),
+    [flow.futureJobs, flow.startsInMinutes, t, isHebrew],
+  )
+
+  const incomingTitle = i18n.resolvedLanguage === 'he' ? 'הזמנה חדשה' : 'New order arrived'
+  const idleHeroTitle = flow.isOnline ? (isHebrew ? 'מצב מחובר' : 'Connected') : (isHebrew ? 'לא מחובר' : 'Offline')
+  const idleHeroSubtitle = flow.isOnline
+    ? isHebrew
+      ? 'מוכן להזמנות'
+      : 'Ready for orders'
+    : isHebrew
+      ? 'התחבר כדי להתחיל לקבל הזמנות'
+      : 'Go online to start receiving orders'
+  const idleWaitingTitle = flow.isOnline
+    ? isHebrew
+      ? 'מחכה להזמנות…'
+      : 'Waiting for new orders…'
+    : isHebrew
+      ? 'מוכן להתחברות'
+      : 'Ready to go online'
+  const idleWaitingBody = flow.isOnline
+    ? isHebrew
+      ? 'בקשות קרובות יופיעו כאן.'
+      : 'Nearby requests will appear here.'
+    : isHebrew
+      ? 'הפעל את מצב המחובר כדי לקבל הזמנות חדשות בזמן אמת.'
+      : 'Turn on your connected mode to receive new orders in real time.'
+  const completedJobsCount = flow.completedJobs.filter((job) => job.status === 'completed').length
+  const walletPayoutReady =
+    !!flow.connectStatus?.connected &&
+    !!flow.connectStatus?.stripe_connect_onboarding_complete &&
+    !!flow.connectStatus?.payouts_enabled
+  const walletNeedsSetup = !flow.connectLoading && !walletPayoutReady
+
+  useEffect(() => {
+    if (!walletNeedsSetup) {
+      setPayoutCtaAnimationStopped(false)
+      setPayoutCtaNudgeActive(false)
+      return
+    }
+
+    if (payoutCtaAnimationStopped) {
+      setPayoutCtaNudgeActive(false)
+      return
+    }
+
+    const nudgeStart = window.setTimeout(() => {
+      setPayoutCtaNudgeActive(true)
+    }, 3600)
+    const nudgeStop = window.setTimeout(() => {
+      setPayoutCtaNudgeActive(false)
+    }, 4550)
+
+    return () => {
+      window.clearTimeout(nudgeStart)
+      window.clearTimeout(nudgeStop)
+    }
+  }, [payoutCtaAnimationStopped, walletNeedsSetup])
 
   useEffect(() => {
     if (!flow.takenNotice) return
@@ -377,11 +512,48 @@ export default function WalkerDashboard({
 
   const hideHistoryItem = useCallback(
     async (id: string) => {
-      const next = [...hiddenHistoryIds, id]
-      persistHiddenIds(next)
+      setHiddenHistoryIds((current) => {
+        const next = new Set(current)
+        next.add(id)
+        return next
+      })
     },
-    [hiddenHistoryIds, persistHiddenIds],
+    [],
   )
+
+  const toggleFavoriteClient = useCallback(async (clientKey: string, clientName: string) => {
+    if (!clientKey) return
+    setFavoriteClients((current) => {
+      const next = new Map(current)
+      if (next.has(clientKey)) {
+        next.delete(clientKey)
+      } else {
+        next.set(clientKey, clientName)
+      }
+      return next
+    })
+  }, [])
+
+  const completionClientId = completionJobDetails?.client?.id ?? flow.completionSuccess?.clientId ?? null
+  const completionClientName =
+    getCustomerDisplayName(
+      {
+        client: completionJobDetails?.client ?? null,
+        clientName: completionJobDetails?.client?.full_name || completionJobDetails?.client?.email || null,
+        customerName: flow.completionSuccess?.clientName || null,
+        dogName: completionJobDetails?.dog_name || null,
+        petName: flow.completionSuccess?.dogName || null,
+      },
+      isHebrew,
+    )
+  const completionClientKey = getPreferredCustomerKey({
+    clientId: completionClientId,
+    clientName: completionClientName,
+  })
+  const completionClientSaved = completionClientKey ? favoriteClients.has(completionClientKey) : false
+  const preferredCustomers = useMemo(() => {
+    return Array.from(favoriteClients.entries()).map(([key, name]) => ({ key, name }))
+  }, [favoriteClients])
 
   const handleOnlineToggle = useCallback(async () => {
     if (!flow.isOnline) {
@@ -493,17 +665,97 @@ export default function WalkerDashboard({
 
   return (
     <>
-      <div style={screenStyle}>
+      <style>{`
+        .walker-dashboard-screen {
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .walker-dashboard-screen::-webkit-scrollbar {
+          display: none;
+          width: 0;
+          height: 0;
+        }
+        .walker-menu-scroll::-webkit-scrollbar {
+          display: none;
+          width: 0;
+          height: 0;
+        }
+        @keyframes walkerPayoutPulse {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 8px 18px rgba(217, 119, 6, 0.10);
+          }
+          50% {
+            transform: scale(1.02);
+            box-shadow: 0 10px 22px rgba(217, 119, 6, 0.18);
+          }
+        }
+        @keyframes walkerPayoutNudge {
+          0%, 100% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.03);
+          }
+        }
+        @keyframes walkerDrawerInLtr {
+          from {
+            transform: translateX(-18px);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        @keyframes walkerDrawerInRtl {
+          from {
+            transform: translateX(18px);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `}</style>
+      <div className="walker-dashboard-screen" style={screenStyle}>
         <div style={headerStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
+          <div style={headerIdentityRowStyle}>
+            <ProfileAvatar
+              url={photo.avatarUrl}
+              name={walkerName}
+              size={48}
+              borderRadius={18}
+              onClick={() => fileInputRef.current?.click()}
+            />
+            <div style={headerIdentityStyle}>
+              <h2 style={greetingStyle}>{greetingLabel}</h2>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) photo.uploadAvatar(file)
+                  e.target.value = ''
+                }}
+              />
+              {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
+              {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
+            </div>
+          </div>
+
+          <div style={headerTopRowStyle}>
             <button
               type="button"
               onClick={() => {
-                setProfileOpen(false)
+                setMenuPage('main')
                 setBurgerOpen((v) => !v)
               }}
               style={headerMenuBtnStyle}
-              aria-label="Menu"
+              aria-label={t('menu.menu')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
                 <line x1="4" y1="7" x2="20" y2="7" />
@@ -511,41 +763,18 @@ export default function WalkerDashboard({
                 <line x1="4" y1="17" x2="20" y2="17" />
               </svg>
             </button>
-            <div style={{ minWidth: 0 }}>
-              <h2 style={greetingStyle}>Hey, {flow.firstName}</h2>
-            </div>
-          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {!isActiveOrCompleted && !flow.onlineLoading && (
-              <div style={toggleGroupStyle}>
-                <div style={statusLabelWrapStyle}>
-                  <div
-                    style={{
-                      ...statusDotStyle,
-                      background: flow.isOnline ? '#16A34A' : '#94A3B8',
-                    }}
-                  />
-                  <span style={{ ...statusLabelStyle, color: flow.isOnline ? '#15803D' : '#94A3B8' }}>
-                    {flow.isOnline ? 'Online' : 'Offline'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleOnlineToggle()}
-                  style={{ ...toggleBtnStyle, background: flow.isOnline ? '#16A34A' : '#CBD5E1' }}
-                >
-                  <div
-                    style={{
-                      ...toggleKnobStyle,
-                      transform: flow.isOnline ? 'translateX(18px)' : 'translateX(0)',
-                    }}
-                  />
-                </button>
+            {isActiveOrCompleted ? (
+              <div style={activeSessionChipStyle}>
+                {flow.screenState === 'active' ? activeLabels.activeTitle : t('tracking.onTheWay')}
               </div>
+            ) : (
+              <div />
             )}
 
-            <NotificationsBell />
+            <div style={bellWrapStyle}>
+              <NotificationsBell />
+            </div>
           </div>
         </div>
 
@@ -632,192 +861,229 @@ export default function WalkerDashboard({
         {burgerOpen && (
           <>
             <div style={menuOverlayStyle} onClick={closeAll} />
-            <div style={menuPanelStyle}>
-              <div style={menuHeaderStyle}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (historyView === 'all') {
-                      setHistoryView('menu')
-                    } else {
-                      closeAll()
-                    }
-                  }}
-                  style={menuHeaderIconButtonStyle}
-                  aria-label={historyView === 'all' ? 'Back' : 'Close'}
-                >
-                  {historyView === 'all' ? (
-                    <span style={menuBackGlyphStyle}>‹</span>
-                  ) : (
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
-                      <line x1="4" y1="7" x2="20" y2="7" />
-                      <line x1="4" y1="12" x2="20" y2="12" />
-                      <line x1="4" y1="17" x2="20" y2="17" />
-                    </svg>
-                  )}
-                </button>
-                <span style={menuHeaderTitleStyle}>{historyView === 'all' ? 'All history' : 'Menu'}</span>
-              </div>
-
-              <div style={menuDividerStyle} />
-
-              {historyView === 'all' ? (
-                <div style={historyContainerStyle}>
-                  <GroupedHistory
-                    items={allHistoryItems}
-                    role="walker"
-                    compact
-                    onHide={hideHistoryItem}
-                    emptyTitle="No walk history yet"
-                    emptySubtitle="Completed jobs and client feedback will appear here."
-                  />
-                </div>
-              ) : (
-                <>
+            <div
+              style={{
+                ...menuPanelStyle,
+                ...(isRtl ? menuPanelRtlStyle : menuPanelLtrStyle),
+              }}
+            >
+              <div style={menuHeaderRowStyle}>
+                <div style={menuHeaderLeftStyle}>
                   <button
                     type="button"
                     onClick={() => {
-                      setBurgerOpen(false)
-                      setProfileOpen(true)
+                      if (menuPage !== 'main') {
+                        setMenuPage('main')
+                      } else {
+                        closeAll()
+                      }
                     }}
-                    style={menuProfileButtonStyle}
+                    style={menuBackButtonStyle}
+                    aria-label={menuPage !== 'main' ? t('common.back') : t('common.close')}
                   >
-                    <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={48} borderRadius={16} />
-                    <div style={menuProfileTextStyle}>
-                      <div style={profileNameStyle}>{walkerName}</div>
-                      {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
-                      {flow.avgRating !== null && (
-                        <div style={profileRatingStyle}>
-                          <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
-                          {flow.ratingsReceived.length !== 1 ? 's' : ''}
+                    {menuPage !== 'main' ? '‹' : '✕'}
+                  </button>
+                  <span style={menuTitleStyle}>
+                    {menuPage === 'settings'
+                      ? t('menu.settings')
+                      : menuPage === 'history'
+                        ? t('menu.tripHistory')
+                        : menuPage === 'futureOrders'
+                          ? t('menu.futureOrders')
+                          : t('menu.menu')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="walker-menu-scroll" style={menuScrollAreaStyle}>
+                {menuPage === 'history' ? (
+                  <BurgerSection title={t('menu.tripHistory')} subtitle={t('menu.allHistorySubtitle')}>
+                      <GroupedHistory
+                        items={allHistoryItems}
+                        role="walker"
+                        compact
+                        onHide={hideHistoryItem}
+                        favoriteClientIds={new Set(favoriteClients.keys())}
+                        onToggleFavoriteClient={toggleFavoriteClient}
+                        emptyTitle={t('menu.noWalkHistory')}
+                        emptySubtitle={t('menu.noWalkHistorySubtitle')}
+                      />
+                  </BurgerSection>
+                ) : menuPage === 'settings' ? (
+                  <>
+                    <BurgerSection title={walkerName} subtitle={profile.email || t('common.provider')}>
+                      <div style={settingsProfileRowStyle}>
+                        <div style={{ position: 'relative' }}>
+                          <ProfileAvatar
+                            url={photo.avatarUrl}
+                            name={walkerName}
+                            size={52}
+                            borderRadius={18}
+                            onClick={() => fileInputRef.current?.click()}
+                          />
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0]
+                              if (file) photo.uploadAvatar(file)
+                              e.target.value = ''
+                            }}
+                          />
+                        </div>
+                        <div style={settingsProfileMetaStyle}>
+                          <div style={settingsProfileTitleStyle}>{walkerName}</div>
+                          {flow.avgRating !== null && (
+                            <div style={profileRatingStyle}>
+                              <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} reviews
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            style={settingsPhotoButtonStyle}
+                          >
+                            Change photo
+                          </button>
+                          {photo.uploading && <div style={uploadStatusStyle}>Uploading photo...</div>}
+                          {photo.error && <div style={uploadErrorStyle}>{photo.error}</div>}
+                        </div>
+                      </div>
+                    </BurgerSection>
+
+                    <BurgerSection title={t('common.language')} subtitle={t('menu.settings')}>
+                      <div style={languageSelectorRowStyle}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void i18n.changeLanguage('en')
+                          }}
+                          style={{
+                            ...languageButtonStyle,
+                            ...(i18n.resolvedLanguage === 'en' ? languageButtonActiveStyle : null),
+                          }}
+                        >
+                          EN
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void i18n.changeLanguage('he')
+                          }}
+                          style={{
+                            ...languageButtonStyle,
+                            ...(i18n.resolvedLanguage === 'he' ? languageButtonActiveStyle : null),
+                          }}
+                        >
+                          עברית
+                        </button>
+                      </div>
+                    </BurgerSection>
+
+                    <BurgerSection
+                      title={preferredCustomersLabel}
+                      subtitle={preferredCustomersSubtitle}
+                    >
+                      {preferredCustomers.length === 0 ? (
+                        <div style={emptyMenuCardStyle}>{noPreferredCustomersLabel}</div>
+                      ) : (
+                        <div style={preferredCustomerListStyle}>
+                          {preferredCustomers.map((customer) => (
+                            <div key={customer.key} style={preferredCustomerRowStyle}>
+                              <div style={preferredCustomerHeartStyle}>♥</div>
+                              <div style={preferredCustomerNameStyle}>{customer.name}</div>
+                            </div>
+                          ))}
                         </div>
                       )}
+                    </BurgerSection>
+
+                    <div style={menuFooterActionWrapStyle}>
+                      <MenuNavRow
+                        icon="↪"
+                        label={t('menu.signOut')}
+                        destructive
+                        onClick={() => {
+                          closeAll()
+                          void onSignOut()
+                        }}
+                      />
                     </div>
-                    <div style={menuProfileChevronStyle}>›</div>
-                  </button>
+                  </>
+                ) : menuPage === 'futureOrders' ? (
+                  <BurgerSection
+                    title={t('menu.futureOrders')}
+                    subtitle={t('menu.futureOrdersSubtitle')}
+                  >
+                    {upcomingFutureItems.length === 0 ? (
+                      <div style={emptyMenuCardStyle}>{t('menu.noFutureOrders')}</div>
+                    ) : (
+                      <div style={futureOrderListStyle}>
+                        {upcomingFutureItems.map((item) => (
+                          <div key={item.id} style={futureOrderCardStyle}>
+                            <div style={futureOrderTopStyle}>
+                              <div>
+                                <div style={futureOrderTitleStyle}>{item.dogName}</div>
+                                <div style={futureOrderSubtitleStyle}>{item.clientName}</div>
+                              </div>
+                              {item.earningsLabel && (
+                                <div style={futureOrderPriceStyle}>{item.earningsLabel}</div>
+                              )}
+                            </div>
+                            {item.address && <div style={futureOrderAddressStyle}>{item.address}</div>}
+                            <div style={futureOrderMetaStyle}>
+                              {item.scheduledFor && (
+                                <span>{t('menu.scheduledFor', { time: new Date(item.scheduledFor).toLocaleString() })}</span>
+                              )}
+                              {typeof item.startsInMinutes === 'number' && (
+                                <span>{t('menu.startsInMinutes', { count: item.startsInMinutes })}</span>
+                              )}
+                              {item.durationLabel !== '—' && <span>{item.durationLabel}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </BurgerSection>
+                ) : (
+                  <>
+                    <div style={menuProfileButtonStyle}>
+                      <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={52} borderRadius={18} />
+                      <div style={menuProfileTextStyle}>
+                        <div style={profileNameStyle}>{walkerName}</div>
+                        {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                        {flow.avgRating !== null && (
+                          <div style={profileRatingStyle}>
+                            <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} reviews
+                          </div>
+                        )}
+                      </div>
+                    </div>
 
-                  <div style={menuDividerStyle} />
+                    <div style={menuRowListStyle}>
+                      <MenuNavRow icon="⚙️" label={t('menu.settings')} onClick={() => setMenuPage('settings')} />
+                      <MenuNavRow icon="🕘" label={t('menu.tripHistory')} onClick={() => setMenuPage('history')} />
+                      <MenuNavRow icon="📅" label={t('menu.futureOrders')} onClick={() => setMenuPage('futureOrders')} />
+                      <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => setMenuPage('settings')} />
+                    </div>
 
-                  <button type="button" onClick={() => setHistoryOpen((v) => !v)} style={menuItemActionStyle}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <polyline points="12 6 12 12 16 14" />
-                    </svg>
-                    <span style={{ flex: 1 }}>Walk history</span>
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="#94A3B8"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{ transform: historyOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }}
-                    >
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </button>
-
-                  {historyOpen && (
-                    <div style={historyContainerStyle}>
+                    <BurgerSection title={t('menu.latestTrips')} subtitle={t('menu.walkHistorySubtitle')}>
                       <GroupedHistory
                         items={visibleHistoryItems}
                         role="walker"
                         compact
                         onHide={hideHistoryItem}
-                        emptyTitle="No walk history yet"
-                        emptySubtitle="Completed jobs and client feedback will appear here."
+                        favoriteClientIds={new Set(favoriteClients.keys())}
+                        onToggleFavoriteClient={toggleFavoriteClient}
+                        emptyTitle={t('menu.noWalkHistory')}
+                        emptySubtitle={t('menu.noWalkHistorySubtitle')}
                       />
-                      {allHistoryItems.length > 7 && (
-                        <div style={viewAllWrapStyle}>
-                          <button type="button" onClick={() => setHistoryView('all')} style={viewAllButtonStyle}>
-                            View all
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div style={menuDividerStyle} />
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeAll()
-                      void onSignOut()
-                    }}
-                    style={menuSignOutBtnStyle}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                      <polyline points="16 17 21 12 16 7" />
-                      <line x1="21" y1="12" x2="9" y2="12" />
-                    </svg>
-                    <span>Sign out</span>
-                  </button>
-                </>
-              )}
-            </div>
-          </>
-        )}
-
-        {profileOpen && (
-          <>
-            <div style={menuOverlayStyle} onClick={closeAll} />
-            <div style={profilePanelStyle}>
-              <div style={profileSectionStyle}>
-                <div style={{ position: 'relative' }}>
-                  <ProfileAvatar
-                    url={photo.avatarUrl}
-                    name={walkerName}
-                    size={56}
-                    borderRadius={18}
-                    onClick={() => fileInputRef.current?.click()}
-                  />
-                  <div style={cameraIconStyle}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="#FFFFFF">
-                      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
-                      <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
-                    </svg>
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) photo.uploadAvatar(file)
-                      e.target.value = ''
-                    }}
-                  />
-                </div>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={profileNameStyle}>{walkerName}</div>
-                  {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
-                  {flow.avgRating !== null && (
-                    <div style={profileRatingStyle}>
-                      <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} review
-                      {flow.ratingsReceived.length !== 1 ? 's' : ''}
-                    </div>
-                  )}
-                </div>
+                    </BurgerSection>
+                  </>
+                )}
               </div>
-
-              {photo.uploading && <div style={uploadStatusStyle}>Uploading photo...</div>}
-              {photo.error && <div style={uploadErrorStyle}>{photo.error}</div>}
-
-              <div style={menuDividerStyle} />
-
-              <button type="button" onClick={() => fileInputRef.current?.click()} style={profileActionBtnStyle}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z" />
-                  <path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9z" />
-                </svg>
-                <span>Change photo</span>
-              </button>
             </div>
           </>
         )}
@@ -839,40 +1105,219 @@ export default function WalkerDashboard({
 
           {flow.screenState === 'offline' && (
             <div className="sheet-state-enter">
-              <div style={statusHintStyle}>
-                <span>Go online to receive walk requests</span>
+              <div style={idleHeroStyle}>
+                <div style={idleHeroGlowStyle} />
+                <div style={idleHeroBadgeStyle}>{idleHeroTitle}</div>
+                <button
+                  type="button"
+                  onClick={() => void handleOnlineToggle()}
+                  style={{
+                    ...idleHeroToggleStyle,
+                    background: flow.isOnline ? 'linear-gradient(180deg, #16A34A 0%, #15803D 100%)' : '#CBD5E1',
+                  }}
+                >
+                  <div
+                    style={{
+                    ...idleHeroToggleKnobStyle,
+                      transform: flow.isOnline ? 'translateX(28px)' : 'translateX(0)',
+                    }}
+                  />
+                </button>
+                <div style={idleHeroTitleStyle}>{idleHeroSubtitle}</div>
+                <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
               </div>
 
-              <WalletCard balance={flow.wallet.availableBalance} pending={flow.wallet.pendingEarnings} />
+              <div style={idleCardGridStyle}>
+                <div style={idleRadarCardStyle}>
+                  <RadarVisual />
+                  <div style={idleInfoCardTextWrapStyle}>
+                    <div style={idleInfoCardTitleStyle}>{idleWaitingTitle}</div>
+                    <div style={idleInfoCardBodyStyle}>
+                      {flow.connectLoading
+                        ? 'Checking payout setup...'
+                        : isHebrew
+                          ? 'הפעל את מצב המחובר כדי להתחיל לקבל בקשות קרובות.'
+                          : 'Turn on connected mode to start receiving nearby requests.'}
+                    </div>
+                  </div>
+                </div>
 
-              <ConnectOnboardingCard
-                status={flow.connectStatus}
-                loading={flow.connectLoading}
-                error={flow.connectError}
-                onConnect={flow.handleConnectAccount}
-                onContinue={flow.handleContinueOnboarding}
-                onRefresh={() => void flow.fetchConnectStatus()}
-              />
+                <div style={idleStatsCardStyle}>
+                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'נתונים מהירים' : 'Quick stats'}</div>
+                  <div style={idleStatsGridStyle}>
+                    <div style={idleStatItemStyle}>
+                      <span style={idleStatLabelStyle}>{isHebrew ? 'דירוג' : 'Rating'}</span>
+                      <span style={idleStatValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</span>
+                    </div>
+                    <div style={idleStatItemStyle}>
+                      <span style={idleStatLabelStyle}>{isHebrew ? 'הושלמו' : 'Completed'}</span>
+                      <span style={idleStatValueStyle}>{completedJobsCount}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={walletCardStyle}>
+                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'ארנק' : 'Wallet'}</div>
+                  <div style={walletGridStyle}>
+                    <div style={walletMetricStyle}>
+                      <span style={walletMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available'}</span>
+                      <span style={walletMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</span>
+                    </div>
+                    <div style={walletMetricStyle}>
+                      <span style={walletMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending'}</span>
+                      <span style={walletMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</span>
+                    </div>
+                  </div>
+                  <div style={walletStatusWrapStyle}>
+                    {flow.connectLoading ? (
+                      <span style={walletStatusNeutralStyle}>
+                        {isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}
+                      </span>
+                    ) : walletPayoutReady ? (
+                      <span style={walletStatusReadyStyle}>
+                        {isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}
+                      </span>
+                    ) : (
+                      <>
+                        <span style={walletStatusWarningStyle}>
+                          {isHebrew
+                            ? 'השלם הגדרת תשלומים כדי לקבל כספים'
+                            : 'Complete payout setup to receive earnings'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPayoutCtaAnimationStopped(true)
+                            void handleStripeSetup(false)
+                          }}
+                          disabled={isCheckingPayout}
+                          style={{
+                            ...walletSetupButtonStyle,
+                            ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
+                            ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
+                            ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
+                          }}
+                        >
+                          {isCheckingPayout
+                            ? isHebrew
+                              ? 'בודק...'
+                              : 'Checking...'
+                            : isHebrew
+                              ? 'הגדר תשלומים'
+                              : 'Set up payouts'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
           {flow.screenState === 'waiting' && (
             <div className="sheet-state-enter">
-              <div style={statusHintOnlineStyle}>
-                <div style={waitingDotStyle} />
-                <span>Waiting for requests</span>
+              <div style={{ ...idleHeroStyle, ...idleHeroOnlineStyle }}>
+                <div style={idleHeroGlowStyle} />
+                <div style={{ ...idleHeroBadgeStyle, background: 'rgba(22, 163, 74, 0.12)', color: '#15803D' }}>
+                  {idleHeroTitle}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleOnlineToggle()}
+                  style={{
+                    ...idleHeroToggleStyle,
+                    background: 'linear-gradient(180deg, #16A34A 0%, #15803D 100%)',
+                  }}
+                >
+                  <div
+                    style={{
+                      ...idleHeroToggleKnobStyle,
+                      transform: 'translateX(28px)',
+                    }}
+                  />
+                </button>
+                <div style={idleHeroTitleStyle}>{idleHeroSubtitle}</div>
+                <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
               </div>
 
-              <WalletCard balance={flow.wallet.availableBalance} pending={flow.wallet.pendingEarnings} />
+              <div style={idleCardGridStyle}>
+                <div style={idleRadarCardStyle}>
+                  <RadarVisual />
+                  <div style={idleInfoCardTextWrapStyle}>
+                    <div style={idleInfoCardTitleStyle}>{idleWaitingTitle}</div>
+                    <div style={idleInfoCardBodyStyle}>{idleWaitingBody}</div>
+                  </div>
+                </div>
 
-              <ConnectOnboardingCard
-                status={flow.connectStatus}
-                loading={flow.connectLoading}
-                error={flow.connectError}
-                onConnect={flow.handleConnectAccount}
-                onContinue={flow.handleContinueOnboarding}
-                onRefresh={() => void flow.fetchConnectStatus()}
-              />
+                <div style={idleStatsCardStyle}>
+                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'נתונים מהירים' : 'Quick stats'}</div>
+                  <div style={idleStatsGridStyle}>
+                    <div style={idleStatItemStyle}>
+                      <span style={idleStatLabelStyle}>{isHebrew ? 'דירוג' : 'Rating'}</span>
+                      <span style={idleStatValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</span>
+                    </div>
+                    <div style={idleStatItemStyle}>
+                      <span style={idleStatLabelStyle}>{isHebrew ? 'הושלמו' : 'Completed'}</span>
+                      <span style={idleStatValueStyle}>{completedJobsCount}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={walletCardStyle}>
+                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'ארנק' : 'Wallet'}</div>
+                  <div style={walletGridStyle}>
+                    <div style={walletMetricStyle}>
+                      <span style={walletMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available'}</span>
+                      <span style={walletMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</span>
+                    </div>
+                    <div style={walletMetricStyle}>
+                      <span style={walletMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending'}</span>
+                      <span style={walletMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</span>
+                    </div>
+                  </div>
+                  <div style={walletStatusWrapStyle}>
+                    {flow.connectLoading ? (
+                      <span style={walletStatusNeutralStyle}>
+                        {isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}
+                      </span>
+                    ) : walletPayoutReady ? (
+                      <span style={walletStatusReadyStyle}>
+                        {isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}
+                      </span>
+                    ) : (
+                      <>
+                        <span style={walletStatusWarningStyle}>
+                          {isHebrew
+                            ? 'השלם הגדרת תשלומים כדי לקבל כספים'
+                            : 'Complete payout setup to receive earnings'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPayoutCtaAnimationStopped(true)
+                            void handleStripeSetup(false)
+                          }}
+                          disabled={isCheckingPayout}
+                          style={{
+                            ...walletSetupButtonStyle,
+                            ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
+                            ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
+                            ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
+                          }}
+                        >
+                          {isCheckingPayout
+                            ? isHebrew
+                              ? 'בודק...'
+                              : 'Checking...'
+                            : isHebrew
+                              ? 'הגדר תשלומים'
+                              : 'Set up payouts'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -890,7 +1335,17 @@ export default function WalkerDashboard({
               </div>
 
               <h3 style={activeDogNameStyle}>{onTheWayJob.dog_name || 'Dog'}</h3>
-              <p style={activeClientStyle}>for {onTheWayJob.client?.full_name || onTheWayJob.client?.email || 'Client'}</p>
+              <p style={activeClientStyle}>
+                {isHebrew ? 'עבור ' : 'for '}
+                {getCustomerDisplayName(
+                  {
+                    client: onTheWayJob.client ?? null,
+                    clientName: onTheWayJob.client?.full_name || onTheWayJob.client?.email || null,
+                    dogName: onTheWayJob.dog_name || null,
+                  },
+                  isHebrew,
+                )}
+              </p>
 
               {onTheWayJob.location && (
                 <div style={activeLocationStyle}>
@@ -922,7 +1377,7 @@ export default function WalkerDashboard({
                 {flow.screenPhase === 'on_the_way'
                   ? 'Arrived'
                   : flow.screenPhase === 'arrival_confirmed'
-                    ? onTheWayLabels.startAction
+                    ? walkerStartServiceLabel
                     : 'Waiting for client'}
               </button>
             </div>
@@ -938,7 +1393,17 @@ export default function WalkerDashboard({
               </div>
 
               <h3 style={activeDogNameStyle}>{activeJob.dog_name || 'Dog'}</h3>
-              <p style={activeClientStyle}>for {activeJob.client?.full_name || activeJob.client?.email || 'Client'}</p>
+              <p style={activeClientStyle}>
+                {isHebrew ? 'עבור ' : 'for '}
+                {getCustomerDisplayName(
+                  {
+                    client: activeJob.client ?? null,
+                    clientName: activeJob.client?.full_name || activeJob.client?.email || null,
+                    dogName: activeJob.dog_name || null,
+                  },
+                  isHebrew,
+                )}
+              </p>
 
               {activeJob.location && (
                 <div style={activeLocationStyle}>
@@ -1007,7 +1472,7 @@ export default function WalkerDashboard({
                   : flow.pendingClientConfirmation === activeJob.id
                     ? t('completion.walkerWaiting')
                     : activeJobCanComplete
-                      ? activeLabels.completeAction
+                      ? walkerCompleteServiceLabel
                       : 'Available at dispatch time'}
               </button>
             </div>
@@ -1017,7 +1482,9 @@ export default function WalkerDashboard({
             <div className="sheet-state-enter" style={completionCardStyle}>
               <div style={checkStyle}>✓</div>
               <h3 style={completionTitleStyle}>{getServiceLabels(null).completedTitle}</h3>
-              <p style={completionSubStyle}>{flow.completionSuccess.clientName}'s dog</p>
+              <p style={completionSubStyle}>
+                {isHebrew ? `השירות של ${completionClientName}` : `${completionClientName}'s service`}
+              </p>
 
               {flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0 && (
                 <div style={earningsRowStyle}>
@@ -1040,7 +1507,9 @@ export default function WalkerDashboard({
 
               {!compRatingDone && (
                 <div style={inlineRatingContainerStyle}>
-                  <p style={ratingPromptStyle}>How was {flow.completionSuccess.clientName}?</p>
+                  <p style={ratingPromptStyle}>
+                    {isHebrew ? `איך היה עם ${completionClientName}?` : `How was ${completionClientName}?`}
+                  </p>
                   <div style={starsRowStyle}>
                     {[1, 2, 3, 4, 5].map((star) => {
                       const isActive = star <= (compHover || compRating)
@@ -1140,7 +1609,19 @@ export default function WalkerDashboard({
           <div style={overlayBackdropStyle} />
           <div style={bottomSheetStyle}>
             <div style={sheetHeaderStyle}>
-              <span style={newRequestLabelStyle}>New request</span>
+              <div style={incomingSheetTitleWrapStyle}>
+                <span style={newRequestLabelStyle}>{incomingTitle}</span>
+                <span style={incomingSheetSubtitleStyle}>
+                  {getCustomerDisplayName(
+                    {
+                      client: topRequest.client ?? null,
+                      clientName: topRequest.client?.full_name || topRequest.client?.email || null,
+                      dogName: topRequest.dog_name || null,
+                    },
+                    isHebrew,
+                  )}
+                </span>
+              </div>
               <span style={{ ...countdownLabelStyle, color: countdown <= 5 ? '#EF4444' : '#F59E0B' }}>
                 {countdown}s
               </span>
@@ -1150,33 +1631,34 @@ export default function WalkerDashboard({
               <div style={{ ...progressFillStyle, width: `${(countdown / REQUEST_TIMEOUT_SECONDS) * 100}%` }} />
             </div>
 
-            <div style={dogNameStyle}>{topRequest.dog_name || 'Dog'}</div>
-
-            {topRequest.location && (
-              <div style={reqLocationStyle}>
-                <span style={ellipsisStyle}>{formatShortAddress(topRequest.address || topRequest.location)}</span>
+            <div style={incomingMainCardStyle}>
+              <div style={incomingInfoCardStyle}>
+                <div style={incomingInfoLabelStyle}>{isHebrew ? 'שם הזמנה' : 'Order name'}</div>
+                <div style={dogNameStyle}>{topRequest.dog_name || t('booking.walkFallback')}</div>
               </div>
-            )}
 
-            <div style={infoPillsRowStyle}>
-              <div style={infoPillStyle}><span>{requestDuration}</span></div>
-              <div style={infoPillDividerStyle} />
-              <div style={{ ...infoPillStyle, color: '#15803D', fontWeight: 800 }}><span>{requestPrice}</span></div>
+              {topRequest.location && (
+                <div style={reqLocationStyle}>
+                  <div style={incomingInfoLabelStyle}>{isHebrew ? 'כתובת' : 'Location'}</div>
+                  <span style={ellipsisStyle}>{formatShortAddress(topRequest.address || topRequest.location)}</span>
+                </div>
+              )}
+
+              <div style={incomingMetaRowStyle}>
+                <div style={incomingMetaCardStyle}>
+                  <span style={incomingMetaLabelStyle}>{t('booking.durationQuestion')}</span>
+                  <span style={incomingMetaValueStyle}>{requestDuration}</span>
+                </div>
+                <div style={incomingMetaCardStyle}>
+                  <span style={incomingMetaLabelStyle}>{t('booking.priceLabel')}</span>
+                  <span style={{ ...incomingMetaValueStyle, color: '#15803D' }}>{requestPrice}</span>
+                </div>
+              </div>
             </div>
 
             {flow.openJobs.length > 1 && <div style={queueHintStyle}>+{flow.openJobs.length - 1} more in queue</div>}
 
             <div style={ctaContainerStyle}>
-              <button
-                onClick={async () => {
-                    await hapticMedium()
-                    void flow.handleAccept(topRequest.id)
-                }}
-                style={acceptBtnStyle}
-                className="request-accept-btn"
-              >
-                Accept
-              </button>
               <button
                 onClick={async () => {
                   await hapticMedium()
@@ -1186,6 +1668,16 @@ export default function WalkerDashboard({
                 style={declineBtnStyle}
               >
                 Decline
+              </button>
+              <button
+                onClick={async () => {
+                  await hapticMedium()
+                  void flow.handleAccept(topRequest.id)
+                }}
+                style={acceptBtnStyle}
+                className="request-accept-btn"
+              >
+                Accept
               </button>
             </div>
           </div>
@@ -1234,7 +1726,7 @@ export default function WalkerDashboard({
             <CompletionCard
               promptKey={flow.completionSuccess.jobId}
               title={getServiceLabels(null).completedTitle}
-              subtitle={`Rate ${flow.completionSuccess.clientName}`}
+              subtitle={isHebrew ? `דרג את ${completionClientName}` : `Rate ${completionClientName}`}
               metaRows={completionMetaRows}
               earnings={
                 flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0
@@ -1244,6 +1736,17 @@ export default function WalkerDashboard({
               onRate={flow.submitCompletionRating}
               ratingSubmitting={flow.completionRatingSubmitting}
               alreadyRated={flow.ratedJobIds.has(flow.completionSuccess.jobId)}
+              favoriteLabel={completionClientName}
+              favoriteInactiveLabel={isHebrew ? `שמור את ${completionClientName}` : `Save ${completionClientName}`}
+              favoriteActiveLabel={isHebrew ? `${completionClientName} נשמר` : `${completionClientName} saved`}
+              favoriteActive={completionClientSaved}
+              onToggleFavorite={
+                completionClientKey
+                  ? () => {
+                      void toggleFavoriteClient(completionClientKey, completionClientName)
+                    }
+                  : undefined
+              }
               onDismiss={flow.dismissCompletion}
             />
           </div>
@@ -1253,73 +1756,136 @@ export default function WalkerDashboard({
   )
 }
 
-function WalletCard({ balance, pending }: { balance: number; pending: number }) {
+function BurgerSection({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  children: ReactNode
+}) {
   return (
-    <div style={walletCardStyle}>
-      <div style={walletHeaderStyle}>Wallet</div>
-      <div style={walletRowStyle}>
-        <div>
-          <div style={walletLabelStyle}>Available</div>
-          <div style={walletValueStyle}>₪{balance.toFixed(0)}</div>
-        </div>
-        <div>
-          <div style={walletLabelStyle}>Pending</div>
-          <div style={walletValueStyle}>₪{pending.toFixed(0)}</div>
-        </div>
+    <section style={burgerSectionStyle}>
+      <div style={burgerSectionHeaderStyle}>
+        <div style={burgerSectionTitleStyle}>{title}</div>
+        {subtitle ? <div style={burgerSectionSubtitleStyle}>{subtitle}</div> : null}
       </div>
-    </div>
+      {children}
+    </section>
   )
 }
 
-function ConnectOnboardingCard({
-  status,
-  loading,
-  error,
-  onConnect,
-  onContinue,
-  onRefresh,
+function MenuNavRow({
+  icon,
+  label,
+  destructive = false,
+  onClick,
 }: {
-  status: ConnectStatus | null
-  loading: boolean
-  error: string | null
-  onConnect: () => Promise<void> | void
-  onContinue: () => Promise<void> | void
-  onRefresh: () => Promise<void> | void
+  icon: string
+  label: string
+  destructive?: boolean
+  onClick: () => void
 }) {
   return (
-    <div style={connectCardStyle}>
-      <div style={connectTitleStyle}>Payout setup</div>
-      {loading ? (
-        <div style={connectSubStyle}>Checking payout status...</div>
-      ) : error ? (
-        <div style={connectErrorStyle}>{error}</div>
-      ) : status?.connected && status.stripe_connect_onboarding_complete && status.payouts_enabled ? (
-        <div style={connectReadyStyle}>Ready to receive payouts</div>
-      ) : status?.connected ? (
-        <>
-          <div style={connectSubStyle}>Complete your Stripe onboarding to receive payouts.</div>
-          <div style={connectActionsStyle}>
-            <button type="button" onClick={() => void onContinue()} style={primaryMiniBtnStyle}>
-              Continue
-            </button>
-            <button type="button" onClick={() => void onRefresh()} style={secondaryMiniBtnStyle}>
-              Refresh
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={connectSubStyle}>Connect Stripe to receive your earnings.</div>
-          <div style={connectActionsStyle}>
-            <button type="button" onClick={() => void onConnect()} style={primaryMiniBtnStyle}>
-              Connect
-            </button>
-            <button type="button" onClick={() => void onRefresh()} style={secondaryMiniBtnStyle}>
-              Refresh
-            </button>
-          </div>
-        </>
-      )}
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...menuNavRowStyle,
+        ...(destructive ? menuNavRowDestructiveStyle : null),
+      }}
+    >
+      <span style={menuNavIconStyle}>{icon}</span>
+      <span style={{ flex: 1, textAlign: 'start' }}>{label}</span>
+      {!destructive && <span style={menuNavChevronStyle}>›</span>}
+    </button>
+  )
+}
+
+function RadarVisual() {
+  return (
+    <div style={idleRadarVisualStyle} aria-hidden="true">
+      <svg viewBox="0 0 320 150" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="walkerRadarGlow" cx="50%" cy="50%" r="62%">
+            <stop offset="0%" stopColor="rgba(91,124,250,0.18)" />
+            <stop offset="45%" stopColor="rgba(91,124,250,0.08)" />
+            <stop offset="100%" stopColor="rgba(91,124,250,0)" />
+          </radialGradient>
+          <linearGradient id="walkerRadarSweep" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(91,124,250,0.28)" />
+            <stop offset="55%" stopColor="rgba(91,124,250,0.08)" />
+            <stop offset="100%" stopColor="rgba(91,124,250,0)" />
+          </linearGradient>
+        </defs>
+
+        <rect x="0" y="0" width="320" height="150" rx="22" fill="transparent" />
+        <circle cx="160" cy="75" r="64" fill="url(#walkerRadarGlow)" />
+        <circle cx="160" cy="75" r="58" fill="none" stroke="rgba(91,124,250,0.18)" strokeWidth="1.5" />
+        <circle cx="160" cy="75" r="42" fill="none" stroke="rgba(91,124,250,0.16)" strokeWidth="1.5" />
+        <circle cx="160" cy="75" r="26" fill="none" stroke="rgba(91,124,250,0.16)" strokeWidth="1.5" />
+        <line x1="36" y1="75" x2="284" y2="75" stroke="rgba(148,163,184,0.16)" strokeWidth="1" />
+        <line x1="160" y1="16" x2="160" y2="134" stroke="rgba(148,163,184,0.16)" strokeWidth="1" />
+
+        <path d="M160 75 L160 17 A58 58 0 0 1 218 75 Z" fill="url(#walkerRadarSweep)" opacity="0.92">
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 160 75"
+            to="360 160 75"
+            dur="5.6s"
+            repeatCount="indefinite"
+          />
+        </path>
+
+        <circle cx="160" cy="75" r="6" fill="#5B7CFA">
+          <animate
+            attributeName="r"
+            values="5.5;7.5;5.5"
+            dur="1.9s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.95;1;0.95"
+            dur="1.9s"
+            repeatCount="indefinite"
+          />
+        </circle>
+
+        <circle cx="160" cy="75" r="10" fill="none" stroke="rgba(91,124,250,0.28)" strokeWidth="2">
+          <animate
+            attributeName="r"
+            values="10;36"
+            dur="2.2s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.6;0"
+            dur="2.2s"
+            repeatCount="indefinite"
+          />
+        </circle>
+
+        <circle cx="160" cy="75" r="10" fill="none" stroke="rgba(91,124,250,0.18)" strokeWidth="1.5">
+          <animate
+            attributeName="r"
+            values="10;50"
+            dur="2.2s"
+            begin="1.1s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.45;0"
+            dur="2.2s"
+            begin="1.1s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      </svg>
     </div>
   )
 }
@@ -1330,29 +1896,31 @@ const screenStyle: React.CSSProperties = {
   color: '#0F172A',
   fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
   overflowY: 'auto',
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
   WebkitOverflowScrolling: 'touch',
 }
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-  padding: 'calc(18px + env(safe-area-inset-top)) 18px 12px',
+  flexDirection: 'column',
+  alignItems: 'stretch',
+  gap: 6,
+  margin: 'calc(10px + env(safe-area-inset-top)) 18px 4px',
+  padding: '0',
   position: 'sticky',
   top: 0,
   zIndex: 20,
-  background: 'rgba(248, 250, 252, 0.92)',
-  backdropFilter: 'blur(10px)',
+  background: 'transparent',
 }
 
 const headerMenuBtnStyle: React.CSSProperties = {
-  width: 46,
-  height: 46,
-  borderRadius: 16,
-  border: 'none',
-  background: '#FFFFFF',
-  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
+  width: 44,
+  height: 44,
+  borderRadius: 14,
+  border: '1px solid rgba(226,232,240,0.9)',
+  background: 'rgba(255,255,255,0.92)',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
   display: 'grid',
   placeItems: 'center',
   cursor: 'pointer',
@@ -1360,7 +1928,7 @@ const headerMenuBtnStyle: React.CSSProperties = {
 
 const greetingStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 22,
+  fontSize: 21,
   fontWeight: 800,
   lineHeight: 1.1,
   overflow: 'hidden',
@@ -1368,46 +1936,46 @@ const greetingStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const toggleGroupStyle: React.CSSProperties = {
+const headerTopRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  justifyContent: 'space-between',
   gap: 10,
 }
 
-const statusLabelWrapStyle: React.CSSProperties = {
+const headerIdentityRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 12,
+  padding: '0',
 }
 
-const statusDotStyle: React.CSSProperties = {
-  width: 10,
-  height: 10,
+const headerIdentityStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: 'grid',
+  gap: 2,
+}
+
+const bellWrapStyle: React.CSSProperties = {
+  width: 44,
+  height: 44,
+  borderRadius: 14,
+  background: 'rgba(255,255,255,0.92)',
+  border: '1px solid rgba(226,232,240,0.9)',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
+  display: 'grid',
+  placeItems: 'center',
+}
+
+const activeSessionChipStyle: React.CSSProperties = {
+  padding: '8px 10px',
   borderRadius: 999,
-}
-
-const statusLabelStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-}
-
-const toggleBtnStyle: React.CSSProperties = {
-  width: 50,
-  height: 32,
-  borderRadius: 999,
-  border: 'none',
-  padding: 3,
-  position: 'relative',
-  cursor: 'pointer',
-  transition: 'background 0.2s ease',
-}
-
-const toggleKnobStyle: React.CSSProperties = {
-  width: 26,
-  height: 26,
-  borderRadius: 999,
-  background: '#FFFFFF',
-  transition: 'transform 0.2s ease',
+  background: 'rgba(224, 242, 254, 0.92)',
+  color: '#0369A1',
+  fontSize: 11,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
 }
 
 const stripeGateOverlayStyle: React.CSSProperties = {
@@ -1492,76 +2060,83 @@ const stripeGateSecondaryStyle: React.CSSProperties = {
 const menuOverlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.26)',
+  background: 'rgba(15, 23, 42, 0.18)',
   zIndex: 30,
 }
 
 const menuPanelStyle: React.CSSProperties = {
   position: 'fixed',
-  top: 'calc(90px + env(safe-area-inset-top))',
-  left: 18,
-  width: 'min(560px, calc(100vw - 36px))',
-  maxHeight: 'calc(100dvh - 130px)',
+  top: 0,
+  bottom: 0,
+  width: 'min(86vw, 360px)',
+  maxHeight: '100dvh',
   overflow: 'hidden',
-  background: '#FFFFFF',
-  borderRadius: 34,
-  boxShadow: '0 30px 80px rgba(15, 23, 42, 0.18)',
+  background: 'rgba(255,255,255,0.96)',
+  backdropFilter: 'blur(16px) saturate(135%)',
+  WebkitBackdropFilter: 'blur(16px) saturate(135%)',
+  boxShadow: '0 18px 48px rgba(15, 23, 42, 0.16)',
   zIndex: 31,
   display: 'flex',
   flexDirection: 'column',
+  paddingTop: 'env(safe-area-inset-top)',
+  paddingBottom: 'env(safe-area-inset-bottom)',
 }
 
-const menuHeaderStyle: React.CSSProperties = {
+const menuPanelLtrStyle: React.CSSProperties = {
+  left: 0,
+  borderTopRightRadius: 28,
+  borderBottomRightRadius: 28,
+  animation: 'walkerDrawerInLtr 0.22s ease-out',
+}
+
+const menuPanelRtlStyle: React.CSSProperties = {
+  right: 0,
+  borderTopLeftRadius: 28,
+  borderBottomLeftRadius: 28,
+  animation: 'walkerDrawerInRtl 0.22s ease-out',
+}
+
+const menuHeaderRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '22px 20px 14px',
+  borderBottom: '1px solid #E5E7EB',
+}
+
+const menuHeaderLeftStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '26px 26px 18px',
-  fontSize: 18,
-  fontWeight: 800,
 }
 
-const menuHeaderIconButtonStyle: React.CSSProperties = {
+const menuBackButtonStyle: React.CSSProperties = {
   appearance: 'none',
-  border: 'none',
-  background: 'transparent',
-  width: 32,
-  height: 32,
-  padding: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+  border: '1px solid #E2E8F0',
+  background: '#F8FAFC',
   cursor: 'pointer',
+  fontSize: 24,
+  fontWeight: 700,
   color: '#0F172A',
 }
 
-const menuBackGlyphStyle: React.CSSProperties = {
-  fontSize: 32,
-  lineHeight: 1,
-  fontWeight: 700,
-  marginTop: -2,
-}
-
-const menuHeaderTitleStyle: React.CSSProperties = {
+const menuTitleStyle: React.CSSProperties = {
   fontSize: 18,
   fontWeight: 800,
 }
 
-const menuDividerStyle: React.CSSProperties = {
-  height: 1,
-  background: '#E5E7EB',
-  margin: '0 24px',
-}
-
 const menuProfileButtonStyle: React.CSSProperties = {
-  margin: '18px 24px',
+  margin: '0 0 20px',
   border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  borderRadius: 20,
-  padding: 12,
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  borderRadius: 24,
+  padding: 16,
   display: 'flex',
   alignItems: 'center',
-  gap: 12,
-  cursor: 'pointer',
+  gap: 14,
   textAlign: 'left',
 }
 
@@ -1570,82 +2145,78 @@ const menuProfileTextStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-const menuProfileChevronStyle: React.CSSProperties = {
-  color: '#94A3B8',
-  fontSize: 24,
-  lineHeight: 1,
-  flexShrink: 0,
+const menuScrollAreaStyle: React.CSSProperties = {
+  padding: 16,
+  overflowY: 'auto',
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
 }
 
-const menuItemActionStyle: React.CSSProperties = {
+const menuRowListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  marginBottom: 20,
+}
+
+const burgerSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  marginBottom: 20,
+}
+
+const burgerSectionHeaderStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const burgerSectionTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const burgerSectionSubtitleStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: '#64748B',
+}
+
+const menuFooterActionWrapStyle: React.CSSProperties = {
+  marginTop: 6,
+}
+
+const menuNavRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 14,
   width: '100%',
-  padding: '22px 24px',
-  border: 'none',
-  background: 'transparent',
-  fontSize: 17,
-  fontWeight: 800,
-  color: '#475569',
-  cursor: 'pointer',
-  textAlign: 'left',
-}
-
-const historyContainerStyle: React.CSSProperties = {
-  padding: '0 20px 14px',
-  overflowY: 'auto',
-}
-
-const viewAllWrapStyle: React.CSSProperties = {
-  marginTop: 10,
-  textAlign: 'center',
-}
-
-const viewAllButtonStyle: React.CSSProperties = {
-  appearance: 'none',
+  padding: '16px 18px',
+  borderRadius: 20,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#0F172A',
-  borderRadius: 999,
-  padding: '9px 16px',
-  fontSize: 13,
-  fontWeight: 800,
-  cursor: 'pointer',
-}
-
-const menuSignOutBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  width: '100%',
-  padding: '26px 24px',
-  border: 'none',
-  background: 'transparent',
-  color: '#EF4444',
-  fontSize: 17,
+  fontSize: 15,
   fontWeight: 800,
   cursor: 'pointer',
   textAlign: 'left',
 }
 
-const profilePanelStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 'calc(90px + env(safe-area-inset-top))',
-  right: 18,
-  width: 'min(320px, calc(100vw - 36px))',
-  background: '#FFFFFF',
-  borderRadius: 28,
-  boxShadow: '0 24px 70px rgba(15, 23, 42, 0.18)',
-  zIndex: 31,
-  overflow: 'hidden',
+const menuNavRowDestructiveStyle: React.CSSProperties = {
+  color: '#DC2626',
+  borderColor: 'rgba(248, 113, 113, 0.28)',
+  background: '#FEF2F2',
 }
 
-const profileSectionStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 14,
-  alignItems: 'center',
-  padding: '22px 20px 18px',
+const menuNavIconStyle: React.CSSProperties = {
+  width: 24,
+  textAlign: 'center',
+  flexShrink: 0,
+}
+
+const menuNavChevronStyle: React.CSSProperties = {
+  fontSize: 22,
+  color: '#94A3B8',
+  lineHeight: 1,
 }
 
 const profileNameStyle: React.CSSProperties = {
@@ -1667,50 +2238,176 @@ const profileRatingStyle: React.CSSProperties = {
   fontWeight: 700,
 }
 
-const cameraIconStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: -2,
-  bottom: -2,
-  width: 22,
-  height: 22,
-  borderRadius: 999,
-  background: '#2563EB',
-  display: 'grid',
-  placeItems: 'center',
-  border: '2px solid #FFFFFF',
-}
-
 const uploadStatusStyle: React.CSSProperties = {
-  padding: '0 20px 12px',
   fontSize: 12,
   color: '#64748B',
 }
 
 const uploadErrorStyle: React.CSSProperties = {
-  padding: '0 20px 12px',
   fontSize: 12,
   color: '#DC2626',
 }
 
-const profileActionBtnStyle: React.CSSProperties = {
+const settingsProfileRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  gap: 14,
+}
+
+const settingsProfileMetaStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'grid',
+  gap: 6,
+}
+
+const settingsProfileTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const settingsPhotoButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  borderRadius: 999,
+  padding: '8px 12px',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  justifySelf: 'start',
+}
+
+const languageSelectorRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
   gap: 10,
-  width: '100%',
-  padding: '16px 20px',
-  border: 'none',
-  background: 'transparent',
+}
+
+const languageButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  minHeight: 48,
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const languageButtonActiveStyle: React.CSSProperties = {
+  background: '#0F172A',
+  color: '#FFFFFF',
+  borderColor: '#0F172A',
+}
+
+const emptyMenuCardStyle: React.CSSProperties = {
+  padding: '16px 18px',
+  borderRadius: 20,
+  border: '1px dashed #CBD5E1',
+  background: '#F8FAFC',
+  color: '#64748B',
+  fontSize: 14,
+  fontWeight: 600,
+}
+
+const preferredCustomerListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const preferredCustomerRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '14px 16px',
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+}
+
+const preferredCustomerHeartStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 999,
+  display: 'grid',
+  placeItems: 'center',
+  background: '#FEF3C7',
+  color: '#B45309',
+  fontSize: 15,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
+const preferredCustomerNameStyle: React.CSSProperties = {
+  minWidth: 0,
   fontSize: 14,
   fontWeight: 700,
-  color: '#475569',
-  cursor: 'pointer',
-  textAlign: 'left',
+  color: '#0F172A',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const futureOrderListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const futureOrderCardStyle: React.CSSProperties = {
+  borderRadius: 22,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  padding: 16,
+  display: 'grid',
+  gap: 10,
+}
+
+const futureOrderTopStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'start',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const futureOrderTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const futureOrderSubtitleStyle: React.CSSProperties = {
+  marginTop: 3,
+  fontSize: 13,
+  color: '#64748B',
+}
+
+const futureOrderPriceStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#15803D',
+}
+
+const futureOrderAddressStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#334155',
+}
+
+const futureOrderMetaStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 700,
 }
 
 const contentStyle: React.CSSProperties = {
-  padding: '10px 18px calc(32px + env(safe-area-inset-bottom))',
+  padding: '2px 18px calc(20px + env(safe-area-inset-bottom))',
   display: 'grid',
-  gap: 14,
+  gap: 8,
   boxSizing: 'border-box',
 }
 
@@ -1748,126 +2445,266 @@ const toastDismissStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const statusHintStyle: React.CSSProperties = {
-  padding: '14px 16px',
-  borderRadius: 18,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  color: '#64748B',
-  fontWeight: 700,
+const idleHeroStyle: React.CSSProperties = {
+  position: 'relative',
+  overflow: 'hidden',
+  padding: '16px 16px 14px',
+  borderRadius: 28,
+  background:
+    'radial-gradient(circle at top, rgba(91,124,250,0.18) 0%, rgba(91,124,250,0.04) 28%, rgba(255,255,255,0.96) 62%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  border: '1px solid rgba(226,232,240,0.9)',
+  boxShadow: '0 18px 40px rgba(15,23,42,0.10)',
+  display: 'grid',
+  justifyItems: 'center',
+  gap: 6,
 }
 
-const statusHintOnlineStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '14px 16px',
-  borderRadius: 18,
-  background: '#ECFDF5',
-  color: '#166534',
+const idleHeroOnlineStyle: React.CSSProperties = {
+  background:
+    'radial-gradient(circle at top, rgba(22,163,74,0.18) 0%, rgba(22,163,74,0.04) 28%, rgba(255,255,255,0.96) 62%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+}
+
+const idleHeroGlowStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 'auto auto -30px -30px',
+  width: 120,
+  height: 120,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0) 70%)',
+  pointerEvents: 'none',
+}
+
+const idleHeroBadgeStyle: React.CSSProperties = {
+  position: 'relative',
+  zIndex: 1,
+  padding: '5px 9px',
+  borderRadius: 999,
+  background: 'rgba(91,124,250,0.10)',
+  color: '#4157B2',
+  fontSize: 10,
   fontWeight: 800,
 }
 
-const waitingDotStyle: React.CSSProperties = {
-  width: 10,
-  height: 10,
+const idleHeroToggleStyle: React.CSSProperties = {
+  position: 'relative',
+  zIndex: 1,
+  width: 66,
+  height: 38,
   borderRadius: 999,
-  background: '#16A34A',
+  border: 'none',
+  padding: 3,
+  boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.24)',
+  cursor: 'pointer',
+  transition: 'background 0.2s ease',
+}
+
+const idleHeroToggleKnobStyle: React.CSSProperties = {
+  width: 32,
+  height: 32,
+  borderRadius: '50%',
+  background: '#FFFFFF',
+  boxShadow: '0 8px 16px rgba(15,23,42,0.18)',
+  transition: 'transform 0.2s ease',
+}
+
+const idleHeroTitleStyle: React.CSSProperties = {
+  position: 'relative',
+  zIndex: 1,
+  fontSize: 20,
+  lineHeight: 1.08,
+  fontWeight: 900,
+  color: '#0F172A',
+  textAlign: 'center',
+}
+
+const idleHeroBodyStyle: React.CSSProperties = {
+  position: 'relative',
+  zIndex: 1,
+  maxWidth: 280,
+  fontSize: 12,
+  lineHeight: 1.35,
+  color: '#64748B',
+  textAlign: 'center',
+}
+
+const idleCardGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const idleRadarCardStyle: React.CSSProperties = {
+  position: 'relative',
+  overflow: 'hidden',
+  borderRadius: 22,
+  background:
+    'radial-gradient(circle at 20% 20%, rgba(91,124,250,0.14) 0%, rgba(91,124,250,0.04) 24%, rgba(255,255,255,0.96) 60%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
+  padding: '12px 12px 14px',
+  display: 'grid',
+  gap: 8,
+}
+
+const idleRadarVisualStyle: React.CSSProperties = {
+  position: 'relative',
+  height: 92,
+  borderRadius: 18,
+  background:
+    'radial-gradient(circle at center, rgba(91,124,250,0.12) 0%, rgba(91,124,250,0.04) 28%, rgba(255,255,255,0) 29%), linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(248,250,252,0.98) 100%)',
+  border: '1px solid rgba(226,232,240,0.9)',
+  display: 'grid',
+  placeItems: 'center',
+}
+
+const idleInfoCardTextWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const idleStatsCardStyle: React.CSSProperties = {
+  borderRadius: 22,
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
+  padding: 10,
+  display: 'grid',
+  gap: 7,
+}
+
+const idleInfoCardTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const idleInfoCardBodyStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.35,
+  color: '#64748B',
+}
+
+const idleStatsGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 6,
+}
+
+const idleStatItemStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  borderRadius: 14,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gap: 2,
+}
+
+const idleStatLabelStyle: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 800,
+  color: '#64748B',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+}
+
+const idleStatValueStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
 }
 
 const walletCardStyle: React.CSSProperties = {
-  padding: '18px 18px',
-  borderRadius: 24,
-  background: '#FFFFFF',
+  borderRadius: 22,
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
   border: '1px solid #E2E8F0',
+  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
+  padding: 10,
+  display: 'grid',
+  gap: 8,
 }
 
-const walletHeaderStyle: React.CSSProperties = {
-  fontSize: 15,
+const walletGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 6,
+}
+
+const walletMetricStyle: React.CSSProperties = {
+  padding: '9px 10px',
+  borderRadius: 14,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gap: 4,
+}
+
+const walletMetricLabelStyle: React.CSSProperties = {
+  fontSize: 9,
   fontWeight: 800,
+  color: '#64748B',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+}
+
+const walletMetricValueStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
   color: '#0F172A',
 }
 
-const walletRowStyle: React.CSSProperties = {
-  marginTop: 14,
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 14,
+const walletStatusWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 2,
 }
 
-const walletLabelStyle: React.CSSProperties = {
-  fontSize: 12,
+const walletStatusNeutralStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
   color: '#64748B',
   fontWeight: 700,
 }
 
-const walletValueStyle: React.CSSProperties = {
-  marginTop: 4,
-  fontSize: 24,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const connectCardStyle: React.CSSProperties = {
-  padding: '18px',
-  borderRadius: 24,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-}
-
-const connectTitleStyle: React.CSSProperties = {
-  fontSize: 15,
+const walletStatusReadyStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#15803D',
   fontWeight: 800,
 }
 
-const connectSubStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 13,
-  color: '#64748B',
-  lineHeight: 1.45,
+const walletStatusWarningStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#9A6B16',
+  fontWeight: 700,
 }
 
-const connectErrorStyle: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 13,
-  color: '#DC2626',
-}
-
-const connectReadyStyle: React.CSSProperties = {
-  marginTop: 8,
-  fontSize: 13,
-  color: '#166534',
-  fontWeight: 800,
-}
-
-const connectActionsStyle: React.CSSProperties = {
-  marginTop: 12,
-  display: 'flex',
-  gap: 10,
-}
-
-const primaryMiniBtnStyle: React.CSSProperties = {
-  minHeight: 40,
-  padding: '0 16px',
-  border: 'none',
-  borderRadius: 14,
-  background: '#08153B',
-  color: '#FFFFFF',
-  fontSize: 13,
+const walletSetupButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  justifySelf: 'start',
+  minHeight: 34,
+  padding: '0 12px',
+  borderRadius: 999,
+  border: '1px solid rgba(217, 119, 6, 0.16)',
+  background: '#FFF7ED',
+  color: '#9A3412',
+  fontSize: 12,
   fontWeight: 800,
   cursor: 'pointer',
+  transformOrigin: 'center',
+  transition: 'transform 0.22s ease, box-shadow 0.22s ease, opacity 0.22s ease',
 }
 
-const secondaryMiniBtnStyle: React.CSSProperties = {
-  minHeight: 40,
-  padding: '0 16px',
-  border: '1px solid #E2E8F0',
-  borderRadius: 14,
-  background: '#FFFFFF',
-  color: '#334155',
-  fontSize: 13,
-  fontWeight: 800,
-  cursor: 'pointer',
+const walletSetupButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.7,
+  cursor: 'not-allowed',
+}
+
+const walletSetupButtonPulseStyle: React.CSSProperties = {
+  animation: 'walkerPayoutPulse 2.5s ease-in-out infinite',
+}
+
+const walletSetupButtonPulseAndNudgeStyle: React.CSSProperties = {
+  animation: 'walkerPayoutPulse 2.5s ease-in-out infinite, walkerPayoutNudge 0.85s ease-in-out 1',
 }
 
 const activeCardStyle: React.CSSProperties = {
@@ -2217,18 +3054,30 @@ const bottomSheetStyle: React.CSSProperties = {
 
 const sheetHeaderStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
   justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 12,
+}
+
+const incomingSheetTitleWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
 }
 
 const newRequestLabelStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
+  fontSize: 20,
+  fontWeight: 900,
   color: '#0F172A',
 }
 
+const incomingSheetSubtitleStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
 const countdownLabelStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 16,
   fontWeight: 900,
 }
 
@@ -2248,10 +3097,35 @@ const progressFillStyle: React.CSSProperties = {
 }
 
 const dogNameStyle: React.CSSProperties = {
-  marginTop: 16,
-  fontSize: 28,
+  fontSize: 24,
   fontWeight: 900,
   color: '#0F172A',
+}
+
+const incomingMainCardStyle: React.CSSProperties = {
+  marginTop: 16,
+  padding: 18,
+  borderRadius: 24,
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  boxShadow: '0 12px 26px rgba(15,23,42,0.08)',
+}
+
+const incomingInfoCardStyle: React.CSSProperties = {
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gap: 6,
+}
+
+const incomingInfoLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#64748B',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
 }
 
 const reqLocationStyle: React.CSSProperties = {
@@ -2262,29 +3136,34 @@ const reqLocationStyle: React.CSSProperties = {
   border: '1px solid #E2E8F0',
 }
 
-const infoPillsRowStyle: React.CSSProperties = {
+const incomingMetaRowStyle: React.CSSProperties = {
   marginTop: 14,
-  display: 'flex',
-  alignItems: 'center',
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
   gap: 10,
-  padding: '14px 16px',
+}
+
+const incomingMetaCardStyle: React.CSSProperties = {
+  padding: '12px 14px',
   borderRadius: 18,
   background: '#F8FAFC',
+  border: '1px solid #E2E8F0',
+  display: 'grid',
+  gap: 4,
 }
 
-const infoPillStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  fontSize: 14,
-  color: '#475569',
-  fontWeight: 700,
+const incomingMetaLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#64748B',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
 }
 
-const infoPillDividerStyle: React.CSSProperties = {
-  width: 1,
-  alignSelf: 'stretch',
-  background: '#E2E8F0',
+const incomingMetaValueStyle: React.CSSProperties = {
+  fontSize: 15,
+  color: '#0F172A',
+  fontWeight: 800,
 }
 
 const queueHintStyle: React.CSSProperties = {

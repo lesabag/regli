@@ -11,6 +11,8 @@ interface CompletionCardProps {
   ratingSubmitting?: boolean
   alreadyRated?: boolean
   favoriteLabel?: string
+  favoriteInactiveLabel?: string
+  favoriteActiveLabel?: string
   favoriteActive?: boolean
   onToggleFavorite?: () => void
   onDismiss: () => void
@@ -26,6 +28,8 @@ export default function CompletionCard({
   ratingSubmitting,
   alreadyRated,
   favoriteLabel,
+  favoriteInactiveLabel,
+  favoriteActiveLabel,
   favoriteActive,
   onToggleFavorite,
   onDismiss,
@@ -75,14 +79,22 @@ export default function CompletionCard({
       {onToggleFavorite && favoriteLabel && (
         <button
           type="button"
-          onClick={onToggleFavorite}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onToggleFavorite()
+          }}
           style={{
             ...favoriteButtonStyle,
             ...(favoriteActive ? favoriteButtonActiveStyle : null),
           }}
         >
           <span style={favoriteIconStyle}>{favoriteActive ? '♥' : '♡'}</span>
-          <span>{favoriteActive ? 'Preferred walker' : `Save ${favoriteLabel}`}</span>
+          <span>
+            {favoriteActive
+              ? favoriteActiveLabel ?? 'Preferred walker'
+              : favoriteInactiveLabel ?? `Save ${favoriteLabel}`}
+          </span>
         </button>
       )}
 

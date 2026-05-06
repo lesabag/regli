@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { formatShortAddress } from '../utils/addressFormat'
 
 type Role = 'client' | 'walker'
@@ -61,6 +62,8 @@ type GroupedHistoryProps = {
   onHide?: (id: string) => Promise<void> | void
   favoriteWalkerIds?: Set<string>
   onToggleFavoriteWalker?: (walkerId: string) => Promise<void> | void
+  favoriteClientIds?: Set<string>
+  onToggleFavoriteClient?: (clientId: string, clientName: string) => Promise<void> | void
   emptyTitle?: string
   emptySubtitle?: string
   className?: string
@@ -77,6 +80,7 @@ const SWIPE_HIDE_WIDTH = 132
 const SWIPE_HIDE_THRESHOLD = 86
 
 export default function GroupedHistory(props: GroupedHistoryProps) {
+  const { i18n } = useTranslation()
   const compact = props.compact === true
   const rawItems = useMemo(
     () => props.items ?? props.history ?? props.requests ?? props.jobs ?? [],
@@ -141,6 +145,8 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
   )
 
   const grouped = useMemo(() => buildGroups(items), [items])
+  const hideLabel = i18n.resolvedLanguage === 'he' ? 'הסתר' : 'Hide'
+  const favoriteLabel = i18n.resolvedLanguage === 'he' ? 'מועדף' : 'Favorite'
 
   return (
     <div className={props.className} style={{ ...styles.root, ...(compact ? compactStyles.root : null) }}>
@@ -165,9 +171,13 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
                     canHide={!!props.onHide}
                     onBookAgain={() => handleBookAgain(item)}
                     onHide={() => handleHide(item)}
+                    hideLabel={hideLabel}
+                    favoriteLabel={favoriteLabel}
                     onDetails={() => handleDetails(item)}
                     favoriteWalkerIds={props.favoriteWalkerIds}
                     onToggleFavoriteWalker={props.onToggleFavoriteWalker}
+                    favoriteClientIds={props.favoriteClientIds}
+                    onToggleFavoriteClient={props.onToggleFavoriteClient}
                     registerRef={(node) => {
                       rowRefs.current[id] = node
                     }}
@@ -189,9 +199,13 @@ type SwipeHistoryRowProps = {
   canHide: boolean
   onBookAgain: () => void
   onHide: () => void
+  hideLabel: string
+  favoriteLabel: string
   onDetails: () => void
   favoriteWalkerIds?: Set<string>
   onToggleFavoriteWalker?: (walkerId: string) => Promise<void> | void
+  favoriteClientIds?: Set<string>
+  onToggleFavoriteClient?: (clientId: string, clientName: string) => Promise<void> | void
   registerRef: (node: HTMLDivElement | null) => void
 }
 
@@ -202,15 +216,26 @@ function SwipeHistoryRow({
   canHide,
   onBookAgain,
   onHide,
+  hideLabel,
+  favoriteLabel,
   onDetails,
   favoriteWalkerIds,
   onToggleFavoriteWalker,
+  favoriteClientIds,
+  onToggleFavoriteClient,
   registerRef,
 }: SwipeHistoryRowProps) {
   void onBookAgain
   const isHidden = isHiddenHistoryItem(item)
   const canSwipeHide = canHide && !isHidden
-  const actionWidth = canSwipeHide ? SWIPE_HIDE_WIDTH : 0
+  const walkerId = getWalkerId(item)
+  const canFavoriteWalker = role === 'client' && !!walkerId && !!onToggleFavoriteWalker
+  const isFavoriteWalker = !!walkerId && favoriteWalkerIds?.has(walkerId)
+  const clientFavoriteKey = getClientFavoriteKey(item)
+  const canFavoriteClient = role === 'walker' && !!clientFavoriteKey && !!onToggleFavoriteClient
+  const isFavoriteClient = !!clientFavoriteKey && favoriteClientIds?.has(clientFavoriteKey)
+  const leftActionWidth = canFavoriteClient ? SWIPE_HIDE_WIDTH : 0
+  const rightActionWidth = canSwipeHide ? SWIPE_HIDE_WIDTH : 0
 
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
@@ -238,7 +263,7 @@ function SwipeHistoryRow({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (actionWidth === 0) return
+      if (leftActionWidth === 0 && rightActionWidth === 0) return
 
       dragStateRef.current = {
         startX: event.clientX,
@@ -249,12 +274,12 @@ function SwipeHistoryRow({
       setDragging(true)
       event.currentTarget.setPointerCapture(event.pointerId)
     },
-    [actionWidth],
+    [leftActionWidth, rightActionWidth],
   )
 
   const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging || actionWidth === 0) return
+      if (!dragging || (leftActionWidth === 0 && rightActionWidth === 0)) return
 
       const delta = event.clientX - dragStateRef.current.startX
       if (Math.abs(delta) > 4) {
@@ -262,26 +287,29 @@ function SwipeHistoryRow({
       }
 
       const raw = dragStateRef.current.startTranslate + delta
-      setDragX(applyResistance(raw, actionWidth))
+      setDragX(applyResistance(raw, leftActionWidth, rightActionWidth))
     },
-    [actionWidth, dragging],
+    [dragging, leftActionWidth, rightActionWidth],
   )
 
   const handlePointerUp = useCallback(() => {
-    if (!dragging || actionWidth === 0) return
+    if (!dragging || (leftActionWidth === 0 && rightActionWidth === 0)) return
 
     setDragging(false)
-    if (dragX <= -SWIPE_HIDE_THRESHOLD) {
+    if (dragX <= -SWIPE_HIDE_THRESHOLD && rightActionWidth > 0) {
       void onHide()
     }
+    if (dragX >= SWIPE_HIDE_THRESHOLD && leftActionWidth > 0 && clientFavoriteKey) {
+      void onToggleFavoriteClient?.(clientFavoriteKey, counterpartLabel || favoriteLabel)
+    }
     setDragX(0)
-  }, [actionWidth, dragX, dragging, onHide])
+  }, [clientFavoriteKey, dragX, dragging, leftActionWidth, onHide, onToggleFavoriteClient, rightActionWidth])
 
   const handlePointerCancel = useCallback(() => {
-    if (!dragging || actionWidth === 0) return
+    if (!dragging || (leftActionWidth === 0 && rightActionWidth === 0)) return
     setDragging(false)
     setDragX(0)
-  }, [actionWidth, dragging])
+  }, [dragging, leftActionWidth, rightActionWidth])
 
   const handleCardClick = useCallback(() => {
     if (dragStateRef.current.moved) {
@@ -306,10 +334,6 @@ function SwipeHistoryRow({
   const coords = getCoordinates(item)
   const hasPreview = Boolean(locationText || coords)
   const isLongReview = reviewText.length > 92
-  const walkerId = getWalkerId(item)
-  const canFavoriteWalker = role === 'client' && !!walkerId && !!onToggleFavoriteWalker
-  const isFavoriteWalker = !!walkerId && favoriteWalkerIds?.has(walkerId)
-
   useEffect(() => {
     setReviewExpanded(false)
   }, [itemId])
@@ -323,16 +347,39 @@ function SwipeHistoryRow({
     <div
       ref={registerRef}
       style={{ ...styles.rowShell, ...(compact ? compactStyles.rowShell : null) }}
-      onPointerDown={actionWidth > 0 ? handlePointerDown : undefined}
-      onPointerMove={actionWidth > 0 ? handlePointerMove : undefined}
-      onPointerUp={actionWidth > 0 ? handlePointerUp : undefined}
-      onPointerCancel={actionWidth > 0 ? handlePointerCancel : undefined}
+      onPointerDown={leftActionWidth > 0 || rightActionWidth > 0 ? handlePointerDown : undefined}
+      onPointerMove={leftActionWidth > 0 || rightActionWidth > 0 ? handlePointerMove : undefined}
+      onPointerUp={leftActionWidth > 0 || rightActionWidth > 0 ? handlePointerUp : undefined}
+      onPointerCancel={leftActionWidth > 0 || rightActionWidth > 0 ? handlePointerCancel : undefined}
     >
-      {actionWidth > 0 ? (
+      {leftActionWidth > 0 ? (
+        <div style={{ ...styles.actionsRail, ...styles.actionsRailLeft, ...(compact ? compactStyles.actionsRail : null) }}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              if (clientFavoriteKey) {
+                void onToggleFavoriteClient?.(clientFavoriteKey, counterpartLabel || favoriteLabel)
+              }
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            style={{
+              ...styles.swipeFavoriteCue,
+              ...(isFavoriteClient ? styles.swipeFavoriteCueActive : null),
+            }}
+            aria-label={isFavoriteClient ? 'Remove favorite client' : 'Favorite client'}
+          >
+            <div style={styles.actionIcon}>{isFavoriteClient ? '♥' : '♡'}</div>
+            <div style={styles.actionLabel}>{favoriteLabel}</div>
+          </button>
+        </div>
+      ) : null}
+
+      {rightActionWidth > 0 ? (
         <div style={{ ...styles.actionsRail, ...(compact ? compactStyles.actionsRail : null) }}>
           <div style={styles.swipeHideCue}>
             <div style={styles.actionIcon}>✕</div>
-            <div style={styles.actionLabel}>Hide</div>
+            <div style={styles.actionLabel}>{hideLabel}</div>
           </div>
         </div>
       ) : null}
@@ -398,6 +445,24 @@ function SwipeHistoryRow({
                   aria-label={isFavoriteWalker ? 'Remove favorite walker' : 'Favorite walker'}
                 >
                   {isFavoriteWalker ? '♥' : '♡'}
+                </button>
+              ) : null}
+
+              {canFavoriteClient && clientFavoriteKey ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void onToggleFavoriteClient?.(clientFavoriteKey, counterpartLabel || favoriteLabel)
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  style={{
+                    ...styles.favoriteButton,
+                    ...(isFavoriteClient ? styles.favoriteButtonActive : null),
+                  }}
+                  aria-label={isFavoriteClient ? 'Remove favorite client' : 'Favorite client'}
+                >
+                  {isFavoriteClient ? '♥' : '♡'}
                 </button>
               ) : null}
             </div>
@@ -530,11 +595,31 @@ function getCounterpart(item: HistoryItem, role: Role): string {
     return sanitizeString(item.walker_name) ?? sanitizeString(item.walkerName) ?? ''
   }
 
-  return sanitizeString(item.client_name) ?? sanitizeString(item.clientName) ?? ''
+  return (
+    sanitizeString(item.client_name) ??
+    sanitizeString(item.clientName) ??
+    sanitizeString(item.dog_name) ??
+    sanitizeString(item.dogName) ??
+    ''
+  )
 }
 
 function getWalkerId(item: HistoryItem): string {
   return sanitizeString(item.walker_id) ?? sanitizeString(item.walkerId) ?? ''
+}
+
+function getClientId(item: HistoryItem): string {
+  return sanitizeString(item.client_id) ?? sanitizeString((item as { clientId?: string | null }).clientId) ?? ''
+}
+
+function getClientFavoriteKey(item: HistoryItem): string {
+  return (
+    getClientId(item) ||
+    sanitizeString((item as { client_favorite_key?: string | null }).client_favorite_key) ||
+    sanitizeString(item.client_name) ||
+    sanitizeString((item as { clientName?: string | null }).clientName) ||
+    ''
+  )
 }
 
 function getReviewText(item: HistoryItem): string {
@@ -698,13 +783,21 @@ function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())
 }
 
-function applyResistance(raw: number, actionWidth: number): number {
-  if (raw > 0) {
+function applyResistance(raw: number, leftActionWidth: number, rightActionWidth: number): number {
+  if (raw > leftActionWidth) {
+    return leftActionWidth + (raw - leftActionWidth) * 0.2
+  }
+
+  if (raw > 0 && leftActionWidth === 0) {
     return raw * 0.2
   }
 
-  if (raw < -actionWidth) {
-    return -actionWidth + (raw + actionWidth) * 0.2
+  if (raw < -rightActionWidth) {
+    return -rightActionWidth + (raw + rightActionWidth) * 0.2
+  }
+
+  if (raw < 0 && rightActionWidth === 0) {
+    return raw * 0.2
   }
 
   return raw
@@ -808,6 +901,9 @@ const styles: Record<string, React.CSSProperties> = {
       'linear-gradient(135deg, rgba(9, 14, 24, 0.92) 0%, rgba(11, 18, 32, 0.98) 100%)',
     borderRadius: 24,
   },
+  actionsRailLeft: {
+    justifyContent: 'flex-start',
+  },
   swipeHideCue: {
     width: 108,
     borderRadius: 18,
@@ -822,6 +918,29 @@ const styles: Record<string, React.CSSProperties> = {
       'linear-gradient(180deg, rgba(30, 38, 54, 0.96) 0%, rgba(18, 25, 37, 0.98) 100%)',
     border: '1px solid rgba(255,255,255,0.06)',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
+  },
+  swipeFavoriteCue: {
+    width: 108,
+    borderRadius: 18,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    fontWeight: 800,
+    color: '#FFF7E6',
+    background:
+      'linear-gradient(180deg, rgba(61, 48, 18, 0.96) 0%, rgba(34, 25, 8, 0.98) 100%)',
+    border: '1px solid rgba(255, 209, 102, 0.16)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+    cursor: 'pointer',
+    appearance: 'none',
+  },
+  swipeFavoriteCueActive: {
+    color: '#FFF8D4',
+    background:
+      'linear-gradient(180deg, rgba(110, 79, 15, 0.96) 0%, rgba(63, 43, 8, 0.98) 100%)',
+    border: '1px solid rgba(255, 220, 120, 0.22)',
   },
   actionButton: {
     appearance: 'none',
