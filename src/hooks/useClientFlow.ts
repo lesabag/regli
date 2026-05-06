@@ -2658,6 +2658,44 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }, new Map<string, { total: number; count: number }>())
         }
 
+        let providerSavedCustomerIds = new Set<string>()
+        let customerSavedProviderIds = new Set<string>()
+        if (walkerIds.length > 0) {
+          const [{ data: favoriteCustomersRows, error: favoriteCustomersError }, { data: favoriteWalkersRows, error: favoriteWalkersError }] =
+            await Promise.all([
+              supabase
+                .from('favorite_customers')
+                .select('walker_id')
+                .eq('client_id', profileId)
+                .in('walker_id', walkerIds),
+              supabase
+                .from('favorite_walkers')
+                .select('walker_id')
+                .eq('client_id', profileId)
+                .in('walker_id', walkerIds),
+            ])
+
+          if (favoriteCustomersError) {
+            console.warn('[useClientFlow] favorite customers unavailable for affinity:', favoriteCustomersError.message)
+          } else {
+            providerSavedCustomerIds = new Set(
+              ((favoriteCustomersRows as Array<{ walker_id: string | null }> | null) ?? [])
+                .map((row) => row.walker_id)
+                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+            )
+          }
+
+          if (favoriteWalkersError) {
+            console.warn('[useClientFlow] favorite walkers unavailable for affinity:', favoriteWalkersError.message)
+          } else {
+            customerSavedProviderIds = new Set(
+              ((favoriteWalkersRows as Array<{ walker_id: string | null }> | null) ?? [])
+                .map((row) => row.walker_id)
+                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+            )
+          }
+        }
+
         const ranked = rankWalkerCandidates(
           onlineWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
@@ -2678,6 +2716,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
                   ? ratingStats.total / ratingStats.count
                   : null,
               reviewCount: ratingStats?.count ?? 0,
+              affinityProviderSaved: providerSavedCustomerIds.has(walker.id),
+              affinityClientSaved: customerSavedProviderIds.has(walker.id),
             }
           }),
         ).map((candidate) => ({
@@ -2685,6 +2725,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
           score: candidate.score,
           meta: {
             source: 'useClientFlow',
+            base_score: candidate.baseScore,
+            affinity_score: candidate.affinityScore,
+            affinity_provider_saved: candidate.affinityProviderSaved,
+            affinity_client_saved: candidate.affinityClientSaved,
             distance_score: candidate.distanceScore,
             rating_score: candidate.ratingScore,
             review_count_score: candidate.reviewCountScore,

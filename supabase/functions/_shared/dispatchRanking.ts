@@ -3,11 +3,17 @@ export type WalkerRankingInput = {
   distanceKm?: number | null
   avgRating?: number | null
   reviewCount?: number | null
+  affinityProviderSaved?: boolean
+  affinityClientSaved?: boolean
 }
 
 export type RankedWalkerCandidate = {
   walkerId: string
   score: number
+  baseScore: number
+  affinityScore: number
+  affinityProviderSaved: boolean
+  affinityClientSaved: boolean
   distanceScore: number
   ratingScore: number
   reviewCountScore: number
@@ -23,6 +29,9 @@ const DISTANCE_CAP_KM = 5
 const NO_RATING_BASELINE = 0.75
 const EXPERIENCE_CAP_REVIEWS = 20
 const NEUTRAL_DISTANCE_SCORE = 0.5
+const PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST = 10
+const CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST = 20
+const AFFINITY_SCORE_CAP = 30
 
 export function distanceKm(
   lat1: number,
@@ -69,17 +78,29 @@ export function rankWalkerCandidates(inputs: WalkerRankingInput[]): RankedWalker
       const distanceValue = toFiniteNumber(input.distanceKm)
       const avgRating = toFiniteNumber(input.avgRating)
       const reviewCount = Math.max(0, Math.floor(toFiniteNumber(input.reviewCount) ?? 0))
+      const affinityProviderSaved = input.affinityProviderSaved === true
+      const affinityClientSaved = input.affinityClientSaved === true
 
       const distanceScore = normalizeDistanceScore(distanceValue)
       const ratingScore = normalizeRatingScore(avgRating, reviewCount)
       const reviewCountScore = normalizeReviewCountScore(reviewCount)
-      const score =
+      const baseScore =
         distanceScore * DISTANCE_WEIGHT +
         ratingScore * RATING_WEIGHT +
         reviewCountScore * EXPERIENCE_WEIGHT
+      const affinityScore = Math.min(
+        (affinityProviderSaved ? PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST : 0) +
+          (affinityClientSaved ? CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST : 0),
+        AFFINITY_SCORE_CAP,
+      )
+      const score = baseScore + affinityScore
 
       return {
         walkerId: input.walkerId,
+        baseScore: Number(baseScore.toFixed(6)),
+        affinityScore,
+        affinityProviderSaved,
+        affinityClientSaved,
         score: Number(score.toFixed(6)),
         distanceScore: Number(distanceScore.toFixed(6)),
         ratingScore: Number(ratingScore.toFixed(6)),

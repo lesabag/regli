@@ -24,18 +24,102 @@ function getScheduledDispatchLeadMinutes(): number {
 const SCHEDULED_DISPATCH_LEAD_MINUTES = getScheduledDispatchLeadMinutes()
 const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
 
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeAffinityScore(meta: Record<string, unknown>): number {
+  const rawAffinityScore = toFiniteNumber(meta.affinity_score)
+  if (rawAffinityScore == null) return 0
+  if (rawAffinityScore > 1) {
+    return Number((Math.min(rawAffinityScore, 30) / 100).toFixed(6))
+  }
+  return Number(Math.max(0, Math.min(rawAffinityScore, 0.3)).toFixed(6))
+}
+
+function getBaseScore(candidate: RankedCandidate): number {
+  const meta = candidate.meta ?? {}
+  const metaBaseScore = toFiniteNumber(meta.base_score)
+  const candidateScore = toFiniteNumber(candidate.score)
+  return Number((metaBaseScore ?? candidateScore ?? 0).toFixed(6))
+}
+
 function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!meta) return {}
-  const source = typeof meta.source === 'string' ? meta.source : null
-  return source ? { source } : {}
+  const safeMeta = meta ?? {}
+  const source = typeof safeMeta.source === 'string' ? safeMeta.source : null
+  const persistedMeta: Record<string, unknown> = {}
+  const baseScore =
+    typeof safeMeta.base_score === 'number' && Number.isFinite(safeMeta.base_score)
+      ? Number(safeMeta.base_score.toFixed(6))
+      : null
+  const affinityScore = normalizeAffinityScore(safeMeta)
+  const finalScore = baseScore == null ? null : Number((baseScore + affinityScore).toFixed(6))
+
+  if (source) {
+    persistedMeta.source = source
+  }
+
+  persistedMeta.base_score = baseScore
+  persistedMeta.affinity_score = affinityScore
+  persistedMeta.affinity_provider_saved = safeMeta.affinity_provider_saved === true
+  persistedMeta.affinity_client_saved = safeMeta.affinity_client_saved === true
+  persistedMeta.final_score = finalScore
+
+  return persistedMeta
+}
+
+function getPersistedCandidateScore(candidate: RankedCandidate): number {
+  const meta = candidate.meta ?? {}
+  const baseScore = getBaseScore(candidate)
+  const affinityScore = normalizeAffinityScore(meta)
+  return Number((baseScore + affinityScore).toFixed(6))
+}
+
+function computeAffinityScore(providerSavedCustomer: boolean, customerSavedProvider: boolean): number {
+  const rawScore =
+    (providerSavedCustomer ? 0.1 : 0) +
+    (customerSavedProvider ? 0.2 : 0)
+  return Number(Math.min(rawScore, 0.3).toFixed(6))
+}
+
+function compareRankedCandidates(
+  left: RankedCandidate & { originalIndex: number },
+  right: RankedCandidate & { originalIndex: number },
+): number {
+  const scoreDiff = getPersistedCandidateScore(right) - getPersistedCandidateScore(left)
+  if (Math.abs(scoreDiff) > 0.000001) {
+    return scoreDiff
+  }
+
+  const leftDistance = toFiniteNumber(left.meta?.distance_km)
+  const rightDistance = toFiniteNumber(right.meta?.distance_km)
+  if (leftDistance != null && rightDistance != null && leftDistance !== rightDistance) {
+    return leftDistance - rightDistance
+  }
+
+  const leftRating = toFiniteNumber(left.meta?.avg_rating)
+  const rightRating = toFiniteNumber(right.meta?.avg_rating)
+  if (leftRating != null && rightRating != null && leftRating !== rightRating) {
+    return rightRating - leftRating
+  }
+
+  return left.originalIndex - right.originalIndex
 }
 
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
   const meta = candidate.meta ?? {}
+  const baseScore = getBaseScore(candidate)
+  const affinityScore = normalizeAffinityScore(meta)
+  const finalScore = Number((baseScore + affinityScore).toFixed(6))
   return {
     rank,
     walkerId: candidate.walkerId,
-    score: candidate.score,
+    score: finalScore,
+    base_score: baseScore,
+    affinity_score: affinityScore,
+    final_score: finalScore,
+    affinity_provider_saved: meta.affinity_provider_saved === true,
+    affinity_client_saved: meta.affinity_client_saved === true,
     distance_score:
       typeof meta.distance_score === 'number' ? meta.distance_score : null,
     rating_score:
@@ -105,7 +189,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id')
       .eq('id', requestId)
       .single()
 
@@ -181,6 +265,110 @@ serve(async (req) => {
       })
       return jsonResponse(409, { ok: false, error: 'dispatch already active' }, corsHeaders)
     }
+
+    const clientId = typeof requestRow.client_id === 'string' ? requestRow.client_id : null
+    const candidateWalkerIds = Array.from(
+      new Set(
+        rankedCandidates
+          .map((candidate) => candidate.walkerId)
+          .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+      ),
+    )
+
+    let providerSavedCustomerIds = new Set<string>()
+    let customerSavedProviderIds = new Set<string>()
+
+    if (clientId && candidateWalkerIds.length > 0) {
+      const [
+        { data: favoriteCustomersRows, error: favoriteCustomersError },
+        { data: favoriteWalkersRows, error: favoriteWalkersError },
+      ] = await Promise.all([
+        supabase
+          .from('favorite_customers')
+          .select('walker_id')
+          .eq('client_id', clientId)
+          .in('walker_id', candidateWalkerIds),
+        supabase
+          .from('favorite_walkers')
+          .select('walker_id')
+          .eq('client_id', clientId)
+          .in('walker_id', candidateWalkerIds),
+      ])
+
+      if (favoriteCustomersError) {
+        console.error('[start-dispatch] failed loading provider->customer affinity', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          clientId,
+          error: favoriteCustomersError.message,
+        })
+      } else {
+        providerSavedCustomerIds = new Set(
+          (favoriteCustomersRows ?? [])
+            .map((row) => row.walker_id)
+            .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+        )
+      }
+
+      if (favoriteWalkersError) {
+        console.error('[start-dispatch] failed loading customer->provider affinity', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          clientId,
+          error: favoriteWalkersError.message,
+        })
+      } else {
+        customerSavedProviderIds = new Set(
+          (favoriteWalkersRows ?? [])
+            .map((row) => row.walker_id)
+            .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+        )
+      }
+    } else {
+      console.log('[start-dispatch] affinity lookup skipped', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        clientId,
+        candidateWalkerCount: candidateWalkerIds.length,
+      })
+    }
+
+    const affinityRankedCandidates = rankedCandidates
+      .map((candidate, originalIndex) => {
+        const providerSavedCustomer = providerSavedCustomerIds.has(candidate.walkerId)
+        const customerSavedProvider = customerSavedProviderIds.has(candidate.walkerId)
+        const affinityScore = computeAffinityScore(providerSavedCustomer, customerSavedProvider)
+        const baseScore = getBaseScore(candidate)
+        const finalScore = Number((baseScore + affinityScore).toFixed(6))
+        const meta = {
+          ...(candidate.meta ?? {}),
+          base_score: baseScore,
+          affinity_score: affinityScore,
+          affinity_provider_saved: providerSavedCustomer,
+          affinity_client_saved: customerSavedProvider,
+          final_score: finalScore,
+        }
+
+        console.log('[start-dispatch] candidate affinity recomputed', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          clientId,
+          walker_id: candidate.walkerId,
+          base_score: baseScore,
+          affinity_score: affinityScore,
+          final_score: finalScore,
+          affinity_provider_saved: providerSavedCustomer,
+          affinity_client_saved: customerSavedProvider,
+        })
+
+        return {
+          ...candidate,
+          score: finalScore,
+          meta,
+          originalIndex,
+        }
+      })
+      .sort(compareRankedCandidates)
 
     if (requestRow.booking_timing === 'scheduled') {
       if (!requestRow.scheduled_for) {
@@ -334,11 +522,11 @@ serve(async (req) => {
       )
     }
 
-    const candidateRows = rankedCandidates.map((candidate, index) => ({
+    const candidateRows = affinityRankedCandidates.map((candidate, index) => ({
       request_id: requestId,
       walker_id: candidate.walkerId,
       rank: index + 1,
-      score: candidate.score,
+      score: getPersistedCandidateScore(candidate),
       meta: buildPersistedMeta(candidate.meta),
     }))
 
@@ -347,7 +535,7 @@ serve(async (req) => {
       requestId,
       candidateCount: candidateRows.length,
       candidateWalkerIds: candidateRows.map((row) => row.walker_id),
-      candidateScoreBreakdown: rankedCandidates.slice(0, 10).map((candidate, index) =>
+      candidateScoreBreakdown: affinityRankedCandidates.slice(0, 10).map((candidate, index) =>
         buildCandidateScoreLog(candidate, index + 1)
       ),
     })
@@ -457,7 +645,7 @@ serve(async (req) => {
     console.log('[start-dispatch] logging dispatch_started event', {
       version: START_DISPATCH_VERSION,
       requestId,
-      candidateCount: rankedCandidates.length,
+      candidateCount: affinityRankedCandidates.length,
       timeoutSeconds,
     })
 

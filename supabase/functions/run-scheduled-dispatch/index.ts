@@ -287,6 +287,54 @@ serve(async (req) => {
           }, new Map<string, { total: number; count: number }>())
         }
 
+        let providerSavedCustomerIds = new Set<string>()
+        let customerSavedProviderIds = new Set<string>()
+        if (walkerIds.length > 0 && job.client_id) {
+          const [{ data: favoriteCustomersRows, error: favoriteCustomersError }, { data: favoriteWalkersRows, error: favoriteWalkersError }] =
+            await Promise.all([
+              supabase
+                .from('favorite_customers')
+                .select('walker_id')
+                .eq('client_id', job.client_id)
+                .in('walker_id', walkerIds),
+              supabase
+                .from('favorite_walkers')
+                .select('walker_id')
+                .eq('client_id', job.client_id)
+                .in('walker_id', walkerIds),
+            ])
+
+          if (favoriteCustomersError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_favorite_customers_lookup_failed',
+              p_payload: { error: favoriteCustomersError.message },
+            })
+          } else {
+            providerSavedCustomerIds = new Set(
+              ((favoriteCustomersRows as Array<{ walker_id: string | null }> | null) ?? [])
+                .map((row) => row.walker_id)
+                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+            )
+          }
+
+          if (favoriteWalkersError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_favorite_walkers_lookup_failed',
+              p_payload: { error: favoriteWalkersError.message },
+            })
+          } else {
+            customerSavedProviderIds = new Set(
+              ((favoriteWalkersRows as Array<{ walker_id: string | null }> | null) ?? [])
+                .map((row) => row.walker_id)
+                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
+            )
+          }
+        }
+
         const ranked = rankWalkerCandidates(
           onlineWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
@@ -298,6 +346,8 @@ serve(async (req) => {
                   ? ratingStats.total / ratingStats.count
                   : null,
               reviewCount: ratingStats?.count ?? 0,
+              affinityProviderSaved: providerSavedCustomerIds.has(walker.id),
+              affinityClientSaved: customerSavedProviderIds.has(walker.id),
             }
           }),
         ).map((candidate) => ({
@@ -305,6 +355,10 @@ serve(async (req) => {
           score: candidate.score,
           meta: {
             source: 'run-scheduled-dispatch',
+            base_score: candidate.baseScore,
+            affinity_score: candidate.affinityScore,
+            affinity_provider_saved: candidate.affinityProviderSaved,
+            affinity_client_saved: candidate.affinityClientSaved,
             distance_score: candidate.distanceScore,
             rating_score: candidate.ratingScore,
             review_count_score: candidate.reviewCountScore,
@@ -324,6 +378,10 @@ serve(async (req) => {
             top_candidates: ranked.slice(0, 5).map((candidate) => ({
               walker_id: candidate.walkerId,
               score: candidate.score,
+              base_score: candidate.meta.base_score,
+              affinity_score: candidate.meta.affinity_score,
+              affinity_provider_saved: candidate.meta.affinity_provider_saved,
+              affinity_client_saved: candidate.meta.affinity_client_saved,
               distance_score: candidate.meta.distance_score,
               rating_score: candidate.meta.rating_score,
               review_count_score: candidate.meta.review_count_score,
