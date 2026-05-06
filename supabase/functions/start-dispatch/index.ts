@@ -7,6 +7,7 @@ import {
   sanitizeCandidates,
   type RankedCandidate,
 } from '../_shared/dispatch.ts'
+import { rankDispatchCandidatesByFinalScore } from '../_shared/dispatchRanking.ts'
 
 type StartDispatchBody = {
   requestId?: string
@@ -73,37 +74,6 @@ function getPersistedCandidateScore(candidate: RankedCandidate): number {
   const baseScore = getBaseScore(candidate)
   const affinityScore = normalizeAffinityScore(meta)
   return Number((baseScore + affinityScore).toFixed(6))
-}
-
-function computeAffinityScore(providerSavedCustomer: boolean, customerSavedProvider: boolean): number {
-  const rawScore =
-    (providerSavedCustomer ? 0.1 : 0) +
-    (customerSavedProvider ? 0.2 : 0)
-  return Number(Math.min(rawScore, 0.3).toFixed(6))
-}
-
-function compareRankedCandidates(
-  left: RankedCandidate & { originalIndex: number },
-  right: RankedCandidate & { originalIndex: number },
-): number {
-  const scoreDiff = getPersistedCandidateScore(right) - getPersistedCandidateScore(left)
-  if (Math.abs(scoreDiff) > 0.000001) {
-    return scoreDiff
-  }
-
-  const leftDistance = toFiniteNumber(left.meta?.distance_km)
-  const rightDistance = toFiniteNumber(right.meta?.distance_km)
-  if (leftDistance != null && rightDistance != null && leftDistance !== rightDistance) {
-    return leftDistance - rightDistance
-  }
-
-  const leftRating = toFiniteNumber(left.meta?.avg_rating)
-  const rightRating = toFiniteNumber(right.meta?.avg_rating)
-  if (leftRating != null && rightRating != null && leftRating !== rightRating) {
-    return rightRating - leftRating
-  }
-
-  return left.originalIndex - right.originalIndex
 }
 
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
@@ -334,12 +304,23 @@ serve(async (req) => {
     }
 
     const affinityRankedCandidates = rankedCandidates
-      .map((candidate, originalIndex) => {
+      .map((candidate) => {
         const providerSavedCustomer = providerSavedCustomerIds.has(candidate.walkerId)
         const customerSavedProvider = customerSavedProviderIds.has(candidate.walkerId)
-        const affinityScore = computeAffinityScore(providerSavedCustomer, customerSavedProvider)
         const baseScore = getBaseScore(candidate)
-        const finalScore = Number((baseScore + affinityScore).toFixed(6))
+        const [rankedSelection] = rankDispatchCandidatesByFinalScore([
+          {
+            walkerId: candidate.walkerId,
+            baseScore,
+            affinityProviderSaved: providerSavedCustomer,
+            affinityClientSaved: customerSavedProvider,
+            distanceKm: toFiniteNumber(candidate.meta?.distance_km),
+            avgRating: toFiniteNumber(candidate.meta?.avg_rating),
+            reviewCount: toFiniteNumber(candidate.meta?.review_count),
+          },
+        ])
+        const affinityScore = rankedSelection?.affinityScore ?? 0
+        const finalScore = rankedSelection?.finalScore ?? baseScore
         const meta = {
           ...(candidate.meta ?? {}),
           base_score: baseScore,
@@ -365,10 +346,43 @@ serve(async (req) => {
           ...candidate,
           score: finalScore,
           meta,
-          originalIndex,
         }
       })
-      .sort(compareRankedCandidates)
+
+    const affinityRankedCandidateOrder = rankDispatchCandidatesByFinalScore(
+      affinityRankedCandidates.map((candidate) => ({
+        walkerId: candidate.walkerId,
+        baseScore: getBaseScore(candidate),
+        affinityProviderSaved: candidate.meta?.affinity_provider_saved === true,
+        affinityClientSaved: candidate.meta?.affinity_client_saved === true,
+        distanceKm: toFiniteNumber(candidate.meta?.distance_km),
+        avgRating: toFiniteNumber(candidate.meta?.avg_rating),
+        reviewCount: toFiniteNumber(candidate.meta?.review_count),
+      })),
+    )
+
+    const affinityRankedCandidatesByWalkerId = new Map(
+      affinityRankedCandidates.map((candidate) => [candidate.walkerId, candidate]),
+    )
+
+    const rerankedCandidates = affinityRankedCandidateOrder
+      .map((selection) => {
+        const candidate = affinityRankedCandidatesByWalkerId.get(selection.walkerId)
+        if (!candidate) return null
+        return {
+          ...candidate,
+          score: selection.finalScore,
+          meta: {
+            ...(candidate.meta ?? {}),
+            base_score: selection.baseScore,
+            affinity_score: selection.affinityScore,
+            affinity_provider_saved: selection.affinityProviderSaved,
+            affinity_client_saved: selection.affinityClientSaved,
+            final_score: selection.finalScore,
+          },
+        }
+      })
+      .filter((candidate): candidate is RankedCandidate => candidate != null)
 
     if (requestRow.booking_timing === 'scheduled') {
       if (!requestRow.scheduled_for) {
@@ -522,7 +536,7 @@ serve(async (req) => {
       )
     }
 
-    const candidateRows = affinityRankedCandidates.map((candidate, index) => ({
+    const candidateRows = rerankedCandidates.map((candidate, index) => ({
       request_id: requestId,
       walker_id: candidate.walkerId,
       rank: index + 1,
@@ -535,7 +549,7 @@ serve(async (req) => {
       requestId,
       candidateCount: candidateRows.length,
       candidateWalkerIds: candidateRows.map((row) => row.walker_id),
-      candidateScoreBreakdown: affinityRankedCandidates.slice(0, 10).map((candidate, index) =>
+      candidateScoreBreakdown: rerankedCandidates.slice(0, 10).map((candidate, index) =>
         buildCandidateScoreLog(candidate, index + 1)
       ),
     })
@@ -645,7 +659,7 @@ serve(async (req) => {
     console.log('[start-dispatch] logging dispatch_started event', {
       version: START_DISPATCH_VERSION,
       requestId,
-      candidateCount: affinityRankedCandidates.length,
+      candidateCount: rerankedCandidates.length,
       timeoutSeconds,
     })
 

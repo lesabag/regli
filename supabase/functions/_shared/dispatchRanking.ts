@@ -22,6 +22,29 @@ export type RankedWalkerCandidate = {
   reviewCount: number
 }
 
+export type FinalDispatchSelectionInput = {
+  walkerId: string
+  baseScore: number
+  affinityProviderSaved?: boolean
+  affinityClientSaved?: boolean
+  distanceKm?: number | null
+  avgRating?: number | null
+  reviewCount?: number | null
+}
+
+export type FinalDispatchSelectionCandidate = {
+  walkerId: string
+  rank: number
+  baseScore: number
+  affinityScore: number
+  finalScore: number
+  affinityProviderSaved: boolean
+  affinityClientSaved: boolean
+  distanceKm: number | null
+  avgRating: number | null
+  reviewCount: number
+}
+
 const DISTANCE_WEIGHT = 0.55
 const RATING_WEIGHT = 0.3
 const EXPERIENCE_WEIGHT = 0.15
@@ -32,6 +55,9 @@ const NEUTRAL_DISTANCE_SCORE = 0.5
 const PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST = 10
 const CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST = 20
 const AFFINITY_SCORE_CAP = 30
+const NORMALIZED_PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST = 0.1
+const NORMALIZED_CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST = 0.2
+const NORMALIZED_AFFINITY_SCORE_CAP = 0.3
 
 export function distanceKm(
   lat1: number,
@@ -70,6 +96,67 @@ function normalizeRatingScore(avgRating: number | null, reviewCount: number): nu
 
 function normalizeReviewCountScore(reviewCount: number): number {
   return Math.max(0, Math.min(reviewCount / EXPERIENCE_CAP_REVIEWS, 1))
+}
+
+function normalizeSelectionReviewCount(reviewCount: number | null | undefined): number {
+  return Math.max(0, Math.floor(toFiniteNumber(reviewCount) ?? 0))
+}
+
+export function computeNormalizedAffinityScore(
+  affinityProviderSaved: boolean,
+  affinityClientSaved: boolean,
+): number {
+  const rawScore =
+    (affinityProviderSaved ? NORMALIZED_PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST : 0) +
+    (affinityClientSaved ? NORMALIZED_CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST : 0)
+  return Number(Math.min(rawScore, NORMALIZED_AFFINITY_SCORE_CAP).toFixed(6))
+}
+
+export function rankDispatchCandidatesByFinalScore(
+  inputs: FinalDispatchSelectionInput[],
+): FinalDispatchSelectionCandidate[] {
+  return inputs
+    .map((input, index) => {
+      const baseScore = Number((toFiniteNumber(input.baseScore) ?? 0).toFixed(6))
+      const affinityProviderSaved = input.affinityProviderSaved === true
+      const affinityClientSaved = input.affinityClientSaved === true
+      const affinityScore = computeNormalizedAffinityScore(
+        affinityProviderSaved,
+        affinityClientSaved,
+      )
+      const finalScore = Number((baseScore + affinityScore).toFixed(6))
+      const distanceKm = toFiniteNumber(input.distanceKm)
+      const avgRating = toFiniteNumber(input.avgRating)
+      const reviewCount = normalizeSelectionReviewCount(input.reviewCount)
+
+      return {
+        walkerId: input.walkerId,
+        rank: index + 1,
+        baseScore,
+        affinityScore,
+        finalScore,
+        affinityProviderSaved,
+        affinityClientSaved,
+        distanceKm: distanceKm == null ? null : Number(distanceKm.toFixed(3)),
+        avgRating: avgRating == null ? null : Number(avgRating.toFixed(3)),
+        reviewCount,
+      }
+    })
+    .sort((left, right) => {
+      if (right.finalScore !== left.finalScore) return right.finalScore - left.finalScore
+      if ((left.distanceKm ?? Number.POSITIVE_INFINITY) !== (right.distanceKm ?? Number.POSITIVE_INFINITY)) {
+        return (left.distanceKm ?? Number.POSITIVE_INFINITY) - (right.distanceKm ?? Number.POSITIVE_INFINITY)
+      }
+      if ((right.avgRating ?? NO_RATING_BASELINE * 5) !== (left.avgRating ?? NO_RATING_BASELINE * 5)) {
+        return (right.avgRating ?? NO_RATING_BASELINE * 5) - (left.avgRating ?? NO_RATING_BASELINE * 5)
+      }
+      if (right.reviewCount !== left.reviewCount) return right.reviewCount - left.reviewCount
+      return left.rank - right.rank
+    })
+    .map((candidate, index) => ({
+      ...candidate,
+      rank: index + 1,
+    }))
 }
 
 export function rankWalkerCandidates(inputs: WalkerRankingInput[]): RankedWalkerCandidate[] {
