@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { AppRole } from '../hooks/useAuth'
 import { formatShortAddress } from '../utils/addressFormat'
+import {
+  getProfileServiceOptions,
+  type ProfileServiceType,
+} from '../lib/profileServiceTypes'
 import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
 import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
 import customerCharacterImage from '../assets/onboarding/customer-character.jpg'
@@ -15,6 +19,7 @@ interface AuthScreenProps {
     role: AppRole
     primaryService?: string
     locationAddress?: string
+    serviceType?: ProfileServiceType
   }) => Promise<{ ok: boolean }>
   authError?: string | null
 }
@@ -22,16 +27,13 @@ interface AuthScreenProps {
 type OnboardingMode = 'welcome' | 'signin' | 'signup'
 type SignupStep = 'welcome' | 'role' | 'service' | 'location' | 'auth'
 type ServiceOption = {
-  id: string
+  id: ProfileServiceType
   icon: string
   label: string
+  description: string
 }
 
-const SERVICE_OPTIONS: ServiceOption[] = [
-  { id: 'dog-walking', icon: '🐾', label: 'Dog Walking' },
-]
-
-const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'location', 'auth']
+const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'auth']
 
 function getStepIndex(mode: OnboardingMode, step: SignupStep) {
   if (mode === 'signin') return SIGNUP_STEPS.indexOf('auth')
@@ -73,19 +75,28 @@ export default function AuthScreen({
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState<AppRole>('client')
-  const [selectedService, setSelectedService] = useState<string>('dog-walking')
+  const [selectedService, setSelectedService] = useState<ProfileServiceType>('dog_walker')
   const [locationLabel, setLocationLabel] = useState('Your area')
   const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>('placeholder')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
+  const serviceOptions = useMemo<ServiceOption[]>(
+    () => getProfileServiceOptions(false).map((option) => ({
+      id: option.value,
+      icon: option.icon,
+      label: option.label,
+      description: option.description,
+    })),
+    [],
+  )
 
   const currentStep = mode === 'signin' ? 'auth' : signupStep
   const activeStepIndex = getStepIndex(mode, currentStep)
 
   const selectedServiceMeta = useMemo(
-    () => SERVICE_OPTIONS.find((service) => service.id === selectedService) ?? SERVICE_OPTIONS[0],
-    [selectedService],
+    () => serviceOptions.find((service) => service.id === selectedService) ?? serviceOptions[0],
+    [selectedService, serviceOptions],
   )
 
   const canContinue = useMemo(() => {
@@ -179,7 +190,7 @@ export default function AuthScreen({
     }
 
     if (signupStep === 'location') {
-      setSignupStep('role')
+      setSignupStep('service')
       return
     }
 
@@ -213,7 +224,7 @@ export default function AuthScreen({
     }
 
     if (signupStep === 'role') {
-      setSignupStep('location')
+      setSignupStep('service')
       return
     }
 
@@ -236,6 +247,7 @@ export default function AuthScreen({
         role,
         primaryService: selectedServiceMeta.label,
         locationAddress: locationLabel,
+        serviceType: selectedService,
       })
       if (result.ok && typeof window !== 'undefined') {
         window.sessionStorage.setItem(
@@ -378,7 +390,7 @@ export default function AuthScreen({
                 Pick the service focus for now. You can expand this later.
               </p>
               <div style={serviceGridStyle}>
-                {SERVICE_OPTIONS.map((service) => {
+                {serviceOptions.map((service) => {
                   const selected = selectedService === service.id
                   return (
                     <button
@@ -392,6 +404,7 @@ export default function AuthScreen({
                     >
                       <span style={serviceEmojiStyle}>{service.icon}</span>
                       <span style={serviceLabelStyle}>{service.label}</span>
+                      <span style={serviceDescriptionStyle}>{service.description}</span>
                       {selected ? <span style={checkBadgeStyle}>✓</span> : null}
                     </button>
                   )
@@ -402,7 +415,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'location' && (
             <>
-              <div style={eyebrowStyle}>Step 2</div>
+              <div style={eyebrowStyle}>Step 3</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 We’ll use this to tailor nearby availability and a smoother first experience.
@@ -453,7 +466,7 @@ export default function AuthScreen({
 
           {currentStep === 'auth' && (
             <>
-              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 3'}</div>
+              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 4'}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 {mode === 'signin'
@@ -1101,6 +1114,12 @@ const serviceLabelStyle: CSSProperties = {
   lineHeight: 1.35,
   fontWeight: 800,
   color: '#0F172A',
+}
+
+const serviceDescriptionStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.45,
+  color: '#64748B',
 }
 
 const checkBadgeStyle: CSSProperties = {
