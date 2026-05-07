@@ -17,7 +17,7 @@ import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import {
   getProfileServiceOptions,
-  normalizeProfileServiceType,
+  normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
 
@@ -33,6 +33,7 @@ interface WalkerDashboardProps {
     full_name: string | null
     role: AppRole
     service_type?: string | null
+    service_types?: string[] | null
   }
   onSignOut: () => Promise<void>
   showOnboardingWowToken?: number
@@ -181,10 +182,10 @@ export default function WalkerDashboard({
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
   const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
-  const [profileServiceType, setProfileServiceType] = useState<ProfileServiceType | null>(
-    normalizeProfileServiceType(profile.service_type),
+  const [profileServiceTypes, setProfileServiceTypes] = useState<ProfileServiceType[]>(
+    normalizeProfileServiceTypes(profile.service_types ?? profile.service_type),
   )
-  const [serviceTypeSaving, setServiceTypeSaving] = useState<ProfileServiceType | null>(null)
+  const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -197,33 +198,43 @@ export default function WalkerDashboard({
   }, [])
 
   useEffect(() => {
-    setProfileServiceType(normalizeProfileServiceType(profile.service_type))
-  }, [profile.service_type])
+    setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
+  }, [profile.service_type, profile.service_types])
 
-  const handleProfileServiceTypeChange = useCallback(async (nextServiceType: ProfileServiceType) => {
-    if (serviceTypeSaving || profileServiceType === nextServiceType) return
-    const previousServiceType = profileServiceType
+  const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
+    if (serviceTypeSaving) return
+    const previousServiceTypes = profileServiceTypes
+    const nextServiceTypes = profileServiceTypes.includes(nextServiceType)
+      ? profileServiceTypes.length > 1
+        ? profileServiceTypes.filter((value) => value !== nextServiceType)
+        : profileServiceTypes
+      : [...profileServiceTypes, nextServiceType]
 
-    setProfileServiceType(nextServiceType)
-    setServiceTypeSaving(nextServiceType)
+    if (nextServiceTypes === previousServiceTypes) return
+
+    setProfileServiceTypes(nextServiceTypes)
+    setServiceTypeSaving(true)
     setServiceTypeSaveError(null)
 
     const { error } = await supabase
       .from('profiles')
-      .update({ service_type: nextServiceType })
+      .update({
+        service_types: nextServiceTypes,
+        service_type: nextServiceTypes[0] ?? null,
+      })
       .eq('id', profile.id)
 
     if (error) {
       console.warn('[WalkerDashboard] failed to update service_type:', error.message)
-      setProfileServiceType(previousServiceType)
+      setProfileServiceTypes(previousServiceTypes)
       setServiceTypeSaveError(serviceTypeErrorLabel)
-      setServiceTypeSaving(null)
+      setServiceTypeSaving(false)
       return
     }
 
-    setServiceTypeSaving(null)
+    setServiceTypeSaving(false)
     setServiceTypeSavedAt(Date.now())
-  }, [profile.id, profileServiceType, serviceTypeErrorLabel, serviceTypeSaving])
+  }, [profile.id, profileServiceTypes, serviceTypeErrorLabel, serviceTypeSaving])
 
   const prevCompJobId = useRef<string | null>(null)
   useEffect(() => {
@@ -1163,33 +1174,32 @@ export default function WalkerDashboard({
                     <BurgerSection title={serviceTypeSectionTitle} subtitle={serviceTypeSectionSubtitle}>
                       <div style={serviceTypeSelectorRowStyle}>
                         {profileServiceOptions.map((option) => {
-                          const selected = profileServiceType === option.value
-                          const saving = serviceTypeSaving === option.value
+                          const selected = profileServiceTypes.includes(option.value)
                           return (
                             <button
                               key={option.value}
                               type="button"
                               onClick={() => {
-                                void handleProfileServiceTypeChange(option.value)
+                                void handleProfileServiceTypeToggle(option.value)
                               }}
-                              disabled={serviceTypeSaving !== null}
+                              disabled={serviceTypeSaving}
                               style={{
                                 ...serviceTypeButtonStyle,
                                 ...(selected ? serviceTypeButtonActiveStyle : null),
-                                opacity: serviceTypeSaving !== null && !saving ? 0.72 : 1,
+                                opacity: serviceTypeSaving && !selected ? 0.72 : 1,
                               }}
                             >
                               <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
                               <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
                               <span style={serviceTypeButtonDescriptionStyle}>{option.description}</span>
-                              {saving ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
+                              {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
                             </button>
                           )
                         })}
                       </div>
                       {serviceTypeSaveError ? (
                         <div style={serviceTypeStatusErrorStyle}>{serviceTypeSaveError}</div>
-                      ) : serviceTypeSaving === null && serviceTypeSavedAt > 0 ? (
+                      ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                       ) : null}
                     </BurgerSection>

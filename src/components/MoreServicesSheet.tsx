@@ -10,13 +10,18 @@ import {
 interface MoreServicesSheetProps {
   onSelect: (service: ServiceType) => void
   onClose: () => void
+  services?: ServiceType[]
 }
 
 export default function MoreServicesSheet({
   onSelect,
   onClose,
+  services,
 }: MoreServicesSheetProps) {
   const { t } = useTranslation()
+  const visibleServices = services && services.length > 0
+    ? MORE_SERVICES.filter((svc) => services.includes(svc))
+    : MORE_SERVICES
 
   return (
     <>
@@ -25,7 +30,7 @@ export default function MoreServicesSheet({
         <div style={handleStyle} />
         <div style={titleStyle}>{t('services.more')}</div>
         <div style={listStyle}>
-          {MORE_SERVICES.map((svc) => (
+          {visibleServices.map((svc) => (
             <button
               key={svc}
               type="button"

@@ -105,5 +105,5 @@ export const SERVICE_I18N_KEYS: Record<
 }
 
 export function isServiceAvailable(serviceType: ServiceType): boolean {
-  return serviceType === 'dog_walking'
+  return serviceType === 'dog_walking' || serviceType === 'babysitter'
 }

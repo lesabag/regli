@@ -631,6 +631,9 @@ serve(async (req: Request) => {
         location: location.trim(),
         notes: notes?.trim() || null,
         status: 'awaiting_payment',
+        dispatch_state: 'queued',
+        smart_dispatch_state: 'idle',
+        smart_dispatch_last_error: null,
         payment_status: initialPaymentStatus,
         payment_authorized_at: paymentAuthorizedAt,
         paid_at: paidAt,
@@ -679,17 +682,30 @@ serve(async (req: Request) => {
       paymentIntentStatus: paymentIntent.status,
       currency: jobCurrency,
       paymentStatus: initialPaymentStatus,
+      dispatchState: 'queued',
+      smartDispatchState: 'idle',
       paymentMethodAttached: !!paymentIntent.payment_method,
     })
 
     try {
-      await stripe.paymentIntents.update(paymentIntent.id, {
-        transfer_group: job.id,
+      const updatePayload: Stripe.PaymentIntentUpdateParams = {
         metadata: {
           ...paymentIntent.metadata,
           job_id: job.id,
         },
-      })
+      }
+
+      if (!paymentIntent.transfer_group) {
+        updatePayload.transfer_group = job.id
+      } else {
+        console.warn(`[create-payment-intent][${FUNCTION_VERSION}] transfer_group already set; keeping existing value`, {
+          paymentIntentId: paymentIntent.id,
+          existingTransferGroup: paymentIntent.transfer_group,
+          requestedTransferGroup: job.id,
+        })
+      }
+
+      await stripe.paymentIntents.update(paymentIntent.id, updatePayload)
     } catch (updateErr) {
       console.error('Failed to update PI with job ID (non-blocking):', updateErr)
     }

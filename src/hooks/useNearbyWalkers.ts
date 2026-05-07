@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../services/supabaseClient'
+import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 
 export interface NearbyWalker {
   id: string
@@ -54,10 +55,13 @@ interface BearingEntry {
 export function useNearbyWalkers(
   userLocation: [number, number] | null,
   enabled: boolean,
+  serviceTypeFilter?: ProfileServiceType | null,
 ): NearbyWalker[] {
   const [walkers, setWalkers] = useState<NearbyWalker[]>([])
   const userLocRef = useRef(userLocation)
   userLocRef.current = userLocation
+  const serviceTypeFilterRef = useRef(serviceTypeFilter ?? null)
+  serviceTypeFilterRef.current = serviceTypeFilter ?? null
 
   const prevPosRef = useRef<Map<string, [number, number]>>(new Map())
   const lastSeenPosRef = useRef<Map<string, [number, number]>>(new Map())
@@ -110,6 +114,22 @@ export function useNearbyWalkers(
     [],
   )
 
+  const walkerSupportsService = useCallback(
+    (
+      row: {
+        service_types?: string[] | null
+        service_type?: string | null
+      },
+      expectedServiceType: ProfileServiceType | null,
+    ) => {
+      if (!expectedServiceType) return true
+      const supportedServices = normalizeProfileServiceTypes(row.service_types ?? row.service_type)
+      if (supportedServices.length === 0) return true
+      return supportedServices.includes(expectedServiceType)
+    },
+    [],
+  )
+
   const fetchNearby = useCallback(async () => {
     const loc = userLocRef.current
     if (!loc) {
@@ -119,7 +139,7 @@ export function useNearbyWalkers(
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, last_lat, last_lng, is_online')
+      .select('id, last_lat, last_lng, is_online, service_type, service_types')
       .eq('role', 'walker')
       .eq('is_online', true)
       .not('last_lat', 'is', null)
@@ -133,10 +153,12 @@ export function useNearbyWalkers(
 
     const activeIds = new Set<string>()
     const nearby: NearbyWalker[] = []
+    const expectedServiceType = serviceTypeFilterRef.current
 
     for (const w of data) {
       if (w.is_online !== true) continue
       if (w.last_lat == null || w.last_lng == null) continue
+      if (!walkerSupportsService(w, expectedServiceType)) continue
 
       if (haversineKm(loc[0], loc[1], w.last_lat, w.last_lng) <= MAX_DISTANCE_KM) {
         activeIds.add(w.id)
@@ -158,7 +180,7 @@ export function useNearbyWalkers(
     }
 
     setWalkers(nearby)
-  }, [resolveBearing])
+  }, [resolveBearing, walkerSupportsService])
 
   const applyRealtimeUpdate = useCallback(
     (row: {
@@ -167,13 +189,21 @@ export function useNearbyWalkers(
       last_lat?: number | null
       last_lng?: number | null
       role?: string
+      service_type?: string | null
+      service_types?: string[] | null
     }) => {
       const loc = userLocRef.current
       if (!loc) return
+      const expectedServiceType = serviceTypeFilterRef.current
 
       if (row.role && row.role !== 'walker') return
 
       if (row.is_online === false) {
+        removeWalker(row.id)
+        return
+      }
+
+      if (!walkerSupportsService(row, expectedServiceType)) {
         removeWalker(row.id)
         return
       }
@@ -206,7 +236,7 @@ export function useNearbyWalkers(
         removeWalker(row.id)
       }
     },
-    [removeWalker, resolveBearing],
+    [removeWalker, resolveBearing, walkerSupportsService],
   )
 
   useEffect(() => {
@@ -237,6 +267,8 @@ export function useNearbyWalkers(
             is_online?: boolean
             last_lat?: number | null
             last_lng?: number | null
+            service_type?: string | null
+            service_types?: string[] | null
           }
           applyRealtimeUpdate(row)
         },
@@ -247,7 +279,7 @@ export function useNearbyWalkers(
       clearInterval(pollId)
       supabase.removeChannel(channel)
     }
-  }, [enabled, fetchNearby, applyRealtimeUpdate])
+  }, [enabled, fetchNearby, applyRealtimeUpdate, serviceTypeFilter])
 
   return walkers
 }

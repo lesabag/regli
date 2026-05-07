@@ -182,6 +182,7 @@ type DispatchWalkerProfile = {
   last_lat: number | null
   last_lng: number | null
   service_type?: string | null
+  service_types?: string[] | string | null
 }
 
 type DispatchRatingRow = {
@@ -319,7 +320,11 @@ function isExhaustedUiCandidate(job: WalkRequestRow): boolean {
   return (
     job.status === 'cancelled' &&
     typeof job.smart_dispatch_last_error === 'string' &&
-    job.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted')
+    (
+      job.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted') ||
+      job.smart_dispatch_last_error.toLowerCase().includes('no matching providers for service_type') ||
+      job.smart_dispatch_last_error.toLowerCase().includes('no matching providers for service type')
+    )
   )
 }
 
@@ -367,6 +372,8 @@ function isDispatchUnavailableMessage(message: string): boolean {
     normalized.includes('no walkers online') ||
     normalized.includes('no candidates available') ||
     normalized.includes('all candidates exhausted') ||
+    normalized.includes('no matching providers for service_type') ||
+    normalized.includes('no matching providers for service type') ||
     normalized.includes('no providers available')
   )
 }
@@ -1083,6 +1090,40 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return 'baby_sitter'
     }
     return null
+  }
+
+  function walkerSupportsRequestedService(
+    walker: {
+      service_type?: string | null
+      service_types?: string[] | string | null
+    },
+    requestServiceType: 'dog_walker' | 'baby_sitter' | null,
+  ): boolean {
+    if (!requestServiceType) return true
+
+    const rawServiceTypes = walker.service_types
+    const serviceTypes =
+      Array.isArray(rawServiceTypes)
+        ? rawServiceTypes
+        : typeof rawServiceTypes === 'string'
+          ? rawServiceTypes
+              .replace(/^\{|\}$/g, '')
+              .split(',')
+              .map((value) => value.trim().replace(/^"|"$/g, ''))
+              .filter(Boolean)
+          : null
+
+    if (serviceTypes) {
+      const normalizedServiceTypes = serviceTypes
+        .map((value) => normalizeProviderServiceType(value))
+        .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
+
+      if (normalizedServiceTypes.length > 0) {
+        return normalizedServiceTypes.includes(requestServiceType)
+      }
+    }
+
+    return normalizeProviderServiceType(walker.service_type) === requestServiceType
   }
 
   const startsInMinutes = useCallback((date: string | null | undefined) => {
@@ -1849,7 +1890,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
             if (updated.id === currentJobId) {
               if (
                 typeof updated.smart_dispatch_last_error === 'string' &&
-                updated.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted')
+                (
+                  updated.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted') ||
+                  updated.smart_dispatch_last_error.toLowerCase().includes('no matching providers for service_type') ||
+                  updated.smart_dispatch_last_error.toLowerCase().includes('no matching providers for service type')
+                )
               ) {
                 setCurrentJob((prev) => mergeWalkRequest(prev, updated))
                 setCurrentJobId(updated.id)
@@ -2608,8 +2653,20 @@ export function useClientFlow(profileId: string, _profileName: string) {
         },
       })
 
+      console.log('[useClientFlow] create-payment-intent response', {
+        responseData: response.data ?? null,
+        responseError: response.error ?? null,
+      })
+
       if (response.error) throw new Error(response.error)
-      if (!response.data?.jobId) throw new Error('Failed to create walk request')
+      if (!response.data?.jobId) {
+        console.error('[useClientFlow] create-payment-intent missing jobId', {
+          responseData: response.data ?? null,
+          bookingTiming,
+          requestServiceType: normalizedRequestServiceType,
+        })
+        throw new Error('Failed to create walk request')
+      }
       if (
         response.data.paymentStatus !== 'requires_capture' &&
         response.data.paymentStatus !== 'authorized' &&
@@ -2620,6 +2677,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const jobId = response.data.jobId
+      console.log('[useClientFlow] resolved request/job id', {
+        jobId,
+        bookingTiming,
+        requestServiceType: normalizedRequestServiceType,
+      })
       createdJobId = jobId
       saveReusableServiceName(dogName)
       const durationMinutes = durationToMinutes(duration)
@@ -2627,12 +2689,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
       const statusPatch: Record<string, unknown> = {
         status: 'open',
+        dispatch_state: 'queued',
+        smart_dispatch_state: 'idle',
+        smart_dispatch_last_error: null,
         duration_minutes: durationMinutes,
         price: adjustedPriceILS,
       }
-      if (bookingTiming === 'scheduled') {
-        statusPatch.dispatch_state = 'queued'
-      } else {
+      if (bookingTiming !== 'scheduled') {
         statusPatch.booking_timing = 'asap'
       }
 
@@ -2666,7 +2729,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id, last_lat, last_lng, service_type')
+          .select('id, last_lat, last_lng, service_type, service_types')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -2677,11 +2740,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
         const requestedProviderServiceType = normalizeProviderServiceType(
           createdJob.service_type ?? normalizedRequestServiceType,
         )
-        const onlineWalkers = ((walkers as DispatchWalkerProfile[] | null) ?? []).filter((walker) => {
-          if (!requestedProviderServiceType) return true
-          return normalizeProviderServiceType(walker.service_type) === requestedProviderServiceType
+        const allOnlineWalkers = (walkers as DispatchWalkerProfile[] | null) ?? []
+        const matchingWalkers = allOnlineWalkers.filter((walker) => {
+          return walkerSupportsRequestedService(walker, requestedProviderServiceType)
         })
-        const walkerIds = onlineWalkers.map((walker) => walker.id)
+        const walkerIds = allOnlineWalkers.map((walker) => walker.id)
 
         let ratingsByWalker = new Map<string, { total: number; count: number }>()
         if (walkerIds.length > 0) {
@@ -2742,7 +2805,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         }
 
         const ranked = rankWalkerCandidates(
-          onlineWalkers.map((walker) => {
+          allOnlineWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
             const hasWalkerLocation =
               userLocation &&
@@ -2783,14 +2846,23 @@ export function useClientFlow(profileId: string, _profileName: string) {
           },
         }))
 
-        if (ranked.length === 0) {
-          throw new Error('No walkers online')
-        }
+        console.log('[useClientFlow] start-dispatch invoke', {
+          requestId: createdJob.id,
+          requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
+          onlineWalkerCount: allOnlineWalkers.length,
+          matchingWalkerCount: matchingWalkers.length,
+          rankedCandidateCount: ranked.length,
+        })
 
         const dispatchResult = await startDispatch({
           requestId: createdJob.id,
           rankedCandidates: ranked,
           resetExisting: true,
+        })
+
+        console.log('[useClientFlow] start-dispatch response', {
+          requestId: createdJob.id,
+          dispatchResult,
         })
 
         if (!dispatchResult.ok) {

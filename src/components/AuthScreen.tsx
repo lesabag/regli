@@ -19,7 +19,7 @@ interface AuthScreenProps {
     role: AppRole
     primaryService?: string
     locationAddress?: string
-    serviceType?: ProfileServiceType
+    serviceTypes?: ProfileServiceType[]
   }) => Promise<{ ok: boolean }>
   authError?: string | null
 }
@@ -75,7 +75,7 @@ export default function AuthScreen({
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState<AppRole>('client')
-  const [selectedService, setSelectedService] = useState<ProfileServiceType>('dog_walker')
+  const [selectedServices, setSelectedServices] = useState<ProfileServiceType[]>(['dog_walker'])
   const [locationLabel, setLocationLabel] = useState('Your area')
   const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>('placeholder')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
@@ -95,18 +95,18 @@ export default function AuthScreen({
   const activeStepIndex = getStepIndex(mode, currentStep)
 
   const selectedServiceMeta = useMemo(
-    () => serviceOptions.find((service) => service.id === selectedService) ?? serviceOptions[0],
-    [selectedService, serviceOptions],
+    () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
+    [selectedServices, serviceOptions],
   )
 
   const canContinue = useMemo(() => {
     if (mode === 'signin') return !!email && !!password
     if (currentStep === 'role') return !!role
-    if (currentStep === 'service') return !!selectedService
+    if (currentStep === 'service') return selectedServices.length > 0
     if (currentStep === 'location') return true
     if (currentStep === 'auth') return !!email && !!password && !!fullName.trim()
     return true
-  }, [currentStep, email, fullName, mode, password, role, selectedService])
+  }, [currentStep, email, fullName, mode, password, role, selectedServices])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
 
@@ -247,7 +247,7 @@ export default function AuthScreen({
         role,
         primaryService: selectedServiceMeta.label,
         locationAddress: locationLabel,
-        serviceType: selectedService,
+        serviceTypes: selectedServices,
       })
       if (result.ok && typeof window !== 'undefined') {
         window.sessionStorage.setItem(
@@ -391,12 +391,20 @@ export default function AuthScreen({
               </p>
               <div style={serviceGridStyle}>
                 {serviceOptions.map((service) => {
-                  const selected = selectedService === service.id
+                  const selected = selectedServices.includes(service.id)
                   return (
                     <button
                       key={service.id}
                       type="button"
-                      onClick={() => setSelectedService(service.id)}
+                      onClick={() => {
+                        setSelectedServices((current) => {
+                          if (current.includes(service.id)) {
+                            if (current.length === 1) return current
+                            return current.filter((value) => value !== service.id)
+                          }
+                          return [...current, service.id]
+                        })
+                      }}
                       style={{
                         ...serviceCardStyle,
                         ...(selected ? serviceCardSelectedStyle : null),
@@ -478,7 +486,7 @@ export default function AuthScreen({
                 <div style={summaryCardStyle}>
                   <div style={summaryRowStyle}>
                     <span>{roleSummary}</span>
-                    <span>{selectedServiceMeta.label}</span>
+                    <span>{selectedServices.map((value) => serviceOptions.find((service) => service.id === value)?.label).filter(Boolean).join(', ')}</span>
                   </div>
                   <div style={summaryLocationStyle}>{locationLabel}</div>
                 </div>

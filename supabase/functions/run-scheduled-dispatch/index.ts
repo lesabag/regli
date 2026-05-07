@@ -25,6 +25,7 @@ type WalkerRow = {
   last_lat: number | null
   last_lng: number | null
   service_type: string | null
+  service_types?: string[] | null
 }
 
 type RatingRow = {
@@ -51,6 +52,26 @@ function normalizeProviderServiceType(value: string | null | undefined): 'dog_wa
     return 'baby_sitter'
   }
   return null
+}
+
+function providerSupportsRequestedService(
+  profile: {
+    service_types?: string[] | null
+    service_type?: string | null
+  },
+  requestServiceType: 'dog_walker' | 'baby_sitter' | null,
+): boolean {
+  if (!requestServiceType) return true
+
+  if (Array.isArray(profile.service_types)) {
+    const normalizedServiceTypes = profile.service_types
+      .map((value) => normalizeProviderServiceType(value))
+      .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
+
+    return normalizedServiceTypes.includes(requestServiceType)
+  }
+
+  return normalizeProviderServiceType(profile.service_type) === requestServiceType
 }
 
 serve(async (req) => {
@@ -235,7 +256,7 @@ serve(async (req) => {
         // 🔍 fetch online walkers
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id, last_lat, last_lng, service_type')
+          .select('id, last_lat, last_lng, service_type, service_types')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -275,10 +296,17 @@ serve(async (req) => {
 
         const requestedProviderServiceType = normalizeProviderServiceType(job.service_type)
         const onlineWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
-          if (!requestedProviderServiceType) return true
-          return normalizeProviderServiceType(walker.service_type) === requestedProviderServiceType
+          return providerSupportsRequestedService(walker, requestedProviderServiceType)
         })
         const walkerIds = onlineWalkers.map((walker) => walker.id)
+
+        console.log('[run-scheduled-dispatch] candidates after service_type filtering', {
+          requestId: job.id,
+          requestServiceType: job.service_type ?? null,
+          normalizedProviderServiceType: requestedProviderServiceType,
+          onlineWalkerCount: (walkers as WalkerRow[] | null)?.length ?? 0,
+          filteredCandidateCount: onlineWalkers.length,
+        })
 
         if (onlineWalkers.length === 0) {
           const { error: updateError } = await supabase

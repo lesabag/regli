@@ -88,6 +88,51 @@ function normalizeProviderServiceType(value: string | null | undefined): 'dog_wa
   return null
 }
 
+function parseServiceTypes(
+  rawServiceTypes: string[] | string | null | undefined,
+): string[] {
+  if (Array.isArray(rawServiceTypes)) {
+    return rawServiceTypes
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean)
+  }
+
+  if (typeof rawServiceTypes === 'string') {
+    return rawServiceTypes
+      .replace(/^\{|\}$/g, '')
+      .split(',')
+      .map((value) => value.trim().replace(/^"|"$/g, ''))
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+function getNormalizedServiceTypes(
+  rawServiceTypes: string[] | string | null | undefined,
+): Array<'dog_walker' | 'baby_sitter'> {
+  return parseServiceTypes(rawServiceTypes)
+    .map((value) => normalizeProviderServiceType(value))
+    .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
+}
+
+function providerSupportsRequestedService(
+  profile: {
+    service_types?: string[] | string | null
+    service_type?: string | null
+  },
+  requestServiceType: 'dog_walker' | 'baby_sitter' | null,
+): boolean {
+  if (!requestServiceType) return true
+
+  const normalizedServiceTypes = getNormalizedServiceTypes(profile.service_types)
+  if (normalizedServiceTypes.length > 0) {
+    return normalizedServiceTypes.includes(requestServiceType)
+  }
+
+  return normalizeProviderServiceType(profile.service_type) === requestServiceType
+}
+
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
   const meta = candidate.meta ?? {}
   const baseScore = getBaseScore(candidate)
@@ -270,7 +315,7 @@ serve(async (req) => {
       ] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, service_type')
+          .select('id, role, is_online, service_type, service_types')
           .in('id', candidateWalkerIds),
         supabase
           .from('favorite_customers')
@@ -291,9 +336,37 @@ serve(async (req) => {
           error: walkerProfilesError.message,
         })
       } else if (requestProviderServiceType) {
+        const candidateCapabilityRows = ((
+          walkerProfileRows as Array<{
+            id: string
+            role?: string | null
+            is_online?: boolean | null
+            service_type: string | null
+            service_types?: string[] | string | null
+          }> | null
+        ) ?? [])
+
+        candidateCapabilityRows.forEach((row) => {
+          const normalizedServiceTypes = getNormalizedServiceTypes(row.service_types)
+          const matched = providerSupportsRequestedService(row, requestProviderServiceType)
+          console.log('[start-dispatch] candidate capability', {
+            version: START_DISPATCH_VERSION,
+            requestId,
+            walkerId: row.id,
+            role: row.role ?? null,
+            is_online: row.is_online ?? null,
+            legacyServiceType: row.service_type ?? null,
+            serviceTypesRaw: row.service_types ?? null,
+            normalizedServiceTypes,
+            requestServiceType: requestRow.service_type ?? null,
+            normalizedRequestServiceType: requestProviderServiceType,
+            matched,
+          })
+        })
+
         matchingServiceWalkerIds = new Set(
-          ((walkerProfileRows as Array<{ id: string; service_type: string | null }> | null) ?? [])
-            .filter((row) => normalizeProviderServiceType(row.service_type) === requestProviderServiceType)
+          candidateCapabilityRows
+            .filter((row) => providerSupportsRequestedService(row, requestProviderServiceType))
             .map((row) => row.id),
         )
       }
@@ -386,19 +459,72 @@ serve(async (req) => {
         }
       })
 
-    if (requestProviderServiceType && affinityRankedCandidates.length === 0) {
+    console.log('[start-dispatch] candidates after service_type filtering', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      requestServiceType: requestRow.service_type ?? null,
+      normalizedProviderServiceType: requestProviderServiceType,
+      candidateCountBeforeServiceTypeFilter: rankedCandidates.length,
+      candidateCountAfterServiceTypeFilter: affinityRankedCandidates.length,
+    })
+
+    if (affinityRankedCandidates.length === 0) {
+      const exhaustedMessage = 'No matching providers for service_type'
       console.warn('[start-dispatch] no candidates match request service type', {
         version: START_DISPATCH_VERSION,
         requestId,
         requestServiceType: requestRow.service_type,
         normalizedProviderServiceType: requestProviderServiceType,
+        finalRequestState: {
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'exhausted',
+          smart_dispatch_last_error: exhaustedMessage,
+        },
       })
+
+      const { error: exhaustedUpdateError } = await supabase
+        .from('walk_requests')
+        .update({
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'exhausted',
+          smart_dispatch_last_error: exhaustedMessage,
+          smart_dispatch_expires_at: null,
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .is('walker_id', null)
+
+      if (exhaustedUpdateError) {
+        console.error('[start-dispatch] failed to mark request exhausted after zero candidates', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: exhaustedUpdateError.message,
+        })
+        return jsonResponse(
+          500,
+          {
+            ok: false,
+            error: 'failed to mark request exhausted',
+            details: exhaustedUpdateError.message,
+            requestId,
+          },
+          corsHeaders,
+        )
+      }
+
       return jsonResponse(
-        409,
+        200,
         {
-          ok: false,
-          error: 'no providers match the requested service type',
+          ok: true,
+          exhausted: true,
+          error: exhaustedMessage,
           requestServiceType: requestRow.service_type,
+          candidateCount: 0,
+          requestState: {
+            dispatch_state: 'queued',
+            smart_dispatch_state: 'exhausted',
+            smart_dispatch_last_error: exhaustedMessage,
+          },
         },
         corsHeaders,
       )
@@ -602,7 +728,7 @@ serve(async (req) => {
     console.log('[start-dispatch] inserting candidates', {
       version: START_DISPATCH_VERSION,
       requestId,
-      candidateCount: candidateRows.length,
+      insertedCandidatesCount: candidateRows.length,
       candidateWalkerIds: candidateRows.map((row) => row.walker_id),
       candidateScoreBreakdown: rerankedCandidates.slice(0, 10).map((candidate, index) =>
         buildCandidateScoreLog(candidate, index + 1)
@@ -831,6 +957,8 @@ serve(async (req) => {
     }
 
     const firstAdvanceRow = Array.isArray(advanceResult) ? advanceResult[0] : advanceResult
+    const createdAttemptId = typeof firstAdvanceRow?.attempt_id === 'string' ? firstAdvanceRow.attempt_id : null
+    const createdAttemptStatus = typeof firstAdvanceRow?.status === 'string' ? firstAdvanceRow.status : null
 
     if (!firstAdvanceRow?.ok || !firstAdvanceRow?.attempt_id) {
       const message =
@@ -878,6 +1006,13 @@ serve(async (req) => {
         corsHeaders,
       )
     }
+
+    console.log('[start-dispatch] attempt created', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      createdAttemptId,
+      createdAttemptStatus,
+    })
 
     if (requestRow.booking_timing === 'scheduled') {
       const attemptId = String(firstAdvanceRow.attempt_id)
@@ -1067,7 +1202,14 @@ serve(async (req) => {
       version: START_DISPATCH_VERSION,
       requestId,
       timeoutSeconds,
-      candidateCount: rankedCandidates.length,
+      candidateCount: rerankedCandidates.length,
+      insertedCandidatesCount: candidateRows.length,
+      createdAttemptId,
+      createdAttemptStatus,
+      finalRequestState: {
+        dispatch_state: requestRow.booking_timing === 'scheduled' ? 'dispatched' : 'dispatching',
+        smart_dispatch_state: 'dispatching',
+      },
     })
 
     return jsonResponse(
@@ -1076,7 +1218,10 @@ serve(async (req) => {
         ok: true,
         requestId,
         timeoutSeconds,
-        candidateCount: rankedCandidates.length,
+        candidateCount: rerankedCandidates.length,
+        insertedCandidatesCount: candidateRows.length,
+        attemptId: createdAttemptId,
+        attemptStatus: createdAttemptStatus,
         advanceResult,
         version: START_DISPATCH_VERSION,
       },

@@ -12,22 +12,30 @@ interface ServiceSelectorPanelProps {
   selected: ServiceType
   onSelect: (service: ServiceType) => void
   onMorePress: () => void
+  services?: ServiceType[]
 }
 
 export default function ServiceSelectorPanel({
   selected,
   onSelect,
   onMorePress,
+  services,
 }: ServiceSelectorPanelProps) {
   const { t } = useTranslation()
 
-  const isMoreSelected = (MORE_SERVICES as readonly ServiceType[]).includes(selected)
+  const visiblePrimaryServices = services && services.length > 0
+    ? PRIMARY_SERVICES.filter((svc) => services.includes(svc))
+    : PRIMARY_SERVICES
+  const visibleMoreServices = services && services.length > 0
+    ? MORE_SERVICES.filter((svc) => services.includes(svc))
+    : MORE_SERVICES
+  const isMoreSelected = (visibleMoreServices as readonly ServiceType[]).includes(selected)
 
   return (
     <div style={wrapStyle}>
       <div style={titleStyle}>{t('booking.chooseService')}</div>
       <div className="service-panel-scroll" style={rowStyle}>
-        {PRIMARY_SERVICES.map((svc) => {
+        {visiblePrimaryServices.map((svc) => {
           const isActive = selected === svc
           return (
             <button
@@ -62,16 +70,18 @@ export default function ServiceSelectorPanel({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={onMorePress}
-          style={itemStyle}
-        >
-          <div style={circleStyle}>
-            <span style={moreIconStyle}>⋯</span>
-          </div>
-          <span style={labelStyle}>{t('services.more')}</span>
-        </button>
+        {visibleMoreServices.length > 0 && (
+          <button
+            type="button"
+            onClick={onMorePress}
+            style={itemStyle}
+          >
+            <div style={circleStyle}>
+              <span style={moreIconStyle}>⋯</span>
+            </div>
+            <span style={labelStyle}>{t('services.more')}</span>
+          </button>
+        )}
       </div>
     </div>
   )

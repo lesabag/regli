@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
-import type { ProfileServiceType } from '../lib/profileServiceTypes'
+import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -14,6 +14,7 @@ interface Profile {
   primary_service?: string | null
   location_address?: string | null
   service_type?: ProfileServiceType | null
+  service_types?: ProfileServiceType[] | null
 }
 
 const SESSION_INIT_TIMEOUT_MS = 8000
@@ -36,6 +37,7 @@ function withTimeout<T>(promise: PromiseLike<T>, timeoutMs: number, message: str
 }
 
 function getFallbackProfile(currentUser: User): Profile {
+  const fallbackServiceTypes = normalizeProfileServiceTypes(currentUser.user_metadata?.service_types)
   return {
     id: currentUser.id,
     email: currentUser.email ?? null,
@@ -43,9 +45,27 @@ function getFallbackProfile(currentUser: User): Profile {
       (currentUser.user_metadata?.full_name as string | undefined) ?? null,
     role:
       (currentUser.user_metadata?.role as ProfileRole | undefined) ?? 'client',
+    service_types: fallbackServiceTypes,
     service_type:
-      (currentUser.user_metadata?.service_type as ProfileServiceType | undefined) ?? null,
+      fallbackServiceTypes[0] ??
+      ((currentUser.user_metadata?.service_type as ProfileServiceType | undefined) ?? null),
   }
+}
+
+function normalizeLoadedProfile(profile: Partial<Profile> & { id: string }): Profile {
+  const normalizedServiceTypes = normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
+  return {
+    ...profile,
+    email: profile.email ?? null,
+    full_name: profile.full_name ?? null,
+    role: profile.role ?? 'client',
+    service_type: normalizedServiceTypes[0] ?? normalizeProfileServiceTypeFallback(profile.service_type),
+    service_types: normalizedServiceTypes,
+  }
+}
+
+function normalizeProfileServiceTypeFallback(value: Profile['service_type']): ProfileServiceType | null {
+  return typeof value === 'string' ? (normalizeProfileServiceTypes(value)[0] ?? null) : value ?? null
 }
 
 export function useAuth() {
@@ -80,9 +100,10 @@ export function useAuth() {
       if (!isCurrentRequest()) return null
 
       if (!error && data) {
-        setProfile(data as Profile)
+        const normalizedProfile = normalizeLoadedProfile(data as Profile)
+        setProfile(normalizedProfile)
         setAuthError(null)
-        return data as Profile
+        return normalizedProfile
       }
 
       if (error) {
@@ -106,9 +127,10 @@ export function useAuth() {
         throw insertError
       }
 
-      setProfile(insertedProfile as Profile)
+      const normalizedProfile = normalizeLoadedProfile(insertedProfile as Profile)
+      setProfile(normalizedProfile)
       setAuthError(null)
-      return insertedProfile as Profile
+      return normalizedProfile
     } catch (err) {
       if (!isCurrentRequest()) return null
 
@@ -199,7 +221,7 @@ export function useAuth() {
       role,
       primaryService,
       locationAddress,
-      serviceType,
+      serviceTypes,
     }: {
       email: string
       password: string
@@ -207,11 +229,13 @@ export function useAuth() {
       role: AppRole
       primaryService?: string
       locationAddress?: string
-      serviceType?: ProfileServiceType
+      serviceTypes?: ProfileServiceType[]
     }) => {
       setAuthError(null)
 
       const safeRole: AppRole = role === 'admin' ? 'client' : role
+
+      const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
 
       try {
         const { data, error } = await withTimeout(
@@ -224,7 +248,8 @@ export function useAuth() {
                 role: safeRole,
                 primary_service: primaryService ?? null,
                 location_address: locationAddress ?? null,
-                service_type: serviceType ?? null,
+                service_type: normalizedServiceTypes[0] ?? null,
+                service_types: normalizedServiceTypes,
               },
             },
           }),
@@ -250,7 +275,8 @@ export function useAuth() {
           role: safeRole,
           primary_service: primaryService ?? null,
           location_address: locationAddress ?? null,
-          service_type: serviceType ?? null,
+          service_type: normalizedServiceTypes[0] ?? null,
+          service_types: normalizedServiceTypes,
         }
 
         const { error: profileError } = await withTimeout(

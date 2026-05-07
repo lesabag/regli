@@ -37,7 +37,10 @@ import {
 } from '../utils/firstInteractionPerf'
 import {
   getProfileServiceOptions,
+  mapBookingServiceTypeToProfileServiceType,
+  mapProfileServiceTypeToBookingServiceType,
   normalizeProfileServiceType,
+  normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
 import { supabase } from '../services/supabaseClient'
@@ -122,6 +125,7 @@ interface ClientDashboardProps {
     full_name: string | null
     role: AppRole
     service_type?: string | null
+    service_types?: string[] | null
   }
   onSignOut: () => Promise<void>
   showOnboardingWowToken?: number
@@ -200,10 +204,10 @@ export default function ClientDashboard({
   const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
-  const [profileServiceType, setProfileServiceType] = useState<ProfileServiceType | null>(
-    normalizeProfileServiceType(profile.service_type),
+  const [profileServiceTypes, setProfileServiceTypes] = useState<ProfileServiceType[]>(
+    normalizeProfileServiceTypes(profile.service_types ?? profile.service_type),
   )
-  const [serviceTypeSaving, setServiceTypeSaving] = useState<ProfileServiceType | null>(null)
+  const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
@@ -238,36 +242,67 @@ export default function ClientDashboard({
   const serviceTypeErrorLabel = isRtl
     ? 'לא הצלחנו לשמור את סוג השירות.'
     : 'We could not save the service type.'
-  const requestServiceType = profileServiceType ?? normalizeProfileServiceType(profile.service_type)
+  const availableProfileServiceTypes = profileServiceTypes.length > 0
+    ? profileServiceTypes
+    : normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
+  const availableBookingServices = useMemo(
+    () => availableProfileServiceTypes.map((serviceType) => mapProfileServiceTypeToBookingServiceType(serviceType)),
+    [availableProfileServiceTypes],
+  )
+  const shouldShowProfileServicePicker = availableBookingServices.length > 1
+  const resolvedBookingService = availableBookingServices.includes(selectedService)
+    ? selectedService
+    : availableBookingServices[0] ?? selectedService
+  const requestServiceType =
+    mapBookingServiceTypeToProfileServiceType(resolvedBookingService) ??
+    availableProfileServiceTypes[0] ??
+    normalizeProfileServiceType(profile.service_type)
 
   useEffect(() => {
-    setProfileServiceType(normalizeProfileServiceType(profile.service_type))
-  }, [profile.service_type])
+    setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
+  }, [profile.service_type, profile.service_types])
 
-  const handleProfileServiceTypeChange = useCallback(async (nextServiceType: ProfileServiceType) => {
-    if (serviceTypeSaving || profileServiceType === nextServiceType) return
-    const previousServiceType = profileServiceType
+  useEffect(() => {
+    if (availableBookingServices.length === 0) return
+    if (!availableBookingServices.includes(selectedService)) {
+      setSelectedService(availableBookingServices[0])
+    }
+  }, [availableBookingServices, selectedService])
 
-    setProfileServiceType(nextServiceType)
-    setServiceTypeSaving(nextServiceType)
+  const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
+    if (serviceTypeSaving) return
+    const previousServiceTypes = profileServiceTypes
+    const nextServiceTypes = profileServiceTypes.includes(nextServiceType)
+      ? profileServiceTypes.length > 1
+        ? profileServiceTypes.filter((value) => value !== nextServiceType)
+        : profileServiceTypes
+      : [...profileServiceTypes, nextServiceType]
+
+    if (nextServiceTypes === previousServiceTypes) return
+
+    setProfileServiceTypes(nextServiceTypes)
+    setServiceTypeSaving(true)
     setServiceTypeSaveError(null)
 
     const { error } = await supabase
       .from('profiles')
-      .update({ service_type: nextServiceType })
+      .update({
+        service_types: nextServiceTypes,
+        service_type: nextServiceTypes[0] ?? null,
+      })
       .eq('id', profile.id)
 
     if (error) {
       console.warn('[ClientDashboard] failed to update service_type:', error.message)
-      setProfileServiceType(previousServiceType)
+      setProfileServiceTypes(previousServiceTypes)
       setServiceTypeSaveError(serviceTypeErrorLabel)
-      setServiceTypeSaving(null)
+      setServiceTypeSaving(false)
       return
     }
 
-    setServiceTypeSaving(null)
+    setServiceTypeSaving(false)
     setServiceTypeSavedAt(Date.now())
-  }, [profile.id, profileServiceType, serviceTypeErrorLabel, serviceTypeSaving])
+  }, [profile.id, profileServiceTypes, serviceTypeErrorLabel, serviceTypeSaving])
 
   useEffect(() => {
     if (!debugFlags().interactionDebug) return
@@ -657,6 +692,21 @@ export default function ClientDashboard({
 
   const handleFindWalker = useCallback(() => {
     if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
+    if (import.meta.env.DEV) {
+      const pricingPackage =
+        flow.duration === '20min'
+          ? 'quick'
+          : flow.duration === '40min'
+            ? 'standard'
+            : 'energy'
+      console.log('[ClientDashboard] submit booking', {
+        selectedBookingService: resolvedBookingService,
+        profileServiceTypes: profile.service_types ?? null,
+        legacyProfileServiceType: profile.service_type ?? null,
+        pricingPackage,
+        requestServiceType,
+      })
+    }
     markFirstInteractionHandler('client-dashboard:find-walker')
     flow.clearAvailabilityNotice()
     flow.clearError()
@@ -671,7 +721,10 @@ export default function ClientDashboard({
     flow.location,
     flow.requestWalk,
     flow.savedCard,
+    profile.service_type,
+    profile.service_types,
     requestServiceType,
+    resolvedBookingService,
   ])
 
   const handleFirstBookingAddPayment = useCallback(() => {
@@ -941,9 +994,28 @@ export default function ClientDashboard({
   const isDispatchExhausted =
     isActivelyMatchingExhaustedJob(flow.currentJob) ||
     isActivelyMatchingExhaustedJob(flow.activeJob)
+  const hasExplicitNoProviderState = [flow.currentJob, flow.activeJob].some((job) => {
+    if (!job) return false
+    if (job.smart_dispatch_state === 'exhausted') return true
+    const lastError = typeof job.smart_dispatch_last_error === 'string'
+      ? job.smart_dispatch_last_error.toLowerCase()
+      : ''
+    return (
+      lastError.includes('all candidates exhausted') ||
+      lastError.includes('no matching providers for service_type') ||
+      lastError.includes('no matching providers for service type') ||
+      lastError.includes('no providers available')
+    )
+  })
   const shouldShowNoProvidersEmptyState =
-    flow.availabilityNotice?.title === 'No providers available right now' ||
-    flow.availabilityNotice?.title === t('booking.noProvidersAvailable')
+    hasExplicitNoProviderState ||
+    (
+      flow.screenState !== 'searching' &&
+      (
+        flow.availabilityNotice?.title === 'No providers available right now' ||
+        flow.availabilityNotice?.title === t('booking.noProvidersAvailable')
+      )
+    )
   const isIdleState =
     flow.screenState === 'idle' &&
     !hasCompletionPrompt &&
@@ -1063,6 +1135,7 @@ export default function ClientDashboard({
   const nearbyWalkers = useNearbyWalkers(
     flow.hasUserLocation ? flow.userLocation : null,
     flow.hasUserLocation && showNearbyWalkers,
+    requestServiceType,
   )
 
   const mapUserLocation: [number, number] =
@@ -1463,15 +1536,15 @@ export default function ClientDashboard({
     setIsDraggingSheet(false)
   }, [])
 
-  const serviceKeys = SERVICE_I18N_KEYS[selectedService]
-  const isSelectedServiceAvailable = checkServiceAvailable(selectedService)
+  const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
+  const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
   const bookingSubjectLabel = isBabySitterMode
     ? isRtl ? 'פרטי שירות' : 'Service details'
     : t(serviceKeys.inputLabel)
   const bookingSubjectPlaceholder = isBabySitterMode
     ? isRtl ? 'שם הילד או פרטי השירות' : 'Child name or service details'
-    : t(serviceKeys.inputPlaceholder)
+    : t(serviceKeys.inputLabel)
   const bookingSubjectSheetTitle = isBabySitterMode
     ? isRtl ? 'פרטי השירות' : 'Service details'
     : t(serviceKeys.sheetTitle)
@@ -1487,6 +1560,7 @@ export default function ClientDashboard({
     ? isRtl ? 'לדוגמה: נועה, גיל 4' : 'For example: Maya, age 4'
     : t('dogNameSheet.typePlaceholder')
   const showBookingSubjectSuggestions = !isBabySitterMode
+  const shouldShowBookingSubjectCaption = isBabySitterMode
 
   const dogSelectorBlock = (
     <div style={compactFieldStyle}>
@@ -1502,15 +1576,17 @@ export default function ClientDashboard({
           ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
         }}
       >
-        <div
+          <div
           style={{
             ...dogInputShellStyle,
             ...(isDogNameGuided ? guidedFieldShellStyle : null),
           }}
         >
-          <div style={dogThumbStyle}>{SERVICE_ICONS[selectedService]}</div>
+          <div style={dogThumbStyle}>{SERVICE_ICONS[resolvedBookingService]}</div>
           <div style={dogInputButtonContentStyle}>
-            <div style={compactFieldLabelMutedStyle}>{bookingSubjectLabel}</div>
+            {shouldShowBookingSubjectCaption && (
+              <div style={compactFieldLabelMutedStyle}>{bookingSubjectLabel}</div>
+            )}
             <div
               style={
                 flow.dogName.trim()
@@ -1836,33 +1912,32 @@ export default function ClientDashboard({
                     </div>
                     <div style={serviceTypeSelectorRowStyle}>
                       {profileServiceOptions.map((option) => {
-                        const selected = profileServiceType === option.value
-                        const saving = serviceTypeSaving === option.value
+                        const selected = profileServiceTypes.includes(option.value)
                         return (
                           <button
                             key={option.value}
                             type="button"
                             onClick={() => {
-                              void handleProfileServiceTypeChange(option.value)
+                              void handleProfileServiceTypeToggle(option.value)
                             }}
-                            disabled={serviceTypeSaving !== null}
+                            disabled={serviceTypeSaving}
                             style={{
                               ...serviceTypeButtonStyle,
                               ...(selected ? serviceTypeButtonActiveStyle : null),
-                              opacity: serviceTypeSaving !== null && !saving ? 0.72 : 1,
+                              opacity: serviceTypeSaving && !selected ? 0.72 : 1,
                             }}
                           >
                             <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
                             <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
                             <span style={serviceTypeButtonDescriptionStyle}>{option.description}</span>
-                            {saving ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
+                            {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
                           </button>
                         )
                       })}
                     </div>
                     {serviceTypeSaveError ? (
                       <div style={serviceTypeStatusErrorStyle}>{serviceTypeSaveError}</div>
-                    ) : serviceTypeSaving === null && serviceTypeSavedAt > 0 ? (
+                    ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                       <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                     ) : null}
                   </section>
@@ -2107,11 +2182,14 @@ export default function ClientDashboard({
               }}
             >
               <div style={bookingCardStyle}>
-                <ServiceSelectorPanel
-                  selected={selectedService}
-                  onSelect={setSelectedService}
-                  onMorePress={() => setMoreServicesOpen(true)}
-                />
+                {shouldShowProfileServicePicker && (
+                  <ServiceSelectorPanel
+                    selected={resolvedBookingService}
+                    onSelect={setSelectedService}
+                    onMorePress={() => setMoreServicesOpen(true)}
+                    services={availableBookingServices}
+                  />
+                )}
 
                 {!isSelectedServiceAvailable ? (
                   <div style={comingSoonOverlayStyle}>
@@ -2500,6 +2578,7 @@ export default function ClientDashboard({
       {moreServicesOpen && (
         <MoreServicesSheet
           onSelect={setSelectedService}
+          services={availableBookingServices}
           onClose={() => setMoreServicesOpen(false)}
         />
       )}

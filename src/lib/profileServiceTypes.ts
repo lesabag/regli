@@ -1,3 +1,5 @@
+import type { ServiceType } from './serviceTypes'
+
 export const PROFILE_SERVICE_TYPES = ['dog_walker', 'baby_sitter'] as const
 
 export type ProfileServiceType = (typeof PROFILE_SERVICE_TYPES)[number]
@@ -54,6 +56,21 @@ export function normalizeProfileServiceType(value: string | null | undefined): P
   return null
 }
 
+export function normalizeProfileServiceTypes(values: unknown): ProfileServiceType[] {
+  if (Array.isArray(values)) {
+    return Array.from(
+      new Set(
+        values
+          .map((value) => normalizeProfileServiceType(typeof value === 'string' ? value : null))
+          .filter((value): value is ProfileServiceType => value != null),
+      ),
+    )
+  }
+
+  const single = normalizeProfileServiceType(typeof values === 'string' ? values : null)
+  return single ? [single] : []
+}
+
 export function getProfileServiceOptions(isHebrew: boolean): ProfileServiceTypeOption[] {
   return PROFILE_SERVICE_TYPES.map((value) => ({
     value,
@@ -72,4 +89,27 @@ export function getProfileServiceTypeLabel(
   return isHebrew
     ? PROFILE_SERVICE_TYPE_COPY[normalized].he.label
     : PROFILE_SERVICE_TYPE_COPY[normalized].en.label
+}
+
+export function getProfileServiceTypesLabel(
+  values: unknown,
+  isHebrew: boolean,
+): string {
+  const normalized = normalizeProfileServiceTypes(values)
+  if (normalized.length === 0) {
+    return isHebrew ? 'לא נבחר שירות' : 'No service selected'
+  }
+  return normalized
+    .map((value) => (isHebrew ? PROFILE_SERVICE_TYPE_COPY[value].he.label : PROFILE_SERVICE_TYPE_COPY[value].en.label))
+    .join(isHebrew ? ' • ' : ' • ')
+}
+
+export function mapProfileServiceTypeToBookingServiceType(serviceType: ProfileServiceType): ServiceType {
+  return serviceType === 'baby_sitter' ? 'babysitter' : 'dog_walking'
+}
+
+export function mapBookingServiceTypeToProfileServiceType(serviceType: ServiceType): ProfileServiceType | null {
+  if (serviceType === 'babysitter') return 'baby_sitter'
+  if (serviceType === 'dog_walking') return 'dog_walker'
+  return null
 }
