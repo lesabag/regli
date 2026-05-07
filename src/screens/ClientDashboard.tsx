@@ -242,9 +242,14 @@ export default function ClientDashboard({
   const serviceTypeErrorLabel = isRtl
     ? 'לא הצלחנו לשמור את סוג השירות.'
     : 'We could not save the service type.'
+  const serviceSelectionRequiredLabel = isRtl
+    ? 'יש לבחור לפחות שירות אחד בהגדרות לפני הזמנה.'
+    : 'Please choose at least one service in Settings before booking.'
+  const openSettingsLabel = isRtl ? 'פתח הגדרות' : 'Open Settings'
   const availableProfileServiceTypes = profileServiceTypes.length > 0
     ? profileServiceTypes
     : normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
+  const hasSelectedProfileService = availableProfileServiceTypes.length > 0
   const availableBookingServices = useMemo(
     () => availableProfileServiceTypes.map((serviceType) => mapProfileServiceTypeToBookingServiceType(serviceType)),
     [availableProfileServiceTypes],
@@ -691,6 +696,12 @@ export default function ClientDashboard({
   }, [onSignOut])
 
   const handleFindWalker = useCallback(() => {
+    if (!hasSelectedProfileService) {
+      setServiceTypeSaveError(serviceSelectionRequiredLabel)
+      setBurgerOpen(true)
+      setMenuPage('settings')
+      return
+    }
     if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
     if (import.meta.env.DEV) {
       const pricingPackage =
@@ -721,10 +732,12 @@ export default function ClientDashboard({
     flow.location,
     flow.requestWalk,
     flow.savedCard,
+    hasSelectedProfileService,
     profile.service_type,
     profile.service_types,
     requestServiceType,
     resolvedBookingService,
+    serviceSelectionRequiredLabel,
   ])
 
   const handleFirstBookingAddPayment = useCallback(() => {
@@ -2349,6 +2362,7 @@ export default function ClientDashboard({
                   onClick={handleFindWalker}
                   loading={flow.loading || (flow.cardLoading && !flow.savedCard)}
                   disabled={
+                    !hasSelectedProfileService ||
                     !isSelectedServiceAvailable ||
                     !flow.dogName.trim() ||
                     !flow.location.trim() ||
@@ -2357,6 +2371,47 @@ export default function ClientDashboard({
                     (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
                   }
                 />
+                {!hasSelectedProfileService ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      padding: '10px 12px',
+                      borderRadius: 16,
+                      background: 'rgba(255,255,255,0.96)',
+                      border: '1px solid rgba(251, 191, 36, 0.28)',
+                      color: '#92400E',
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <span>{serviceSelectionRequiredLabel}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setServiceTypeSaveError(serviceSelectionRequiredLabel)
+                        setBurgerOpen(true)
+                        setMenuPage('settings')
+                      }}
+                      style={{
+                        border: 'none',
+                        background: '#FFF7ED',
+                        color: '#B45309',
+                        borderRadius: 999,
+                        padding: '8px 12px',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {openSettingsLabel}
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <button
                 type="button"

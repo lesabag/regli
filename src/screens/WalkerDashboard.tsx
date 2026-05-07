@@ -197,6 +197,11 @@ export default function WalkerDashboard({
     setMenuPage('main')
   }, [])
 
+  const serviceSelectionRequiredLabel = isHebrew
+    ? 'יש לבחור לפחות שירות אחד בהגדרות לפני מעבר לאונליין.'
+    : 'Please choose at least one service in Settings before going online.'
+  const hasSelectedProfileService = profileServiceTypes.length > 0
+
   useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
@@ -745,6 +750,12 @@ export default function WalkerDashboard({
   }, [completionClientKey, completionClientName, isHebrew, preferredCustomerIds, preferredCustomerNames])
 
   const handleOnlineToggle = useCallback(async () => {
+    if (!hasSelectedProfileService) {
+      setServiceTypeSaveError(serviceSelectionRequiredLabel)
+      setBurgerOpen(true)
+      setMenuPage('settings')
+      return
+    }
     if (!flow.isOnline) {
       const ok = await flow.toggleOnline()
       if (!ok) {
@@ -754,7 +765,7 @@ export default function WalkerDashboard({
     }
     setShowStripeGate(false)
     await flow.toggleOnline()
-  }, [flow])
+  }, [flow, hasSelectedProfileService, serviceSelectionRequiredLabel])
 
   const handleStripeSetup = useCallback(async (rememberAutoOnline = false) => {
     if (isCheckingPayout) return
@@ -825,6 +836,13 @@ export default function WalkerDashboard({
       return
     }
 
+    if (!hasSelectedProfileService) {
+      setServiceTypeSaveError(serviceSelectionRequiredLabel)
+      setBurgerOpen(true)
+      setMenuPage('settings')
+      return
+    }
+
     autoOnlineInFlightRef.current = true
     void (async () => {
       const ok = await flow.toggleOnline()
@@ -838,10 +856,16 @@ export default function WalkerDashboard({
       setShowOnboardingWow(false)
       setShowStripeGate(false)
     })()
-  }, [flow.isOnline, flow.stripeReadyForOnline, flow.toggleOnline, profile.id])
+  }, [flow.isOnline, flow.stripeReadyForOnline, flow.toggleOnline, hasSelectedProfileService, profile.id, serviceSelectionRequiredLabel])
 
   const handleOnboardingWowPrimary = useCallback(async () => {
     if (isCheckingPayout) return
+    if (!hasSelectedProfileService) {
+      setServiceTypeSaveError(serviceSelectionRequiredLabel)
+      setBurgerOpen(true)
+      setMenuPage('settings')
+      return
+    }
     if (flow.stripeReadyForOnline) {
       const ok = await flow.toggleOnline()
       if (ok) {
@@ -850,7 +874,7 @@ export default function WalkerDashboard({
       return
     }
     await handleStripeSetup(true)
-  }, [flow.stripeReadyForOnline, flow.toggleOnline, handleStripeSetup, isCheckingPayout])
+  }, [flow.stripeReadyForOnline, flow.toggleOnline, handleStripeSetup, hasSelectedProfileService, isCheckingPayout, serviceSelectionRequiredLabel])
 
   return (
     <>
