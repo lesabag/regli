@@ -68,6 +68,38 @@ function durationFromMinutes(minutes: number | null | undefined): string {
   return `${minutes} min`
 }
 
+function parseBabysitterNotes(notes: string | null | undefined): {
+  details: string | null
+  startTime: string | null
+  duration: string | null
+  budget: string | null
+} {
+  const parsed: {
+    details: string | null
+    startTime: string | null
+    duration: string | null
+    budget: string | null
+  } = {
+    details: null,
+    startTime: null,
+    duration: null,
+    budget: null,
+  }
+
+  if (!notes) return parsed
+
+  notes.split('\n').forEach((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+    if (trimmed.startsWith('Service details:')) parsed.details = trimmed.replace('Service details:', '').trim()
+    if (trimmed.startsWith('Start time:')) parsed.startTime = trimmed.replace('Start time:', '').trim()
+    if (trimmed.startsWith('Requested duration:')) parsed.duration = trimmed.replace('Requested duration:', '').trim()
+    if (trimmed.startsWith('Client budget:')) parsed.budget = trimmed.replace('Client budget:', '').trim()
+  })
+
+  return parsed
+}
+
 function formatRelativeDate(value: string | null | undefined): string {
   if (!value) return 'Recently'
   const dt = new Date(value)
@@ -282,6 +314,11 @@ export default function WalkerDashboard({
     : '—'
 
   const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
+  const isBabysitterRequest = topRequest?.service_type === 'baby_sitter'
+  const babysitterRequestNotes = useMemo(
+    () => parseBabysitterNotes(topRequest?.notes),
+    [topRequest?.notes],
+  )
   const topOffer = flow.activeOffers.find((offer) => offer.request_id === topRequest?.id) ?? null
 
   useEffect(() => {
@@ -1879,25 +1916,43 @@ export default function WalkerDashboard({
 
             <div style={incomingMainCardStyle}>
               <div style={incomingInfoCardStyle}>
-                <div style={incomingInfoLabelStyle}>{isHebrew ? 'שם הזמנה' : 'Order name'}</div>
-                <div style={dogNameStyle}>{topRequest.dog_name || t('booking.walkFallback')}</div>
+                <div style={incomingInfoLabelStyle}>
+                  {isBabysitterRequest ? (isHebrew ? 'פרטי שירות' : 'Service details') : (isHebrew ? 'שם הזמנה' : 'Order name')}
+                </div>
+                <div style={dogNameStyle}>
+                  {isBabysitterRequest
+                    ? babysitterRequestNotes.details || topRequest.dog_name || (isHebrew ? 'שירות בייביסיטר' : 'Babysitter service')
+                    : topRequest.dog_name || t('booking.walkFallback')}
+                </div>
               </div>
 
-              {topRequest.location && (
+              {(isBabysitterRequest ? babysitterRequestNotes.startTime : topRequest.location) && (
                 <div style={reqLocationStyle}>
-                  <div style={incomingInfoLabelStyle}>{isHebrew ? 'כתובת' : 'Location'}</div>
-                  <span style={ellipsisStyle}>{formatShortAddress(topRequest.address || topRequest.location)}</span>
+                  <div style={incomingInfoLabelStyle}>{isBabysitterRequest ? (isHebrew ? 'מועד התחלה' : 'Requested time') : (isHebrew ? 'כתובת' : 'Location')}</div>
+                  <span style={ellipsisStyle}>
+                    {isBabysitterRequest
+                      ? babysitterRequestNotes.startTime
+                      : formatShortAddress(topRequest.address || topRequest.location)}
+                  </span>
                 </div>
               )}
 
               <div style={incomingMetaRowStyle}>
                 <div style={incomingMetaCardStyle}>
-                  <span style={incomingMetaLabelStyle}>{t('booking.durationQuestion')}</span>
-                  <span style={incomingMetaValueStyle}>{requestDuration}</span>
+                  <span style={incomingMetaLabelStyle}>
+                    {isBabysitterRequest ? (isHebrew ? 'משך מבוקש' : 'Requested duration') : t('booking.durationQuestion')}
+                  </span>
+                  <span style={incomingMetaValueStyle}>
+                    {isBabysitterRequest ? babysitterRequestNotes.duration || requestDuration : requestDuration}
+                  </span>
                 </div>
                 <div style={incomingMetaCardStyle}>
-                  <span style={incomingMetaLabelStyle}>{t('booking.priceLabel')}</span>
-                  <span style={{ ...incomingMetaValueStyle, color: '#15803D' }}>{requestPrice}</span>
+                  <span style={incomingMetaLabelStyle}>
+                    {isBabysitterRequest ? (isHebrew ? 'תקציב לקוח' : 'Client budget') : t('booking.priceLabel')}
+                  </span>
+                  <span style={{ ...incomingMetaValueStyle, color: '#15803D' }}>
+                    {isBabysitterRequest ? babysitterRequestNotes.budget || requestPrice : requestPrice}
+                  </span>
                 </div>
               </div>
             </div>

@@ -118,6 +118,28 @@ type WheelOption = {
   label: string
 }
 
+const BABYSITTER_DURATION_MIN = 0
+const BABYSITTER_DURATION_MAX = 24
+const BABYSITTER_DURATION_STEP = 0.5
+const BABYSITTER_DEFAULT_DURATION_HOURS = 0.5
+const BABYSITTER_BUDGET_MIN_ILS = 0
+const BABYSITTER_BUDGET_MAX_ILS = 500
+const BABYSITTER_BUDGET_STEP_ILS = 5
+const BABYSITTER_DEFAULT_FIXED_BUDGET_ILS = 0
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function parseNumberOrFallback(value: string, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function formatHoursValue(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
 interface ClientDashboardProps {
   profile: {
     id: string
@@ -194,6 +216,13 @@ export default function ClientDashboard({
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
+  const [babysitterServiceDetails, setBabysitterServiceDetails] = useState('')
+  const [babysitterDurationHours, setBabysitterDurationHours] = useState(
+    String(BABYSITTER_DEFAULT_DURATION_HOURS),
+  )
+  const [babysitterBudgetFixed, setBabysitterBudgetFixed] = useState(
+    String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
+  )
   const [showFirstBookingWow, setShowFirstBookingWow] = useState(false)
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
@@ -695,17 +724,65 @@ export default function ClientDashboard({
     }
   }, [onSignOut])
 
+  const babysitterDurationValue = clampNumber(
+    parseNumberOrFallback(babysitterDurationHours, BABYSITTER_DEFAULT_DURATION_HOURS),
+    BABYSITTER_DURATION_MIN,
+    BABYSITTER_DURATION_MAX,
+  )
+  const babysitterFixedBudgetValue = clampNumber(
+    parseNumberOrFallback(babysitterBudgetFixed, BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
+    BABYSITTER_BUDGET_MIN_ILS,
+    BABYSITTER_BUDGET_MAX_ILS,
+  )
+  const handleBabysitterDurationStep = (direction: 'down' | 'up') => {
+    const delta = direction === 'up' ? BABYSITTER_DURATION_STEP : -BABYSITTER_DURATION_STEP
+    const nextValue = clampNumber(
+      Math.round((babysitterDurationValue + delta) * 2) / 2,
+      BABYSITTER_DURATION_MIN,
+      BABYSITTER_DURATION_MAX,
+    )
+    setBabysitterDurationHours(formatHoursValue(nextValue))
+  }
+  const handleBabysitterFixedBudgetChange = (nextValue: number) => {
+    setBabysitterBudgetFixed(String(clampNumber(nextValue, BABYSITTER_BUDGET_MIN_ILS, BABYSITTER_BUDGET_MAX_ILS)))
+  }
+
   const handleFindWalker = useCallback(() => {
+    const isBabysitterRequest = requestServiceType === 'baby_sitter'
     if (!hasSelectedProfileService) {
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
       setBurgerOpen(true)
       setMenuPage('settings')
       return
     }
-    if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) return
+    const babysitterDurationMinutes =
+      Number.isFinite(babysitterDurationValue) && babysitterDurationValue > 0
+        ? Math.round(babysitterDurationValue * 60)
+        : null
+    const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
+
+    if (isBabysitterRequest) {
+      if (
+        !babysitterServiceDetails.trim() ||
+        !flow.location.trim() ||
+        !flow.savedCard ||
+        !babysitterDurationMinutes ||
+        !babysitterBudgetValue
+      ) {
+        return
+      }
+    } else if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) {
+      return
+    }
     if (import.meta.env.DEV) {
       const pricingPackage =
-        flow.duration === '20min'
+        isBabySitterMode
+          ? babysitterDurationMinutes != null && babysitterDurationMinutes <= 120
+            ? 'quick'
+            : babysitterDurationMinutes != null && babysitterDurationMinutes <= 240
+              ? 'standard'
+              : 'energy'
+          : flow.duration === '20min'
           ? 'quick'
           : flow.duration === '40min'
             ? 'standard'
@@ -723,15 +800,49 @@ export default function ClientDashboard({
     flow.clearError()
     setMatchingUiState(null)
     markFirstInteractionVisual('client-dashboard:find-walker')
-    flow.requestWalk(requestServiceType ?? undefined)
+    if (isBabysitterRequest) {
+      const budgetLabel =
+        `₪${babysitterFixedBudgetValue}`
+      const notes = [
+        `Service details: ${babysitterServiceDetails.trim()}`,
+        `Start time: ${formatScheduledTime(flow.scheduledFor)}`,
+        `Requested duration: ${formatHoursValue(babysitterDurationValue)} hour${babysitterDurationValue === 1 ? '' : 's'}`,
+        `Client budget: ${budgetLabel}`,
+      ].join('\n')
+
+      const pricingDuration: DurationType =
+        (babysitterDurationMinutes ?? 0) <= 120
+          ? '20min'
+          : (babysitterDurationMinutes ?? 0) <= 240
+            ? '40min'
+            : '60min'
+
+      flow.requestWalk({
+        requestServiceType: requestServiceType ?? undefined,
+        dogNameOverride: babysitterServiceDetails.trim(),
+        notesOverride: notes,
+        durationOverride: pricingDuration,
+        durationMinutesOverride: babysitterDurationMinutes,
+        priceOverrideILS: babysitterBudgetValue,
+        bookingTimingOverride: 'scheduled',
+        scheduledForOverride: flow.scheduledFor,
+      })
+    } else {
+      flow.requestWalk(requestServiceType ?? undefined)
+    }
     void hapticMedium()
   }, [
+    babysitterBudgetFixed,
+    babysitterServiceDetails,
+    babysitterDurationValue,
+    babysitterFixedBudgetValue,
     flow,
     flow.dogName,
     flow.duration,
     flow.location,
     flow.requestWalk,
     flow.savedCard,
+    flow.scheduledFor,
     hasSelectedProfileService,
     profile.service_type,
     profile.service_types,
@@ -773,20 +884,25 @@ export default function ClientDashboard({
   )
 
   const openDogNameSheet = useCallback(() => {
+    const isBabysitterRequest = requestServiceType === 'baby_sitter'
     setShowDogNameSheet(true)
     requestAnimationFrame(() => {
-      setDogNameDraft(flow.dogName || '')
+      setDogNameDraft(isBabysitterRequest ? babysitterServiceDetails : (flow.dogName || ''))
     })
-  }, [flow.dogName])
+  }, [babysitterServiceDetails, flow.dogName, requestServiceType])
 
   const closeDogNameSheet = useCallback(() => {
     setShowDogNameSheet(false)
   }, [])
 
   const submitDogNameSheet = useCallback(() => {
-    commitDogName(dogNameDraft)
+    if (requestServiceType === 'baby_sitter') {
+      setBabysitterServiceDetails(normalizeDogName(dogNameDraft))
+    } else {
+      commitDogName(dogNameDraft)
+    }
     setShowDogNameSheet(false)
-  }, [commitDogName, dogNameDraft])
+  }, [commitDogName, dogNameDraft, requestServiceType])
 
   const handleFirstBookingStart = useCallback(() => {
     setShowFirstBookingWow(false)
@@ -1054,11 +1170,12 @@ export default function ClientDashboard({
     !!flow.completionJob ||
     !!flow.tipJob
   const shouldUseSteplessGuidance = !hasPreviousBookingActivity && isIdleState && !showFirstBookingWow
+  const isBabysitterGuidanceMode = requestServiceType === 'baby_sitter'
   const nextGuidedBookingField: 'dogName' | 'duration' | 'payment' | null = !shouldUseSteplessGuidance
     ? null
-    : !flow.dogName.trim()
+    : !(isBabysitterGuidanceMode ? babysitterServiceDetails.trim() : flow.dogName.trim())
       ? 'dogName'
-      : !flow.duration
+      : !(isBabysitterGuidanceMode ? babysitterDurationHours.trim() : flow.duration)
         ? 'duration'
         : !flow.savedCard
           ? 'payment'
@@ -1556,7 +1673,7 @@ export default function ClientDashboard({
     ? isRtl ? 'פרטי שירות' : 'Service details'
     : t(serviceKeys.inputLabel)
   const bookingSubjectPlaceholder = isBabySitterMode
-    ? isRtl ? 'שם הילד או פרטי השירות' : 'Child name or service details'
+    ? isRtl ? 'שם' : 'name'
     : t(serviceKeys.inputLabel)
   const bookingSubjectSheetTitle = isBabySitterMode
     ? isRtl ? 'פרטי השירות' : 'Service details'
@@ -1573,10 +1690,13 @@ export default function ClientDashboard({
     ? isRtl ? 'לדוגמה: נועה, גיל 4' : 'For example: Maya, age 4'
     : t('dogNameSheet.typePlaceholder')
   const showBookingSubjectSuggestions = !isBabySitterMode
-  const shouldShowBookingSubjectCaption = isBabySitterMode
+  const shouldShowBookingSubjectCaption = false
+  const babysitterBudgetSummary = useMemo(() => {
+    return `₪${babysitterFixedBudgetValue}`
+  }, [babysitterFixedBudgetValue])
 
   const dogSelectorBlock = (
-    <div style={compactFieldStyle}>
+    <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterServiceFieldWrapStyle : null) }}>
       <button
         type="button"
         onClick={() => {
@@ -1588,26 +1708,29 @@ export default function ClientDashboard({
           ...(isDogNameGuided ? guidedFieldButtonStyle : null),
           ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
         }}
-      >
+        >
           <div
           style={{
             ...dogInputShellStyle,
+            ...(isBabySitterMode ? dogInputShellCompactStyle : null),
             ...(isDogNameGuided ? guidedFieldShellStyle : null),
           }}
         >
-          <div style={dogThumbStyle}>{SERVICE_ICONS[resolvedBookingService]}</div>
+          <div style={{ ...dogThumbStyle, ...(isBabySitterMode ? dogThumbCompactStyle : null) }}>
+            {SERVICE_ICONS[resolvedBookingService]}
+          </div>
           <div style={dogInputButtonContentStyle}>
             {shouldShowBookingSubjectCaption && (
               <div style={compactFieldLabelMutedStyle}>{bookingSubjectLabel}</div>
             )}
             <div
               style={
-                flow.dogName.trim()
+                (isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim())
                   ? dogInputValueTextStyle
                   : dogInputPlaceholderTextStyle
               }
             >
-              {flow.dogName.trim() || bookingSubjectPlaceholder}
+              {(isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim()) || bookingSubjectPlaceholder}
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -1620,10 +1743,15 @@ export default function ClientDashboard({
   )
 
   const pickupSelectorBlock = (
-    <div style={compactFieldStyle}>
-      <div style={compactFieldLabelStyle}>{t('booking.pickupFrom')}</div>
+    <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterAddressFieldWrapStyle : null) }}>
+      <div style={isBabySitterMode ? babysitterAddressLabelStyle : compactFieldLabelStyle}>
+        {isBabySitterMode ? (isRtl ? 'כתובת' : 'Address') : t('booking.pickupFrom')}
+      </div>
       <div
-        style={pickupSelectorShellStyle}
+        style={{
+          ...pickupSelectorShellStyle,
+          ...(isBabySitterMode ? pickupSelectorShellCompactStyle : null),
+        }}
         onClick={openAddressPicker}
         data-control="address-row"
       >
@@ -1633,8 +1761,14 @@ export default function ClientDashboard({
         <span
           style={
             flow.location.trim()
-              ? pickupSelectorValueStyle
-              : pickupSelectorPlaceholderStyle
+              ? {
+                  ...pickupSelectorValueStyle,
+                  ...(isBabySitterMode ? pickupSelectorValueCompactStyle : null),
+                }
+              : {
+                  ...pickupSelectorPlaceholderStyle,
+                  ...(isBabySitterMode ? pickupSelectorValueCompactStyle : null),
+                }
           }
         >
           {flow.locationLoading
@@ -1674,14 +1808,71 @@ export default function ClientDashboard({
     </div>
   )
 
+  const babysitterPlannerBlock = (
+    <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterPlannerFieldWrapStyle : null) }}>
+      <div style={babysitterPlannerCardStyle}>
+        <div style={babysitterPlannerTopRowStyle}>
+          <div style={babysitterFieldGroupStyle}>
+            <label style={babysitterFieldLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+            <div style={babysitterDurationStepperStyle}>
+              <div style={babysitterDurationValueStyle}>{formatHoursValue(babysitterDurationValue)}</div>
+              <div style={babysitterDurationStepperButtonsStyle}>
+                <button
+                  type="button"
+                  onClick={() => handleBabysitterDurationStep('up')}
+                  style={babysitterStepButtonStyle}
+                  aria-label={isRtl ? 'הגדל משך' : 'Increase duration'}
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBabysitterDurationStep('down')}
+                  style={babysitterStepButtonStyle}
+                  aria-label={isRtl ? 'הקטן משך' : 'Decrease duration'}
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+          <div style={babysitterBudgetGroupStyle}>
+            <div style={babysitterBudgetSummaryRowStyle}>
+              <span style={babysitterBudgetValueDisplayStyle}>₪{babysitterFixedBudgetValue}</span>
+            </div>
+            <div style={babysitterBudgetSliderWrapStyle}>
+              <input
+                type="range"
+                min={BABYSITTER_BUDGET_MIN_ILS}
+                max={BABYSITTER_BUDGET_MAX_ILS}
+                step={BABYSITTER_BUDGET_STEP_ILS}
+                value={babysitterFixedBudgetValue}
+                onChange={(e) => handleBabysitterFixedBudgetChange(Number(e.target.value))}
+                style={babysitterBudgetSliderStyle}
+                aria-label={isRtl ? 'תקציב' : 'Budget'}
+              />
+              <div style={babysitterBudgetScaleRowStyle}>
+                <span style={babysitterBudgetScaleLabelStyle}>₪0</span>
+                <span style={babysitterBudgetScaleLabelStyle}>₪500</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
   const compactDisplayPrice = useMemo(() => {
+    if (isBabySitterMode) {
+      return babysitterBudgetSummary ? { price: babysitterBudgetSummary, original: null } : null
+    }
     if (flow.adjustedPriceILS <= 0) return null
     const hasSurge = flow.surgeMultiplier > 1
     const price = hasSurge
       ? Math.round(flow.adjustedPriceILS * flow.surgeMultiplier)
       : flow.adjustedPriceILS
     return { price, original: hasSurge ? flow.adjustedPriceILS : null }
-  }, [flow.adjustedPriceILS, flow.surgeMultiplier])
+  }, [babysitterBudgetSummary, flow.adjustedPriceILS, flow.surgeMultiplier, isBabySitterMode])
 
   const compactSavedCardSummary =
     flow.savedCard && !flow.setupClientSecret ? (
@@ -1702,10 +1893,12 @@ export default function ClientDashboard({
           </span>
         </div>
         <div style={compactPriceEndStyle}>
-          {compactDisplayPrice && (
+              {compactDisplayPrice && (
             <>
-              <span style={compactPriceValueStyle}>₪{compactDisplayPrice.price}</span>
-              {compactDisplayPrice.original != null && (
+              <span style={compactPriceValueStyle}>
+                {typeof compactDisplayPrice.price === 'number' ? `₪${compactDisplayPrice.price}` : compactDisplayPrice.price}
+              </span>
+              {typeof compactDisplayPrice.original === 'number' && (
                 <span style={compactPriceOriginalStyle}>₪{compactDisplayPrice.original}</span>
               )}
             </>
@@ -2237,7 +2430,7 @@ export default function ClientDashboard({
 
                   {pickupSelectorBlock}
 
-                  {isSelectedServiceAvailable && durationPickerBlock}
+                  {isSelectedServiceAvailable && (isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock)}
 
                   {!isSheetCollapsed && isSelectedServiceAvailable && (
                       <div style={compactFieldStyle}>
@@ -2247,6 +2440,7 @@ export default function ClientDashboard({
                         <div
                           style={{
                             ...compactPaymentWrapStyle,
+                            ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : null),
                             ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
                             ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
                           }}
@@ -2269,7 +2463,7 @@ export default function ClientDashboard({
                   )}
                 </div>
 
-                {!isSheetCollapsed && (
+                {!isSheetCollapsed && !isBabySitterMode && (
                   <div style={feeLabelStyle}>
                     {flow.bookingTiming === 'scheduled'
                       ? t('booking.priceLockedNow')
@@ -2336,7 +2530,7 @@ export default function ClientDashboard({
         </div>
 
         {shouldRenderIdleSheet && !isSheetCollapsed && (
-          <div style={stickyCtaWrapStyle}>
+          <div style={{ ...stickyCtaWrapStyle, ...(isBabySitterMode ? stickyCtaWrapBabysitterStyle : null) }}>
             {shouldShowGuidanceCtaHelper && (
               <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
             )}
@@ -2364,11 +2558,15 @@ export default function ClientDashboard({
                   disabled={
                     !hasSelectedProfileService ||
                     !isSelectedServiceAvailable ||
-                    !flow.dogName.trim() ||
+                    !(isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim()) ||
                     !flow.location.trim() ||
-                    !flow.duration ||
+                    (isBabySitterMode
+                      ? babysitterDurationValue <= 0 || babysitterFixedBudgetValue <= 0
+                      : !flow.duration) ||
                     !flow.savedCard ||
-                    (flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
+                    (isBabySitterMode
+                      ? !flow.scheduledFor
+                      : flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
                   }
                 />
                 {!hasSelectedProfileService ? (
@@ -2420,7 +2618,7 @@ export default function ClientDashboard({
                   markFirstInteractionHandler('client-dashboard:calendar-button')
                   if (hasFutureOrders) {
                     openFutureOrdersMenu()
-                  } else if (!flow.duration) {
+                  } else if (!isBabySitterMode && !flow.duration) {
                     setGuidedBookingField('duration')
                     markFirstInteractionVisual('client-dashboard:calendar-button')
                     void hapticLight()
@@ -3737,6 +3935,18 @@ const compactFieldStyle: React.CSSProperties = {
   gap: 2,
 }
 
+const babysitterServiceFieldWrapStyle: React.CSSProperties = {
+  marginBottom: 2,
+}
+
+const babysitterAddressFieldWrapStyle: React.CSSProperties = {
+  marginBottom: 8,
+}
+
+const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
+  marginBottom: 4,
+}
+
 const guidedFieldButtonStyle: React.CSSProperties = {
   borderRadius: 18,
   transformOrigin: 'center top',
@@ -3793,6 +4003,11 @@ const pickupSelectorShellStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
+const pickupSelectorShellCompactStyle: React.CSSProperties = {
+  minHeight: 44,
+  padding: '0 11px',
+}
+
 const pickupSelectorInlineIconStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -3812,6 +4027,10 @@ const pickupSelectorValueStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+}
+
+const pickupSelectorValueCompactStyle: React.CSSProperties = {
+  fontSize: 14,
 }
 
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
@@ -3838,6 +4057,10 @@ const dogInputShellStyle: React.CSSProperties = {
   overflow: 'hidden',
 }
 
+const dogInputShellCompactStyle: React.CSSProperties = {
+  height: 43,
+}
+
 const dogThumbStyle: React.CSSProperties = {
   width: 38,
   height: 38,
@@ -3850,6 +4073,12 @@ const dogThumbStyle: React.CSSProperties = {
   justifyContent: 'center',
   fontSize: 18,
   flexShrink: 0,
+}
+
+const dogThumbCompactStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  fontSize: 16,
 }
 
 const dogInputButtonStyle: React.CSSProperties = {
@@ -4125,6 +4354,150 @@ const compactPriceOriginalStyle: React.CSSProperties = {
   fontWeight: 600,
   color: '#94A3B8',
   textDecoration: 'line-through',
+}
+
+const babysitterPlannerCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  padding: '7px 9px 5px',
+  borderRadius: 16,
+  border: '1px solid rgba(226, 232, 240, 0.9)',
+  background: 'rgba(255,255,255,0.36)',
+}
+
+const babysitterPlannerTopRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(104px, 116px) minmax(0, 1fr)',
+  columnGap: 18,
+  rowGap: 0,
+  alignItems: 'start',
+}
+
+const babysitterFieldGroupStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+  alignContent: 'start',
+}
+
+const babysitterBudgetGroupStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+  alignContent: 'start',
+}
+
+const babysitterFieldLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#475569',
+  lineHeight: 1.2,
+  minHeight: 14,
+  display: 'inline-flex',
+  alignItems: 'center',
+}
+
+const babysitterDurationStepperStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 24px',
+  alignItems: 'stretch',
+  borderRadius: 12,
+  border: '1px solid rgba(203, 213, 225, 0.95)',
+  background: '#FFF',
+  minHeight: 34,
+  overflow: 'hidden',
+}
+
+const babysitterDurationValueStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0 10px',
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#0F172A',
+}
+
+const babysitterDurationStepperButtonsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateRows: '1fr 1fr',
+  borderInlineStart: '1px solid rgba(226, 232, 240, 0.95)',
+}
+
+const babysitterStepButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: '#F8FAFC',
+  color: '#475569',
+  padding: 0,
+  margin: 0,
+  fontSize: 9,
+  fontWeight: 800,
+  cursor: 'pointer',
+  lineHeight: 1,
+}
+
+const babysitterBudgetSliderWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  paddingTop: 5,
+  paddingBottom: 4,
+}
+
+const babysitterBudgetSummaryRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  justifyContent: 'center',
+  minHeight: 18,
+  minWidth: 0,
+  flexWrap: 'nowrap',
+}
+
+const babysitterAddressLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
+  lineHeight: 1.2,
+}
+
+const babysitterBudgetValueDisplayStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#0F172A',
+  fontSize: 15,
+  fontWeight: 900,
+  whiteSpace: 'nowrap',
+}
+
+const babysitterBudgetSliderStyle: React.CSSProperties = {
+  width: '100%',
+  margin: 0,
+  accentColor: '#0F172A',
+  height: 22,
+}
+
+const babysitterBudgetScaleRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  marginTop: -1,
+}
+
+const babysitterBudgetScaleLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  color: '#94A3B8',
+  lineHeight: 1,
+}
+
+const compactPaymentWrapBabysitterStyle: React.CSSProperties = {
+  marginTop: 8,
+}
+
+const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
+  paddingTop: 10,
 }
 
 const paymentGuidedFieldShellStyle: React.CSSProperties = {

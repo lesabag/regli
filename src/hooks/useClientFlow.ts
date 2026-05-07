@@ -177,6 +177,17 @@ type TipRow = {
   created_at: string
 }
 
+type RequestWalkOptions = {
+  requestServiceType?: string
+  dogNameOverride?: string
+  notesOverride?: string | null
+  durationOverride?: DurationType | null
+  durationMinutesOverride?: number | null
+  priceOverrideILS?: number | null
+  bookingTimingOverride?: 'asap' | 'scheduled'
+  scheduledForOverride?: string | null
+}
+
 type DispatchWalkerProfile = {
   id: string
   last_lat: number | null
@@ -2578,8 +2589,25 @@ export function useClientFlow(profileId: string, _profileName: string) {
     resetBookingComposerAfterCompletion()
   }, [resetBookingComposerAfterCompletion])
 
-  const requestWalk = useCallback(async (requestServiceType?: string) => {
-    if (!dogName.trim()) {
+  const requestWalk = useCallback(async (requestServiceTypeOrOptions?: string | RequestWalkOptions) => {
+    const requestOptions =
+      typeof requestServiceTypeOrOptions === 'string' || requestServiceTypeOrOptions == null
+        ? { requestServiceType: requestServiceTypeOrOptions }
+        : requestServiceTypeOrOptions
+
+    const effectiveDogName = (requestOptions.dogNameOverride ?? dogName).trim()
+    const effectiveDuration = requestOptions.durationOverride ?? duration
+    const effectiveBookingTiming = requestOptions.bookingTimingOverride ?? bookingTiming
+    const effectiveScheduledFor =
+      requestOptions.scheduledForOverride === undefined ? scheduledFor : requestOptions.scheduledForOverride
+    const effectiveNotes = requestOptions.notesOverride ?? null
+    const effectiveDurationMinutes =
+      requestOptions.durationMinutesOverride ?? (effectiveDuration ? durationToMinutes(effectiveDuration) : null)
+    const effectivePriceILS =
+      requestOptions.priceOverrideILS ?? adjustedPriceILS
+    const effectiveRequestServiceType = requestOptions.requestServiceType
+
+    if (!effectiveDogName) {
       setError('Enter name')
       return
     }
@@ -2587,7 +2615,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setError('Enter location')
       return
     }
-    if (!duration) {
+    if (!effectiveDuration) {
       setError('Choose duration')
       return
     }
@@ -2605,14 +2633,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const bookingLocation = formatShortAddress(preferredLiveLocation) || preferredLiveLocation
     let createdJobId: string | null = null
 
-    const normalizedRequestServiceType = normalizeProviderServiceType(requestServiceType)
+    const normalizedRequestServiceType = normalizeProviderServiceType(effectiveRequestServiceType)
 
     if (!normalizedRequestServiceType) {
       console.warn('[useClientFlow] missing profile service_type for request creation', {
         profileId,
-        requestServiceType: requestServiceType ?? null,
-        duration,
-        bookingTiming,
+        requestServiceType: effectiveRequestServiceType ?? null,
+        duration: effectiveDuration,
+        bookingTiming: effectiveBookingTiming,
       })
       setError('Missing service type. Please update your profile settings and try again.')
       return
@@ -2629,9 +2657,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       console.log('[useClientFlow] create-payment-intent request', {
-        profileServiceType: requestServiceType ?? null,
-        pricingServiceType: durationToPricingPackage(duration),
+        profileServiceType: effectiveRequestServiceType ?? null,
+        pricingServiceType: durationToPricingPackage(effectiveDuration),
         requestServiceType: normalizedRequestServiceType,
+        notesOverride: effectiveNotes,
       })
 
       const response = await invokeEdgeFunction<{
@@ -2641,15 +2670,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
         paymentStatus?: string
       }>('create-payment-intent', {
         body: {
-          bookingTiming,
-          timing: bookingTiming,
-          serviceType: durationToPricingPackage(duration),
+          bookingTiming: effectiveBookingTiming,
+          timing: effectiveBookingTiming,
+          serviceType: durationToPricingPackage(effectiveDuration),
           requestServiceType: normalizedRequestServiceType,
-          dogName,
+          dogName: effectiveDogName,
           location: bookingLocation,
+          notes: effectiveNotes,
           customerId: stripeCustomerId,
           paymentMethodId: savedCard.id,
-          scheduledFor: bookingTiming === 'scheduled' ? scheduledFor : null,
+          scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
         },
       })
 
@@ -2662,7 +2692,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       if (!response.data?.jobId) {
         console.error('[useClientFlow] create-payment-intent missing jobId', {
           responseData: response.data ?? null,
-          bookingTiming,
+          bookingTiming: effectiveBookingTiming,
           requestServiceType: normalizedRequestServiceType,
         })
         throw new Error('Failed to create walk request')
@@ -2679,24 +2709,27 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const jobId = response.data.jobId
       console.log('[useClientFlow] resolved request/job id', {
         jobId,
-        bookingTiming,
+        bookingTiming: effectiveBookingTiming,
         requestServiceType: normalizedRequestServiceType,
       })
       createdJobId = jobId
-      saveReusableServiceName(dogName)
-      const durationMinutes = durationToMinutes(duration)
-      const shouldSearchNow = bookingTiming === 'asap'
+      saveReusableServiceName(effectiveDogName)
+      const shouldSearchNow = effectiveBookingTiming === 'asap'
 
       const statusPatch: Record<string, unknown> = {
         status: 'open',
         dispatch_state: 'queued',
         smart_dispatch_state: 'idle',
         smart_dispatch_last_error: null,
-        duration_minutes: durationMinutes,
-        price: adjustedPriceILS,
+        duration_minutes: effectiveDurationMinutes,
+        price: effectivePriceILS,
+        notes: effectiveNotes,
       }
-      if (bookingTiming !== 'scheduled') {
+      if (effectiveBookingTiming !== 'scheduled') {
         statusPatch.booking_timing = 'asap'
+      } else {
+        statusPatch.booking_timing = 'scheduled'
+        statusPatch.scheduled_for = effectiveScheduledFor
       }
 
       const { error: normalizeError } = await supabase
@@ -2893,8 +2926,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         console.error('[useClientFlow] requestWalk failed', {
           profileId,
           requestServiceType: normalizedRequestServiceType,
-          duration,
-          bookingTiming,
+          duration: effectiveDuration,
+          bookingTiming: effectiveBookingTiming,
           message,
           error: err,
         })
