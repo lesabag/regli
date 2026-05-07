@@ -100,6 +100,11 @@ function bookingSubjectStorageKey(profileId: string, requestServiceType: string 
   return `regli_client_recent_subjects_${profileId}_${normalizedServiceType}`
 }
 
+function bookingSubjectSelectedStorageKey(profileId: string, requestServiceType: string | null): string {
+  const normalizedServiceType = (requestServiceType ?? 'default').trim().toLowerCase() || 'default'
+  return `regli_client_selected_subject_${profileId}_${normalizedServiceType}`
+}
+
 function normalizeDogName(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
 }
@@ -641,6 +646,22 @@ export default function ClientDashboard({
   }, [profile.id, requestServiceType])
 
   useEffect(() => {
+    if (requestServiceType !== 'baby_sitter') return
+    if (babysitterServiceDetails.trim()) return
+    try {
+      const raw = window.localStorage.getItem(
+        bookingSubjectSelectedStorageKey(profile.id, requestServiceType),
+      )
+      const nextValue = normalizeDogName(String(raw ?? ''))
+      if (nextValue) {
+        setBabysitterServiceDetails(nextValue)
+      }
+    } catch {
+      // noop
+    }
+  }, [babysitterServiceDetails, profile.id, requestServiceType])
+
+  useEffect(() => {
     if (!showDogNameSheet) return
   }, [flow.dogName, showDogNameSheet])
 
@@ -922,15 +943,49 @@ export default function ClientDashboard({
     [profile.id, requestServiceType],
   )
 
+  const persistSelectedBookingSubject = useCallback(
+    (value: string) => {
+      const nextValue = normalizeDogName(value)
+      try {
+        if (nextValue) {
+          window.localStorage.setItem(
+            bookingSubjectSelectedStorageKey(profile.id, requestServiceType),
+            nextValue,
+          )
+        } else {
+          window.localStorage.removeItem(
+            bookingSubjectSelectedStorageKey(profile.id, requestServiceType),
+          )
+        }
+      } catch {
+        // noop
+      }
+    },
+    [profile.id, requestServiceType],
+  )
+
   const commitDogName = useCallback(
     (rawValue: string) => {
       const nextName = normalizeDogName(rawValue)
       flow.setDogName(nextName)
+      persistSelectedBookingSubject(nextName)
       if (!nextName) return
       const nextNames = [nextName, ...recentDogNames.filter((name) => name !== nextName)].slice(0, 8)
       persistRecentDogNames(nextNames)
     },
-    [flow, persistRecentDogNames, recentDogNames],
+    [flow, persistRecentDogNames, persistSelectedBookingSubject, recentDogNames],
+  )
+
+  const commitBabysitterSubject = useCallback(
+    (rawValue: string) => {
+      const nextName = normalizeDogName(rawValue)
+      setBabysitterServiceDetails(nextName)
+      persistSelectedBookingSubject(nextName)
+      if (!nextName) return
+      const nextNames = [nextName, ...recentDogNames.filter((name) => name !== nextName)].slice(0, 8)
+      persistRecentDogNames(nextNames)
+    },
+    [persistRecentDogNames, persistSelectedBookingSubject, recentDogNames],
   )
 
   const openDogNameSheet = useCallback(() => {
@@ -947,12 +1002,12 @@ export default function ClientDashboard({
 
   const submitDogNameSheet = useCallback(() => {
     if (requestServiceType === 'baby_sitter') {
-      setBabysitterServiceDetails(normalizeDogName(dogNameDraft))
+      commitBabysitterSubject(dogNameDraft)
     } else {
       commitDogName(dogNameDraft)
     }
     setShowDogNameSheet(false)
-  }, [commitDogName, dogNameDraft, requestServiceType])
+  }, [commitBabysitterSubject, commitDogName, dogNameDraft, requestServiceType])
 
   const handleFirstBookingStart = useCallback(() => {
     setShowFirstBookingWow(false)
@@ -1650,26 +1705,26 @@ export default function ClientDashboard({
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
   const bookingSubjectLabel = isBabySitterMode
-    ? isRtl ? 'פרטי שירות' : 'Service details'
+    ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.inputLabel)
   const bookingSubjectPlaceholder = isBabySitterMode
-    ? isRtl ? 'שם' : 'name'
+    ? isRtl ? 'הוסף שם מקבל שירות' : 'Add recipient name'
     : t(serviceKeys.inputLabel)
   const bookingSubjectSheetTitle = isBabySitterMode
-    ? isRtl ? 'פרטי השירות' : 'Service details'
+    ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.sheetTitle)
   const bookingSubjectSheetSubtitle = isBabySitterMode
     ? isRtl
-      ? 'הוסף שם ילד, גיל או כל פרט חשוב להזמנה.'
-      : 'Add a child name, age, or any important detail for the booking.'
+      ? 'בחר שם אחרון או הקלד שם חדש.'
+      : 'Pick a recent name or type a new one.'
     : t(serviceKeys.sheetSubtitle)
   const bookingSubjectInputLabel = isBabySitterMode
-    ? isRtl ? 'הוסף פרטים' : 'Add details'
+    ? 'ADD NEW'
     : t('dogNameSheet.addNew')
   const bookingSubjectInputPlaceholder = isBabySitterMode
     ? isRtl ? 'לדוגמה: נועה, גיל 4' : 'For example: Maya, age 4'
     : t('dogNameSheet.typePlaceholder')
-  const showBookingSubjectSuggestions = !isBabySitterMode
+  const showBookingSubjectSuggestions = true
   const shouldShowBookingSubjectCaption = false
   const babysitterBudgetSummary = useMemo(() => {
     return `₪${babysitterFixedBudgetValue}`
@@ -2871,7 +2926,11 @@ export default function ClientDashboard({
                       type="button"
                       onClick={() => {
                         setDogNameDraft(name)
-                        commitDogName(name)
+                        if (isBabySitterMode) {
+                          commitBabysitterSubject(name)
+                        } else {
+                          commitDogName(name)
+                        }
                         setShowDogNameSheet(false)
                       }}
                       style={dogNameChipStyle}
@@ -2885,6 +2944,15 @@ export default function ClientDashboard({
                         e.stopPropagation()
                         const next = recentDogNames.filter((n) => n !== name)
                         persistRecentDogNames(next)
+                        const currentValue = isBabySitterMode ? babysitterServiceDetails : flow.dogName
+                        if (normalizeDogName(currentValue) === name) {
+                          if (isBabySitterMode) {
+                            setBabysitterServiceDetails('')
+                          } else {
+                            flow.setDogName('')
+                          }
+                          persistSelectedBookingSubject('')
+                        }
                       }}
                       style={dogNameChipDeleteStyle}
                     >
