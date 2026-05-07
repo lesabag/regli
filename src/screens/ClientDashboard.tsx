@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import MapView from '../components/MapView'
-import DurationPicker from '../components/DurationPicker'
 import ActionButton from '../components/ActionButton'
 import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
@@ -15,7 +14,7 @@ import { useClientFlow } from '../hooks/useClientFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
 import { usePushNotifications } from '../hooks/usePushNotifications'
-import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
+import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
   SERVICE_ICONS,
@@ -29,7 +28,6 @@ import { getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
 import { CreditCard } from 'lucide-react'
-import { flushSync } from 'react-dom'
 import AddressPickerSheet from '../components/AddressPickerSheet'
 import {
   markFirstInteractionHandler,
@@ -126,6 +124,14 @@ const BABYSITTER_BUDGET_MIN_ILS = 0
 const BABYSITTER_BUDGET_MAX_ILS = 500
 const BABYSITTER_BUDGET_STEP_ILS = 5
 const BABYSITTER_DEFAULT_FIXED_BUDGET_ILS = 0
+const DOG_WALKER_DURATION_MIN = 0
+const DOG_WALKER_DURATION_MAX = 24
+const DOG_WALKER_DURATION_STEP = 0.5
+const DOG_WALKER_DEFAULT_DURATION_HOURS = 0.5
+const DOG_WALKER_BUDGET_MIN_ILS = 0
+const DOG_WALKER_BUDGET_MAX_ILS = 500
+const DOG_WALKER_BUDGET_STEP_ILS = 5
+const DOG_WALKER_DEFAULT_BUDGET_ILS = 0
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -138,6 +144,12 @@ function parseNumberOrFallback(value: string, fallback: number): number {
 
 function formatHoursValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
+function durationTypeFromMinutes(minutes: number): DurationType {
+  if (minutes <= 120) return '20min'
+  if (minutes <= 240) return '40min'
+  return '60min'
 }
 
 interface ClientDashboardProps {
@@ -222,6 +234,12 @@ export default function ClientDashboard({
   )
   const [babysitterBudgetFixed, setBabysitterBudgetFixed] = useState(
     String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
+  )
+  const [dogWalkerDurationHours, setDogWalkerDurationHours] = useState(
+    String(DOG_WALKER_DEFAULT_DURATION_HOURS),
+  )
+  const [dogWalkerBudgetFixed, setDogWalkerBudgetFixed] = useState(
+    String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
   const [showFirstBookingWow, setShowFirstBookingWow] = useState(false)
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
@@ -734,6 +752,20 @@ export default function ClientDashboard({
     BABYSITTER_BUDGET_MIN_ILS,
     BABYSITTER_BUDGET_MAX_ILS,
   )
+  const dogWalkerDurationValue = clampNumber(
+    parseNumberOrFallback(dogWalkerDurationHours, DOG_WALKER_DEFAULT_DURATION_HOURS),
+    DOG_WALKER_DURATION_MIN,
+    DOG_WALKER_DURATION_MAX,
+  )
+  const dogWalkerBudgetValue = clampNumber(
+    parseNumberOrFallback(dogWalkerBudgetFixed, DOG_WALKER_DEFAULT_BUDGET_ILS),
+    DOG_WALKER_BUDGET_MIN_ILS,
+    DOG_WALKER_BUDGET_MAX_ILS,
+  )
+  const dogWalkerDurationMinutes =
+    Number.isFinite(dogWalkerDurationValue) && dogWalkerDurationValue > 0
+      ? Math.round(dogWalkerDurationValue * 60)
+      : null
   const handleBabysitterDurationStep = (direction: 'down' | 'up') => {
     const delta = direction === 'up' ? BABYSITTER_DURATION_STEP : -BABYSITTER_DURATION_STEP
     const nextValue = clampNumber(
@@ -749,6 +781,7 @@ export default function ClientDashboard({
 
   const handleFindWalker = useCallback(() => {
     const isBabysitterRequest = requestServiceType === 'baby_sitter'
+    const isDogWalkerRequest = requestServiceType === 'dog_walker'
     if (!hasSelectedProfileService) {
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
       setBurgerOpen(true)
@@ -760,6 +793,7 @@ export default function ClientDashboard({
         ? Math.round(babysitterDurationValue * 60)
         : null
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
+    const dogWalkerBudgetRequestValue = dogWalkerBudgetValue > 0 ? dogWalkerBudgetValue : null
 
     if (isBabysitterRequest) {
       if (
@@ -771,22 +805,31 @@ export default function ClientDashboard({
       ) {
         return
       }
+    } else if (isDogWalkerRequest) {
+      if (
+        !flow.dogName.trim() ||
+        !flow.location.trim() ||
+        !flow.savedCard ||
+        !dogWalkerDurationMinutes ||
+        !dogWalkerBudgetRequestValue
+      ) {
+        return
+      }
     } else if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) {
       return
     }
     if (import.meta.env.DEV) {
-      const pricingPackage =
-        isBabySitterMode
-          ? babysitterDurationMinutes != null && babysitterDurationMinutes <= 120
-            ? 'quick'
-            : babysitterDurationMinutes != null && babysitterDurationMinutes <= 240
-              ? 'standard'
-              : 'energy'
-          : flow.duration === '20min'
-          ? 'quick'
-          : flow.duration === '40min'
-            ? 'standard'
-            : 'energy'
+      const pricingPackage = durationTypeFromMinutes(
+        isBabysitterRequest
+          ? (babysitterDurationMinutes ?? 0)
+          : isDogWalkerRequest
+            ? (dogWalkerDurationMinutes ?? 0)
+            : flow.duration === '20min'
+              ? 20
+              : flow.duration === '40min'
+                ? 40
+                : 60,
+      )
       console.log('[ClientDashboard] submit booking', {
         selectedBookingService: resolvedBookingService,
         profileServiceTypes: profile.service_types ?? null,
@@ -810,12 +853,7 @@ export default function ClientDashboard({
         `Client budget: ${budgetLabel}`,
       ].join('\n')
 
-      const pricingDuration: DurationType =
-        (babysitterDurationMinutes ?? 0) <= 120
-          ? '20min'
-          : (babysitterDurationMinutes ?? 0) <= 240
-            ? '40min'
-            : '60min'
+      const pricingDuration = durationTypeFromMinutes(babysitterDurationMinutes ?? 0)
 
       flow.requestWalk({
         requestServiceType: requestServiceType ?? undefined,
@@ -827,11 +865,23 @@ export default function ClientDashboard({
         bookingTimingOverride: 'scheduled',
         scheduledForOverride: flow.scheduledFor,
       })
+    } else if (isDogWalkerRequest) {
+      const pricingDuration = durationTypeFromMinutes(dogWalkerDurationMinutes ?? 0)
+      flow.requestWalk({
+        requestServiceType: requestServiceType ?? undefined,
+        dogNameOverride: flow.dogName.trim(),
+        durationOverride: pricingDuration,
+        durationMinutesOverride: dogWalkerDurationMinutes,
+        priceOverrideILS: dogWalkerBudgetRequestValue,
+      })
     } else {
       flow.requestWalk(requestServiceType ?? undefined)
     }
     void hapticMedium()
   }, [
+    dogWalkerBudgetValue,
+    dogWalkerDurationMinutes,
+    dogWalkerDurationValue,
     babysitterBudgetFixed,
     babysitterServiceDetails,
     babysitterDurationValue,
@@ -1171,11 +1221,18 @@ export default function ClientDashboard({
     !!flow.tipJob
   const shouldUseSteplessGuidance = !hasPreviousBookingActivity && isIdleState && !showFirstBookingWow
   const isBabysitterGuidanceMode = requestServiceType === 'baby_sitter'
+  const isDogWalkerGuidanceMode = requestServiceType === 'dog_walker'
   const nextGuidedBookingField: 'dogName' | 'duration' | 'payment' | null = !shouldUseSteplessGuidance
     ? null
     : !(isBabysitterGuidanceMode ? babysitterServiceDetails.trim() : flow.dogName.trim())
       ? 'dogName'
-      : !(isBabysitterGuidanceMode ? babysitterDurationHours.trim() : flow.duration)
+      : !(
+          isBabysitterGuidanceMode
+            ? babysitterDurationValue > 0
+            : isDogWalkerGuidanceMode
+              ? dogWalkerDurationValue > 0
+              : flow.duration
+        )
         ? 'duration'
         : !flow.savedCard
           ? 'payment'
@@ -1273,15 +1330,6 @@ export default function ClientDashboard({
 
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
-
-  const localizedDurationOptions = useMemo(
-    () =>
-      DURATION_OPTIONS.map((option) => ({
-        ...option,
-        label: formatDurationLabelFromMinutes(option.minutes) || option.label,
-      })),
-    [i18n.resolvedLanguage],
-  )
 
   const requestDurationLabel = formatDurationLabelFromMinutes(flow.currentJob?.duration_minutes) ||
     localizeMinuteUnitLabel(flow.selectedDuration.label) ||
@@ -1447,100 +1495,32 @@ export default function ClientDashboard({
     return await flow.refreshLocation()
   }, [flow])
 
-  const [selectedDurationUi, setSelectedDurationUi] = useState<DurationType | ''>(flow.duration ?? '')
-  const hasDurationUiInteractedRef = useRef(false)
-  const lastRequestedDurationRef = useRef<DurationType | ''>(flow.duration ?? '')
-  const previousFlowDurationRef = useRef<DurationType | ''>(flow.duration ?? '')
-
-  useEffect(() => {
-    const nextFlowDuration = (flow.duration ?? '') as DurationType | ''
-    const previousFlowDuration = previousFlowDurationRef.current
-
-    if (!hasDurationUiInteractedRef.current) {
-      setSelectedDurationUi(nextFlowDuration)
-      lastRequestedDurationRef.current = nextFlowDuration
-    } else if (!nextFlowDuration && previousFlowDuration) {
-      setSelectedDurationUi('')
-      lastRequestedDurationRef.current = ''
-      hasDurationUiInteractedRef.current = false
-    } else if (
-      nextFlowDuration &&
-      nextFlowDuration !== previousFlowDuration &&
-      nextFlowDuration !== lastRequestedDurationRef.current
-    ) {
-      setSelectedDurationUi(nextFlowDuration)
-      lastRequestedDurationRef.current = nextFlowDuration
-    }
-
-    previousFlowDurationRef.current = nextFlowDuration
-  }, [flow.duration])
-
   const handleMatchingTryAgain = useCallback(() => {
     flow.clearAvailabilityNotice()
     flow.clearError()
     flow.clearExhaustedRequestForRetry?.()
     setMatchingUiState(null)
-    if (selectedDurationUi) {
-      flow.setDuration(selectedDurationUi)
-    }
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     })
-  }, [flow, selectedDurationUi])
+  }, [flow])
 
-  const eagerDurationFiredRef = useRef(false)
-  const lastDurationIntentRef = useRef<{ value: DurationType; at: number } | null>(null)
-
-  const handleDurationEager = useCallback(
-    (value: DurationType) => {
-      const lastIntent = lastDurationIntentRef.current
-      const now = Date.now()
-      if (lastIntent && lastIntent.value === value && now - lastIntent.at < 700) return
-      lastDurationIntentRef.current = { value, at: now }
-      eagerDurationFiredRef.current = true
-      hasDurationUiInteractedRef.current = true
-      lastRequestedDurationRef.current = value
-      flushSync(() => {
-        setSelectedDurationUi(value)
-        flow.setDuration(value)
-      })
-      markFirstInteractionHandler('client-dashboard:duration-eager', {
-        value,
-        currentUi: selectedDurationUi,
-      })
-      markFirstInteractionVisual('client-dashboard:duration-ui', { value })
-      setSheetSnap('default')
-      void hapticLight()
-    },
-    [flow, selectedDurationUi],
-  )
-
-  const handleDurationSelect = useCallback(
-    (value: DurationType) => {
-      if (eagerDurationFiredRef.current) {
-        eagerDurationFiredRef.current = false
-        return
-      }
-      const lastIntent = lastDurationIntentRef.current
-      const now = Date.now()
-      if (lastIntent && lastIntent.value === value && now - lastIntent.at < 700) return
-      lastDurationIntentRef.current = { value, at: now }
-      hasDurationUiInteractedRef.current = true
-      lastRequestedDurationRef.current = value
-      flushSync(() => {
-        setSelectedDurationUi(value)
-        flow.setDuration(value)
-      })
-      markFirstInteractionHandler('client-dashboard:duration-select', {
-        value,
-        currentUi: selectedDurationUi,
-      })
-      markFirstInteractionVisual('client-dashboard:duration-ui', { value })
-      setSheetSnap('default')
-      void hapticLight()
-    },
-    [flow, selectedDurationUi],
-  )
+  const handleDogWalkerDurationStep = useCallback((direction: 'down' | 'up') => {
+    const delta = direction === 'up' ? DOG_WALKER_DURATION_STEP : -DOG_WALKER_DURATION_STEP
+    const nextValue = clampNumber(
+      Math.round((dogWalkerDurationValue + delta) * 2) / 2,
+      DOG_WALKER_DURATION_MIN,
+      DOG_WALKER_DURATION_MAX,
+    )
+    setDogWalkerDurationHours(formatHoursValue(nextValue))
+    markFirstInteractionHandler('client-dashboard:duration-select', {
+      value: nextValue,
+      currentUi: dogWalkerDurationValue,
+    })
+    markFirstInteractionVisual('client-dashboard:duration-ui', { value: nextValue })
+    setSheetSnap('default')
+    void hapticLight()
+  }, [dogWalkerDurationValue])
 
   const openFavoritesMenu = useCallback(() => {
     setBurgerOpen(true)
@@ -1694,6 +1674,7 @@ export default function ClientDashboard({
   const babysitterBudgetSummary = useMemo(() => {
     return `₪${babysitterFixedBudgetValue}`
   }, [babysitterFixedBudgetValue])
+  const dogWalkerBudgetSummary = useMemo(() => `₪${dogWalkerBudgetValue}`, [dogWalkerBudgetValue])
 
   const dogSelectorBlock = (
     <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterServiceFieldWrapStyle : null) }}>
@@ -1743,9 +1724,9 @@ export default function ClientDashboard({
   )
 
   const pickupSelectorBlock = (
-    <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterAddressFieldWrapStyle : null) }}>
-      <div style={isBabySitterMode ? babysitterAddressLabelStyle : compactFieldLabelStyle}>
-        {isBabySitterMode ? (isRtl ? 'כתובת' : 'Address') : t('booking.pickupFrom')}
+    <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterAddressFieldWrapStyle : dogWalkerAddressFieldWrapStyle) }}>
+      <div style={isBabySitterMode ? babysitterAddressLabelStyle : dogWalkerAddressLabelStyle}>
+        {isRtl ? 'כתובת' : 'Address'}
       </div>
       <div
         style={{
@@ -1783,27 +1764,66 @@ export default function ClientDashboard({
   )
 
   const durationPickerBlock = (
-    <div style={compactFieldStyle}>
-      <div style={compactFieldLabelStyle}>{t('booking.durationQuestion')}</div>
+    <div style={{ ...compactFieldStyle, ...dogWalkerPlannerFieldWrapStyle }}>
       {isDurationGuided && (
         <div style={guidedFieldHintAboveStyle}>{t('booking.chooseDuration')}</div>
       )}
-      <div
-        style={{
-          ...compactDurationWrapStyle,
-          ...(isDurationGuided ? durationGuidedFieldShellStyle : null),
-          ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-        }}
-      >
-        <DurationPicker
-          options={localizedDurationOptions}
-          selected={selectedDurationUi}
-          onSelect={(v) => handleDurationSelect(v as DurationType)}
-          onEagerSelect={(v) => handleDurationEager(v as DurationType)}
-          surgeMultiplier={flow.surgeMultiplier}
-          surgeLevel={flow.surgeLevel}
-          hidePrice
-        />
+      <div style={dogWalkerPlannerCardStyle}>
+        <div style={dogWalkerPlannerTopRowStyle}>
+          <div style={dogWalkerFieldGroupStyle}>
+            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+            <div
+              style={{
+                ...babysitterDurationStepperStyle,
+                ...(isDurationGuided ? durationGuidedFieldShellStyle : null),
+                ...(isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+              }}
+            >
+              <div style={babysitterDurationValueStyle}>
+                {formatHoursValue(dogWalkerDurationValue)}
+              </div>
+              <div style={babysitterDurationStepperButtonsStyle}>
+                <button
+                  type="button"
+                  onClick={() => handleDogWalkerDurationStep('up')}
+                  style={babysitterStepButtonStyle}
+                  aria-label={isRtl ? 'הגדל משך' : 'Increase duration'}
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDogWalkerDurationStep('down')}
+                  style={babysitterStepButtonStyle}
+                  aria-label={isRtl ? 'הקטן משך' : 'Decrease duration'}
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+          <div style={dogWalkerPriceGroupStyle}>
+            <div style={dogWalkerPriceValueRowStyle}>
+              <span style={babysitterBudgetValueDisplayStyle}>₪{dogWalkerBudgetValue}</span>
+            </div>
+            <div style={babysitterBudgetSliderWrapStyle}>
+              <input
+                type="range"
+                min={DOG_WALKER_BUDGET_MIN_ILS}
+                max={DOG_WALKER_BUDGET_MAX_ILS}
+                step={DOG_WALKER_BUDGET_STEP_ILS}
+                value={dogWalkerBudgetValue}
+                onChange={(e) => setDogWalkerBudgetFixed(String(Number(e.target.value)))}
+                style={babysitterBudgetSliderStyle}
+                aria-label={isRtl ? 'תקציב' : 'Budget'}
+              />
+              <div style={babysitterBudgetScaleRowStyle}>
+                <span style={babysitterBudgetScaleLabelStyle}>₪0</span>
+                <span style={babysitterBudgetScaleLabelStyle}>₪500</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -1866,13 +1886,8 @@ export default function ClientDashboard({
     if (isBabySitterMode) {
       return babysitterBudgetSummary ? { price: babysitterBudgetSummary, original: null } : null
     }
-    if (flow.adjustedPriceILS <= 0) return null
-    const hasSurge = flow.surgeMultiplier > 1
-    const price = hasSurge
-      ? Math.round(flow.adjustedPriceILS * flow.surgeMultiplier)
-      : flow.adjustedPriceILS
-    return { price, original: hasSurge ? flow.adjustedPriceILS : null }
-  }, [babysitterBudgetSummary, flow.adjustedPriceILS, flow.surgeMultiplier, isBabySitterMode])
+    return dogWalkerBudgetSummary ? { price: dogWalkerBudgetSummary, original: null } : null
+  }, [babysitterBudgetSummary, dogWalkerBudgetSummary, isBabySitterMode])
 
   const compactSavedCardSummary =
     flow.savedCard && !flow.setupClientSecret ? (
@@ -2440,7 +2455,7 @@ export default function ClientDashboard({
                         <div
                           style={{
                             ...compactPaymentWrapStyle,
-                            ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : null),
+                            ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : compactPaymentWrapDogWalkerStyle),
                             ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
                             ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
                           }}
@@ -2463,13 +2478,6 @@ export default function ClientDashboard({
                   )}
                 </div>
 
-                {!isSheetCollapsed && !isBabySitterMode && (
-                  <div style={feeLabelStyle}>
-                    {flow.bookingTiming === 'scheduled'
-                      ? t('booking.priceLockedNow')
-                      : t('booking.serviceFeeIncluded')}
-                  </div>
-                )}
                 </>
                 )}
               </div>
@@ -2530,7 +2538,12 @@ export default function ClientDashboard({
         </div>
 
         {shouldRenderIdleSheet && !isSheetCollapsed && (
-          <div style={{ ...stickyCtaWrapStyle, ...(isBabySitterMode ? stickyCtaWrapBabysitterStyle : null) }}>
+          <div
+            style={{
+              ...stickyCtaWrapStyle,
+              ...(isBabySitterMode ? stickyCtaWrapBabysitterStyle : stickyCtaWrapDogWalkerStyle),
+            }}
+          >
             {shouldShowGuidanceCtaHelper && (
               <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
             )}
@@ -2560,9 +2573,11 @@ export default function ClientDashboard({
                     !isSelectedServiceAvailable ||
                     !(isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim()) ||
                     !flow.location.trim() ||
-                    (isBabySitterMode
-                      ? babysitterDurationValue <= 0 || babysitterFixedBudgetValue <= 0
-                      : !flow.duration) ||
+                    (
+                      isBabySitterMode
+                        ? babysitterDurationValue <= 0 || babysitterFixedBudgetValue <= 0
+                        : dogWalkerDurationValue <= 0 || dogWalkerBudgetValue <= 0
+                    ) ||
                     !flow.savedCard ||
                     (isBabySitterMode
                       ? !flow.scheduledFor
@@ -2618,7 +2633,7 @@ export default function ClientDashboard({
                   markFirstInteractionHandler('client-dashboard:calendar-button')
                   if (hasFutureOrders) {
                     openFutureOrdersMenu()
-                  } else if (!isBabySitterMode && !flow.duration) {
+                  } else if (!isBabySitterMode && dogWalkerDurationValue <= 0) {
                     setGuidedBookingField('duration')
                     markFirstInteractionVisual('client-dashboard:calendar-button')
                     void hapticLight()
@@ -3943,7 +3958,15 @@ const babysitterAddressFieldWrapStyle: React.CSSProperties = {
   marginBottom: 8,
 }
 
+const dogWalkerAddressFieldWrapStyle: React.CSSProperties = {
+  marginBottom: 8,
+}
+
 const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
+  marginBottom: 4,
+}
+
+const dogWalkerPlannerFieldWrapStyle: React.CSSProperties = {
   marginBottom: 4,
 }
 
@@ -3971,14 +3994,6 @@ const guidedFieldHintAboveStyle: React.CSSProperties = {
   ...guidedFieldHelperStyle,
   marginTop: 0,
   marginBottom: 2,
-}
-
-const compactFieldLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: 0.6,
-  textTransform: 'uppercase',
-  color: '#64748B',
 }
 
 const compactFieldLabelMutedStyle: React.CSSProperties = {
@@ -4031,6 +4046,13 @@ const pickupSelectorValueStyle: React.CSSProperties = {
 
 const pickupSelectorValueCompactStyle: React.CSSProperties = {
   fontSize: 14,
+}
+
+const dogWalkerAddressLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
+  lineHeight: 1.2,
 }
 
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
@@ -4272,15 +4294,6 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const compactDurationWrapStyle: React.CSSProperties = {
-  marginTop: -1,
-  border: '2px solid transparent',
-  borderRadius: 18,
-  padding: 0,
-  boxSizing: 'border-box',
-  transformOrigin: 'center top',
-}
-
 const durationGuidedFieldShellStyle: React.CSSProperties = {
   border: '2px solid #3B82F6',
   background: 'rgba(59,130,246,0.06)',
@@ -4363,6 +4376,58 @@ const babysitterPlannerCardStyle: React.CSSProperties = {
   borderRadius: 16,
   border: '1px solid rgba(226, 232, 240, 0.9)',
   background: 'rgba(255,255,255,0.36)',
+}
+
+const dogWalkerPlannerCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  padding: '7px 9px 5px',
+  borderRadius: 16,
+  border: '1px solid rgba(226, 232, 240, 0.9)',
+  background: 'rgba(255,255,255,0.36)',
+}
+
+const dogWalkerPlannerTopRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(104px, 116px) minmax(0, 1fr)',
+  columnGap: 18,
+  rowGap: 0,
+  alignItems: 'start',
+}
+
+const dogWalkerPlannerLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#475569',
+  lineHeight: 1.2,
+  minHeight: 14,
+  display: 'inline-flex',
+  alignItems: 'center',
+  whiteSpace: 'nowrap',
+}
+
+const dogWalkerFieldGroupStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+  alignContent: 'start',
+}
+
+const dogWalkerPriceGroupStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+  alignContent: 'start',
+}
+
+const dogWalkerPriceValueRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  minHeight: 18,
+  minWidth: 0,
+  flexWrap: 'nowrap',
 }
 
 const babysitterPlannerTopRowStyle: React.CSSProperties = {
@@ -4496,7 +4561,15 @@ const compactPaymentWrapBabysitterStyle: React.CSSProperties = {
   marginTop: 8,
 }
 
+const compactPaymentWrapDogWalkerStyle: React.CSSProperties = {
+  marginTop: 8,
+}
+
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
+  paddingTop: 10,
+}
+
+const stickyCtaWrapDogWalkerStyle: React.CSSProperties = {
   paddingTop: 10,
 }
 
@@ -4504,18 +4577,6 @@ const paymentGuidedFieldShellStyle: React.CSSProperties = {
   border: '2px solid #3B82F6',
   background: 'rgba(59,130,246,0.06)',
   boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
-}
-
-const feeLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  color: '#2563EB',
-  lineHeight: 1.3,
-  textAlign: 'center',
-  marginTop: -2,
-  background: 'rgba(59,130,246,0.08)',
-  padding: '3px 10px',
-  borderRadius: 8,
-  fontWeight: 600,
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
