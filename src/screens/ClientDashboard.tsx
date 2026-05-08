@@ -270,6 +270,8 @@ export default function ClientDashboard({
   const lastCurrentJobIdRef = useRef<string | null>(null)
   const hasUserInteractedRef = useRef(false)
   const arrivalBeepPlayedJobIdRef = useRef<string | null>(null)
+  const selectedBookingServiceRef = useRef<ServiceType>('dog_walking')
+  const requestServiceTypeRef = useRef<ProfileServiceType | null>(null)
   const [mapMounted, setMapMounted] = useState(false)
   const [isDraggingSheet, setIsDraggingSheet] = useState(false)
   const sheetDragRef = useRef<{ startY: number; startSnap: SheetSnap; lastDelta: number } | null>(null)
@@ -316,6 +318,11 @@ export default function ClientDashboard({
     normalizeProfileServiceType(profile.service_type)
 
   useEffect(() => {
+    selectedBookingServiceRef.current = resolvedBookingService
+    requestServiceTypeRef.current = requestServiceType
+  }, [requestServiceType, resolvedBookingService])
+
+  useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
 
@@ -325,6 +332,26 @@ export default function ClientDashboard({
       setSelectedService(availableBookingServices[0])
     }
   }, [availableBookingServices, selectedService])
+
+  const handleSelectBookingService = useCallback((nextService: ServiceType) => {
+    const normalizedNextService = availableBookingServices.includes(nextService)
+      ? nextService
+      : availableBookingServices[0] ?? nextService
+
+    selectedBookingServiceRef.current = normalizedNextService
+    requestServiceTypeRef.current =
+      mapBookingServiceTypeToProfileServiceType(normalizedNextService) ??
+      normalizeProfileServiceType(profile.service_type)
+
+    setMatchingUiState(null)
+    flow.clearAvailabilityNotice()
+    flow.clearError()
+    setSelectedService(normalizedNextService)
+  }, [
+    availableBookingServices,
+    flow,
+    profile.service_type,
+  ])
 
   const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
     if (serviceTypeSaving) return
@@ -805,8 +832,15 @@ export default function ClientDashboard({
   }
 
   const handleFindWalker = useCallback(() => {
-    const isBabysitterRequest = requestServiceType === 'baby_sitter'
-    const isDogWalkerRequest = requestServiceType === 'dog_walker'
+    const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
+      ? selectedBookingServiceRef.current
+      : resolvedBookingService
+    const effectiveRequestServiceType =
+      mapBookingServiceTypeToProfileServiceType(effectiveBookingService) ??
+      requestServiceTypeRef.current ??
+      requestServiceType
+    const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
+    const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
     if (!hasSelectedProfileService) {
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
       setBurgerOpen(true)
@@ -852,11 +886,11 @@ export default function ClientDashboard({
                 : 60,
       )
       console.log('[ClientDashboard] submit booking', {
-        selectedBookingService: resolvedBookingService,
+        selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
         pricingPackage,
-        requestServiceType,
+        requestServiceType: effectiveRequestServiceType,
       })
     }
     markFirstInteractionHandler('client-dashboard:find-walker')
@@ -877,8 +911,8 @@ export default function ClientDashboard({
       const pricingDuration = durationTypeFromMinutes(babysitterDurationMinutes ?? 0)
 
       flow.requestWalk({
-        requestServiceType: requestServiceType ?? undefined,
-        selectedBookingService: resolvedBookingService,
+        requestServiceType: effectiveRequestServiceType ?? undefined,
+        selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
         dogNameOverride: babysitterServiceDetails.trim(),
@@ -892,8 +926,8 @@ export default function ClientDashboard({
     } else if (isDogWalkerRequest) {
       const pricingDuration = durationTypeFromMinutes(dogWalkerDurationMinutes ?? 0)
       flow.requestWalk({
-        requestServiceType: requestServiceType ?? undefined,
-        selectedBookingService: resolvedBookingService,
+        requestServiceType: effectiveRequestServiceType ?? undefined,
+        selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
         dogNameOverride: flow.dogName.trim(),
@@ -903,8 +937,8 @@ export default function ClientDashboard({
       })
     } else {
       flow.requestWalk({
-        requestServiceType: requestServiceType ?? undefined,
-        selectedBookingService: resolvedBookingService,
+        requestServiceType: effectiveRequestServiceType ?? undefined,
+        selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
       })
@@ -918,6 +952,7 @@ export default function ClientDashboard({
     babysitterServiceDetails,
     babysitterDurationValue,
     babysitterFixedBudgetValue,
+    availableBookingServices,
     flow,
     flow.dogName,
     flow.duration,
@@ -928,7 +963,6 @@ export default function ClientDashboard({
     hasSelectedProfileService,
     profile.service_type,
     profile.service_types,
-    requestServiceType,
     resolvedBookingService,
     serviceSelectionRequiredLabel,
   ])
@@ -2497,7 +2531,7 @@ export default function ClientDashboard({
                 {shouldShowProfileServicePicker && (
                   <ServiceSelectorPanel
                     selected={resolvedBookingService}
-                    onSelect={setSelectedService}
+                    onSelect={handleSelectBookingService}
                     onMorePress={() => setMoreServicesOpen(true)}
                     services={availableBookingServices}
                   />
@@ -2936,7 +2970,7 @@ export default function ClientDashboard({
 
       {moreServicesOpen && (
         <MoreServicesSheet
-          onSelect={setSelectedService}
+          onSelect={handleSelectBookingService}
           services={availableBookingServices}
           onClose={() => setMoreServicesOpen(false)}
         />
