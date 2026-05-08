@@ -25,7 +25,7 @@ type WalkerRow = {
   last_lat: number | null
   last_lng: number | null
   service_type: string | null
-  service_types?: string[] | null
+  service_types?: string[] | string | null
 }
 
 type RatingRow = {
@@ -56,19 +56,33 @@ function normalizeProviderServiceType(value: string | null | undefined): 'dog_wa
 
 function providerSupportsRequestedService(
   profile: {
-    service_types?: string[] | null
+    service_types?: string[] | string | null
     service_type?: string | null
   },
   requestServiceType: 'dog_walker' | 'baby_sitter' | null,
 ): boolean {
   if (!requestServiceType) return true
 
-  if (Array.isArray(profile.service_types)) {
-    const normalizedServiceTypes = profile.service_types
+  const rawServiceTypes = profile.service_types
+  const serviceTypes =
+    Array.isArray(rawServiceTypes)
+      ? rawServiceTypes
+      : typeof rawServiceTypes === 'string'
+        ? rawServiceTypes
+            .replace(/^\{|\}$/g, '')
+            .split(',')
+            .map((value) => value.trim().replace(/^"|"$/g, ''))
+            .filter(Boolean)
+        : null
+
+  if (serviceTypes) {
+    const normalizedServiceTypes = serviceTypes
       .map((value) => normalizeProviderServiceType(value))
       .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
 
-    return normalizedServiceTypes.includes(requestServiceType)
+    if (normalizedServiceTypes.length > 0) {
+      return normalizedServiceTypes.includes(requestServiceType)
+    }
   }
 
   return normalizeProviderServiceType(profile.service_type) === requestServiceType
@@ -91,7 +105,7 @@ serve(async (req) => {
       leadTimeIso: leadTime.toISOString(),
     })
 
-    // 🔍 fetch ONLY relevant jobs
+    // Fetch a broader scheduled set so skip reasons are explicit in logs.
     const { data: jobs, error } = await supabase
       .from('walk_requests')
       .select(`
@@ -108,13 +122,8 @@ serve(async (req) => {
         stripe_payment_intent_id
       `)
       .eq('booking_timing', 'scheduled')
-      .eq('status', 'open')
-      .in('payment_status', ['authorized', 'requires_capture'])
-      .not('stripe_payment_intent_id', 'is', null)
-      .is('walker_id', null)
       .not('scheduled_for', 'is', null)
       .lte('scheduled_for', leadTime.toISOString())
-      .not('dispatch_state', 'eq', 'dispatched')
 
     if (error) {
       console.error('[run-scheduled-dispatch] job query failed', {
@@ -130,7 +139,7 @@ serve(async (req) => {
       }, corsHeaders)
     }
 
-    console.log('[run-scheduled-dispatch] jobs selected', {
+    console.log('[run-scheduled-dispatch] jobs loaded in lead window', {
       nowIso: now.toISOString(),
       leadTimeIso: leadTime.toISOString(),
       leadMinutes: LEAD_MINUTES,
@@ -156,9 +165,40 @@ serve(async (req) => {
 
     let started = 0
     let noCandidates = 0
+    let eligible = 0
 
     for (const job of jobs) {
       try {
+        const skipReason =
+          job.status !== 'open'
+            ? `status=${job.status}`
+            : !['authorized', 'requires_capture'].includes(job.payment_status ?? '')
+              ? `payment_status=${job.payment_status ?? 'null'}`
+              : !job.stripe_payment_intent_id
+                ? 'missing_stripe_payment_intent_id'
+                : job.walker_id
+                  ? `already_assigned=${job.walker_id}`
+                  : job.smart_dispatch_state === 'cancelled'
+                    ? 'smart_dispatch_state=cancelled'
+                    : job.smart_dispatch_state === 'exhausted'
+                      ? 'smart_dispatch_state=exhausted'
+                      : null
+
+        if (skipReason) {
+          console.log('[run-scheduled-dispatch] skipped job', {
+            requestId: job.id,
+            reason: skipReason,
+            scheduledFor: job.scheduled_for,
+            status: job.status,
+            paymentStatus: job.payment_status,
+            dispatchState: job.dispatch_state,
+            smartDispatchState: job.smart_dispatch_state,
+            walkerId: job.walker_id,
+          })
+          continue
+        }
+
+        eligible++
         console.log('[run-scheduled-dispatch] processing job', {
           requestId: job.id,
           scheduledFor: job.scheduled_for,
@@ -546,6 +586,7 @@ serve(async (req) => {
     return jsonResponse(200, {
       ok: true,
       scanned: jobs.length,
+      eligible,
       started,
       noCandidates,
     }, corsHeaders)

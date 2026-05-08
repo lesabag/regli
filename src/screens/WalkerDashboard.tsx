@@ -13,7 +13,7 @@ import { usePushNotifications } from '../hooks/usePushNotifications'
 import { supabase } from '../services/supabaseClient'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels } from '../utils/serviceLifecycle'
-import { getDurationSummary } from '../utils/serviceTiming'
+import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import {
   getProfileServiceOptions,
@@ -64,8 +64,7 @@ function friendlyError(raw: string): string {
 }
 
 function durationFromMinutes(minutes: number | null | undefined): string {
-  if (typeof minutes !== 'number' || minutes <= 0) return '—'
-  return `${minutes} min`
+  return formatDurationFromMinutes(minutes) ?? '—'
 }
 
 function parseBabysitterNotes(notes: string | null | undefined): {
@@ -306,11 +305,9 @@ export default function WalkerDashboard({
     (activeJob.booking_timing !== 'scheduled' || activeJob.dispatch_state === 'dispatched')
 
   const requestPrice = topRequest
-    ? topRequest.walker_earnings != null
-      ? `₪${topRequest.walker_earnings.toFixed(0)}`
-      : topRequest.price != null
-        ? `₪${(topRequest.price * 0.8).toFixed(0)}`
-        : '—'
+    ? topRequest.price != null
+      ? `₪${topRequest.price.toFixed(0)}`
+      : '—'
     : '—'
 
   const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
@@ -1951,7 +1948,7 @@ export default function WalkerDashboard({
                     {isBabysitterRequest ? (isHebrew ? 'תקציב לקוח' : 'Client budget') : t('booking.priceLabel')}
                   </span>
                   <span style={{ ...incomingMetaValueStyle, color: '#15803D' }}>
-                    {isBabysitterRequest ? babysitterRequestNotes.budget || requestPrice : requestPrice}
+                    {requestPrice !== '—' ? requestPrice : isBabysitterRequest ? babysitterRequestNotes.budget || '—' : '—'}
                   </span>
                 </div>
               </div>

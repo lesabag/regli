@@ -145,7 +145,7 @@ export default function SearchingSheet({
           <div style={detailRowStyle}>
             <div style={detailChipStyle}>
               <span style={detailChipLabelStyle}>Duration</span>
-              <span style={detailChipValueStyle}>{durationLabel || 'Service'}</span>
+              <span style={detailChipValueStyle}>{durationLabel || '—'}</span>
             </div>
             <div style={detailDividerStyle} />
             <div style={detailChipStyle}>
@@ -186,7 +186,7 @@ export default function SearchingSheet({
       <div style={detailRowStyle}>
         <div style={detailChipStyle}>
           <span style={detailChipLabelStyle}>Duration</span>
-          <span style={detailChipValueStyle}>{durationLabel || 'Service'}</span>
+          <span style={detailChipValueStyle}>{durationLabel || '—'}</span>
         </div>
         <div style={detailDividerStyle} />
         <div style={detailChipStyle}>

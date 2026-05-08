@@ -289,7 +289,7 @@ serve(async (req: Request) => {
 
     const { data: clientProfile, error: clientError } = await supabaseAdmin
       .from('profiles')
-      .select('id, role, service_type')
+      .select('id, role, service_type, service_types')
       .eq('id', user.id)
       .single()
 
@@ -307,24 +307,62 @@ serve(async (req: Request) => {
       )
     }
 
+    const explicitRequestServiceType = normalizeRequestServiceType(requestServiceType)
     const profileRequestServiceType = normalizeRequestServiceType(clientProfile.service_type)
-    const fallbackRequestServiceType = normalizeRequestServiceType(requestServiceType)
-    const persistedRequestServiceType = profileRequestServiceType ?? fallbackRequestServiceType ?? null
+    const persistedRequestServiceType = explicitRequestServiceType ?? profileRequestServiceType ?? null
 
-    if (!profileRequestServiceType) {
-      console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing profile service_type; using compatibility fallback if available`, {
+    if (!explicitRequestServiceType && !profileRequestServiceType) {
+      console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing explicit request service_type and profile service_type`, {
         profileServiceType: clientProfile.service_type ?? null,
+        profileServiceTypes: Array.isArray(clientProfile.service_types) ? clientProfile.service_types : clientProfile.service_types ?? null,
         requestServiceTypeInput: requestServiceType ?? null,
-        fallbackRequestServiceType,
       })
     }
 
     console.log(`[create-payment-intent][${FUNCTION_VERSION}] Request service type resolved:`, {
       pricingServiceType: serviceType,
       requestServiceTypeInput: requestServiceType ?? null,
+      profileServiceTypes: Array.isArray(clientProfile.service_types) ? clientProfile.service_types : clientProfile.service_types ?? null,
       profileServiceType: clientProfile.service_type ?? null,
+      explicitRequestServiceType,
       persistedRequestServiceType,
     })
+
+    if (bookingTiming === 'asap' && persistedRequestServiceType) {
+      const { data: existingActiveAsapRequest, error: existingActiveAsapRequestError } =
+        await supabaseAdmin
+          .from('walk_requests')
+          .select('id')
+          .eq('client_id', user.id)
+          .eq('booking_timing', 'asap')
+          .eq('service_type', persistedRequestServiceType)
+          .in('status', ['open', 'accepted'])
+          .not('smart_dispatch_state', 'in', '("cancelled","exhausted")')
+          .limit(1)
+          .maybeSingle()
+
+      if (existingActiveAsapRequestError) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Active ASAP same-service guard failed:`, {
+          clientId: user.id,
+          requestServiceType: persistedRequestServiceType,
+          error: existingActiveAsapRequestError,
+        })
+        return new Response(
+          JSON.stringify({ error: 'Failed to validate active requests', _v: FUNCTION_VERSION }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (existingActiveAsapRequest?.id) {
+        return new Response(
+          JSON.stringify({
+            error: 'You already have an active request for this service.',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
 
     if (walkerId) {
       const { data: walkerProfile, error: walkerError } = await supabaseAdmin
@@ -584,6 +622,7 @@ serve(async (req: Request) => {
       paymentMethodId,
       customerId,
       scheduledForInput: scheduledFor ?? null,
+      receivedScheduledFor: scheduledFor ?? null,
       normalizedScheduledFor,
       scheduleTimezone: SCHEDULE_TIMEZONE,
     })
@@ -659,8 +698,10 @@ serve(async (req: Request) => {
 
     console.log(`[create-payment-intent][${FUNCTION_VERSION}] Walk request insert payload:`, {
       requestServiceTypeReceived: requestServiceType ?? null,
+      receivedScheduledFor: scheduledFor ?? null,
       profileServiceType: clientProfile.service_type ?? null,
       insertedWalkRequestServiceType: persistedRequestServiceType,
+      insertedScheduledFor: normalizedScheduledFor,
     })
 
     if (jobError || !job) {
@@ -684,6 +725,7 @@ serve(async (req: Request) => {
       paymentStatus: initialPaymentStatus,
       dispatchState: 'queued',
       smartDispatchState: 'idle',
+      insertedScheduledFor: normalizedScheduledFor,
       paymentMethodAttached: !!paymentIntent.payment_method,
     })
 

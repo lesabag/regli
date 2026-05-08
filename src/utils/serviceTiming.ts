@@ -26,9 +26,13 @@ function formatClock(seconds: number): string {
   return [hours, minutes, secs].map((value) => String(value).padStart(2, '0')).join(':')
 }
 
-function formatMinutesLabel(minutes: number | null | undefined): string | null {
+export function formatDurationFromMinutes(minutes: number | null | undefined): string | null {
   if (minutes == null || Number.isNaN(minutes)) return null
   const safe = Math.max(0, Math.round(minutes))
+  if (safe <= 0) return null
+  if (safe < 60) return `${safe} min`
+  if (safe % 60 === 0) return `${safe / 60} h`
+  if (safe % 30 === 0) return `${safe / 60} h`
   return `${safe} min`
 }
 
@@ -49,9 +53,9 @@ export function getElapsedSeconds(
 
 export function getDurationSummary(input: DurationSummaryInput): DurationSummary {
   const elapsedSeconds = getElapsedSeconds(input.startedAt, input.completedAt, input.now)
-  const plannedLabel = formatMinutesLabel(input.plannedMinutes ?? null)
+  const plannedLabel = formatDurationFromMinutes(input.plannedMinutes ?? null)
   const actualLabel =
-    elapsedSeconds == null ? null : formatMinutesLabel(Math.round(elapsedSeconds / 60))
+    elapsedSeconds == null ? null : formatDurationFromMinutes(Math.round(elapsedSeconds / 60))
 
   return {
     elapsedSeconds,

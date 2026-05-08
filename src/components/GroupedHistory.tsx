@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatShortAddress } from '../utils/addressFormat'
+import { formatDurationFromMinutes } from '../utils/serviceTiming'
 
 type Role = 'client' | 'walker'
 
@@ -642,15 +643,7 @@ function getDuration(item: HistoryItem): string {
         ? item.durationMinutes
         : null
 
-  if (!minutes || minutes <= 0) return ''
-
-  if (minutes < 60) return `${minutes} min`
-
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-
-  if (rest === 0) return `${hours}h`
-  return `${hours}h ${rest}m`
+  return formatDurationFromMinutes(minutes) ?? ''
 }
 
 function getPrice(item: HistoryItem): string {

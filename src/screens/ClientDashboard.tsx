@@ -24,7 +24,7 @@ import {
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { formatShortAddress } from '../utils/addressFormat'
-import { getDurationSummary } from '../utils/serviceTiming'
+import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
 import { CreditCard } from 'lucide-react'
@@ -773,6 +773,10 @@ export default function ClientDashboard({
     BABYSITTER_BUDGET_MIN_ILS,
     BABYSITTER_BUDGET_MAX_ILS,
   )
+  const babysitterDurationMinutes =
+    Number.isFinite(babysitterDurationValue) && babysitterDurationValue > 0
+      ? Math.round(babysitterDurationValue * 60)
+      : null
   const dogWalkerDurationValue = clampNumber(
     parseNumberOrFallback(dogWalkerDurationHours, DOG_WALKER_DEFAULT_DURATION_HOURS),
     DOG_WALKER_DURATION_MIN,
@@ -809,10 +813,6 @@ export default function ClientDashboard({
       setMenuPage('settings')
       return
     }
-    const babysitterDurationMinutes =
-      Number.isFinite(babysitterDurationValue) && babysitterDurationValue > 0
-        ? Math.round(babysitterDurationValue * 60)
-        : null
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
     const dogWalkerBudgetRequestValue = dogWalkerBudgetValue > 0 ? dogWalkerBudgetValue : null
 
@@ -878,25 +878,36 @@ export default function ClientDashboard({
 
       flow.requestWalk({
         requestServiceType: requestServiceType ?? undefined,
+        selectedBookingService: resolvedBookingService,
+        profileServiceTypes: profile.service_types ?? null,
+        legacyProfileServiceType: profile.service_type ?? null,
         dogNameOverride: babysitterServiceDetails.trim(),
         notesOverride: notes,
         durationOverride: pricingDuration,
         durationMinutesOverride: babysitterDurationMinutes,
         priceOverrideILS: babysitterBudgetValue,
-        bookingTimingOverride: 'scheduled',
-        scheduledForOverride: flow.scheduledFor,
+        bookingTimingOverride: flow.bookingTiming,
+        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
     } else if (isDogWalkerRequest) {
       const pricingDuration = durationTypeFromMinutes(dogWalkerDurationMinutes ?? 0)
       flow.requestWalk({
         requestServiceType: requestServiceType ?? undefined,
+        selectedBookingService: resolvedBookingService,
+        profileServiceTypes: profile.service_types ?? null,
+        legacyProfileServiceType: profile.service_type ?? null,
         dogNameOverride: flow.dogName.trim(),
         durationOverride: pricingDuration,
         durationMinutesOverride: dogWalkerDurationMinutes,
         priceOverrideILS: dogWalkerBudgetRequestValue,
       })
     } else {
-      flow.requestWalk(requestServiceType ?? undefined)
+      flow.requestWalk({
+        requestServiceType: requestServiceType ?? undefined,
+        selectedBookingService: resolvedBookingService,
+        profileServiceTypes: profile.service_types ?? null,
+        legacyProfileServiceType: profile.service_type ?? null,
+      })
     }
     void hapticMedium()
   }, [
@@ -1386,9 +1397,19 @@ export default function ClientDashboard({
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
 
-  const requestDurationLabel = formatDurationLabelFromMinutes(flow.currentJob?.duration_minutes) ||
-    localizeMinuteUnitLabel(flow.selectedDuration.label) ||
-    t('booking.walkFallback')
+  const flexibleRequestDurationMinutes =
+    requestServiceType === 'baby_sitter'
+      ? babysitterDurationMinutes
+      : requestServiceType === 'dog_walker'
+        ? dogWalkerDurationMinutes
+        : null
+  const requestDurationLabel =
+    localizeMinuteUnitLabel(
+      formatDurationFromMinutes(flow.currentJob?.duration_minutes ?? flexibleRequestDurationMinutes),
+    ) ||
+    (requestServiceType === 'baby_sitter' || requestServiceType === 'dog_walker'
+      ? ''
+      : localizeMinuteUnitLabel(flow.selectedDuration.label) || t('booking.walkFallback'))
   const requestPriceLabel =
     flow.currentJob?.price != null && flow.currentJob.price > 0
       ? `₪${flow.currentJob.price}`
@@ -3697,13 +3718,7 @@ function localizeMinuteUnitLabel(value: string | null | undefined): string | nul
     .replace(/\bmins\b/gi, 'דק׳')
     .replace(/\bminutes\b/gi, 'דק׳')
     .replace(/\bminute\b/gi, 'דק׳')
-}
-
-function formatDurationLabelFromMinutes(minutes: number | null | undefined): string {
-  if (minutes === 20 || minutes === 40 || minutes === 60) {
-    return i18n.resolvedLanguage === 'he' ? `${minutes} דק׳` : `${minutes} min`
-  }
-  return ''
+    .replace(/\bh\b/gi, 'ש׳')
 }
 
 function formatEta(

@@ -179,6 +179,9 @@ type TipRow = {
 
 type RequestWalkOptions = {
   requestServiceType?: string
+  selectedBookingService?: string | null
+  profileServiceTypes?: string[] | null
+  legacyProfileServiceType?: string | null
   dogNameOverride?: string
   notesOverride?: string | null
   durationOverride?: DurationType | null
@@ -2646,6 +2649,30 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
+    if (effectiveBookingTiming === 'asap') {
+      const { data: existingAsapRequest, error: existingAsapRequestError } = await supabase
+        .from('walk_requests')
+        .select('id')
+        .eq('client_id', profileId)
+        .eq('booking_timing', 'asap')
+        .eq('service_type', normalizedRequestServiceType)
+        .in('status', ['open', 'accepted'])
+        .not('smart_dispatch_state', 'in', '("cancelled","exhausted")')
+        .limit(1)
+        .maybeSingle()
+
+      if (existingAsapRequestError) {
+        console.warn('[useClientFlow] active ASAP same-service guard query failed', {
+          profileId,
+          requestServiceType: normalizedRequestServiceType,
+          message: existingAsapRequestError.message,
+        })
+      } else if (existingAsapRequest?.id) {
+        setError('You already have an active request for this service.')
+        return
+      }
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -2657,10 +2684,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       console.log('[useClientFlow] create-payment-intent request', {
+        selectedBookingService: requestOptions.selectedBookingService ?? null,
+        profileServiceTypes: requestOptions.profileServiceTypes ?? null,
+        legacyProfileServiceType: requestOptions.legacyProfileServiceType ?? null,
         profileServiceType: effectiveRequestServiceType ?? null,
         pricingServiceType: durationToPricingPackage(effectiveDuration),
         requestServiceType: normalizedRequestServiceType,
         notesOverride: effectiveNotes,
+        selectedLocalScheduledDateTime:
+          effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor ?? null : null,
+        scheduledForBeingSent:
+          effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor ?? null : null,
+        timezoneOffsetMinutes: new Date().getTimezoneOffset(),
       })
 
       const response = await invokeEdgeFunction<{
@@ -2729,7 +2764,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
         statusPatch.booking_timing = 'asap'
       } else {
         statusPatch.booking_timing = 'scheduled'
-        statusPatch.scheduled_for = effectiveScheduledFor
       }
 
       const { error: normalizeError } = await supabase
