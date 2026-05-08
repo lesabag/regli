@@ -1220,6 +1220,22 @@ export default function ClientDashboard({
   const isSearching = flow.screenState === 'searching'
   const isTrackingState = flow.screenState === 'tracking' || flow.screenState === 'active'
   const hasFutureOrders = upcomingScheduledItems.length > 0
+  const isActivelyMatchingJob = (
+    job:
+      | {
+          smart_dispatch_state?: string | null
+          booking_timing?: string | null
+          scheduled_for?: string | null
+          dispatch_state?: string | null
+          smart_dispatch_last_error?: string | null
+        }
+      | null
+      | undefined,
+  ) =>
+    !!job &&
+    (job.scheduled_for == null ||
+      job.booking_timing !== 'scheduled' ||
+      job.dispatch_state === 'dispatched')
   const isActivelyMatchingExhaustedJob = (
     job:
       | {
@@ -1232,15 +1248,13 @@ export default function ClientDashboard({
       | undefined,
   ) =>
     !!job &&
-    job.smart_dispatch_state === 'exhausted' &&
-    (job.scheduled_for == null ||
-      job.booking_timing !== 'scheduled' ||
-      job.dispatch_state === 'dispatched')
+    isActivelyMatchingJob(job) &&
+    job.smart_dispatch_state === 'exhausted'
   const isDispatchExhausted =
     isActivelyMatchingExhaustedJob(flow.currentJob) ||
     isActivelyMatchingExhaustedJob(flow.activeJob)
   const hasExplicitNoProviderState = [flow.currentJob, flow.activeJob].some((job) => {
-    if (!job) return false
+    if (!job || !isActivelyMatchingJob(job)) return false
     if (job.smart_dispatch_state === 'exhausted') return true
     const lastError = typeof job.smart_dispatch_last_error === 'string'
       ? job.smart_dispatch_last_error.toLowerCase()
@@ -1255,6 +1269,7 @@ export default function ClientDashboard({
   const shouldShowNoProvidersEmptyState =
     hasExplicitNoProviderState ||
     (
+      !hasFutureOrders &&
       flow.screenState !== 'searching' &&
       (
         flow.availabilityNotice?.title === 'No providers available right now' ||

@@ -177,6 +177,14 @@ type TipRow = {
   created_at: string
 }
 
+type DispatchAttemptTimerRow = {
+  id: string
+  status: string | null
+  offered_at: string | null
+  created_at: string | null
+  expires_at: string | null
+}
+
 type RequestWalkOptions = {
   requestServiceType?: string
   selectedBookingService?: string | null
@@ -566,6 +574,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const addressSourceRef = useRef<AddressSource>('gps')
   const searchStartTimeRef = useRef<number | null>(null)
 
+  const setSearchAttemptStartedAt = useCallback((startedAt: number, reason: string) => {
+    if (import.meta.env.DEV) {
+      console.log('[search timer] start', startedAt, reason)
+    }
+    searchStartTimeRef.current = startedAt
+    setSearchClockNow(startedAt)
+    setSearchStartTime(startedAt)
+    return startedAt
+  }, [])
+
   const setAddressSourceValue = useCallback(
     (nextSource: AddressSource) => {
       addressSourceRef.current = nextSource
@@ -580,15 +598,52 @@ export function useClientFlow(profileId: string, _profileName: string) {
   )
 
   const beginSearchAttempt = useCallback(() => {
-    const startedAt = Date.now()
-    if (import.meta.env.DEV) {
-      console.log('[search timer] start', startedAt, 'request_walk')
+    return setSearchAttemptStartedAt(Date.now(), 'request_walk')
+  }, [setSearchAttemptStartedAt])
+
+  const hydrateSearchAttemptFromDispatch = useCallback(async (requestId: string, reason: string) => {
+    if (!requestId) return
+
+    const fallbackStartedAt = Date.now()
+    const { data, error } = await supabase
+      .from('dispatch_attempts')
+      .select('id, status, offered_at, created_at, expires_at')
+      .eq('request_id', requestId)
+      .eq('status', 'pending')
+      .gt('expires_at', new Date().toISOString())
+      .order('expires_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.warn('[useClientFlow] dispatch attempt timer lookup failed', {
+        requestId,
+        reason,
+        message: error.message,
+      })
+      if (searchStartTimeRef.current == null) {
+        setSearchAttemptStartedAt(fallbackStartedAt, `${reason}:fallback_lookup_failed`)
+      }
+      return
     }
-    searchStartTimeRef.current = startedAt
-    setSearchClockNow(startedAt)
-    setSearchStartTime(startedAt)
-    return startedAt
-  }, [])
+
+    const attempt = (data as DispatchAttemptTimerRow | null) ?? null
+    const offeredAtMs = attempt?.offered_at ? new Date(attempt.offered_at).getTime() : NaN
+    const createdAtMs = attempt?.created_at ? new Date(attempt.created_at).getTime() : NaN
+    const expiresAtMs = attempt?.expires_at ? new Date(attempt.expires_at).getTime() : NaN
+    const derivedStartedAt =
+      Number.isFinite(offeredAtMs)
+        ? offeredAtMs
+        : Number.isFinite(createdAtMs)
+          ? createdAtMs
+          : Number.isFinite(expiresAtMs)
+            ? expiresAtMs - 60_000
+            : fallbackStartedAt
+
+    if (searchStartTimeRef.current == null || derivedStartedAt < searchStartTimeRef.current - 1000) {
+      setSearchAttemptStartedAt(derivedStartedAt, `${reason}:dispatch_attempt`)
+    }
+  }, [setSearchAttemptStartedAt])
 
   const clearSearchAttempt = useCallback(() => {
     searchStartTimeRef.current = null
@@ -1454,6 +1509,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setCompletionReviewJob(null)
     setScreenPhase(nextPhase)
     setScreenState(mapScreenStateFromPhase(nextPhase))
+    if (nextPhase === 'searching' && searchStartTimeRef.current == null) {
+      void hydrateSearchAttemptFromDispatch(row.id, 'applyCurrentRows')
+    }
     if (row.status === 'accepted') {
       clearSearchAttempt()
     }
@@ -1461,6 +1519,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearSearchAttempt,
     clearActiveState,
     currentJobId,
+    hydrateSearchAttemptFromDispatch,
     loadWalkerName,
     screenState,
     showDispatchExhaustedMessage,
@@ -1792,6 +1851,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
             lastActiveJobIdRef.current = updated.id
             setScreenPhase(nextPhase)
             setScreenState(mapScreenStateFromPhase(nextPhase))
+            if (nextPhase === 'searching' && searchStartTimeRef.current == null) {
+              void hydrateSearchAttemptFromDispatch(updated.id, 'realtime_update')
+            }
           }
 
           if (updated.status === 'accepted' && !isSuppressed && currentJobId === updated.id) {
@@ -2017,6 +2079,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     currentJob,
     walkerNameById,
     fetchCurrentAndLists,
+    hydrateSearchAttemptFromDispatch,
     loadWalkerName,
     clearActiveState,
     ratedJobIds,
