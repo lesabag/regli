@@ -95,6 +95,11 @@ function mergeScheduledDraft(datePart: string, timePart: string): string {
   return `${datePart}T${timePart}`
 }
 
+function safeScrollTo(el: HTMLElement | null, options: ScrollToOptions): void {
+  if (!el || typeof el.scrollTo !== 'function') return
+  el.scrollTo(options)
+}
+
 function bookingSubjectStorageKey(profileId: string, requestServiceType: string | null): string {
   const normalizedServiceType = (requestServiceType ?? 'default').trim().toLowerCase() || 'default'
   return `regli_client_recent_subjects_${profileId}_${normalizedServiceType}`
@@ -501,6 +506,11 @@ export default function ClientDashboard({
       @keyframes regliMenuSlideInRight {
         0% { opacity: 0; transform: translateX(28px); }
         100% { opacity: 1; transform: translateX(0); }
+      }
+
+      @keyframes regliScheduleSheetRise {
+        0% { opacity: 0; transform: translateY(24px) scale(0.985); }
+        100% { opacity: 1; transform: translateY(0) scale(1); }
       }
     `
     document.head.appendChild(style)
@@ -1665,6 +1675,18 @@ export default function ClientDashboard({
 
   const scheduleMinValue = getNowPlus15LocalInput()
   const scheduleDraftParts = splitScheduledDraft(clampScheduledDraft(scheduleDraft, scheduleMinValue))
+  const todayDateValue = splitScheduledDraft(scheduleMinValue).date
+  const tomorrowDateValue = (() => {
+    const todayDate = parseLocalDateTime(scheduleMinValue) ?? new Date()
+    const nextDate = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate() + 1)
+    return `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`
+  })()
+  const scheduleDatePreset: 'today' | 'tomorrow' | 'custom' =
+    scheduleDraftParts.date === todayDateValue
+      ? 'today'
+      : scheduleDraftParts.date === tomorrowDateValue
+        ? 'tomorrow'
+        : 'custom'
   const dateWheelOptions = useMemo(
     () => buildDateWheelOptions(scheduleMinValue, i18n.resolvedLanguage || 'en', t),
     [i18n.resolvedLanguage, scheduleMinValue, t],
@@ -1693,6 +1715,28 @@ export default function ClientDashboard({
       )
     },
     [scheduleMinValue],
+  )
+  const handleSchedulePresetSelect = useCallback((preset: 'today' | 'tomorrow') => {
+    const nextDate =
+      preset === 'today'
+        ? todayDateValue
+        : tomorrowDateValue
+
+    updateScheduledDraftFromWheel(
+      nextDate,
+      scheduleDraftParts.time.slice(0, 2),
+      scheduleDraftParts.time.slice(3, 5),
+    )
+  }, [
+    scheduleDraftParts.date,
+    scheduleDraftParts.time,
+    todayDateValue,
+    tomorrowDateValue,
+    updateScheduledDraftFromWheel,
+  ])
+  const scheduleDispatchRelativeLabel = useMemo(
+    () => getScheduledRelativeLabel(scheduleDraft),
+    [scheduleDraft],
   )
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
@@ -2067,14 +2111,22 @@ export default function ClientDashboard({
             onPointerDown={(e) => {
               const t = performance.now()
               console.log(`[perf] debug-btn pointerdown at ${Math.round(t)}ms`)
-              ;(e.currentTarget as HTMLButtonElement).style.background = '#22C55E'
+              const buttonEl = e.currentTarget as HTMLButtonElement | null
+              if (buttonEl) {
+                buttonEl.style.background = '#22C55E'
+              }
             }}
             onClick={(e) => {
               const t = performance.now()
               console.log(`[perf] debug-btn click at ${Math.round(t)}ms`)
-              ;(e.currentTarget as HTMLButtonElement).style.background = '#EF4444'
+              const buttonEl = e.currentTarget as HTMLButtonElement | null
+              if (buttonEl) {
+                buttonEl.style.background = '#EF4444'
+              }
               setTimeout(() => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = '#3B82F6'
+                if (buttonEl) {
+                  buttonEl.style.background = '#3B82F6'
+                }
               }, 400)
             }}
             style={{
@@ -2384,34 +2436,62 @@ export default function ClientDashboard({
           <div style={menuOverlayStyle} onClick={() => setShowSchedulePage(false)} />
           <div
             style={{
-              ...drawerPageStyle,
-              ...(isRtl ? drawerPageRtlStyle : drawerPageLtrStyle),
-              animation: isRtl
-                ? 'regliMenuSlideInRight 220ms cubic-bezier(0.22, 1, 0.36, 1)'
-                : 'regliMenuSlideInLeft 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+              ...scheduleSheetStyle,
+              direction: isRtl ? 'rtl' : 'ltr',
+              animation: 'regliScheduleSheetRise 240ms cubic-bezier(0.22, 1, 0.36, 1)',
             }}
           >
-            <div style={drawerPageHeaderStyle}>
-              <div style={drawerPageTitleStyle}>{t('booking.scheduleOrder')}</div>
+            <div style={scheduleSheetHandleStyle} />
+            <div style={scheduleSheetHeaderStyle}>
+              <div style={scheduleSheetHeaderCopyStyle}>
+                <div style={scheduleSheetTitleStyle}>
+                  {isRtl ? 'קביעת זמן לשירות' : 'Schedule Order'}
+                </div>
+                <div style={scheduleSheetSubtitleStyle}>
+                  {isRtl ? 'בחרו תאריך ושעה שמתאימים לכם.' : 'Choose the best day and time for your order.'}
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowSchedulePage(false)}
-                style={drawerPageCloseButtonStyle}
+                style={scheduleSheetCloseButtonStyle}
                 aria-label={t('common.close')}
               >
                 ✕
               </button>
             </div>
 
-            <div style={drawerPageScrollStyle}>
+            <div style={scheduleSheetScrollStyle}>
               <div style={schedulePageContentStyle}>
-                <div style={schedulePageIntroStyle}>
-                  <div style={scheduleDispatchNoticeStyle}>
-                    {t('booking.dispatchStartsAutomatically')}
-                  </div>
+                <div style={schedulePresetRowStyle}>
+                  <button
+                    type="button"
+                    onClick={() => handleSchedulePresetSelect('today')}
+                    style={{
+                      ...schedulePresetButtonStyle,
+                      ...(scheduleDatePreset === 'today' ? schedulePresetButtonActiveStyle : null),
+                    }}
+                  >
+                    {t('common.today')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSchedulePresetSelect('tomorrow')}
+                    style={{
+                      ...schedulePresetButtonStyle,
+                      ...(scheduleDatePreset === 'tomorrow' ? schedulePresetButtonActiveStyle : null),
+                    }}
+                  >
+                    {t('common.tomorrow')}
+                  </button>
                 </div>
 
                 <div style={schedulePickerCardStyle}>
+                  <div style={scheduleWheelHeaderRowStyle}>
+                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
+                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
+                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
+                  </div>
                   <div style={scheduleWheelWrapStyle}>
                     <div style={scheduleWheelHighlightStyle} />
                     <div style={scheduleWheelColumnsStyle}>
@@ -2453,16 +2533,35 @@ export default function ClientDashboard({
                   </div>
                 </div>
 
+                <div style={scheduleDispatchNoticeStyle}>
+                  <div style={scheduleInfoRowStyle}>
+                    <span style={scheduleInfoIconStyle} aria-hidden="true">⏰</span>
+                    <div style={scheduleInfoCopyStyle}>
+                      <div style={scheduleInfoTitleStyle}>
+                        {isRtl
+                          ? 'החיפוש יתחיל אוטומטית 15 דקות לפני הזמן שבחרת.'
+                          : 'The search will start automatically 15 minutes before the selected time.'}
+                      </div>
+                      {scheduleDispatchRelativeLabel && (
+                        <div style={scheduleInfoSubtitleStyle}>{scheduleDispatchRelativeLabel}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div style={scheduleSummaryCardStyle}>
-                  <div style={scheduleSummaryLabelStyle}>{t('menu.scheduledFor', { time: formatScheduledTime(scheduleDraft) })}</div>
-                  <div style={drawerPagePreviewStyle}>{formatScheduledDate(scheduleDraft)}</div>
+                  <div style={scheduleSummaryPrimaryStyle}>
+                    {isRtl
+                      ? `נקבע ל: ${formatScheduledSummaryDate(scheduleDraft)} בשעה ${formatScheduledTime(scheduleDraft)}`
+                      : `Scheduled for: ${formatScheduledSummaryDate(scheduleDraft)} at ${formatScheduledTime(scheduleDraft)}`}
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div style={drawerPageFooterStyle}>
+            <div style={scheduleSheetFooterStyle}>
               <ActionButton
-                label={t('booking.confirmSchedule')}
+                label={isRtl ? 'אישור הזמנה עתידית' : 'Confirm schedule'}
                 onClick={() => {
                   const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
                   flow.setBookingTiming('scheduled')
@@ -3269,7 +3368,7 @@ function WheelPickerColumn({
     if (!node) return
     const targetTop = selectedIndex * WHEEL_ROW_HEIGHT
     if (Math.abs(node.scrollTop - targetTop) > 2) {
-      node.scrollTo({ top: targetTop, behavior: 'smooth' })
+      safeScrollTo(node, { top: targetTop, behavior: 'smooth' })
     }
   }, [selectedIndex])
 
@@ -3288,12 +3387,14 @@ function WheelPickerColumn({
         ...wheelPickerColumnStyle,
         ...(isWide ? wheelPickerColumnWideStyle : null),
       }}
-      onScroll={(event) => {
+      onScroll={() => {
         if (scrollTimeoutRef.current != null) {
           window.clearTimeout(scrollTimeoutRef.current)
         }
 
-        const nextTop = event.currentTarget.scrollTop
+        const scrollEl = scrollRef.current
+        if (!scrollEl) return
+        const nextTop = scrollEl.scrollTop
         scrollTimeoutRef.current = window.setTimeout(() => {
           const nextIndex = Math.max(
             0,
@@ -3303,7 +3404,7 @@ function WheelPickerColumn({
           if (nextValue && nextValue !== value) {
             onChange(nextValue)
           }
-          event.currentTarget.scrollTo({
+          safeScrollTo(scrollRef.current, {
             top: nextIndex * WHEEL_ROW_HEIGHT,
             behavior: 'smooth',
           })
@@ -3749,6 +3850,47 @@ function formatScheduledTime(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
+}
+
+function formatScheduledSummaryDate(value: string | null | undefined): string {
+  const dt = parseDateTimeFlexible(value)
+  if (!dt) return i18n.t('menu.scheduledWalk')
+  return dt.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+}
+
+function getScheduledRelativeLabel(value: string | null | undefined): string | null {
+  const dt = parseLocalDateTime(value) ?? parseDateTimeFlexible(value)
+  if (!dt) return null
+
+  const diffMs = dt.getTime() - Date.now()
+  if (diffMs <= 0) return null
+
+  const totalMinutes = Math.round(diffMs / 60000)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  const isHebrew = i18n.resolvedLanguage === 'he'
+
+  if (isHebrew) {
+    if (hours > 0 && minutes > 0) {
+      return `(בעוד ${hours} שעות ו-${minutes} דקות)`
+    }
+    if (hours > 0) {
+      return hours === 1 ? '(בעוד שעה)' : `(בעוד ${hours} שעות)`
+    }
+    return minutes === 1 ? '(בעוד דקה)' : `(בעוד ${minutes} דקות)`
+  }
+
+  if (hours > 0 && minutes > 0) {
+    return `(In ${hours} hour${hours === 1 ? '' : 's'} and ${minutes} minute${minutes === 1 ? '' : 's'})`
+  }
+  if (hours > 0) {
+    return `(In ${hours} hour${hours === 1 ? '' : 's'})`
+  }
+  return `(In ${minutes} minute${minutes === 1 ? '' : 's'})`
 }
 
 function getScheduledDispatchWindowLabel(value: string | null | undefined): string | null {
@@ -5407,133 +5549,167 @@ const burgerSectionSubtitleStyle: React.CSSProperties = {
   lineHeight: 1.45,
 }
 
-const drawerPageStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 0,
-  bottom: 0,
-  width: 'min(420px, 100%)',
-  maxWidth: '100%',
-  background: '#FFFFFF',
-  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.22)',
-  zIndex: 40002,
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden',
-  boxSizing: 'border-box',
-  paddingTop: 'calc(22px + env(safe-area-inset-top))',
-  paddingBottom: 'calc(18px + env(safe-area-inset-bottom))',
-}
-
-const drawerPageLtrStyle: React.CSSProperties = {
-  left: 0,
-  borderTopRightRadius: 28,
-}
-
-const drawerPageRtlStyle: React.CSSProperties = {
-  right: 0,
-  borderTopLeftRadius: 28,
-}
-
-const drawerPageHeaderStyle: React.CSSProperties = {
-  padding: '0 16px 10px',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-}
-
-const drawerPageTitleStyle: React.CSSProperties = {
-  fontSize: 20,
-  fontWeight: 900,
-  color: '#0F172A',
-}
-
-const drawerPageCloseButtonStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 12,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 18,
-  fontWeight: 800,
-  cursor: 'pointer',
-  flexShrink: 0,
-}
-
-const drawerPageScrollStyle: React.CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto',
-  padding: '0 16px 10px',
-  display: 'flex',
-  alignItems: 'stretch',
-}
-
-const drawerPagePreviewStyle: React.CSSProperties = {
-  fontSize: 20,
-  lineHeight: 1.2,
-  fontWeight: 900,
-  color: '#0F172A',
-}
-
-const drawerPageFooterStyle: React.CSSProperties = {
-  padding: '8px 16px 0',
-}
-
 const menuFooterActionWrapStyle: React.CSSProperties = {
   marginTop: 'auto',
   paddingTop: 6,
 }
 
-const schedulePageContentStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 360,
-  margin: '0 auto',
-  minHeight: '100%',
+const scheduleSheetStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 40002,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
+  borderTopLeftRadius: 30,
+  borderTopRightRadius: 30,
+  boxShadow: '0 -20px 50px rgba(15, 23, 42, 0.16)',
   display: 'flex',
   flexDirection: 'column',
-  justifyContent: 'center',
-  gap: 12,
+  boxSizing: 'border-box',
+  padding: '10px 16px calc(16px + env(safe-area-inset-bottom))',
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
 }
 
-const schedulePageIntroStyle: React.CSSProperties = {
+const scheduleSheetHandleStyle: React.CSSProperties = {
+  width: 44,
+  height: 5,
+  borderRadius: 999,
+  background: 'rgba(148, 163, 184, 0.45)',
+  margin: '0 auto 12px',
+  flexShrink: 0,
+}
+
+const scheduleSheetHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginBottom: 12,
+}
+
+const scheduleSheetHeaderCopyStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
   display: 'grid',
-  gap: 6,
+  gap: 4,
   textAlign: 'center',
 }
 
-const scheduleDispatchNoticeStyle: React.CSSProperties = {
-  borderRadius: 16,
-  background: '#EFF6FF',
-  border: '1px solid #BFDBFE',
-  color: '#1D4ED8',
+const scheduleSheetTitleStyle: React.CSSProperties = {
+  fontSize: 21,
+  lineHeight: 1.2,
+  fontWeight: 900,
+  color: '#0F172A',
+  letterSpacing: '-0.02em',
+}
+
+const scheduleSheetSubtitleStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const scheduleSheetCloseButtonStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 12,
+  border: '1px solid rgba(203, 213, 225, 0.9)',
+  background: 'rgba(255,255,255,0.9)',
+  color: '#0F172A',
+  fontSize: 17,
   fontWeight: 800,
+  cursor: 'pointer',
+  flexShrink: 0,
+  display: 'grid',
+  placeItems: 'center',
+}
+
+const scheduleSheetScrollStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  maxHeight: 'min(72vh, 560px)',
+  overflowY: 'auto',
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
+  WebkitOverflowScrolling: 'touch',
+}
+
+const schedulePageContentStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: 388,
+  margin: '0 auto',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+}
+
+const schedulePresetRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 8,
+}
+
+const schedulePresetButtonStyle: React.CSSProperties = {
+  borderRadius: 16,
+  border: '1px solid rgba(203, 213, 225, 0.95)',
+  background: 'rgba(248, 250, 252, 0.96)',
+  color: '#0F172A',
+  minHeight: 44,
   padding: '10px 12px',
-  boxShadow: '0 8px 18px rgba(37, 99, 235, 0.08)',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  whiteSpace: 'nowrap',
+}
+
+const schedulePresetButtonActiveStyle: React.CSSProperties = {
+  background: 'linear-gradient(180deg, #12B3A6 0%, #0F8E85 100%)',
+  borderColor: '#0F8E85',
+  color: '#FFFFFF',
+  boxShadow: '0 10px 22px rgba(15, 142, 133, 0.24)',
 }
 
 const schedulePickerCardStyle: React.CSSProperties = {
   borderRadius: 24,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
   padding: 14,
-  boxShadow: '0 14px 34px rgba(15, 23, 42, 0.08)',
+  boxShadow: '0 18px 38px rgba(15, 23, 42, 0.08)',
 }
 
 const WHEEL_ROW_HEIGHT = 44
 
+const scheduleWheelHeaderRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
+  gap: 10,
+  marginBottom: 10,
+}
+
+const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.2,
+  fontWeight: 800,
+  color: '#64748B',
+  textAlign: 'center',
+}
+
 const scheduleWheelWrapStyle: React.CSSProperties = {
   position: 'relative',
-  height: 206,
+  height: 204,
 }
 
 const scheduleWheelColumnsStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 8,
+  gap: 10,
   height: '100%',
 }
 
@@ -5544,27 +5720,78 @@ const scheduleWheelHighlightStyle: React.CSSProperties = {
   top: '50%',
   height: WHEEL_ROW_HEIGHT,
   transform: 'translateY(-50%)',
-  borderRadius: 18,
-  background: 'rgba(239, 244, 255, 0.96)',
-  border: '1px solid rgba(191, 219, 254, 0.92)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.85)',
+  borderRadius: 16,
+  background: 'rgba(248, 250, 252, 0.98)',
+  border: '1px solid rgba(203, 213, 225, 0.92)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.92), 0 6px 18px rgba(148, 163, 184, 0.12)',
   pointerEvents: 'none',
+}
+
+const scheduleDispatchNoticeStyle: React.CSSProperties = {
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, #F3F7FB 0%, #EDF4FB 100%)',
+  border: '1px solid rgba(191, 219, 254, 0.95)',
+  padding: '12px 14px',
+  boxShadow: '0 10px 24px rgba(59, 130, 246, 0.08)',
+}
+
+const scheduleInfoRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+}
+
+const scheduleInfoIconStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  background: 'rgba(59, 130, 246, 0.12)',
+  color: '#2563EB',
+  display: 'grid',
+  placeItems: 'center',
+  flexShrink: 0,
+  fontSize: 15,
+}
+
+const scheduleInfoCopyStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+}
+
+const scheduleInfoTitleStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.45,
+  fontWeight: 800,
+  color: '#1E3A8A',
+}
+
+const scheduleInfoSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: '#64748B',
 }
 
 const scheduleSummaryCardStyle: React.CSSProperties = {
   borderRadius: 20,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-  padding: 12,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #F8FAFC 100%)',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  padding: '14px 16px',
   display: 'grid',
-  gap: 4,
+  gap: 6,
   textAlign: 'center',
+  boxShadow: '0 14px 30px rgba(15, 23, 42, 0.06)',
 }
 
-const scheduleSummaryLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  color: '#64748B',
+const scheduleSummaryPrimaryStyle: React.CSSProperties = {
+  fontSize: 16,
+  lineHeight: 1.45,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const scheduleSheetFooterStyle: React.CSSProperties = {
+  paddingTop: 4,
 }
 
 const wheelPickerColumnStyle: React.CSSProperties = {
