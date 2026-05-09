@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { distanceKm, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
@@ -12,6 +13,19 @@ import {
   isCompletionReviewRequired,
 } from '../utils/completionReview'
 import i18n from '../i18n'
+
+interface CapacitorAppState {
+  isActive: boolean
+}
+
+interface CapacitorAppPlugin {
+  addListener(
+    eventName: 'appStateChange',
+    listenerFunc: (state: CapacitorAppState) => void,
+  ): Promise<PluginListenerHandle>
+}
+
+const NativeApp = registerPlugin<CapacitorAppPlugin>('App')
 
 type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
 type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
@@ -223,6 +237,7 @@ const JOB_SELECT =
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
 const LOCATION_REFRESH_METERS = 50
+const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
 
 
 function pad(n: number): string {
@@ -504,6 +519,25 @@ function mergeWalkRequest(prev: WalkRequestRow | null, next: WalkRequestRow): Wa
   return merged
 }
 
+function logRecovery(
+  tag: '[Recovery]' | '[RealtimeReconnect]' | '[Hydration]' | '[ForegroundResume]',
+  message: string,
+  details?: Record<string, unknown>,
+) {
+  console.log(tag, message, details ?? {})
+}
+
+function isAuthoritativeRecoveryReason(reason: string): boolean {
+  return (
+    reason === 'cold_start' ||
+    reason.includes('foreground') ||
+    reason.includes('visible') ||
+    reason.includes('focus') ||
+    reason.includes('pageshow') ||
+    reason.includes('realtime_subscribed')
+  )
+}
+
 export function useClientFlow(profileId: string, _profileName: string) {
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
@@ -571,8 +605,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const dismissedExhaustedRequestIdRef = useRef<string | null>(null)
   const fullRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const currentOnlyRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const hydrationRunIdRef = useRef(0)
+  const realtimeHydrationAtRef = useRef<Map<string, number>>(new Map())
   const addressSourceRef = useRef<AddressSource>('gps')
   const searchStartTimeRef = useRef<number | null>(null)
+  const currentJobIdRef = useRef<string | null>(null)
+  const currentJobRef = useRef<WalkRequestRow | null>(null)
+  const screenStateRef = useRef<ScreenState>('idle')
+  const walkerNameByIdRef = useRef<Map<string, string>>(new Map())
+  const ratedJobIdsRef = useRef<Set<string>>(new Set())
+  const fetchCurrentAndListsRef = useRef<(reason?: string) => Promise<void>>(async () => {})
+  const hydrateSearchAttemptFromDispatchRef = useRef<(requestId: string, reason: string) => Promise<void>>(async () => {})
+  const loadWalkerNameRef = useRef<(walkerId: string) => Promise<void>>(async () => {})
+  const clearActiveStateRef = useRef<() => void>(() => {})
+  const showLifecycleBannerRef = useRef<(
+    jobId: string,
+    type: 'accepted' | 'arrived' | 'start_walk' | 'complete',
+    message: string,
+  ) => void>(() => {})
+  const showDispatchExhaustedMessageRef = useRef<(requestId: string) => void>(() => {})
+  const shouldShowCompletionReviewRef = useRef<(jobId: string) => boolean>(() => true)
 
   const setSearchAttemptStartedAt = useCallback((startedAt: number, reason: string) => {
     if (import.meta.env.DEV) {
@@ -1444,7 +1496,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearActiveState()
   }, [clearActiveState])
 
-  const applyCurrentRows = useCallback((currentRows: WalkRequestRow[]) => {
+  const applyCurrentRows = useCallback((currentRows: WalkRequestRow[], reason = 'unknown') => {
     const row = getNewestActiveRequest(
       currentRows,
       suppressedActiveRequestIdsRef.current,
@@ -1456,9 +1508,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
       staleActiveCutoffRef.current,
     )
 
+    logRecovery('[Recovery]', 'client active request candidates evaluated', {
+      profileId,
+      reason,
+      rowCount: currentRows.length,
+      activeRequestId: row?.id ?? null,
+      activeStatus: row?.status ?? null,
+      activePhase: row ? getServicePhase(row) : null,
+      exhaustedRequestId: exhaustedRow?.id ?? null,
+      currentJobId,
+      screenState,
+      screenPhase,
+    })
+
     if (!row) {
       setCompletionReviewJob(null)
-      if (screenState === 'searching' && currentJobId) {
+      if (
+        screenState === 'searching' &&
+        currentJobId &&
+        !isAuthoritativeRecoveryReason(reason)
+      ) {
         return
       }
       if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
@@ -1527,13 +1596,33 @@ export function useClientFlow(profileId: string, _profileName: string) {
     shouldShowCompletionReview,
   ])
 
-  const fetchCurrentJobState = useCallback(async () => {
+  const fetchCurrentJobState = useCallback(async (reason = 'current_job_state') => {
+    if (fullRefreshInFlightRef.current) {
+      logRecovery('[Hydration]', 'client current hydration joined full hydration', {
+        profileId,
+        reason,
+      })
+      await fullRefreshInFlightRef.current
+      return
+    }
+
     if (currentOnlyRefreshInFlightRef.current) {
+      logRecovery('[Hydration]', 'client current hydration already in flight', {
+        profileId,
+        reason,
+      })
       await currentOnlyRefreshInFlightRef.current
       return
     }
 
     const run = (async () => {
+      const runId = ++hydrationRunIdRef.current
+      logRecovery('[Hydration]', 'client current hydration started', {
+        profileId,
+        reason,
+        runId,
+      })
+
       const { data, error } = await supabase
         .from('walk_requests')
         .select(JOB_SELECT)
@@ -1544,11 +1633,22 @@ export function useClientFlow(profileId: string, _profileName: string) {
         .limit(10)
 
       if (error) {
-        console.warn('[useClientFlow] current request unavailable:', error.message)
+        console.warn('[Hydration] client current request unavailable:', {
+          profileId,
+          reason,
+          message: error.message,
+        })
         return
       }
 
-      applyCurrentRows((data as WalkRequestRow[] | null) ?? [])
+      const rows = (data as WalkRequestRow[] | null) ?? []
+      applyCurrentRows(rows, reason)
+      logRecovery('[Hydration]', 'client current hydration completed', {
+        profileId,
+        reason,
+        runId,
+        rowCount: rows.length,
+      })
     })().finally(() => {
       currentOnlyRefreshInFlightRef.current = null
     })
@@ -1576,13 +1676,32 @@ export function useClientFlow(profileId: string, _profileName: string) {
     [profileId],
   )
 
-  const fetchCurrentAndLists = useCallback(async () => {
+  const fetchCurrentAndLists = useCallback(async (reason = 'full_refresh') => {
     if (fullRefreshInFlightRef.current) {
+      logRecovery('[Hydration]', 'client full hydration already in flight', {
+        profileId,
+        reason,
+      })
       await fullRefreshInFlightRef.current
       return
     }
 
     const run = (async () => {
+    if (currentOnlyRefreshInFlightRef.current) {
+      logRecovery('[Hydration]', 'client full hydration waiting for current hydration', {
+        profileId,
+        reason,
+      })
+      await currentOnlyRefreshInFlightRef.current
+    }
+
+    const runId = ++hydrationRunIdRef.current
+    logRecovery('[Hydration]', 'client full hydration started', {
+      profileId,
+      reason,
+      runId,
+    })
+
     const [
       currentResult,
       upcomingResult,
@@ -1638,7 +1757,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const tipsRes = settledQuery<TipRow[]>(tipsResult, 'walker tips')
 
     if (currentRes.error) {
-      console.warn('[useClientFlow] current request unavailable:', currentRes.error.message)
+      console.warn('[Hydration] client current request unavailable:', {
+        profileId,
+        reason,
+        message: currentRes.error.message,
+      })
     }
     if (upcomingRes.error) {
       console.warn('[useClientFlow] upcoming requests unavailable:', upcomingRes.error.message)
@@ -1659,7 +1782,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (currentRes.error) {
       // Preserve the current UI state on transient read failures.
     } else {
-      applyCurrentRows((currentRes.data as WalkRequestRow[] | null) ?? [])
+      applyCurrentRows((currentRes.data as WalkRequestRow[] | null) ?? [], reason)
     }
 
     const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
@@ -1747,6 +1870,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
     walkerIds.forEach((id) => {
       void loadWalkerName(id)
     })
+    logRecovery('[Hydration]', 'client full hydration completed', {
+      profileId,
+      reason,
+      runId,
+      currentCount: ((currentRes.data as WalkRequestRow[] | null) ?? []).length,
+      upcomingCount: upcoming.length,
+      completedCount: completed.length,
+    })
     })().finally(() => {
       fullRefreshInFlightRef.current = null
     })
@@ -1761,41 +1892,125 @@ export function useClientFlow(profileId: string, _profileName: string) {
   ])
 
   useEffect(() => {
-    void fetchCurrentAndLists()
-  }, [fetchCurrentAndLists])
+    currentJobIdRef.current = currentJobId
+    currentJobRef.current = currentJob
+    screenStateRef.current = screenState
+    walkerNameByIdRef.current = walkerNameById
+    ratedJobIdsRef.current = ratedJobIds
+    fetchCurrentAndListsRef.current = fetchCurrentAndLists
+    hydrateSearchAttemptFromDispatchRef.current = hydrateSearchAttemptFromDispatch
+    loadWalkerNameRef.current = loadWalkerName
+    clearActiveStateRef.current = clearActiveState
+    showLifecycleBannerRef.current = showLifecycleBanner
+    showDispatchExhaustedMessageRef.current = showDispatchExhaustedMessage
+    shouldShowCompletionReviewRef.current = shouldShowCompletionReview
+  }, [
+    clearActiveState,
+    currentJob,
+    currentJobId,
+    fetchCurrentAndLists,
+    hydrateSearchAttemptFromDispatch,
+    loadWalkerName,
+    ratedJobIds,
+    screenState,
+    showDispatchExhaustedMessage,
+    showLifecycleBanner,
+    shouldShowCompletionReview,
+    walkerNameById,
+  ])
 
   useEffect(() => {
-    const refresh = () => {
+    logRecovery('[Recovery]', 'client cold-start hydration scheduled', { profileId })
+    void fetchCurrentAndListsRef.current('cold_start')
+  }, [profileId])
+
+  useEffect(() => {
+    const refresh = (reason: string) => {
       if (document.visibilityState === 'hidden') return
       if (screenState === 'idle') {
-        void fetchCurrentAndLists()
+        void fetchCurrentAndLists(reason)
         return
       }
-      void fetchCurrentJobState()
+      void fetchCurrentJobState(reason)
     }
 
     const pollId = window.setInterval(
-      refresh,
+      () => refresh(screenState === 'idle' ? 'poll_idle' : 'poll_active'),
       screenState === 'idle' ? 12_000 : 10_000,
     )
 
     const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') refresh()
+      if (document.visibilityState === 'visible') {
+        logRecovery('[ForegroundResume]', 'client document became visible', {
+          profileId,
+          screenState,
+          currentJobId,
+        })
+        refresh('document_visible')
+      }
     }
 
-    window.addEventListener('focus', refresh)
-    window.addEventListener('pageshow', refresh)
+    const refreshOnFocus = () => {
+      logRecovery('[ForegroundResume]', 'client window focus/pageshow refresh', {
+        profileId,
+        screenState,
+        currentJobId,
+      })
+      refresh('window_focus_pageshow')
+    }
+
+    window.addEventListener('focus', refreshOnFocus)
+    window.addEventListener('pageshow', refreshOnFocus)
     document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
       window.clearInterval(pollId)
-      window.removeEventListener('focus', refresh)
-      window.removeEventListener('pageshow', refresh)
+      window.removeEventListener('focus', refreshOnFocus)
+      window.removeEventListener('pageshow', refreshOnFocus)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [fetchCurrentAndLists, fetchCurrentJobState, screenState])
+  }, [currentJobId, fetchCurrentAndLists, fetchCurrentJobState, profileId, screenState])
 
   useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+
+    let cancelled = false
+    let handle: PluginListenerHandle | null = null
+
+    NativeApp.addListener('appStateChange', (state) => {
+      logRecovery('[ForegroundResume]', 'client native app state changed', {
+        profileId,
+        isActive: state.isActive,
+        screenState,
+        currentJobId,
+      })
+      if (!state.isActive) return
+
+      if (screenState === 'idle') {
+        void fetchCurrentAndLists('native_foreground_resume')
+        return
+      }
+      void fetchCurrentJobState('native_foreground_resume')
+    })
+      .then((listener) => {
+        if (cancelled) {
+          void listener.remove()
+          return
+        }
+        handle = listener
+      })
+      .catch((err) => {
+        console.warn('[ForegroundResume] client native app state listener unavailable', err)
+      })
+
+    return () => {
+      cancelled = true
+      if (handle) void handle.remove()
+    }
+  }, [currentJobId, fetchCurrentAndLists, fetchCurrentJobState, profileId, screenState])
+
+  useEffect(() => {
+    let isCleaningUp = false
     const channel = supabase
       .channel(`client-flow-${profileId}`)
       .on(
@@ -1813,13 +2028,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }
 
           if (updated.walker_id) {
-            void loadWalkerName(updated.walker_id)
+            void loadWalkerNameRef.current(updated.walker_id)
           }
 
           const belongsToCurrentFlow =
-            updated.id === currentJobId ||
+            updated.id === currentJobIdRef.current ||
             updated.id === lastActiveJobIdRef.current ||
-            screenState === 'searching'
+            screenStateRef.current === 'searching'
 
           const previousPhase = lifecyclePhaseRef.current.get(updated.id) ?? 'idle'
           const nextPhase = getServicePhase(updated)
@@ -1832,8 +2047,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setScreenPhase('idle')
             setScreenState('idle')
             clearSearchAttempt()
-            showDispatchExhaustedMessage(updated.id)
-            void fetchCurrentAndLists()
+            showDispatchExhaustedMessageRef.current(updated.id)
+            void fetchCurrentAndListsRef.current('realtime_exhausted')
             return
           }
 
@@ -1844,7 +2059,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             (updated.status === 'open' || updated.status === 'awaiting_payment') &&
             isCurrentClientJob(updated) &&
             !isSuppressed &&
-            currentJobId === updated.id
+            currentJobIdRef.current === updated.id
           ) {
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
@@ -1852,11 +2067,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setScreenPhase(nextPhase)
             setScreenState(mapScreenStateFromPhase(nextPhase))
             if (nextPhase === 'searching' && searchStartTimeRef.current == null) {
-              void hydrateSearchAttemptFromDispatch(updated.id, 'realtime_update')
+              void hydrateSearchAttemptFromDispatchRef.current(updated.id, 'realtime_update')
             }
           }
 
-          if (updated.status === 'accepted' && !isSuppressed && currentJobId === updated.id) {
+          if (updated.status === 'accepted' && !isSuppressed && currentJobIdRef.current === updated.id) {
             const labels = getServiceLabels(updated.service_type)
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
@@ -1864,10 +2079,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
             clearSearchAttempt()
             if (isCompletionReviewJob(updated)) {
               const walkerLabel = updated.walker_id
-                ? walkerNameById.get(updated.walker_id) || 'Provider'
+                ? walkerNameByIdRef.current.get(updated.walker_id) || 'Provider'
                 : 'Provider'
               setCompletionReviewJob(
-                shouldShowCompletionReview(updated.id)
+                shouldShowCompletionReviewRef.current(updated.id)
                   ? {
                       jobId: updated.id,
                       walkerId: updated.walker_id,
@@ -1878,7 +2093,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               setPendingCompletionConfirmation(null)
               setScreenPhase('idle')
               setScreenState('idle')
-              void fetchCurrentAndLists()
+              void fetchCurrentAndListsRef.current('realtime_completion_review')
               return
             }
             setCompletionReviewJob(null)
@@ -1887,7 +2102,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
             if (!acceptNotifiedRef.current.has(updated.id)) {
               acceptNotifiedRef.current.add(updated.id)
-              showLifecycleBanner(
+              showLifecycleBannerRef.current(
                 updated.id,
                 'accepted',
                 'Provider is on the way.',
@@ -1896,7 +2111,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
             if (updated.provider_arrived_at && !updated.client_arrival_confirmed_at && !arriveNotifiedRef.current.has(updated.id)) {
               arriveNotifiedRef.current.add(updated.id)
-              showLifecycleBanner(updated.id, 'arrived', 'Provider has arrived.')
+              showLifecycleBannerRef.current(updated.id, 'arrived', 'Provider has arrived.')
             }
 
             if (
@@ -1907,7 +2122,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               !startNotifiedRef.current.has(updated.id)
             ) {
               startNotifiedRef.current.add(updated.id)
-              showLifecycleBanner(updated.id, 'start_walk', labels.startedPast)
+              showLifecycleBannerRef.current(updated.id, 'start_walk', labels.startedPast)
             }
           }
 
@@ -1916,10 +2131,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
             updated.service_completed_at &&
             updated.service_started_at &&
             !isCompletionReviewJob(updated) &&
-            (updated.id === currentJobId || updated.id === lastActiveJobIdRef.current)
+            (updated.id === currentJobIdRef.current || updated.id === lastActiveJobIdRef.current)
           ) {
             const walkerLabel = updated.walker_id
-              ? walkerNameById.get(updated.walker_id) || 'Provider'
+              ? walkerNameByIdRef.current.get(updated.walker_id) || 'Provider'
               : 'Provider'
             setPendingCompletionConfirmation((prev) => {
               if (prev?.jobId === updated.id) return prev
@@ -1934,25 +2149,25 @@ export function useClientFlow(profileId: string, _profileName: string) {
           if (updated.status === 'completed') {
             setCompletionReviewJob(null)
             const belongsToCurrentFlow =
-              updated.id === currentJobId || updated.id === lastActiveJobIdRef.current
+              updated.id === currentJobIdRef.current || updated.id === lastActiveJobIdRef.current
 
             if (belongsToCurrentFlow) {
               flowCompletedJobIdsRef.current.add(updated.id)
-              clearActiveState()
+              clearActiveStateRef.current()
             }
 
             if (!completeNotifiedRef.current.has(updated.id)) {
               completeNotifiedRef.current.add(updated.id)
-              showLifecycleBanner(updated.id, 'complete', getServiceLabels(updated.service_type).completedPast)
+              showLifecycleBannerRef.current(updated.id, 'complete', getServiceLabels(updated.service_type).completedPast)
             }
 
             if (
               belongsToCurrentFlow &&
               updated.walker_id &&
-              !ratedJobIds.has(updated.id) &&
+              !ratedJobIdsRef.current.has(updated.id) &&
               !dismissedCompletionIdsRef.current.has(updated.id)
             ) {
-              const walkerLabel = walkerNameById.get(updated.walker_id) || 'Walker'
+              const walkerLabel = walkerNameByIdRef.current.get(updated.walker_id) || 'Walker'
               setCompletionJob({
                 jobId: updated.id,
                 walkerId: updated.walker_id,
@@ -1963,7 +2178,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
           if (updated.status === 'cancelled') {
             setCompletionReviewJob(null)
-            if (updated.id === currentJobId) {
+            if (updated.id === currentJobIdRef.current) {
               if (
                 typeof updated.smart_dispatch_last_error === 'string' &&
                 (
@@ -1978,15 +2193,15 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 setScreenPhase('idle')
                 setScreenState('idle')
                 clearSearchAttempt()
-                showDispatchExhaustedMessage(updated.id)
-                void fetchCurrentAndLists()
+                showDispatchExhaustedMessageRef.current(updated.id)
+                void fetchCurrentAndListsRef.current('realtime_cancelled_exhausted')
                 return
               }
-              clearActiveState()
+              clearActiveStateRef.current()
             }
           }
 
-          void fetchCurrentAndLists()
+          void fetchCurrentAndListsRef.current('realtime_walk_request_change')
         },
       )
       .on(
@@ -2002,30 +2217,31 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
           if (event.type === 'started' || event.type === 'start_walk') {
             if (completeNotifiedRef.current.has(event.jobId)) return
-            if (event.jobId === currentJobId || event.jobId === lastActiveJobIdRef.current) {
+            if (event.jobId === currentJobIdRef.current || event.jobId === lastActiveJobIdRef.current) {
               setScreenPhase('in_progress')
               setScreenState('active')
             }
             if (!startNotifiedRef.current.has(event.jobId)) {
               startNotifiedRef.current.add(event.jobId)
-              showLifecycleBanner(event.jobId, 'start_walk', event.message || 'Service started.')
+              showLifecycleBannerRef.current(event.jobId, 'start_walk', event.message || 'Service started.')
             }
           } else if (event.type === 'accepted') {
-            showLifecycleBanner(
+            showLifecycleBannerRef.current(
               event.jobId,
               'accepted',
               event.message || 'Provider is on the way.',
             )
           } else if (event.type === 'arrived') {
-            if (event.jobId === currentJobId || event.jobId === lastActiveJobIdRef.current) {
+            if (event.jobId === currentJobIdRef.current || event.jobId === lastActiveJobIdRef.current) {
               setScreenPhase('arrived_pending_confirmation')
               setScreenState('tracking')
             }
-            showLifecycleBanner(event.jobId, 'arrived', event.message || 'Provider has arrived.')
-            void fetchCurrentAndLists()
+            showLifecycleBannerRef.current(event.jobId, 'arrived', event.message || 'Provider has arrived.')
+            void fetchCurrentAndListsRef.current('broadcast_arrived')
           } else if (event.type === 'completion_pending') {
+            const currentJob = currentJobRef.current
             if (currentJob?.id === event.jobId && isCompletionReviewJob(currentJob)) return
-            const walkerLabel = event.walkerName || (event.walkerId ? walkerNameById.get(event.walkerId) : null) || 'Provider'
+            const walkerLabel = event.walkerName || (event.walkerId ? walkerNameByIdRef.current.get(event.walkerId) : null) || 'Provider'
             setPendingCompletionConfirmation({
               jobId: event.jobId,
               walkerName: walkerLabel,
@@ -2036,21 +2252,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
             lifecyclePhaseRef.current.set(event.jobId, 'completed')
             if (!completeNotifiedRef.current.has(event.jobId)) {
               completeNotifiedRef.current.add(event.jobId)
-              showLifecycleBanner(event.jobId, 'complete', event.message || 'Service completed.')
+              showLifecycleBannerRef.current(event.jobId, 'complete', event.message || 'Service completed.')
             }
             if (
               event.walkerId &&
-              !ratedJobIds.has(event.jobId) &&
+              !ratedJobIdsRef.current.has(event.jobId) &&
               !dismissedCompletionIdsRef.current.has(event.jobId)
             ) {
               setCompletionReviewJob(null)
               setCompletionJob({
                 jobId: event.jobId,
                 walkerId: event.walkerId,
-                walkerName: event.walkerName || walkerNameById.get(event.walkerId) || 'Walker',
+                walkerName: event.walkerName || walkerNameByIdRef.current.get(event.walkerId) || 'Walker',
               })
             }
-            void fetchCurrentAndLists()
+            void fetchCurrentAndListsRef.current('broadcast_completed')
           }
         },
       )
@@ -2058,36 +2274,47 @@ export function useClientFlow(profileId: string, _profileName: string) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'ratings', filter: `from_user_id=eq.${profileId}` },
         () => {
-          void fetchCurrentAndLists()
+          void fetchCurrentAndListsRef.current('realtime_rating_from_user')
         },
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'ratings', filter: `to_user_id=eq.${profileId}` },
         () => {
-          void fetchCurrentAndLists()
+          void fetchCurrentAndListsRef.current('realtime_rating_to_user')
         },
       )
-      .subscribe()
+      .subscribe((status) => {
+        if (isCleaningUp && status === 'CLOSED') {
+          logRecovery('[RealtimeReconnect]', 'client realtime closed during cleanup', { profileId })
+          return
+        }
+        logRecovery('[RealtimeReconnect]', 'client realtime status changed', {
+          profileId,
+          status,
+        })
+        if (status === 'SUBSCRIBED') {
+          const reason = 'realtime_subscribed'
+          const now = Date.now()
+          const lastRunAt = realtimeHydrationAtRef.current.get(reason) ?? 0
+          if (now - lastRunAt < REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS) {
+            logRecovery('[RealtimeReconnect]', 'client realtime subscribed hydration throttled', {
+              profileId,
+              reason,
+              msSinceLastRun: now - lastRunAt,
+            })
+            return
+          }
+          realtimeHydrationAtRef.current.set(reason, now)
+          void fetchCurrentAndListsRef.current(reason)
+        }
+      })
 
     return () => {
+      isCleaningUp = true
       void supabase.removeChannel(channel)
     }
-  }, [
-    profileId,
-    currentJobId,
-    currentJob,
-    walkerNameById,
-    fetchCurrentAndLists,
-    hydrateSearchAttemptFromDispatch,
-    loadWalkerName,
-    clearActiveState,
-    ratedJobIds,
-    showLifecycleBanner,
-    screenState,
-    showDispatchExhaustedMessage,
-    shouldShowCompletionReview,
-  ])
+  }, [profileId])
 
   useEffect(() => {
     if (!currentJob || currentJob.status !== 'accepted' || !currentJob.provider_arrived_at) return

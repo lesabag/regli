@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import { isCompletionReviewRequired } from '../utils/completionReview'
+
+interface CapacitorAppState {
+  isActive: boolean
+}
+
+interface CapacitorAppPlugin {
+  addListener(
+    eventName: 'appStateChange',
+    listenerFunc: (state: CapacitorAppState) => void,
+  ): Promise<PluginListenerHandle>
+}
+
+const NativeApp = registerPlugin<CapacitorAppPlugin>('App')
 
 export type WalkerScreenState =
   | 'offline'
@@ -200,10 +213,19 @@ const IDLE_LOCATION_BROADCAST_MS = 15_000
 const ACTIVE_LOCATION_BROADCAST_MS = 5_000
 const CONNECT_STATUS_RETRY_DELAY_MS = 1_000
 const CONNECT_STATUS_MAX_ATTEMPTS = 3
+const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
 
 function logDispatchRealtime(message: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return
   console.log('[useWalkerFlow][dispatch-realtime]', message, details ?? {})
+}
+
+function logRecovery(
+  tag: '[Recovery]' | '[RealtimeReconnect]' | '[Hydration]' | '[ForegroundResume]',
+  message: string,
+  details?: Record<string, unknown>,
+) {
+  console.log(tag, message, details ?? {})
 }
 
 declare global {
@@ -395,6 +417,9 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const candidateRequestIdsRef = useRef<Set<string>>(new Set())
   const assignedJobIdsRef = useRef<Set<string>>(new Set())
   const currentWalkerIdRef = useRef<string | null>(profileId || null)
+  const fetchAllInFlightRef = useRef<Promise<void> | null>(null)
+  const hydrationRunIdRef = useRef(0)
+  const realtimeHydrationAtRef = useRef<Map<string, number>>(new Map())
   const firstName = (profileName || '').split(' ')[0] || profileName
   const [isDocumentVisible, setIsDocumentVisible] = useState(() =>
     typeof document === 'undefined' ? true : !document.hidden,
@@ -460,12 +485,20 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (typeof document === 'undefined') return
 
     const handleVisibilityChange = () => {
-      setIsDocumentVisible(!document.hidden)
+      const nextVisible = !document.hidden
+      setIsDocumentVisible(nextVisible)
+      logRecovery('[ForegroundResume]', 'provider document visibility changed', {
+        profileId,
+        isVisible: nextVisible,
+      })
+      if (nextVisible) {
+        void fetchAllRef.current('document_visible')
+      }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }, [])
+  }, [profileId])
 
   const avgRating = useMemo(() => {
     if (ratingsReceived.length === 0) return null
@@ -914,7 +947,26 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     }
   }, [futureJobs, onTheWayJobs, showStateMessage])
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (reason = 'full_refresh') => {
+    if (fetchAllInFlightRef.current) {
+      logRecovery('[Hydration]', 'provider hydration already in flight', {
+        profileId,
+        reason,
+      })
+      await fetchAllInFlightRef.current
+      return
+    }
+
+    const run = (async () => {
+    const runId = ++hydrationRunIdRef.current
+    logRecovery('[Hydration]', 'provider hydration started', {
+      profileId,
+      reason,
+      runId,
+      isOnline,
+      isDocumentVisible,
+    })
+
     setLoading(true)
     setError(null)
 
@@ -1322,7 +1374,37 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setOpenJobs(newOpen)
     setMyJobs(newMine)
     assignedJobIdsRef.current = new Set(newMine.map((job) => job.id))
+    logRecovery('[Recovery]', 'provider state hydrated from database', {
+      profileId,
+      reason,
+      runId,
+      openOfferCount: newOpen.length,
+      myJobCount: newMine.length,
+      onTheWayCount: newMine.filter(
+        (job) =>
+          job.status === 'accepted' &&
+          isDispatchedScheduledJob(job) &&
+          !isFutureJob(job) &&
+          !isCompletionReviewJob(job) &&
+          !job.service_started_at,
+      ).length,
+      activeCount: newMine.filter(
+        (job) =>
+          job.status === 'accepted' &&
+          isDispatchedScheduledJob(job) &&
+          !isFutureJob(job) &&
+          !isCompletionReviewJob(job) &&
+          !!job.service_started_at,
+      ).length,
+      completionReviewCount: newMine.filter((job) => isCompletionReviewJob(job)).length,
+    })
     setLoading(false)
+    })().finally(() => {
+      fetchAllInFlightRef.current = null
+    })
+
+    fetchAllInFlightRef.current = run
+    await run
   }, [profileId, declinedIds, clearRetainedIncomingOffer])
 
   const fetchAllRef = useRef(fetchAll)
@@ -1337,6 +1419,59 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   useEffect(() => {
     isDocumentVisibleRef.current = isDocumentVisible
   }, [isDocumentVisible])
+
+  useEffect(() => {
+    const refreshOnResume = () => {
+      logRecovery('[ForegroundResume]', 'provider window focus/pageshow refresh', {
+        profileId,
+        isOnline,
+        isDocumentVisible: isDocumentVisibleRef.current,
+      })
+      void fetchAllRef.current('window_focus_or_pageshow')
+    }
+
+    window.addEventListener('focus', refreshOnResume)
+    window.addEventListener('pageshow', refreshOnResume)
+
+    return () => {
+      window.removeEventListener('focus', refreshOnResume)
+      window.removeEventListener('pageshow', refreshOnResume)
+    }
+  }, [isOnline, profileId])
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+
+    let cancelled = false
+    let handle: PluginListenerHandle | null = null
+
+    NativeApp.addListener('appStateChange', (state) => {
+      logRecovery('[ForegroundResume]', 'provider native app state changed', {
+        profileId,
+        isActive: state.isActive,
+        isOnline,
+        isDocumentVisible: isDocumentVisibleRef.current,
+      })
+      if (state.isActive) {
+        void fetchAllRef.current('native_foreground_resume')
+      }
+    })
+      .then((listener) => {
+        if (cancelled) {
+          void listener.remove()
+          return
+        }
+        handle = listener
+      })
+      .catch((err) => {
+        console.warn('[ForegroundResume] provider native app state listener unavailable', err)
+      })
+
+    return () => {
+      cancelled = true
+      if (handle) void handle.remove()
+    }
+  }, [isOnline, profileId])
 
   useEffect(() => {
     currentWalkerIdRef.current = profileId || null
@@ -1357,7 +1492,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (!isOnline || !isDocumentVisible) return
 
     const id = window.setInterval(() => {
-      void fetchAll()
+      void fetchAll(hasActiveWalkerWork ? 'poll_active_provider_work' : 'poll_idle_provider')
     }, hasActiveWalkerWork ? ACTIVE_WALKER_POLL_MS : IDLE_WALKER_POLL_MS)
 
     return () => window.clearInterval(id)
@@ -1365,7 +1500,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   useEffect(() => {
     if (!isOnline || !isDocumentVisible) return
-    void fetchAll()
+    void fetchAll('online_visible_resume')
   }, [fetchAll, isDocumentVisible, isOnline])
   const fetchRatings = useCallback(async () => {
     const { data: received } = await supabase.from('ratings').select('*').eq('to_user_id', profileId)
@@ -1473,7 +1608,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   }, [connectStatus, fetchConnectStatus, isOnline, profileId])
 
   useEffect(() => {
-    fetchAll()
+    logRecovery('[Recovery]', 'provider cold-start hydration scheduled', { profileId })
+    void fetchAllRef.current('cold_start')
     fetchOnlineStatus()
 
     const t1 = setTimeout(() => {
@@ -1492,20 +1628,61 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     let ch4: ReturnType<typeof supabase.channel> | null = null
     let ch5: ReturnType<typeof supabase.channel> | null = null
     let ch6: ReturnType<typeof supabase.channel> | null = null
+    let isCleaningUp = false
+
+    const hydrateOnSubscribed = (reason: string, channelName: string) => {
+      const now = Date.now()
+      const lastRunAt = realtimeHydrationAtRef.current.get(reason) ?? 0
+      if (now - lastRunAt < REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS) {
+        logRecovery('[RealtimeReconnect]', 'provider realtime subscribed hydration throttled', {
+          profileId,
+          channelName,
+          reason,
+          msSinceLastRun: now - lastRunAt,
+        })
+        return
+      }
+
+      realtimeHydrationAtRef.current.set(reason, now)
+      void fetchAllRef.current(reason)
+    }
+
+    const logRealtimeStatus = (channelName: string, status: string) => {
+      if (isCleaningUp && status === 'CLOSED') {
+        logRecovery('[RealtimeReconnect]', 'provider realtime closed during cleanup', {
+          profileId,
+          channelName,
+        })
+        return false
+      }
+
+      logRecovery('[RealtimeReconnect]', 'provider realtime status changed', {
+        profileId,
+        channelName,
+        status,
+      })
+      return true
+    }
 
     const tSub = setTimeout(() => {
+      const requestsChannelName = `wf-requests-${profileId}`
       ch1 = supabase
-        .channel(`wf-requests-${profileId}`)
+        .channel(requestsChannelName)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'walk_requests', filter: `walker_id=eq.${profileId}` },
           () => {
-            if (!isDocumentVisible) return
-            void fetchAll()
+            if (!isDocumentVisibleRef.current) return
+            void fetchAllRef.current('realtime_walker_request_change')
             void fetchWallet()
           },
         )
-        .subscribe()
+        .subscribe((status) => {
+          if (!logRealtimeStatus(requestsChannelName, status)) return
+          if (status === 'SUBSCRIBED') {
+            hydrateOnSubscribed('realtime_walk_requests_subscribed', requestsChannelName)
+          }
+        })
 
       ch2 = supabase
         .channel(`wf-ratings-${profileId}`)
@@ -1542,17 +1719,23 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         )
         .subscribe()
 
+      const dispatchChannelName = `wf-dispatch-${profileId}`
       ch5 = supabase
-        .channel(`wf-dispatch-${profileId}`)
+        .channel(dispatchChannelName)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'dispatch_candidates', filter: `walker_id=eq.${profileId}` },
           () => {
-            if (!isDocumentVisible) return
-            void fetchAll()
+            if (!isDocumentVisibleRef.current) return
+            void fetchAllRef.current('realtime_dispatch_candidate_change')
           },
         )
-        .subscribe()
+        .subscribe((status) => {
+          if (!logRealtimeStatus(dispatchChannelName, status)) return
+          if (status === 'SUBSCRIBED') {
+            hydrateOnSubscribed('realtime_dispatch_candidates_subscribed', dispatchChannelName)
+          }
+        })
 
       ch6 = supabase
         .channel(`wf-tips-${profileId}`)
@@ -1560,8 +1743,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'walker_tips', filter: `walker_id=eq.${profileId}` },
           () => {
-            if (!isDocumentVisible) return
-            void fetchAll()
+            if (!isDocumentVisibleRef.current) return
+            void fetchAllRef.current('realtime_walker_tip_change')
           },
         )
         .subscribe()
@@ -1571,6 +1754,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       clearTimeout(t1)
       clearTimeout(t2)
       clearTimeout(tSub)
+      isCleaningUp = true
       if (ch1) supabase.removeChannel(ch1)
       if (ch2) supabase.removeChannel(ch2)
       if (ch3) supabase.removeChannel(ch3)
@@ -1580,13 +1764,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     }
   }, [
     profileId,
-    fetchAll,
     fetchRatings,
     fetchWallet,
     fetchBalanceAdjustments,
     fetchConnectStatus,
     fetchOnlineStatus,
-    isDocumentVisible,
   ])
 
   useEffect(() => {
@@ -1681,10 +1863,23 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             currentWalkerId,
             requestId,
           })
-          void refreshOffersRef.current()
+          void refreshOffersRef.current('realtime_dispatch_attempt_pending')
         },
       )
       .subscribe((status) => {
+        if (cleanedUp && status === 'CLOSED') {
+          logRecovery('[RealtimeReconnect]', 'provider dispatch attempt realtime closed during cleanup', {
+            profileId: walkerId,
+            channelName,
+          })
+          return
+        }
+
+        logRecovery('[RealtimeReconnect]', 'provider dispatch attempt realtime status changed', {
+          profileId: walkerId,
+          channelName,
+          status,
+        })
         console.log('[useWalkerFlow] realtime subscribe status', {
           currentUserProfileId: walkerId,
           currentWalkerIdCandidate: walkerId,
@@ -1696,6 +1891,22 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           channelName,
           status,
         })
+        if (status === 'SUBSCRIBED') {
+          const reason = 'realtime_dispatch_attempts_subscribed'
+          const now = Date.now()
+          const lastRunAt = realtimeHydrationAtRef.current.get(reason) ?? 0
+          if (now - lastRunAt < REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS) {
+            logRecovery('[RealtimeReconnect]', 'provider dispatch attempt subscribed hydration throttled', {
+              profileId: walkerId,
+              channelName,
+              reason,
+              msSinceLastRun: now - lastRunAt,
+            })
+            return
+          }
+          realtimeHydrationAtRef.current.set(reason, now)
+          void refreshOffersRef.current(reason)
+        }
       })
 
     return () => {
