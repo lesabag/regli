@@ -22,7 +22,8 @@ import {
 } from '../lib/profileServiceTypes'
 
 const REQUEST_TIMEOUT_SECONDS = 20
-type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
+type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings'
+type EarningsPeriod = 'today' | 'week' | 'month'
 
 type AppRole = 'client' | 'walker' | 'admin'
 
@@ -116,6 +117,49 @@ function formatRelativeDate(value: string | null | undefined): string {
   })
 }
 
+function formatMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `₪${Math.round(value).toLocaleString()}`
+}
+
+function getJobCompletedTime(job: {
+  service_completed_at?: string | null
+  paid_at?: string | null
+  created_at: string | null
+}): number {
+  const value = job.service_completed_at ?? job.paid_at ?? job.created_at ?? null
+  if (!value) return 0
+  const ts = new Date(value).getTime()
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function getEstimatedProviderEarnings(job: { price: number | null }): number | null {
+  if (job.price == null) return null
+  return job.price * 0.8
+}
+
+function startOfTodayMs(): number {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+function startOfWeekMs(): number {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  const day = date.getDay()
+  const diff = day === 0 ? 6 : day - 1
+  date.setDate(date.getDate() - diff)
+  return date.getTime()
+}
+
+function startOfMonthMs(): number {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  date.setDate(1)
+  return date.getTime()
+}
+
 function providerAutoOnlineStorageKey(profileId: string) {
   return `regli_provider_auto_online_${profileId}`
 }
@@ -205,6 +249,7 @@ export default function WalkerDashboard({
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
   const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
+  const [earningsPeriod, setEarningsPeriod] = useState<EarningsPeriod>('month')
   const [compRating, setCompRating] = useState(0)
   const [compHover, setCompHover] = useState(0)
   const [compPressed, setCompPressed] = useState(0)
@@ -413,7 +458,7 @@ export default function WalkerDashboard({
           address: formatShortAddress(j.location),
           rating: ratingInfo?.rating ?? null,
           review: ratingInfo?.review ?? null,
-          price: j.walker_earnings ?? (j.price != null ? Math.round(j.price * 0.8) : null),
+          price: j.walker_earnings ?? null,
           duration_minutes: j.duration_minutes ?? null,
           tip_amount: j.tip_amount ?? null,
           status: j.status,
@@ -481,9 +526,7 @@ export default function WalkerDashboard({
         earningsLabel:
           job.walker_earnings != null
             ? `₪${job.walker_earnings.toFixed(0)}`
-            : job.price != null
-              ? `₪${Math.round(job.price * 0.8)}`
-              : null,
+            : null,
       })),
     [flow.futureJobs, flow.startsInMinutes, t, isHebrew],
   )
@@ -517,6 +560,102 @@ export default function WalkerDashboard({
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
     !!flow.connectStatus?.payouts_enabled
   const walletNeedsSetup = !flow.connectLoading && !walletPayoutReady
+  const earningsSummary = useMemo(() => {
+    const completed = flow.completedJobs
+      .filter((job) => job.status === 'completed')
+      .sort((a, b) => getJobCompletedTime(b) - getJobCompletedTime(a))
+
+    const todayStart = startOfTodayMs()
+    const weekStart = startOfWeekMs()
+    const monthStart = startOfMonthMs()
+
+    let today = 0
+    let week = 0
+    let month = 0
+    const todayJobs = completed.filter((job) => getJobCompletedTime(job) >= todayStart)
+    const weekJobs = completed.filter((job) => getJobCompletedTime(job) >= weekStart)
+    const monthJobs = completed.filter((job) => getJobCompletedTime(job) >= monthStart)
+
+    completed.forEach((job) => {
+      const amount = getEstimatedProviderEarnings(job) ?? 0
+      const completedAt = getJobCompletedTime(job)
+      if (completedAt >= todayStart) today += amount
+      if (completedAt >= weekStart) week += amount
+      if (completedAt >= monthStart) month += amount
+    })
+
+    return {
+      today,
+      week,
+      month,
+      completedCount: completed.length,
+      completed,
+      todayJobs,
+      weekJobs,
+      monthJobs,
+    }
+  }, [flow.completedJobs])
+  const selectedEarningsJobs = useMemo(() => {
+    if (earningsPeriod === 'today') return earningsSummary.todayJobs
+    if (earningsPeriod === 'week') return earningsSummary.weekJobs
+    return earningsSummary.monthJobs
+  }, [earningsPeriod, earningsSummary.monthJobs, earningsSummary.todayJobs, earningsSummary.weekJobs])
+  const selectedEarningsTotal = useMemo(
+    () =>
+      selectedEarningsJobs.reduce(
+        (sum, job) => sum + (getEstimatedProviderEarnings(job) ?? 0),
+        0,
+      ),
+    [selectedEarningsJobs],
+  )
+  const selectedEarningsLabel =
+    earningsPeriod === 'today'
+      ? (isHebrew ? 'היום' : 'Today')
+      : earningsPeriod === 'week'
+        ? (isHebrew ? 'השבוע' : 'This week')
+        : (isHebrew ? 'החודש' : 'This month')
+  const earningsHistoryItems = useMemo(
+    () =>
+      selectedEarningsJobs.slice(0, 30).map((job) => {
+        const estimatedEarnings = getEstimatedProviderEarnings(job)
+        const completedAt = getJobCompletedTime(job)
+        const date = completedAt > 0 ? new Date(completedAt) : null
+        const labels = getServiceLabels(job.service_type)
+        const customerName = getCustomerDisplayName(
+          {
+            client: job.client,
+            clientName: job.client?.full_name || job.client?.email || null,
+            dogName: job.dog_name,
+          },
+          isHebrew,
+        )
+
+        return {
+          id: job.id,
+          dateLabel: date
+            ? date.toLocaleDateString(isHebrew ? 'he-IL' : 'en-US', {
+                day: 'numeric',
+                month: 'short',
+              })
+            : isHebrew ? 'לאחרונה' : 'Recently',
+          timeLabel: date
+            ? date.toLocaleTimeString(isHebrew ? 'he-IL' : 'en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : '',
+          serviceLabel: labels.itemLabel,
+          durationLabel: durationFromMinutes(job.duration_minutes),
+          customerName,
+          totalPriceLabel: formatMoney(job.price),
+          earningsLabel: formatMoney(estimatedEarnings),
+          statusLabel: job.status === 'completed'
+            ? (isHebrew ? 'הושלם' : 'Completed')
+            : (isHebrew ? 'בוטל' : 'Cancelled'),
+        }
+      }),
+    [selectedEarningsJobs, isHebrew],
+  )
 
   useEffect(() => {
     if (!walletNeedsSetup) {
@@ -1137,6 +1276,8 @@ export default function WalkerDashboard({
                         ? t('menu.tripHistory')
                         : menuPage === 'futureOrders'
                           ? t('menu.futureOrders')
+                          : menuPage === 'earnings'
+                            ? (isHebrew ? 'רווחים' : 'Earnings')
                           : t('menu.menu')}
                   </span>
                 </div>
@@ -1155,6 +1296,145 @@ export default function WalkerDashboard({
                         emptyTitle={t('menu.noWalkHistory')}
                         emptySubtitle={t('menu.noWalkHistorySubtitle')}
                       />
+                  </BurgerSection>
+                ) : menuPage === 'earnings' ? (
+                  <BurgerSection
+                    title={isHebrew ? 'רווחים' : 'Earnings'}
+                    subtitle={isHebrew ? 'סיכום תשלומים והיסטוריית עבודות שהושלמו.' : 'Payout summary and completed job history.'}
+                  >
+                    <div style={earningsHeroCardStyle}>
+                      <button
+                        type="button"
+                        onClick={() => setEarningsPeriod('month')}
+                        style={{
+                          ...earningsHeroTopButtonStyle,
+                          ...(earningsPeriod === 'month' ? earningsHeroTopButtonActiveStyle : null),
+                        }}
+                      >
+                        <div>
+                          <div style={earningsHeroLabelStyle}>{isHebrew ? 'רווחי ספק משוערים החודש' : 'Estimated provider earnings this month'}</div>
+                          <div style={earningsHeroValueStyle}>{formatMoney(earningsSummary.month)}</div>
+                        </div>
+                        <div style={earningsHeroBadgeStyle}>
+                          {earningsPeriod === 'month'
+                            ? (isHebrew ? 'נבחר' : 'Selected')
+                            : (isHebrew ? 'סינון' : 'Filter')}
+                        </div>
+                      </button>
+                      <div style={earningsMetricGridStyle}>
+                        <EarningsMetric
+                          label={isHebrew ? 'רווחים היום' : 'Earnings today'}
+                          value={formatMoney(earningsSummary.today)}
+                          selected={earningsPeriod === 'today'}
+                          onClick={() => setEarningsPeriod('today')}
+                        />
+                        <EarningsMetric
+                          label={isHebrew ? 'רווחים השבוע' : 'Earnings week'}
+                          value={formatMoney(earningsSummary.week)}
+                          selected={earningsPeriod === 'week'}
+                          onClick={() => setEarningsPeriod('week')}
+                        />
+                        <EarningsMetric
+                          label={isHebrew ? 'עבודות החודש' : 'Month jobs'}
+                          value={String(earningsSummary.monthJobs.length)}
+                          selected={earningsPeriod === 'month'}
+                          onClick={() => setEarningsPeriod('month')}
+                        />
+                      </div>
+                      <div style={earningsWalletStripStyle}>
+                        <div>
+                          <span style={earningsWalletLabelStyle}>{isHebrew ? 'ממתין לתשלום' : 'Pending payout'}</span>
+                          <strong style={earningsWalletValueStyle}>{formatMoney(flow.wallet.pendingEarnings)}</strong>
+                        </div>
+                        <div>
+                          <span style={earningsWalletLabelStyle}>{isHebrew ? 'זמין' : 'Available'}</span>
+                          <strong style={earningsWalletValueStyle}>{formatMoney(flow.wallet.availableBalance)}</strong>
+                        </div>
+                      </div>
+                      <div style={earningsEstimateNoteStyle}>
+                        {isHebrew
+                          ? 'הרווחים הם הערכה לפי 80% ממחיר ההזמנה.'
+                          : 'Earnings are estimated at 80% of request price.'}
+                      </div>
+                    </div>
+
+                    {!walletPayoutReady && (
+                      <div style={earningsPayoutCtaStyle}>
+                        <div>
+                          <div style={earningsPayoutTitleStyle}>{isHebrew ? 'הגדרת תשלומים' : 'Set up payouts'}</div>
+                          <div style={earningsPayoutSubtitleStyle}>
+                            {isHebrew
+                              ? 'השלם את Stripe Connect כדי לקבל תשלומים לחשבון שלך.'
+                              : 'Complete Stripe Connect to receive payouts to your account.'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleStripeSetup(false)
+                          }}
+                          disabled={flow.connectLoading || isCheckingPayout}
+                          style={{
+                            ...earningsPayoutButtonStyle,
+                            ...((flow.connectLoading || isCheckingPayout) ? walletSetupButtonDisabledStyle : null),
+                          }}
+                        >
+                          {flow.connectLoading || isCheckingPayout
+                            ? (isHebrew ? 'בודק...' : 'Checking...')
+                            : (isHebrew ? 'הגדרת תשלומים' : 'Set up payouts')}
+                        </button>
+                      </div>
+                    )}
+
+                    <div style={earningsHistoryHeaderStyle}>
+                      <span>
+                        {isHebrew ? 'היסטוריית רווחים' : 'Earnings history'} · {selectedEarningsLabel}
+                      </span>
+                      <span>{earningsHistoryItems.length} · {formatMoney(selectedEarningsTotal)}</span>
+                    </div>
+                    {earningsHistoryItems.length === 0 ? (
+                      <div style={emptyMenuCardStyle}>
+                        {isHebrew ? 'אין עבודות שהושלמו בתקופה הזו.' : 'No completed jobs in this period.'}
+                      </div>
+                    ) : (
+                      <div style={earningsHistoryListStyle}>
+                        {earningsHistoryItems.map((item) => (
+                          <div key={item.id} style={earningsHistoryCardStyle}>
+                            <div style={earningsHistoryTopStyle}>
+                              <div>
+                                <div style={earningsHistoryTitleStyle}>{item.customerName}</div>
+                                <div style={earningsHistoryMetaStyle}>
+                                  <span>{item.dateLabel}</span>
+                                  {item.timeLabel && <span>{item.timeLabel}</span>}
+                                  <span>{item.serviceLabel}</span>
+                                </div>
+                              </div>
+                              <div style={earningsHistoryAmountWrapStyle}>
+                                <span style={earningsHistoryAmountLabelStyle}>
+                                  {isHebrew ? 'רווח משוער' : 'Estimated earnings'}
+                                </span>
+                                <span style={{
+                                  ...earningsHistoryAmountStyle,
+                                  ...earningsHistoryAmountEstimatedStyle,
+                                }}>
+                                  {item.earningsLabel}
+                                </span>
+                              </div>
+                            </div>
+                            <div style={earningsHistoryDetailGridStyle}>
+                              <span>{isHebrew ? 'משך' : 'Duration'}: {item.durationLabel}</span>
+                              <span>{isHebrew ? 'מחיר הזמנה' : 'Request price'}: {item.totalPriceLabel}</span>
+                              <span>{isHebrew ? 'סטטוס' : 'Status'}: {item.statusLabel}</span>
+                            </div>
+                            <div style={earningsFallbackStyle}>
+                              {isHebrew
+                                ? 'הערכה לפי 80% ממחיר ההזמנה.'
+                                : 'Estimated at 80% of request price.'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </BurgerSection>
                 ) : menuPage === 'settings' ? (
                   <>
@@ -1344,6 +1624,7 @@ export default function WalkerDashboard({
 
                     <div style={menuRowListStyle}>
                       <MenuNavRow icon="⚙️" label={t('menu.settings')} onClick={() => setMenuPage('settings')} />
+                      <MenuNavRow icon="₪" label={isHebrew ? 'רווחים' : 'Earnings'} onClick={() => setMenuPage('earnings')} />
                       <MenuNavRow icon="🕘" label={t('menu.tripHistory')} onClick={() => setMenuPage('history')} />
                       <MenuNavRow icon="📅" label={t('menu.futureOrders')} onClick={() => setMenuPage('futureOrders')} />
                       <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => setMenuPage('settings')} />
@@ -2101,6 +2382,32 @@ function MenuNavRow({
   )
 }
 
+function EarningsMetric({
+  label,
+  value,
+  selected,
+  onClick,
+}: {
+  label: string
+  value: string
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...earningsMetricStyle,
+        ...(selected ? earningsMetricSelectedStyle : null),
+      }}
+    >
+      <span style={earningsMetricLabelStyle}>{label}</span>
+      <strong style={earningsMetricValueStyle}>{value}</strong>
+    </button>
+  )
+}
+
 function RadarVisual() {
   return (
     <div style={idleRadarVisualStyle} aria-hidden="true">
@@ -2515,6 +2822,245 @@ const menuNavChevronStyle: React.CSSProperties = {
   fontSize: 22,
   color: '#94A3B8',
   lineHeight: 1,
+}
+
+const earningsHeroCardStyle: React.CSSProperties = {
+  border: '1px solid rgba(15, 23, 42, 0.08)',
+  background: 'linear-gradient(180deg, #111827 0%, #1F2937 100%)',
+  borderRadius: 24,
+  padding: 18,
+  color: '#FFFFFF',
+  display: 'grid',
+  gap: 16,
+  boxShadow: '0 18px 45px rgba(15, 23, 42, 0.20)',
+}
+
+const earningsHeroTopButtonStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 12,
+  alignItems: 'flex-start',
+  width: '100%',
+  border: '1px solid rgba(255, 255, 255, 0.10)',
+  background: 'rgba(255, 255, 255, 0.04)',
+  borderRadius: 18,
+  padding: 12,
+  color: 'inherit',
+  textAlign: 'start',
+  cursor: 'pointer',
+}
+
+const earningsHeroTopButtonActiveStyle: React.CSSProperties = {
+  borderColor: 'rgba(255, 255, 255, 0.34)',
+  background: 'rgba(255, 255, 255, 0.10)',
+}
+
+const earningsHeroLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: 'rgba(255, 255, 255, 0.72)',
+  fontWeight: 800,
+}
+
+const earningsHeroValueStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 34,
+  lineHeight: 1,
+  fontWeight: 900,
+}
+
+const earningsHeroBadgeStyle: React.CSSProperties = {
+  border: '1px solid rgba(255, 255, 255, 0.18)',
+  background: 'rgba(255, 255, 255, 0.10)',
+  borderRadius: 999,
+  padding: '8px 10px',
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: 'nowrap',
+}
+
+const earningsMetricGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 8,
+}
+
+const earningsMetricStyle: React.CSSProperties = {
+  minWidth: 0,
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  background: 'rgba(255, 255, 255, 0.08)',
+  borderRadius: 16,
+  padding: 10,
+  display: 'grid',
+  gap: 4,
+  textAlign: 'start',
+  cursor: 'pointer',
+}
+
+const earningsMetricSelectedStyle: React.CSSProperties = {
+  borderColor: 'rgba(255, 255, 255, 0.38)',
+  background: 'rgba(255, 255, 255, 0.16)',
+  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.10)',
+}
+
+const earningsMetricLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: 'rgba(255, 255, 255, 0.68)',
+  fontWeight: 800,
+}
+
+const earningsMetricValueStyle: React.CSSProperties = {
+  fontSize: 16,
+  color: '#FFFFFF',
+  fontWeight: 900,
+  overflowWrap: 'anywhere',
+}
+
+const earningsWalletStripStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 10,
+  borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+  paddingTop: 14,
+}
+
+const earningsWalletLabelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 12,
+  color: 'rgba(255, 255, 255, 0.68)',
+  fontWeight: 800,
+  marginBottom: 4,
+}
+
+const earningsWalletValueStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+}
+
+const earningsEstimateNoteStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: 'rgba(255, 255, 255, 0.74)',
+}
+
+const earningsPayoutCtaStyle: React.CSSProperties = {
+  border: '1px solid rgba(245, 158, 11, 0.28)',
+  background: '#FFFBEB',
+  borderRadius: 20,
+  padding: 16,
+  display: 'grid',
+  gap: 14,
+}
+
+const earningsPayoutTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  color: '#92400E',
+}
+
+const earningsPayoutSubtitleStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: '#A16207',
+}
+
+const earningsPayoutButtonStyle: React.CSSProperties = {
+  border: 'none',
+  borderRadius: 16,
+  padding: '13px 16px',
+  background: '#111827',
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 900,
+  cursor: 'pointer',
+}
+
+const earningsHistoryHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  fontSize: 14,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const earningsHistoryListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const earningsHistoryCardStyle: React.CSSProperties = {
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 20,
+  padding: 14,
+  display: 'grid',
+  gap: 12,
+}
+
+const earningsHistoryTopStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 12,
+}
+
+const earningsHistoryTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const earningsHistoryMetaStyle: React.CSSProperties = {
+  marginTop: 5,
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const earningsHistoryAmountStyle: React.CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: '#047857',
+  whiteSpace: 'nowrap',
+}
+
+const earningsHistoryAmountWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  justifyItems: 'end',
+  gap: 3,
+  textAlign: 'end',
+}
+
+const earningsHistoryAmountLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: '#64748B',
+  fontWeight: 900,
+  textTransform: 'uppercase',
+  letterSpacing: 0,
+}
+
+const earningsHistoryAmountEstimatedStyle: React.CSSProperties = {
+  color: '#64748B',
+}
+
+const earningsHistoryDetailGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  fontSize: 12,
+  color: '#475569',
+  fontWeight: 700,
+}
+
+const earningsFallbackStyle: React.CSSProperties = {
+  borderTop: '1px solid #F1F5F9',
+  paddingTop: 10,
+  fontSize: 12,
+  color: '#A16207',
+  fontWeight: 800,
 }
 
 const profileNameStyle: React.CSSProperties = {

@@ -784,8 +784,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const pendingFromJobs = useMemo(() => {
     return myJobs
-      .filter((j) => j.status === 'accepted' && j.payment_status === 'authorized')
-      .reduce((sum, j) => sum + (j.walker_earnings ?? (j.price != null ? j.price * 0.8 : 0)), 0)
+      .filter((j) => j.status === 'accepted' && j.payment_status === 'authorized' && j.walker_earnings != null)
+      .reduce((sum, j) => sum + (j.walker_earnings ?? 0), 0)
   }, [myJobs])
 
   const totalAdjustments = useMemo(() => {
@@ -861,9 +861,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         jobId: pendingCompletion.id,
         clientId: pendingCompletion.client_id,
         dogName: pendingCompletion.dog_name || 'the dog',
-        earnings:
-          pendingCompletion.walker_earnings ??
-          (pendingCompletion.price != null ? Math.round(pendingCompletion.price * 0.8 * 100) / 100 : null),
+        earnings: pendingCompletion.walker_earnings,
         clientName: pendingCompletion.client?.full_name || pendingCompletion.client?.email || 'Client',
       }
 
@@ -899,9 +897,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       jobId: confirmed.id,
       clientId: confirmed.client_id,
       dogName: confirmed.dog_name || 'the dog',
-      earnings:
-        confirmed.walker_earnings ??
-        (confirmed.price != null ? Math.round(confirmed.price * 0.8 * 100) / 100 : null),
+      earnings: confirmed.walker_earnings,
       clientName: confirmed.client?.full_name || confirmed.client?.email || 'Client',
     })
   }, [pendingClientConfirmation, completedJobs, myJobs, showStateMessage])
