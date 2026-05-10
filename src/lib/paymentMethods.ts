@@ -8,6 +8,32 @@ export interface SavedCard {
   expYear?: number
 }
 
+export type PaymentMethodType = 'card' | 'apple_pay' | 'google_pay'
+
+export interface ActivePaymentMethod {
+  type: PaymentMethodType
+  card: SavedCard | null
+}
+
+export function getPaymentMethodLabel(method: ActivePaymentMethod): string {
+  if (method.type === 'apple_pay') return 'Apple Pay'
+  if (method.type === 'google_pay') return 'Google Pay'
+  if (method.card) {
+    return `${capitalize(method.card.brand)} ${method.card.last4}`
+  }
+  return 'Card'
+}
+
+export function getPaymentMethodIcon(type: PaymentMethodType): string {
+  if (type === 'apple_pay') return 'apple'
+  if (type === 'google_pay') return 'google'
+  return 'card'
+}
+
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 interface GetOrCreateResponse {
   customerId: string
   cards: SavedCard[]

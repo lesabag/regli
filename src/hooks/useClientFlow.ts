@@ -13,6 +13,7 @@ import {
   isCompletionReviewRequired,
 } from '../utils/completionReview'
 import i18n from '../i18n'
+import useExpressCheckout from './useExpressCheckout'
 
 interface CapacitorAppState {
   isActive: boolean
@@ -546,6 +547,7 @@ function isAuthoritativeRecoveryReason(reason: string): boolean {
 }
 
 export function useClientFlow(profileId: string, _profileName: string) {
+  const expressCheckout = useExpressCheckout()
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -3479,6 +3481,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setupClientSecret,
     cardLoading,
     cardError,
+    expressCheckout,
 
     elapsedSeconds,
     adjustedPriceILS,
