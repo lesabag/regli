@@ -28,6 +28,8 @@ type EarningsPeriod = 'today' | 'week' | 'month'
 
 type AppRole = 'client' | 'walker' | 'admin'
 
+type ServiceAttributes = Record<string, Record<string, unknown>>
+
 interface WalkerDashboardProps {
   profile: {
     id: string
@@ -36,6 +38,7 @@ interface WalkerDashboardProps {
     role: AppRole
     service_type?: string | null
     service_types?: string[] | null
+    service_attributes?: ServiceAttributes | null
   }
   onSignOut: () => Promise<void>
   showOnboardingWowToken?: number
@@ -266,6 +269,46 @@ export default function WalkerDashboard({
   const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
+  const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
+  const [capSaving, setCapSaving] = useState(false)
+  const [capSavedAt, setCapSavedAt] = useState(0)
+  const [capError, setCapError] = useState<string | null>(null)
+  const [provDogSizes, setProvDogSizes] = useState<string[]>(() => {
+    const sa = profile.service_attributes?.dog_walker
+    return Array.isArray(sa?.supportedDogSizes) ? (sa.supportedDogSizes as string[]) : []
+  })
+  const [provDogEnergy, setProvDogEnergy] = useState<string[]>(() => {
+    const sa = profile.service_attributes?.dog_walker
+    return Array.isArray(sa?.supportedEnergyLevels) ? (sa.supportedEnergyLevels as string[]) : []
+  })
+  const [provDogExp, setProvDogExp] = useState<number>(() => {
+    const sa = profile.service_attributes?.dog_walker
+    return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
+  })
+  const [provDogNotes, setProvDogNotes] = useState<string>(() => {
+    const sa = profile.service_attributes?.dog_walker
+    return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
+  })
+  const [provSitterAges, setProvSitterAges] = useState<string[]>(() => {
+    const sa = profile.service_attributes?.baby_sitter
+    return Array.isArray(sa?.supportedAgeRanges) ? (sa.supportedAgeRanges as string[]) : []
+  })
+  const [provSitterMaxKids, setProvSitterMaxKids] = useState<number>(() => {
+    const sa = profile.service_attributes?.baby_sitter
+    return typeof sa?.maxKids === 'number' ? (sa.maxKids as number) : 1
+  })
+  const [provSitterFirstAid, setProvSitterFirstAid] = useState<boolean>(() => {
+    const sa = profile.service_attributes?.baby_sitter
+    return sa?.hasFirstAid === true
+  })
+  const [provSitterExp, setProvSitterExp] = useState<number>(() => {
+    const sa = profile.service_attributes?.baby_sitter
+    return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
+  })
+  const [provSitterNotes, setProvSitterNotes] = useState<string>(() => {
+    const sa = profile.service_attributes?.baby_sitter
+    return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
+  })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
@@ -318,6 +361,54 @@ export default function WalkerDashboard({
     setServiceTypeSaving(false)
     setServiceTypeSavedAt(Date.now())
   }, [profile.id, profileServiceTypes, serviceTypeErrorLabel, serviceTypeSaving])
+
+  const handleSaveCapabilities = useCallback(async () => {
+    if (capSaving) return
+    setCapSaving(true)
+    setCapError(null)
+
+    const existing: ServiceAttributes = (profile.service_attributes as ServiceAttributes) ?? {}
+    const next: ServiceAttributes = { ...existing }
+
+    if (profileServiceTypes.includes('dog_walker')) {
+      next.dog_walker = {
+        ...(existing.dog_walker ?? {}),
+        supportedDogSizes: provDogSizes,
+        supportedEnergyLevels: provDogEnergy,
+        experienceYears: provDogExp,
+        notes: provDogNotes.trim() || null,
+      }
+    }
+
+    if (profileServiceTypes.includes('baby_sitter')) {
+      next.baby_sitter = {
+        ...(existing.baby_sitter ?? {}),
+        supportedAgeRanges: provSitterAges,
+        maxKids: provSitterMaxKids,
+        hasFirstAid: provSitterFirstAid,
+        experienceYears: provSitterExp,
+        notes: provSitterNotes.trim() || null,
+      }
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ service_attributes: next })
+      .eq('id', profile.id)
+
+    if (error) {
+      setCapError(isHebrew ? 'לא הצלחנו לשמור.' : 'Could not save capabilities.')
+      setCapSaving(false)
+      return
+    }
+
+    setCapSaving(false)
+    setCapSavedAt(Date.now())
+  }, [
+    capSaving, profile.id, profile.service_attributes, profileServiceTypes, isHebrew,
+    provDogSizes, provDogEnergy, provDogExp, provDogNotes,
+    provSitterAges, provSitterMaxKids, provSitterFirstAid, provSitterExp, provSitterNotes,
+  ])
 
   const prevCompJobId = useRef<string | null>(null)
   useEffect(() => {
@@ -1552,6 +1643,221 @@ export default function WalkerDashboard({
                       ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                       ) : null}
+                    </BurgerSection>
+
+                    <BurgerSection
+                      title={isHebrew ? 'יכולות שירות' : 'Service capabilities'}
+                      subtitle={isHebrew ? 'הגדר את ההעדפות והניסיון שלך.' : 'Define your preferences and experience.'}
+                    >
+                      {!capabilitiesOpen ? (
+                        <button
+                          type="button"
+                          onClick={() => setCapabilitiesOpen(true)}
+                          style={capToggleButtonStyle}
+                        >
+                          {isHebrew ? 'ערוך יכולות' : 'Edit capabilities'}
+                        </button>
+                      ) : (
+                        <div style={capEditorStyle}>
+                          {profileServiceTypes.includes('dog_walker') && (
+                            <div style={capSectionStyle}>
+                              {profileServiceTypes.length > 1 && (
+                                <div style={capSectionLabelStyle}>
+                                  {isHebrew ? 'הליכת כלבים' : 'Dog walking'}
+                                </div>
+                              )}
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'גדלי כלבים' : 'Dog sizes'}</div>
+                                <div style={capChipRowStyle}>
+                                  {(['S', 'M', 'L', 'XL'] as const).map((size) => {
+                                    const sel = provDogSizes.includes(size)
+                                    return (
+                                      <button
+                                        key={size}
+                                        type="button"
+                                        onClick={() => setProvDogSizes((prev) =>
+                                          sel ? prev.filter((s) => s !== size) : [...prev, size]
+                                        )}
+                                        style={{ ...capChipStyle, ...(sel ? capChipSelectedStyle : null) }}
+                                      >
+                                        {size}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'רמות אנרגיה' : 'Energy levels'}</div>
+                                <div style={capChipRowStyle}>
+                                  {(['low', 'medium', 'high'] as const).map((level) => {
+                                    const sel = provDogEnergy.includes(level)
+                                    const label = level === 'low' ? (isHebrew ? 'נמוך' : 'Low')
+                                      : level === 'medium' ? (isHebrew ? 'בינוני' : 'Medium')
+                                      : (isHebrew ? 'גבוה' : 'High')
+                                    return (
+                                      <button
+                                        key={level}
+                                        type="button"
+                                        onClick={() => setProvDogEnergy((prev) =>
+                                          sel ? prev.filter((s) => s !== level) : [...prev, level]
+                                        )}
+                                        style={{ ...capChipStyle, ...(sel ? capChipSelectedStyle : null) }}
+                                      >
+                                        {label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
+                                <div style={capChipRowStyle}>
+                                  {[0, 1, 2, 3, 5, 10].map((yr) => (
+                                    <button
+                                      key={yr}
+                                      type="button"
+                                      onClick={() => setProvDogExp(yr)}
+                                      style={{ ...capChipStyle, ...(provDogExp === yr ? capChipSelectedStyle : null) }}
+                                    >
+                                      {yr === 0 ? (isHebrew ? 'חדש' : 'New') : `${yr}+`}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות' : 'Notes'}</div>
+                                <textarea
+                                  value={provDogNotes}
+                                  onChange={(e) => setProvDogNotes(e.target.value)}
+                                  placeholder={isHebrew ? 'לדוגמה: נוח עם כלבים גדולים' : 'e.g. Comfortable with large dogs'}
+                                  rows={2}
+                                  style={capTextareaStyle}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {profileServiceTypes.includes('baby_sitter') && (
+                            <div style={capSectionStyle}>
+                              {profileServiceTypes.length > 1 && (
+                                <div style={capSectionLabelStyle}>
+                                  {isHebrew ? 'שמרטפות' : 'Baby sitting'}
+                                </div>
+                              )}
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'טווחי גילאים' : 'Age ranges'}</div>
+                                <div style={capChipRowStyle}>
+                                  {(['0-2', '3-5', '6-10', '11+'] as const).map((range) => {
+                                    const sel = provSitterAges.includes(range)
+                                    const label = range === '0-2' ? '0–2' : range === '3-5' ? '3–5' : range === '6-10' ? '6–10' : '11+'
+                                    return (
+                                      <button
+                                        key={range}
+                                        type="button"
+                                        onClick={() => setProvSitterAges((prev) =>
+                                          sel ? prev.filter((s) => s !== range) : [...prev, range]
+                                        )}
+                                        style={{ ...capChipStyle, ...(sel ? capChipSelectedStyle : null) }}
+                                      >
+                                        {label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'מקסימום ילדים' : 'Max kids'}</div>
+                                <div style={capChipRowStyle}>
+                                  {[1, 2, 3, 4, 5].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => setProvSitterMaxKids(n)}
+                                      style={{ ...capChipStyle, ...(provSitterMaxKids === n ? capChipSelectedStyle : null) }}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'עזרה ראשונה / החייאה' : 'First aid / CPR'}</div>
+                                <div style={capChipRowStyle}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setProvSitterFirstAid(true)}
+                                    style={{ ...capChipStyle, ...(provSitterFirstAid ? capChipSelectedStyle : null) }}
+                                  >
+                                    {isHebrew ? 'כן' : 'Yes'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setProvSitterFirstAid(false)}
+                                    style={{ ...capChipStyle, ...(!provSitterFirstAid ? capChipSelectedStyle : null) }}
+                                  >
+                                    {isHebrew ? 'לא' : 'No'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
+                                <div style={capChipRowStyle}>
+                                  {[0, 1, 2, 3, 5, 10].map((yr) => (
+                                    <button
+                                      key={yr}
+                                      type="button"
+                                      onClick={() => setProvSitterExp(yr)}
+                                      style={{ ...capChipStyle, ...(provSitterExp === yr ? capChipSelectedStyle : null) }}
+                                    >
+                                      {yr === 0 ? (isHebrew ? 'חדש' : 'New') : `${yr}+`}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות' : 'Notes'}</div>
+                                <textarea
+                                  value={provSitterNotes}
+                                  onChange={(e) => setProvSitterNotes(e.target.value)}
+                                  placeholder={isHebrew ? 'לדוגמה: מנוסה עם תינוקות' : 'e.g. Experienced with infants'}
+                                  rows={2}
+                                  style={capTextareaStyle}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveCapabilities()}
+                            disabled={capSaving}
+                            style={{
+                              ...capSaveButtonStyle,
+                              ...(capSaving ? capSaveButtonDisabledStyle : null),
+                            }}
+                          >
+                            {capSaving
+                              ? (isHebrew ? 'שומר...' : 'Saving...')
+                              : (isHebrew ? 'שמור יכולות' : 'Save capabilities')}
+                          </button>
+
+                          {capError && <div style={serviceTypeStatusErrorStyle}>{capError}</div>}
+                          {!capSaving && capSavedAt > 0 && !capError && (
+                            <div style={serviceTypeStatusSuccessStyle}>
+                              {isHebrew ? 'היכולות נשמרו.' : 'Capabilities saved.'}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </BurgerSection>
 
                     <BurgerSection
@@ -4161,4 +4467,110 @@ const completionOverlayCardStyle: React.CSSProperties = {
   width: 'min(420px, 100%)',
   maxWidth: '100%',
   boxSizing: 'border-box',
+}
+
+const capToggleButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  background: '#FFFFFF',
+  color: '#23314F',
+  borderRadius: 14,
+  minHeight: 46,
+  padding: '0 16px',
+  fontSize: 14,
+  fontWeight: 700,
+  cursor: 'pointer',
+  width: '100%',
+}
+
+const capEditorStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 18,
+}
+
+const capSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const capSectionLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#5B7CFA',
+  textTransform: 'uppercase',
+}
+
+const capFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const capFieldLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#23314F',
+}
+
+const capChipRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const capChipStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  background: '#FFFFFF',
+  borderRadius: 12,
+  padding: '9px 14px',
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#0F172A',
+  cursor: 'pointer',
+  minWidth: 44,
+  textAlign: 'center',
+  transition: 'all 180ms ease',
+}
+
+const capChipSelectedStyle: React.CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.52)',
+  background: '#F0F4FF',
+  boxShadow: '0 6px 16px rgba(91, 124, 250, 0.12)',
+  color: '#3152C8',
+}
+
+const capTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 56,
+  borderRadius: 14,
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  background: '#FFFFFF',
+  padding: '10px 14px',
+  fontSize: 14,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  outline: 'none',
+  resize: 'vertical',
+  fontFamily: 'inherit',
+}
+
+const capSaveButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  minHeight: 48,
+  borderRadius: 16,
+  padding: '0 18px',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.16)',
+  width: '100%',
+}
+
+const capSaveButtonDisabledStyle: React.CSSProperties = {
+  cursor: 'not-allowed',
+  opacity: 0.5,
+  boxShadow: 'none',
 }

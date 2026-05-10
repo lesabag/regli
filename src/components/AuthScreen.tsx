@@ -36,6 +36,7 @@ type ServiceOption = {
 
 type DogSize = 'S' | 'M' | 'L' | 'XL'
 type EnergyLevel = 'low' | 'medium' | 'high'
+type AgeRange = '0-2' | '3-5' | '6-10' | '11+'
 
 interface DogWalkerAttrs {
   petName: string
@@ -47,6 +48,21 @@ interface BabySitterAttrs {
   numberOfKids: number
   childrenAges: string[]
   specialNotes: string
+}
+
+interface ProviderDogWalkerAttrs {
+  supportedDogSizes: DogSize[]
+  supportedEnergyLevels: EnergyLevel[]
+  experienceYears: number
+  notes: string
+}
+
+interface ProviderBabySitterAttrs {
+  supportedAgeRanges: AgeRange[]
+  maxKids: number
+  hasFirstAid: boolean
+  experienceYears: number
+  notes: string
 }
 
 const DOG_SIZE_OPTIONS: { value: DogSize; label: string; desc: string }[] = [
@@ -61,6 +77,16 @@ const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
 ]
+
+const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
+  { value: '0-2', label: '0–2' },
+  { value: '3-5', label: '3–5' },
+  { value: '6-10', label: '6–10' },
+  { value: '11+', label: '11+' },
+]
+
+const EXPERIENCE_YEAR_OPTIONS = [0, 1, 2, 3, 5, 10] as const
+const MAX_KIDS_OPTIONS = [1, 2, 3, 4, 5] as const
 
 const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
 
@@ -114,6 +140,8 @@ export default function AuthScreen({
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
+  const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [], experienceYears: 0, notes: '' })
+  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], maxKids: 1, hasFirstAid: false, experienceYears: 0, notes: '' })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
       id: option.value,
@@ -134,12 +162,17 @@ export default function AuthScreen({
 
   const hasDog = selectedServices.includes('dog_walker')
   const hasSitter = selectedServices.includes('baby_sitter')
+  const isProvider = role === 'walker'
 
-  const dogValid = !hasDog || (dogAttrs.petName.trim().length > 0 && dogAttrs.dogSize !== '' && dogAttrs.energyLevel !== '')
-  const sitterValid = !hasSitter || (
-    sitterAttrs.numberOfKids >= 1 &&
-    sitterAttrs.childrenAges.some((a) => a.trim().length > 0)
-  )
+  const dogValid = isProvider
+    ? !hasDog || provDogAttrs.supportedDogSizes.length > 0
+    : !hasDog || (dogAttrs.petName.trim().length > 0 && dogAttrs.dogSize !== '' && dogAttrs.energyLevel !== '')
+  const sitterValid = isProvider
+    ? !hasSitter || provSitterAttrs.supportedAgeRanges.length > 0
+    : !hasSitter || (
+        sitterAttrs.numberOfKids >= 1 &&
+        sitterAttrs.childrenAges.some((a) => a.trim().length > 0)
+      )
 
   const canContinue = useMemo(() => {
     if (mode === 'signin') return !!email && !!password
@@ -279,21 +312,41 @@ export default function AuthScreen({
     if (signupStep === 'auth') {
       setSubmitting(true)
       const attrs: ServiceAttributes = {}
-      if (hasDog && dogAttrs.petName.trim()) {
-        attrs.dog_walker = {
-          petName: dogAttrs.petName.trim(),
-          dogSize: dogAttrs.dogSize,
-          energyLevel: dogAttrs.energyLevel,
+      if (isProvider) {
+        if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
+          attrs.dog_walker = {
+            supportedDogSizes: provDogAttrs.supportedDogSizes,
+            supportedEnergyLevels: provDogAttrs.supportedEnergyLevels,
+            experienceYears: provDogAttrs.experienceYears,
+            notes: provDogAttrs.notes.trim() || null,
+          }
         }
-      }
-      if (hasSitter && sitterAttrs.numberOfKids >= 1) {
-        attrs.baby_sitter = {
-          numberOfKids: sitterAttrs.numberOfKids,
-          childrenAges: sitterAttrs.childrenAges.filter((a) => a.trim().length > 0).map((a) => {
-            const n = Number(a.trim())
-            return Number.isFinite(n) ? n : a.trim()
-          }),
-          specialNotes: sitterAttrs.specialNotes.trim() || null,
+        if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
+          attrs.baby_sitter = {
+            supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
+            maxKids: provSitterAttrs.maxKids,
+            hasFirstAid: provSitterAttrs.hasFirstAid,
+            experienceYears: provSitterAttrs.experienceYears,
+            notes: provSitterAttrs.notes.trim() || null,
+          }
+        }
+      } else {
+        if (hasDog && dogAttrs.petName.trim()) {
+          attrs.dog_walker = {
+            petName: dogAttrs.petName.trim(),
+            dogSize: dogAttrs.dogSize,
+            energyLevel: dogAttrs.energyLevel,
+          }
+        }
+        if (hasSitter && sitterAttrs.numberOfKids >= 1) {
+          attrs.baby_sitter = {
+            numberOfKids: sitterAttrs.numberOfKids,
+            childrenAges: sitterAttrs.childrenAges.filter((a) => a.trim().length > 0).map((a) => {
+              const n = Number(a.trim())
+              return Number.isFinite(n) ? n : a.trim()
+            }),
+            specialNotes: sitterAttrs.specialNotes.trim() || null,
+          }
         }
       }
       const result = await onSignUp({
@@ -534,131 +587,336 @@ export default function AuthScreen({
               <div style={eyebrowStyle}>Step 4</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
-                Help us personalize your experience by sharing a few details.
+                {isProvider
+                  ? 'Define your capabilities so we can match you with the right clients.'
+                  : 'Help us personalize your experience by sharing a few details.'}
               </p>
 
               <div style={detailsSectionsStyle}>
-                {hasDog && (
-                  <div style={detailsSectionStyle}>
-                    {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
-                    <div style={detailsFieldBlockStyle}>
-                      <label style={labelStyle}>Pet name</label>
-                      <input
-                        value={dogAttrs.petName}
-                        onChange={(e) => setDogAttrs((prev) => ({ ...prev, petName: e.target.value }))}
-                        placeholder="e.g. Boki"
-                        style={inputStyle}
-                      />
-                    </div>
+                {isProvider ? (
+                  <>
+                    {hasDog && (
+                      <div style={detailsSectionStyle}>
+                        {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Dog sizes you handle</label>
+                          <div style={chipRowStyle}>
+                            {DOG_SIZE_OPTIONS.map((opt) => {
+                              const selected = provDogAttrs.supportedDogSizes.includes(opt.value)
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setProvDogAttrs((prev) => ({
+                                    ...prev,
+                                    supportedDogSizes: selected
+                                      ? prev.supportedDogSizes.filter((s) => s !== opt.value)
+                                      : [...prev.supportedDogSizes, opt.value],
+                                  }))}
+                                  style={{
+                                    ...chipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
+                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                  <span style={chipDescStyle}>{opt.desc}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
 
-                    <div style={detailsFieldBlockStyle}>
-                      <label style={labelStyle}>Dog size</label>
-                      <div style={chipRowStyle}>
-                        {DOG_SIZE_OPTIONS.map((opt) => (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => setDogAttrs((prev) => ({ ...prev, dogSize: opt.value }))}
-                            style={{
-                              ...chipStyle,
-                              ...(dogAttrs.dogSize === opt.value ? chipSelectedStyle : null),
-                            }}
-                          >
-                            <span style={chipLabelStyle}>{opt.label}</span>
-                            <span style={chipDescStyle}>{opt.desc}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Energy levels you manage</label>
+                          <div style={chipRowStyle}>
+                            {ENERGY_OPTIONS.map((opt) => {
+                              const selected = provDogAttrs.supportedEnergyLevels.includes(opt.value)
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setProvDogAttrs((prev) => ({
+                                    ...prev,
+                                    supportedEnergyLevels: selected
+                                      ? prev.supportedEnergyLevels.filter((s) => s !== opt.value)
+                                      : [...prev.supportedEnergyLevels, opt.value],
+                                  }))}
+                                  style={{
+                                    ...chipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
+                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
 
-                    <div style={detailsFieldBlockStyle}>
-                      <label style={labelStyle}>Energy level</label>
-                      <div style={chipRowStyle}>
-                        {ENERGY_OPTIONS.map((opt) => (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => setDogAttrs((prev) => ({ ...prev, energyLevel: opt.value }))}
-                            style={{
-                              ...chipStyle,
-                              ...(dogAttrs.energyLevel === opt.value ? chipSelectedStyle : null),
-                            }}
-                          >
-                            <span style={chipLabelStyle}>{opt.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Years of experience</label>
+                          <div style={chipRowStyle}>
+                            {EXPERIENCE_YEAR_OPTIONS.map((yr) => (
+                              <button
+                                key={yr}
+                                type="button"
+                                onClick={() => setProvDogAttrs((prev) => ({ ...prev, experienceYears: yr }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...(provDogAttrs.experienceYears === yr ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{yr === 0 ? 'New' : `${yr}+`}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
 
-                {hasSitter && (
-                  <div style={detailsSectionStyle}>
-                    {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
-                    <div style={detailsFieldBlockStyle}>
-                      <label style={labelStyle}>Number of kids</label>
-                      <div style={chipRowStyle}>
-                        {[1, 2, 3, 4].map((n) => (
-                          <button
-                            key={n}
-                            type="button"
-                            onClick={() => {
-                              setSitterAttrs((prev) => {
-                                const ages = [...prev.childrenAges]
-                                while (ages.length < n) ages.push('')
-                                while (ages.length > n) ages.pop()
-                                return { ...prev, numberOfKids: n, childrenAges: ages }
-                              })
-                            }}
-                            style={{
-                              ...chipStyle,
-                              ...(sitterAttrs.numberOfKids === n ? chipSelectedStyle : null),
-                            }}
-                          >
-                            <span style={chipLabelStyle}>{n}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {sitterAttrs.numberOfKids >= 1 && (
-                      <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>
-                          {sitterAttrs.numberOfKids === 1 ? 'Child age' : 'Children ages'}
-                        </label>
-                        <div style={agesRowStyle}>
-                          {sitterAttrs.childrenAges.map((age, i) => (
-                            <input
-                              key={i}
-                              value={age}
-                              onChange={(e) => {
-                                const val = e.target.value.replace(/[^0-9.]/g, '')
-                                setSitterAttrs((prev) => {
-                                  const next = [...prev.childrenAges]
-                                  next[i] = val
-                                  return { ...prev, childrenAges: next }
-                                })
-                              }}
-                              placeholder={`#${i + 1}`}
-                              inputMode="numeric"
-                              style={{ ...inputStyle, ...ageInputStyle }}
-                            />
-                          ))}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Notes (optional)</label>
+                          <textarea
+                            value={provDogAttrs.notes}
+                            onChange={(e) => setProvDogAttrs((prev) => ({ ...prev, notes: e.target.value }))}
+                            placeholder="e.g. Comfortable with large dogs"
+                            rows={2}
+                            style={textareaStyle}
+                          />
                         </div>
                       </div>
                     )}
 
-                    <div style={detailsFieldBlockStyle}>
-                      <label style={labelStyle}>Special notes / allergies</label>
-                      <textarea
-                        value={sitterAttrs.specialNotes}
-                        onChange={(e) => setSitterAttrs((prev) => ({ ...prev, specialNotes: e.target.value }))}
-                        placeholder="Anything we should know (optional)"
-                        rows={3}
-                        style={textareaStyle}
-                      />
-                    </div>
-                  </div>
+                    {hasSitter && (
+                      <div style={detailsSectionStyle}>
+                        {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Age ranges you cover</label>
+                          <div style={chipRowStyle}>
+                            {AGE_RANGE_OPTIONS.map((opt) => {
+                              const selected = provSitterAttrs.supportedAgeRanges.includes(opt.value)
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => setProvSitterAttrs((prev) => ({
+                                    ...prev,
+                                    supportedAgeRanges: selected
+                                      ? prev.supportedAgeRanges.filter((s) => s !== opt.value)
+                                      : [...prev.supportedAgeRanges, opt.value],
+                                  }))}
+                                  style={{
+                                    ...chipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
+                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Max kids at once</label>
+                          <div style={chipRowStyle}>
+                            {MAX_KIDS_OPTIONS.map((n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => setProvSitterAttrs((prev) => ({ ...prev, maxKids: n }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...(provSitterAttrs.maxKids === n ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{n}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>First aid / CPR certified</label>
+                          <div style={chipRowStyle}>
+                            <button
+                              type="button"
+                              onClick={() => setProvSitterAttrs((prev) => ({ ...prev, hasFirstAid: true }))}
+                              style={{
+                                ...chipStyle,
+                                ...(provSitterAttrs.hasFirstAid ? chipSelectedStyle : null),
+                              }}
+                            >
+                              <span style={chipLabelStyle}>Yes</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setProvSitterAttrs((prev) => ({ ...prev, hasFirstAid: false }))}
+                              style={{
+                                ...chipStyle,
+                                ...(!provSitterAttrs.hasFirstAid ? chipSelectedStyle : null),
+                              }}
+                            >
+                              <span style={chipLabelStyle}>No</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Years of experience</label>
+                          <div style={chipRowStyle}>
+                            {EXPERIENCE_YEAR_OPTIONS.map((yr) => (
+                              <button
+                                key={yr}
+                                type="button"
+                                onClick={() => setProvSitterAttrs((prev) => ({ ...prev, experienceYears: yr }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...(provSitterAttrs.experienceYears === yr ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{yr === 0 ? 'New' : `${yr}+`}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Notes (optional)</label>
+                          <textarea
+                            value={provSitterAttrs.notes}
+                            onChange={(e) => setProvSitterAttrs((prev) => ({ ...prev, notes: e.target.value }))}
+                            placeholder="e.g. Experienced with infants"
+                            rows={2}
+                            style={textareaStyle}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {hasDog && (
+                      <div style={detailsSectionStyle}>
+                        {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Pet name</label>
+                          <input
+                            value={dogAttrs.petName}
+                            onChange={(e) => setDogAttrs((prev) => ({ ...prev, petName: e.target.value }))}
+                            placeholder="e.g. Boki"
+                            style={inputStyle}
+                          />
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Dog size</label>
+                          <div style={chipRowStyle}>
+                            {DOG_SIZE_OPTIONS.map((opt) => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setDogAttrs((prev) => ({ ...prev, dogSize: opt.value }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...(dogAttrs.dogSize === opt.value ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{opt.label}</span>
+                                <span style={chipDescStyle}>{opt.desc}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Energy level</label>
+                          <div style={chipRowStyle}>
+                            {ENERGY_OPTIONS.map((opt) => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => setDogAttrs((prev) => ({ ...prev, energyLevel: opt.value }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...(dogAttrs.energyLevel === opt.value ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{opt.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {hasSitter && (
+                      <div style={detailsSectionStyle}>
+                        {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Number of kids</label>
+                          <div style={chipRowStyle}>
+                            {[1, 2, 3, 4].map((n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => {
+                                  setSitterAttrs((prev) => {
+                                    const ages = [...prev.childrenAges]
+                                    while (ages.length < n) ages.push('')
+                                    while (ages.length > n) ages.pop()
+                                    return { ...prev, numberOfKids: n, childrenAges: ages }
+                                  })
+                                }}
+                                style={{
+                                  ...chipStyle,
+                                  ...(sitterAttrs.numberOfKids === n ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={chipLabelStyle}>{n}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {sitterAttrs.numberOfKids >= 1 && (
+                          <div style={detailsFieldBlockStyle}>
+                            <label style={labelStyle}>
+                              {sitterAttrs.numberOfKids === 1 ? 'Child age' : 'Children ages'}
+                            </label>
+                            <div style={agesRowStyle}>
+                              {sitterAttrs.childrenAges.map((age, i) => (
+                                <input
+                                  key={i}
+                                  value={age}
+                                  onChange={(e) => {
+                                    const val = e.target.value.replace(/[^0-9.]/g, '')
+                                    setSitterAttrs((prev) => {
+                                      const next = [...prev.childrenAges]
+                                      next[i] = val
+                                      return { ...prev, childrenAges: next }
+                                    })
+                                  }}
+                                  placeholder={`#${i + 1}`}
+                                  inputMode="numeric"
+                                  style={{ ...inputStyle, ...ageInputStyle }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div style={detailsFieldBlockStyle}>
+                          <label style={labelStyle}>Special notes / allergies</label>
+                          <textarea
+                            value={sitterAttrs.specialNotes}
+                            onChange={(e) => setSitterAttrs((prev) => ({ ...prev, specialNotes: e.target.value }))}
+                            placeholder="Anything we should know (optional)"
+                            rows={3}
+                            style={textareaStyle}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </>
