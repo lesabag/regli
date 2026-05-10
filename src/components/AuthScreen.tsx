@@ -171,7 +171,8 @@ export default function AuthScreen({
     ? !hasSitter || provSitterAttrs.supportedAgeRanges.length > 0
     : !hasSitter || (
         sitterAttrs.numberOfKids >= 1 &&
-        sitterAttrs.childrenAges.some((a) => a.trim().length > 0)
+        sitterAttrs.childrenAges.length === sitterAttrs.numberOfKids &&
+        sitterAttrs.childrenAges.every((a) => a.trim().length > 0)
       )
 
   const canContinue = useMemo(() => {
@@ -852,7 +853,7 @@ export default function AuthScreen({
                       <div style={detailsSectionStyle}>
                         {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Number of kids</label>
+                          <label style={labelStyle}>How many children need babysitting?</label>
                           <div style={chipRowStyle}>
                             {[1, 2, 3, 4].map((n) => (
                               <button
@@ -877,32 +878,27 @@ export default function AuthScreen({
                           </div>
                         </div>
 
-                        {sitterAttrs.numberOfKids >= 1 && (
-                          <div style={detailsFieldBlockStyle}>
-                            <label style={labelStyle}>
-                              {sitterAttrs.numberOfKids === 1 ? 'Child age' : 'Children ages'}
-                            </label>
-                            <div style={agesRowStyle}>
-                              {sitterAttrs.childrenAges.map((age, i) => (
-                                <input
-                                  key={i}
-                                  value={age}
-                                  onChange={(e) => {
-                                    const val = e.target.value.replace(/[^0-9.]/g, '')
-                                    setSitterAttrs((prev) => {
-                                      const next = [...prev.childrenAges]
-                                      next[i] = val
-                                      return { ...prev, childrenAges: next }
-                                    })
-                                  }}
-                                  placeholder={`#${i + 1}`}
-                                  inputMode="numeric"
-                                  style={{ ...inputStyle, ...ageInputStyle }}
-                                />
-                              ))}
+                        {sitterAttrs.numberOfKids >= 1 &&
+                          sitterAttrs.childrenAges.map((age, i) => (
+                            <div key={i} style={detailsFieldBlockStyle}>
+                              <label style={labelStyle}>Child {i + 1} age</label>
+                              <input
+                                value={age}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/[^0-9.]/g, '')
+                                  setSitterAttrs((prev) => {
+                                    const next = [...prev.childrenAges]
+                                    next[i] = val
+                                    return { ...prev, childrenAges: next }
+                                  })
+                                }}
+                                placeholder="Age in years"
+                                inputMode="numeric"
+                                style={inputStyle}
+                              />
                             </div>
-                          </div>
-                        )}
+                          ))
+                        }
 
                         <div style={detailsFieldBlockStyle}>
                           <label style={labelStyle}>Special notes / allergies</label>
@@ -1873,19 +1869,6 @@ const chipDescStyle: CSSProperties = {
   fontSize: 11,
   color: '#64748B',
   fontWeight: 600,
-}
-
-const agesRowStyle: CSSProperties = {
-  display: 'flex',
-  gap: 8,
-  flexWrap: 'wrap',
-}
-
-const ageInputStyle: CSSProperties = {
-  width: 64,
-  minWidth: 64,
-  textAlign: 'center',
-  flex: 'none',
 }
 
 const textareaStyle: CSSProperties = {
