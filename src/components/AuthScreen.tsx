@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { AppRole } from '../hooks/useAuth'
+import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
 import { formatShortAddress } from '../utils/addressFormat'
 import {
   getProfileServiceOptions,
@@ -20,12 +20,13 @@ interface AuthScreenProps {
     primaryService?: string
     locationAddress?: string
     serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
   authError?: string | null
 }
 
 type OnboardingMode = 'welcome' | 'signin' | 'signup'
-type SignupStep = 'welcome' | 'role' | 'service' | 'location' | 'auth'
+type SignupStep = 'welcome' | 'role' | 'service' | 'location' | 'details' | 'auth'
 type ServiceOption = {
   id: ProfileServiceType
   icon: string
@@ -33,7 +34,35 @@ type ServiceOption = {
   description: string
 }
 
-const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'auth']
+type DogSize = 'S' | 'M' | 'L' | 'XL'
+type EnergyLevel = 'low' | 'medium' | 'high'
+
+interface DogWalkerAttrs {
+  petName: string
+  dogSize: DogSize | ''
+  energyLevel: EnergyLevel | ''
+}
+
+interface BabySitterAttrs {
+  numberOfKids: number
+  childrenAges: string[]
+  specialNotes: string
+}
+
+const DOG_SIZE_OPTIONS: { value: DogSize; label: string; desc: string }[] = [
+  { value: 'S', label: 'S', desc: '<10kg' },
+  { value: 'M', label: 'M', desc: '10–25kg' },
+  { value: 'L', label: 'L', desc: '25–40kg' },
+  { value: 'XL', label: 'XL', desc: '40kg+' },
+]
+
+const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+]
+
+const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
 
 function getStepIndex(mode: OnboardingMode, step: SignupStep) {
   if (mode === 'signin') return SIGNUP_STEPS.indexOf('auth')
@@ -47,6 +76,7 @@ function getStepTitle(mode: OnboardingMode, step: SignupStep, role: AppRole) {
     return role === 'walker' ? 'What service do you provide?' : 'What service are you looking for?'
   }
   if (step === 'location') return 'Where are you located?'
+  if (step === 'details') return 'Tell us more'
   if (step === 'auth') return 'Create your account'
   return 'Welcome'
 }
@@ -81,6 +111,9 @@ export default function AuthScreen({
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
+
+  const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
+  const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
       id: option.value,
@@ -99,14 +132,24 @@ export default function AuthScreen({
     [selectedServices, serviceOptions],
   )
 
+  const hasDog = selectedServices.includes('dog_walker')
+  const hasSitter = selectedServices.includes('baby_sitter')
+
+  const dogValid = !hasDog || (dogAttrs.petName.trim().length > 0 && dogAttrs.dogSize !== '' && dogAttrs.energyLevel !== '')
+  const sitterValid = !hasSitter || (
+    sitterAttrs.numberOfKids >= 1 &&
+    sitterAttrs.childrenAges.some((a) => a.trim().length > 0)
+  )
+
   const canContinue = useMemo(() => {
     if (mode === 'signin') return !!email && !!password
     if (currentStep === 'role') return !!role
     if (currentStep === 'service') return selectedServices.length > 0
     if (currentStep === 'location') return true
+    if (currentStep === 'details') return dogValid && sitterValid
     if (currentStep === 'auth') return !!email && !!password && !!fullName.trim()
     return true
-  }, [currentStep, email, fullName, mode, password, role, selectedServices])
+  }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
 
@@ -189,16 +232,6 @@ export default function AuthScreen({
       return
     }
 
-    if (signupStep === 'location') {
-      setSignupStep('service')
-      return
-    }
-
-    if (signupStep === 'auth') {
-      setSignupStep('location')
-      return
-    }
-
     const currentIndex = SIGNUP_STEPS.indexOf(signupStep)
     if (currentIndex <= 0) {
       setMode('welcome')
@@ -234,12 +267,35 @@ export default function AuthScreen({
     }
 
     if (signupStep === 'location') {
+      setSignupStep('details')
+      return
+    }
+
+    if (signupStep === 'details') {
       setSignupStep('auth')
       return
     }
 
     if (signupStep === 'auth') {
       setSubmitting(true)
+      const attrs: ServiceAttributes = {}
+      if (hasDog && dogAttrs.petName.trim()) {
+        attrs.dog_walker = {
+          petName: dogAttrs.petName.trim(),
+          dogSize: dogAttrs.dogSize,
+          energyLevel: dogAttrs.energyLevel,
+        }
+      }
+      if (hasSitter && sitterAttrs.numberOfKids >= 1) {
+        attrs.baby_sitter = {
+          numberOfKids: sitterAttrs.numberOfKids,
+          childrenAges: sitterAttrs.childrenAges.filter((a) => a.trim().length > 0).map((a) => {
+            const n = Number(a.trim())
+            return Number.isFinite(n) ? n : a.trim()
+          }),
+          specialNotes: sitterAttrs.specialNotes.trim() || null,
+        }
+      }
       const result = await onSignUp({
         email,
         password,
@@ -248,6 +304,7 @@ export default function AuthScreen({
         primaryService: selectedServiceMeta.label,
         locationAddress: locationLabel,
         serviceTypes: selectedServices,
+        serviceAttributes: Object.keys(attrs).length > 0 ? attrs : null,
       })
       if (result.ok && typeof window !== 'undefined') {
         window.sessionStorage.setItem(
@@ -261,7 +318,7 @@ export default function AuthScreen({
 
   const stepTitle = getStepTitle(mode, currentStep, role)
   const shouldShowEmailFields = currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
-  const cardIsScrollable = currentStep === 'auth' && shouldShowEmailFields
+  const cardIsScrollable = (currentStep === 'auth' && shouldShowEmailFields) || currentStep === 'details'
 
   return (
     <div style={screenStyle}>
@@ -472,9 +529,144 @@ export default function AuthScreen({
             </>
           )}
 
+          {mode === 'signup' && currentStep === 'details' && (
+            <>
+              <div style={eyebrowStyle}>Step 4</div>
+              <h1 style={titleStyle}>{stepTitle}</h1>
+              <p style={subtitleStyle}>
+                Help us personalize your experience by sharing a few details.
+              </p>
+
+              <div style={detailsSectionsStyle}>
+                {hasDog && (
+                  <div style={detailsSectionStyle}>
+                    {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
+                    <div style={detailsFieldBlockStyle}>
+                      <label style={labelStyle}>Pet name</label>
+                      <input
+                        value={dogAttrs.petName}
+                        onChange={(e) => setDogAttrs((prev) => ({ ...prev, petName: e.target.value }))}
+                        placeholder="e.g. Boki"
+                        style={inputStyle}
+                      />
+                    </div>
+
+                    <div style={detailsFieldBlockStyle}>
+                      <label style={labelStyle}>Dog size</label>
+                      <div style={chipRowStyle}>
+                        {DOG_SIZE_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setDogAttrs((prev) => ({ ...prev, dogSize: opt.value }))}
+                            style={{
+                              ...chipStyle,
+                              ...(dogAttrs.dogSize === opt.value ? chipSelectedStyle : null),
+                            }}
+                          >
+                            <span style={chipLabelStyle}>{opt.label}</span>
+                            <span style={chipDescStyle}>{opt.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={detailsFieldBlockStyle}>
+                      <label style={labelStyle}>Energy level</label>
+                      <div style={chipRowStyle}>
+                        {ENERGY_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setDogAttrs((prev) => ({ ...prev, energyLevel: opt.value }))}
+                            style={{
+                              ...chipStyle,
+                              ...(dogAttrs.energyLevel === opt.value ? chipSelectedStyle : null),
+                            }}
+                          >
+                            <span style={chipLabelStyle}>{opt.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {hasSitter && (
+                  <div style={detailsSectionStyle}>
+                    {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
+                    <div style={detailsFieldBlockStyle}>
+                      <label style={labelStyle}>Number of kids</label>
+                      <div style={chipRowStyle}>
+                        {[1, 2, 3, 4].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => {
+                              setSitterAttrs((prev) => {
+                                const ages = [...prev.childrenAges]
+                                while (ages.length < n) ages.push('')
+                                while (ages.length > n) ages.pop()
+                                return { ...prev, numberOfKids: n, childrenAges: ages }
+                              })
+                            }}
+                            style={{
+                              ...chipStyle,
+                              ...(sitterAttrs.numberOfKids === n ? chipSelectedStyle : null),
+                            }}
+                          >
+                            <span style={chipLabelStyle}>{n}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {sitterAttrs.numberOfKids >= 1 && (
+                      <div style={detailsFieldBlockStyle}>
+                        <label style={labelStyle}>
+                          {sitterAttrs.numberOfKids === 1 ? 'Child age' : 'Children ages'}
+                        </label>
+                        <div style={agesRowStyle}>
+                          {sitterAttrs.childrenAges.map((age, i) => (
+                            <input
+                              key={i}
+                              value={age}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/[^0-9.]/g, '')
+                                setSitterAttrs((prev) => {
+                                  const next = [...prev.childrenAges]
+                                  next[i] = val
+                                  return { ...prev, childrenAges: next }
+                                })
+                              }}
+                              placeholder={`#${i + 1}`}
+                              inputMode="numeric"
+                              style={{ ...inputStyle, ...ageInputStyle }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={detailsFieldBlockStyle}>
+                      <label style={labelStyle}>Special notes / allergies</label>
+                      <textarea
+                        value={sitterAttrs.specialNotes}
+                        onChange={(e) => setSitterAttrs((prev) => ({ ...prev, specialNotes: e.target.value }))}
+                        placeholder="Anything we should know (optional)"
+                        rows={3}
+                        style={textareaStyle}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
           {currentStep === 'auth' && (
             <>
-              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 4'}</div>
+              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 5'}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 {mode === 'signin'
@@ -596,8 +788,10 @@ export default function AuthScreen({
                     : currentStep === 'auth'
                       ? 'Create account'
                       : currentStep === 'location'
-                        ? 'Continue to account'
-                        : 'Continue'}
+                        ? 'Continue'
+                        : currentStep === 'details'
+                          ? 'Continue to account'
+                          : 'Continue'}
               </button>
             )}
           </div>
@@ -1360,4 +1554,93 @@ const textLinkStyle: CSSProperties = {
   padding: 0,
   cursor: 'pointer',
   fontSize: 'inherit',
+}
+
+const detailsSectionsStyle: CSSProperties = {
+  display: 'grid',
+  gap: 18,
+}
+
+const detailsSectionStyle: CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const detailsSectionLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#5B7CFA',
+  textTransform: 'uppercase',
+}
+
+const detailsFieldBlockStyle: CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const chipRowStyle: CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const chipStyle: CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  background: '#FFFFFF',
+  borderRadius: 14,
+  padding: '10px 14px',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 2,
+  cursor: 'pointer',
+  minWidth: 52,
+  transition: 'all 180ms ease',
+}
+
+const chipSelectedStyle: CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.52)',
+  background: '#F0F4FF',
+  boxShadow: '0 8px 20px rgba(91, 124, 250, 0.12)',
+}
+
+const chipLabelStyle: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const chipDescStyle: CSSProperties = {
+  fontSize: 11,
+  color: '#64748B',
+  fontWeight: 600,
+}
+
+const agesRowStyle: CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const ageInputStyle: CSSProperties = {
+  width: 64,
+  minWidth: 64,
+  textAlign: 'center',
+  flex: 'none',
+}
+
+const textareaStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 72,
+  borderRadius: 16,
+  border: '1px solid rgba(145, 164, 196, 0.24)',
+  background: '#FFFFFF',
+  padding: '10px 14px',
+  fontSize: 14,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  outline: 'none',
+  resize: 'vertical',
+  fontFamily: 'inherit',
 }

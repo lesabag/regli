@@ -6,6 +6,8 @@ import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/pr
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
 
+export type ServiceAttributes = Record<string, Record<string, unknown>>
+
 interface Profile {
   id: string
   email: string | null
@@ -15,6 +17,7 @@ interface Profile {
   location_address?: string | null
   service_type?: ProfileServiceType | null
   service_types?: ProfileServiceType[] | null
+  service_attributes?: ServiceAttributes | null
 }
 
 const SESSION_INIT_TIMEOUT_MS = 8000
@@ -222,6 +225,7 @@ export function useAuth() {
       primaryService,
       locationAddress,
       serviceTypes,
+      serviceAttributes,
     }: {
       email: string
       password: string
@@ -230,6 +234,7 @@ export function useAuth() {
       primaryService?: string
       locationAddress?: string
       serviceTypes?: ProfileServiceType[]
+      serviceAttributes?: ServiceAttributes | null
     }) => {
       setAuthError(null)
 
@@ -277,6 +282,7 @@ export function useAuth() {
           location_address: locationAddress ?? null,
           service_type: normalizedServiceTypes[0] ?? null,
           service_types: normalizedServiceTypes,
+          service_attributes: serviceAttributes ?? null,
         }
 
         const { error: profileError } = await withTimeout(
