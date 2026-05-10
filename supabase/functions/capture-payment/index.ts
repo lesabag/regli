@@ -546,6 +546,15 @@ serve(async (req: Request) => {
 
     // Credit walker wallet (idempotent)
     const walkerEarnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
+    console.log(`[ProviderEarnings][${FUNCTION_VERSION}] Wallet credit calculation:`, {
+      jobId: job.id,
+      walkerId: job.walker_id,
+      walkerAmount: job.walker_amount,
+      walkerEarnings: job.walker_earnings,
+      price: job.price,
+      resolvedEarnings: walkerEarnings,
+      source: job.walker_amount != null ? 'walker_amount' : job.walker_earnings != null ? 'walker_earnings' : 'price_fallback',
+    })
     if (walkerEarnings > 0) {
       const { error: walletErr } = await supabaseAdmin.rpc('credit_walker_wallet', {
         p_walker_id: job.walker_id,

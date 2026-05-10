@@ -6,6 +6,7 @@ import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import { isCompletionReviewRequired } from '../utils/completionReview'
+import { getProviderEarnings } from '../lib/payoutTruth'
 
 interface CapacitorAppState {
   isActive: boolean
@@ -784,8 +785,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const pendingFromJobs = useMemo(() => {
     return myJobs
-      .filter((j) => j.status === 'accepted' && j.payment_status === 'authorized' && j.walker_earnings != null)
-      .reduce((sum, j) => sum + (j.walker_earnings ?? 0), 0)
+      .filter((j) => j.status === 'accepted' && j.payment_status === 'authorized')
+      .reduce((sum, j) => sum + getProviderEarnings(j), 0)
   }, [myJobs])
 
   const totalAdjustments = useMemo(() => {

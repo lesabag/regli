@@ -45,7 +45,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, status, payment_status, stripe_payment_intent_id')
+      .select('id, status, payment_status, stripe_payment_intent_id, price, walker_earnings, platform_fee')
       .eq('id', requestId)
       .single()
 
@@ -60,6 +60,18 @@ serve(async (req) => {
         corsHeaders,
       )
     }
+
+    console.log('[AcceptDispatch] Request loaded:', {
+      requestId,
+      attemptId,
+      walkerId: userId,
+      status: requestRow.status,
+      paymentStatus: requestRow.payment_status,
+      price: requestRow.price,
+      walkerEarnings: requestRow.walker_earnings,
+      platformFee: requestRow.platform_fee,
+      hasStripePI: !!requestRow.stripe_payment_intent_id,
+    })
 
     if (
       requestRow.status !== 'open' ||
@@ -102,6 +114,12 @@ serve(async (req) => {
     })
 
     if (error) {
+      console.error('[AcceptDispatch] RPC error:', {
+        requestId,
+        attemptId,
+        walkerId: userId,
+        error: error.message,
+      })
       return jsonResponse(
         500,
         {
@@ -113,28 +131,64 @@ serve(async (req) => {
       )
     }
 
-    const result = Array.isArray(data) ? data[0] : (data as { ok?: boolean } | null)
+    // Robustly extract the first row from the RPC result
+    // The RPC returns TABLE(ok BOOLEAN, message TEXT), which Supabase may return as:
+    // - Array of rows: [{ok: true, message: "..."}]
+    // - Single object: {ok: true, message: "..."}
+    // - Nested array (edge case): [[{ok: true, ...}]]
+    let innerResult: { ok?: boolean; message?: string } | null = null
 
-    if (!result?.ok) {
+    if (Array.isArray(data)) {
+      const first = data[0]
+      if (first && typeof first === 'object' && !Array.isArray(first)) {
+        innerResult = first as { ok?: boolean; message?: string }
+      } else if (Array.isArray(first) && first[0] && typeof first[0] === 'object') {
+        innerResult = first[0] as { ok?: boolean; message?: string }
+      }
+    } else if (data && typeof data === 'object') {
+      innerResult = data as { ok?: boolean; message?: string }
+    }
+
+    console.log('[AcceptDispatch] RPC result:', {
+      requestId,
+      attemptId,
+      walkerId: userId,
+      rawDataType: Array.isArray(data) ? 'array' : typeof data,
+      rawDataLength: Array.isArray(data) ? data.length : undefined,
+      innerResult,
+      innerOk: innerResult?.ok,
+    })
+
+    if (!innerResult || innerResult.ok !== true) {
       return jsonResponse(
         409,
         {
           ok: false,
-          result,
+          error: innerResult?.message ?? 'Dispatch attempt not accepted',
+          result: innerResult,
         },
         corsHeaders,
       )
     }
 
+    console.log('[AcceptDispatch] Accepted successfully:', {
+      requestId,
+      attemptId,
+      walkerId: userId,
+      price: requestRow.price,
+      walkerEarnings: requestRow.walker_earnings,
+    })
+
     return jsonResponse(
       200,
       {
         ok: true,
-        result,
+        result: innerResult,
       },
       corsHeaders,
     )
   } catch (error) {
+    console.error('[AcceptDispatch] Unexpected error:', error instanceof Error ? error.message : String(error))
     return jsonResponse(
       500,
       {

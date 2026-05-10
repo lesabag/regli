@@ -1,36 +1,42 @@
 import { invokeEdgeFunction } from '../services/supabaseClient'
 
-// ─── Legacy service types (kept for backwards compatibility) ─────
+// ─── Internal backend-compat types ──────────────────────────────
+// These map to Stripe pricing tiers. Never use in UI labels, wallet, or provider cards.
+// Truth sources: duration_minutes, walk_requests.price, payoutTruth.ts
+/** @internal Stripe pricing tier key — not for UI display */
 export type ServiceType = 'quick' | 'standard' | 'energy'
 
+/** @internal Backend labels — not for user-facing UI */
 export const SERVICE_LABELS: Record<ServiceType, string> = {
   quick: 'Quick Walk',
   standard: 'Standard Walk',
   energy: 'Energy Walk',
 }
 
-/** Prices in agorot (smallest ILS unit) */
+/** @internal Base prices in agorot for create-payment-intent */
 export const SERVICE_PRICES: Record<ServiceType, number> = {
   quick: 3000,
   standard: 5500,
   energy: 8000,
 }
 
-/** Prices in ILS for display */
+/** @internal Base prices in ILS — admin pricing only */
 export const SERVICE_PRICES_ILS: Record<ServiceType, number> = {
   quick: 30,
   standard: 55,
   energy: 80,
 }
 
-// ─── Duration-based pricing (new UI model) ───────────────────────
+// ─── Duration picker model ──────────────────────────────────────
 export type DurationType = '20min' | '40min' | '60min'
 
 export interface DurationOption {
   value: DurationType
   label: string
   minutes: number
+  /** @internal Base price for admin display / pre-booking estimate */
   priceILS: number
+  /** @internal Base price in agorot for create-payment-intent */
   priceAgorot: number
 }
 
@@ -40,7 +46,7 @@ export const DURATION_OPTIONS: DurationOption[] = [
   { value: '60min', label: '60 min', minutes: 60, priceILS: 80, priceAgorot: 8000 },
 ]
 
-/** Map duration to legacy service type for backend compatibility */
+/** @internal Map duration to Stripe pricing tier for create-payment-intent */
 export const DURATION_TO_SERVICE: Record<DurationType, ServiceType> = {
   '20min': 'quick',
   '40min': 'standard',

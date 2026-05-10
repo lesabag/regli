@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
 
-const FUNCTION_VERSION = 'v_currency_pi_source_2026_05_05'
+const FUNCTION_VERSION = 'v_payout_truth_2026_05_10'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -191,6 +191,8 @@ serve(async (req: Request) => {
       surgeMultiplier?: number
       bookingTiming?: 'asap' | 'scheduled'
       scheduledFor?: string
+      priceAgorot?: number
+      durationMinutes?: number
     }
 
     try {
@@ -215,6 +217,8 @@ serve(async (req: Request) => {
       surgeMultiplier: rawSurge,
       bookingTiming = 'asap',
       scheduledFor,
+      priceAgorot: rawPriceAgorot,
+      durationMinutes: rawDurationMinutes,
     } = body
 
     if (!serviceType || !SERVICE_PRICES[serviceType]) {
@@ -422,12 +426,41 @@ serve(async (req: Request) => {
         ? Math.round(rawSurge * 100) / 100
         : 1
 
-    const baseAmount = SERVICE_PRICES[serviceType]
+    // Resolve actual price: prefer client-provided priceAgorot, fallback to SERVICE_PRICES
+    const legacyBaseAmount = SERVICE_PRICES[serviceType]
+    const clientPriceAgorot =
+      typeof rawPriceAgorot === 'number' && Number.isFinite(rawPriceAgorot) && rawPriceAgorot > 0
+        ? Math.round(rawPriceAgorot)
+        : null
+
+    const baseAmount = clientPriceAgorot ?? legacyBaseAmount
     const amount = Math.round(baseAmount * surgeMultiplier)
     const platformFee = Math.round((amount * PLATFORM_FEE_PERCENT) / 100)
     const walkerAmount = amount - platformFee
     const jobCurrency = resolveJobCurrency(requestedCurrency)
-    const durationMinutes = getServiceDurationMinutes(serviceType)
+
+    // Resolve duration: prefer client-provided durationMinutes, fallback to serviceType mapping
+    const clientDurationMinutes =
+      typeof rawDurationMinutes === 'number' && Number.isFinite(rawDurationMinutes) && rawDurationMinutes > 0
+        ? Math.round(rawDurationMinutes)
+        : null
+    const durationMinutes = clientDurationMinutes ?? getServiceDurationMinutes(serviceType)
+
+    console.log(`[PayoutTruth][${FUNCTION_VERSION}] Financial calculation:`, {
+      source: clientPriceAgorot != null ? 'client_price' : 'legacy_service_prices',
+      clientPriceAgorot,
+      legacyBaseAmount,
+      baseAmount,
+      surgeMultiplier,
+      amount,
+      platformFee,
+      walkerAmount,
+      priceILS: amount / 100,
+      platformFeeILS: platformFee / 100,
+      walkerEarningsILS: walkerAmount / 100,
+      durationSource: clientDurationMinutes != null ? 'client_override' : 'service_type_default',
+      durationMinutes,
+    })
 
     if (!customerId || !paymentMethodId) {
       console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing saved payment method`, {
@@ -696,7 +729,13 @@ serve(async (req: Request) => {
       .select('id')
       .single()
 
-    console.log(`[create-payment-intent][${FUNCTION_VERSION}] Walk request insert payload:`, {
+    console.log(`[PayoutTruth][${FUNCTION_VERSION}] Walk request persisted financials:`, {
+      priceILS: amount / 100,
+      platformFeeILS: platformFee / 100,
+      walkerEarningsILS: walkerAmount / 100,
+      walkerAmountILS: walkerAmount / 100,
+      source: clientPriceAgorot != null ? 'client_price' : 'legacy_service_prices',
+      durationMinutes,
       requestServiceTypeReceived: requestServiceType ?? null,
       receivedScheduledFor: scheduledFor ?? null,
       profileServiceType: clientProfile.service_type ?? null,

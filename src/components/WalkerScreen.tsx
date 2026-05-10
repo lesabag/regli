@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../services/supabaseClient'
+import { getProviderEarnings } from '../lib/payoutTruth'
 
 interface Booking {
   id: string
   service_type: string
   status: string
+  price: number | null
+  walker_earnings: number | null
   walker_lat?: number | null
   walker_lng?: number | null
   user_lat?: number | null
@@ -41,10 +44,8 @@ const WALKERS: WalkerProfile[] = [
   { id: 'w-4', name: 'Maya T.', rating: 4.7, homeLat: 32.078, homeLng: 34.783 },
 ]
 
-const SERVICE_PRICES: Record<string, number> = {
-  quick: 30,
-  standard: 50,
-  energy: 70,
+function getBookingEarnings(booking: Booking): number {
+  return getProviderEarnings(booking)
 }
 
 function calculateDistanceInKm(
@@ -316,7 +317,7 @@ export default function WalkerScreen() {
   )
   const completedJobs = walkerJobs.filter((b) => b.status === 'completed')
   const totalEarnings = completedJobs.reduce((sum, booking) => {
-    return sum + (SERVICE_PRICES[booking.service_type] ?? 0)
+    return sum + getBookingEarnings(booking)
   }, 0)
 
   const filteredBookings = useMemo(() => {
@@ -358,8 +359,8 @@ export default function WalkerScreen() {
       }
 
       if (sortMode === 'earnings') {
-        const aEarn = SERVICE_PRICES[a.service_type] ?? 0
-        const bEarn = SERVICE_PRICES[b.service_type] ?? 0
+        const aEarn = getBookingEarnings(a)
+        const bEarn = getBookingEarnings(b)
         return bEarn - aEarn
       }
 
@@ -528,7 +529,7 @@ export default function WalkerScreen() {
 
                 {booking.status === 'completed' && booking.walker_id === currentWalker.id && (
                   <p className="mt-1 text-sm font-semibold text-green-700">
-                    Earned: ₪{SERVICE_PRICES[booking.service_type] ?? 0}
+                    Earned: ₪{getBookingEarnings(booking)}
                   </p>
                 )}
               </div>

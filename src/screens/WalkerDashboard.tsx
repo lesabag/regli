@@ -20,6 +20,7 @@ import {
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 
 const REQUEST_TIMEOUT_SECONDS = 20
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings'
@@ -133,9 +134,10 @@ function getJobCompletedTime(job: {
   return Number.isNaN(ts) ? 0 : ts
 }
 
-function getEstimatedProviderEarnings(job: { price: number | null }): number | null {
+function getEstimatedProviderEarnings(job: { price: number | null; walker_earnings: number | null }): number | null {
+  if (job.walker_earnings != null) return job.walker_earnings
   if (job.price == null) return null
-  return job.price * 0.8
+  return getProviderEarnings(job)
 }
 
 function startOfTodayMs(): number {
@@ -577,12 +579,14 @@ export default function WalkerDashboard({
     const monthJobs = completed.filter((job) => getJobCompletedTime(job) >= monthStart)
 
     completed.forEach((job) => {
-      const amount = getEstimatedProviderEarnings(job) ?? 0
+      const earnings = job.walker_earnings ?? getEstimatedProviderEarnings(job) ?? 0
       const completedAt = getJobCompletedTime(job)
-      if (completedAt >= todayStart) today += amount
-      if (completedAt >= weekStart) week += amount
-      if (completedAt >= monthStart) month += amount
+      if (completedAt >= todayStart) today += earnings
+      if (completedAt >= weekStart) week += earnings
+      if (completedAt >= monthStart) month += earnings
     })
+
+    logPayoutSummary('earnings summary', monthJobs)
 
     return {
       today,
@@ -603,7 +607,7 @@ export default function WalkerDashboard({
   const selectedEarningsTotal = useMemo(
     () =>
       selectedEarningsJobs.reduce(
-        (sum, job) => sum + (getEstimatedProviderEarnings(job) ?? 0),
+        (sum, job) => sum + (job.walker_earnings ?? getEstimatedProviderEarnings(job) ?? 0),
         0,
       ),
     [selectedEarningsJobs],
@@ -617,7 +621,8 @@ export default function WalkerDashboard({
   const earningsHistoryItems = useMemo(
     () =>
       selectedEarningsJobs.slice(0, 30).map((job) => {
-        const estimatedEarnings = getEstimatedProviderEarnings(job)
+        const hasStoredEarnings = job.walker_earnings != null
+        const earnings = hasStoredEarnings ? job.walker_earnings : getEstimatedProviderEarnings(job)
         const completedAt = getJobCompletedTime(job)
         const date = completedAt > 0 ? new Date(completedAt) : null
         const labels = getServiceLabels(job.service_type)
@@ -648,7 +653,8 @@ export default function WalkerDashboard({
           durationLabel: durationFromMinutes(job.duration_minutes),
           customerName,
           totalPriceLabel: formatMoney(job.price),
-          earningsLabel: formatMoney(estimatedEarnings),
+          earningsLabel: formatMoney(earnings),
+          isEstimated: !hasStoredEarnings,
           statusLabel: job.status === 'completed'
             ? (isHebrew ? 'הושלם' : 'Completed')
             : (isHebrew ? 'בוטל' : 'Cancelled'),
@@ -1312,7 +1318,7 @@ export default function WalkerDashboard({
                         }}
                       >
                         <div>
-                          <div style={earningsHeroLabelStyle}>{isHebrew ? 'רווחי ספק משוערים החודש' : 'Estimated provider earnings this month'}</div>
+                          <div style={earningsHeroLabelStyle}>{isHebrew ? 'רווחי ספק החודש' : 'Provider earnings this month'}</div>
                           <div style={earningsHeroValueStyle}>{formatMoney(earningsSummary.month)}</div>
                         </div>
                         <div style={earningsHeroBadgeStyle}>
@@ -1351,11 +1357,13 @@ export default function WalkerDashboard({
                           <strong style={earningsWalletValueStyle}>{formatMoney(flow.wallet.availableBalance)}</strong>
                         </div>
                       </div>
-                      <div style={earningsEstimateNoteStyle}>
-                        {isHebrew
-                          ? 'הרווחים הם הערכה לפי 80% ממחיר ההזמנה.'
-                          : 'Earnings are estimated at 80% of request price.'}
-                      </div>
+                      {earningsHistoryItems.some((item) => item.isEstimated) && (
+                        <div style={earningsEstimateNoteStyle}>
+                          {isHebrew
+                            ? 'חלק מהרווחים הם הערכה לפי 80% ממחיר ההזמנה.'
+                            : 'Some earnings are estimated at 80% of request price.'}
+                        </div>
+                      )}
                     </div>
 
                     {!walletPayoutReady && (
@@ -1411,11 +1419,13 @@ export default function WalkerDashboard({
                               </div>
                               <div style={earningsHistoryAmountWrapStyle}>
                                 <span style={earningsHistoryAmountLabelStyle}>
-                                  {isHebrew ? 'רווח משוער' : 'Estimated earnings'}
+                                  {item.isEstimated
+                                    ? (isHebrew ? 'רווח משוער' : 'Estimated earnings')
+                                    : (isHebrew ? 'רווח' : 'Earnings')}
                                 </span>
                                 <span style={{
                                   ...earningsHistoryAmountStyle,
-                                  ...earningsHistoryAmountEstimatedStyle,
+                                  ...(item.isEstimated ? earningsHistoryAmountEstimatedStyle : null),
                                 }}>
                                   {item.earningsLabel}
                                 </span>
@@ -1426,11 +1436,13 @@ export default function WalkerDashboard({
                               <span>{isHebrew ? 'מחיר הזמנה' : 'Request price'}: {item.totalPriceLabel}</span>
                               <span>{isHebrew ? 'סטטוס' : 'Status'}: {item.statusLabel}</span>
                             </div>
-                            <div style={earningsFallbackStyle}>
-                              {isHebrew
-                                ? 'הערכה לפי 80% ממחיר ההזמנה.'
-                                : 'Estimated at 80% of request price.'}
-                            </div>
+                            {item.isEstimated && (
+                              <div style={earningsFallbackStyle}>
+                                {isHebrew
+                                  ? 'הערכה לפי 80% ממחיר ההזמנה.'
+                                  : 'Estimated at 80% of request price.'}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

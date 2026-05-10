@@ -41,6 +41,7 @@ type SavedCard = {
   expYear?: number
 } | null
 
+/** @internal Pre-booking price estimate from duration picker. After job creation, walk_requests.price is truth. */
 const DURATION_PRICE_BY_TYPE: Record<DurationType, number> = DURATION_OPTIONS.reduce(
   (map, option) => {
     map[option.value] = option.priceILS
@@ -3117,6 +3118,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
           customerId: stripeCustomerId,
           paymentMethodId: savedCard.id,
           scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
+          priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
+          durationMinutes: effectiveDurationMinutes ?? undefined,
         },
       })
 
@@ -3153,6 +3156,15 @@ export function useClientFlow(profileId: string, _profileName: string) {
       saveReusableServiceName(effectiveDogName)
       const shouldSearchNow = effectiveBookingTiming === 'asap'
 
+      const platformFeeILS = effectivePriceILS > 0 ? Math.round(effectivePriceILS * 0.20 * 100) / 100 : 0
+      const walkerEarningsILS = effectivePriceILS > 0 ? Math.round(effectivePriceILS * 0.80 * 100) / 100 : 0
+      console.log('[PayoutTruth] status patch financials', {
+        jobId,
+        priceILS: effectivePriceILS,
+        platformFeeILS,
+        walkerEarningsILS,
+        durationMinutes: effectiveDurationMinutes,
+      })
       const statusPatch: Record<string, unknown> = {
         status: 'open',
         dispatch_state: 'queued',
@@ -3160,6 +3172,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
         smart_dispatch_last_error: null,
         duration_minutes: effectiveDurationMinutes,
         price: effectivePriceILS,
+        platform_fee: platformFeeILS,
+        walker_earnings: walkerEarningsILS,
+        walker_amount: walkerEarningsILS,
         notes: effectiveNotes,
       }
       if (effectiveBookingTiming !== 'scheduled') {
