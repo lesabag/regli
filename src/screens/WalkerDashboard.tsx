@@ -293,10 +293,6 @@ export default function WalkerDashboard({
     const sa = profile.service_attributes?.baby_sitter
     return Array.isArray(sa?.supportedAgeRanges) ? (sa.supportedAgeRanges as string[]) : []
   })
-  const [provSitterMaxKids, setProvSitterMaxKids] = useState<number>(() => {
-    const sa = profile.service_attributes?.baby_sitter
-    return typeof sa?.maxKids === 'number' ? (sa.maxKids as number) : 1
-  })
   const [provSitterExp, setProvSitterExp] = useState<number>(() => {
     const sa = profile.service_attributes?.baby_sitter
     return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
@@ -314,7 +310,6 @@ export default function WalkerDashboard({
     const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
     const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
     const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges) ? (sitterSa.supportedAgeRanges as string[]) : []
-    const origSitterMaxKids = typeof sitterSa.maxKids === 'number' ? (sitterSa.maxKids as number) : 1
     const origSitterExp = typeof sitterSa.experienceYears === 'number' ? (sitterSa.experienceYears as number) : 0
     const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
     const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
@@ -324,14 +319,13 @@ export default function WalkerDashboard({
       provDogExp !== origDogExp ||
       provDogNotes !== origDogNotes ||
       !arrEq(provSitterAges, origSitterAges) ||
-      provSitterMaxKids !== origSitterMaxKids ||
       provSitterExp !== origSitterExp ||
       provSitterNotes !== origSitterNotes
     )
   }, [
     profile.service_attributes,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
-    provSitterAges, provSitterMaxKids, provSitterExp, provSitterNotes,
+    provSitterAges, provSitterExp, provSitterNotes,
   ])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -409,7 +403,6 @@ export default function WalkerDashboard({
       next.baby_sitter = {
         ...(existing.baby_sitter ?? {}),
         supportedAgeRanges: provSitterAges,
-        maxKids: provSitterMaxKids,
         experienceYears: provSitterExp,
         notes: provSitterNotes.trim() || null,
       }
@@ -431,7 +424,7 @@ export default function WalkerDashboard({
   }, [
     capSaving, profile.id, profile.service_attributes, profileServiceTypes, isHebrew,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
-    provSitterAges, provSitterMaxKids, provSitterExp, provSitterNotes,
+    provSitterAges, provSitterExp, provSitterNotes,
   ])
 
   const prevCompJobId = useRef<string | null>(null)
@@ -1794,22 +1787,6 @@ export default function WalkerDashboard({
                                       </button>
                                     )
                                   })}
-                                </div>
-                              </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'מקסימום ילדים' : 'Max kids'}</div>
-                                <div style={capChipRowStyle}>
-                                  {[1, 2, 3, 4, 5].map((n) => (
-                                    <button
-                                      key={n}
-                                      type="button"
-                                      onClick={() => setProvSitterMaxKids(n)}
-                                      style={{ ...capChipStyle, ...(provSitterMaxKids === n ? capChipSelectedStyle : null) }}
-                                    >
-                                      {n}
-                                    </button>
-                                  ))}
                                 </div>
                               </div>
 

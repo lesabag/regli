@@ -59,7 +59,6 @@ interface ProviderDogWalkerAttrs {
 
 interface ProviderBabySitterAttrs {
   supportedAgeRanges: AgeRange[]
-  maxKids: number
   experienceYears: number
   notes: string
 }
@@ -85,7 +84,6 @@ const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
 ]
 
 const EXPERIENCE_YEAR_OPTIONS = [0, 1, 2, 3, 5, 10] as const
-const MAX_KIDS_OPTIONS = [1, 2, 3, 4, 5] as const
 
 const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
 
@@ -140,7 +138,7 @@ export default function AuthScreen({
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
   const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [], experienceYears: 0, notes: '' })
-  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], maxKids: 1, experienceYears: 0, notes: '' })
+  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], experienceYears: 0, notes: '' })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
       id: option.value,
@@ -324,7 +322,6 @@ export default function AuthScreen({
         if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
           attrs.baby_sitter = {
             supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
-            maxKids: provSitterAttrs.maxKids,
             experienceYears: provSitterAttrs.experienceYears,
             notes: provSitterAttrs.notes.trim() || null,
           }
@@ -711,25 +708,6 @@ export default function AuthScreen({
                                 </button>
                               )
                             })}
-                          </div>
-                        </div>
-
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Max kids at once</label>
-                          <div style={chipRowStyle}>
-                            {MAX_KIDS_OPTIONS.map((n) => (
-                              <button
-                                key={n}
-                                type="button"
-                                onClick={() => setProvSitterAttrs((prev) => ({ ...prev, maxKids: n }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...(provSitterAttrs.maxKids === n ? chipSelectedStyle : null),
-                                }}
-                              >
-                                <span style={chipLabelStyle}>{n}</span>
-                              </button>
-                            ))}
                           </div>
                         </div>
 
