@@ -706,6 +706,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               data: { jobId: job.id },
             },
           }).catch((err) => console.error('[Push] Failed to notify client (dispatch):', err))
+          void createNotification({
+            userId: data.client_id,
+            type: 'job_accepted',
+            title: 'Walker on the way',
+            message: `${profileName} is heading to you for ${dogLabel}.`,
+            relatedJobId: job.id,
+          })
         }
 
         invokeEdgeFunction('send-push-notification', {
@@ -2069,18 +2076,27 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       if (job.client_id) {
         const isScheduled = job.booking_timing === 'scheduled'
+        const clientNotifTitle = dispatchNow ? 'Walker on the way' : 'Walker Accepted'
+        const clientNotifMessage = dispatchNow
+          ? `${profileName} is heading to you for ${dogLabel}.`
+          : isScheduled
+            ? `${profileName} confirmed ${dogLabel}'s scheduled walk.`
+            : `${profileName} is on the way for ${dogLabel}'s walk!`
         invokeEdgeFunction('send-push-notification', {
           body: {
-            title: dispatchNow ? 'Walker on the way' : 'Walker Accepted',
-            body: dispatchNow
-              ? `${profileName} is heading to you for ${dogLabel}.`
-              : isScheduled
-                ? `${profileName} confirmed ${dogLabel}'s scheduled walk.`
-                : `${profileName} is on the way for ${dogLabel}'s walk!`,
+            title: clientNotifTitle,
+            body: clientNotifMessage,
             targetUserId: job.client_id,
             data: { jobId: requestId },
           },
         }).catch((err) => console.error('[Push] Failed to notify client (accepted):', err))
+        void createNotification({
+          userId: job.client_id,
+          type: 'job_accepted',
+          title: clientNotifTitle,
+          message: clientNotifMessage,
+          relatedJobId: requestId,
+        })
       }
 
       await createNotification({
@@ -2250,6 +2266,25 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: jobId,
       }).catch(() => {})
 
+      if (job.client_id) {
+        const dogLabel = job.dog_name || 'your pet'
+        invokeEdgeFunction('send-push-notification', {
+          body: {
+            title: 'Walker has arrived',
+            body: `${profileName} has arrived for ${dogLabel}.`,
+            targetUserId: job.client_id,
+            data: { jobId },
+          },
+        }).catch((err) => console.error('[Push] Failed to notify client (arrived):', err))
+        void createNotification({
+          userId: job.client_id,
+          type: 'walker_arrived',
+          title: 'Walker has arrived',
+          message: `${profileName} has arrived for ${dogLabel}.`,
+          relatedJobId: jobId,
+        })
+      }
+
       await fetchAll()
     },
     [fetchAll, myJobs, profileId, profileName, showStateMessage, walkerPosition],
@@ -2309,6 +2344,25 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         message: `${labels.startedPast}. ${labels.completeAction} when the work is done.`,
         relatedJobId: jobId,
       })
+
+      if (job.client_id) {
+        const dogLabel = job.dog_name || 'your pet'
+        invokeEdgeFunction('send-push-notification', {
+          body: {
+            title: labels.activeTitle,
+            body: `${profileName} has started the service for ${dogLabel}.`,
+            targetUserId: job.client_id,
+            data: { jobId },
+          },
+        }).catch((err) => console.error('[Push] Failed to notify client (service_started):', err))
+        void createNotification({
+          userId: job.client_id,
+          type: 'job_accepted',
+          title: labels.activeTitle,
+          message: `${profileName} has started the service for ${dogLabel}.`,
+          relatedJobId: jobId,
+        })
+      }
 
       await fetchAll()
     },
@@ -2375,6 +2429,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               data: { jobId: id },
             },
           }).catch((err) => console.error('[Push] Failed to notify client (completion_pending):', err))
+          void createNotification({
+            userId: job.client_id,
+            type: 'job_completed',
+            title: 'Service Completed',
+            message: `${profileName} marked the service as complete. Please confirm.`,
+            relatedJobId: id,
+          })
         }
 
         track(AnalyticsEvent.SERVICE_COMPLETED, {

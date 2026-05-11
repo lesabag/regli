@@ -1944,6 +1944,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
         ? walkerNameById.get(pendingCompletion.walker_id) || 'Walker'
         : 'Walker'
       setCompletionJob((prev) => {
+        if (dismissedCompletionIdsRef.current.has(pendingCompletion.id)) {
+          return prev ?? null
+        }
         const next = {
           jobId: pendingCompletion.id,
           walkerId: pendingCompletion.walker_id,
@@ -2932,6 +2935,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
         }
         dismissedCompletionIdsRef.current.add(current.jobId)
         flowCompletedJobIdsRef.current.delete(current.jobId)
+        if (lastActiveJobIdRef.current === current.jobId) {
+          lastActiveJobIdRef.current = null
+        }
         try {
           window.localStorage.setItem(
             completionDismissStorageKey(profileId),
@@ -2982,6 +2988,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       setTipSubmitting(false)
+      if (tipJob) {
+        dismissedCompletionIdsRef.current.add(tipJob.jobId)
+        flowCompletedJobIdsRef.current.delete(tipJob.jobId)
+        if (lastActiveJobIdRef.current === tipJob.jobId) {
+          lastActiveJobIdRef.current = null
+        }
+        try {
+          window.localStorage.setItem(
+            completionDismissStorageKey(profileId),
+            JSON.stringify(Array.from(dismissedCompletionIdsRef.current)),
+          )
+        } catch {
+          // noop
+        }
+      }
       setTipJob(null)
       resetBookingComposerAfterCompletion()
       setSuccessMessage('Tip saved')
@@ -2991,9 +3012,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
   )
 
   const dismissTip = useCallback(() => {
-    setTipJob(null)
+    setTipJob((current) => {
+      if (current) {
+        dismissedCompletionIdsRef.current.add(current.jobId)
+        flowCompletedJobIdsRef.current.delete(current.jobId)
+        if (lastActiveJobIdRef.current === current.jobId) {
+          lastActiveJobIdRef.current = null
+        }
+        try {
+          window.localStorage.setItem(
+            completionDismissStorageKey(profileId),
+            JSON.stringify(Array.from(dismissedCompletionIdsRef.current)),
+          )
+        } catch {
+          // noop
+        }
+      }
+      return null
+    })
     resetBookingComposerAfterCompletion()
-  }, [resetBookingComposerAfterCompletion])
+  }, [profileId, resetBookingComposerAfterCompletion])
 
   const requestWalk = useCallback(async (requestServiceTypeOrOptions?: string | RequestWalkOptions) => {
     const requestOptions =

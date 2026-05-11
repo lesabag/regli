@@ -297,10 +297,6 @@ export default function WalkerDashboard({
     const sa = profile.service_attributes?.baby_sitter
     return typeof sa?.maxKids === 'number' ? (sa.maxKids as number) : 1
   })
-  const [provSitterFirstAid, setProvSitterFirstAid] = useState<boolean>(() => {
-    const sa = profile.service_attributes?.baby_sitter
-    return sa?.hasFirstAid === true
-  })
   const [provSitterExp, setProvSitterExp] = useState<number>(() => {
     const sa = profile.service_attributes?.baby_sitter
     return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
@@ -309,6 +305,35 @@ export default function WalkerDashboard({
     const sa = profile.service_attributes?.baby_sitter
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
+  const capDirty = useMemo(() => {
+    const sa = profile.service_attributes ?? {}
+    const dogSa = sa.dog_walker ?? {}
+    const sitterSa = sa.baby_sitter ?? {}
+    const origDogSizes = Array.isArray(dogSa.supportedDogSizes) ? (dogSa.supportedDogSizes as string[]) : []
+    const origDogEnergy = Array.isArray(dogSa.supportedEnergyLevels) ? (dogSa.supportedEnergyLevels as string[]) : []
+    const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
+    const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
+    const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges) ? (sitterSa.supportedAgeRanges as string[]) : []
+    const origSitterMaxKids = typeof sitterSa.maxKids === 'number' ? (sitterSa.maxKids as number) : 1
+    const origSitterExp = typeof sitterSa.experienceYears === 'number' ? (sitterSa.experienceYears as number) : 0
+    const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
+    const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
+    return (
+      !arrEq(provDogSizes, origDogSizes) ||
+      !arrEq(provDogEnergy, origDogEnergy) ||
+      provDogExp !== origDogExp ||
+      provDogNotes !== origDogNotes ||
+      !arrEq(provSitterAges, origSitterAges) ||
+      provSitterMaxKids !== origSitterMaxKids ||
+      provSitterExp !== origSitterExp ||
+      provSitterNotes !== origSitterNotes
+    )
+  }, [
+    profile.service_attributes,
+    provDogSizes, provDogEnergy, provDogExp, provDogNotes,
+    provSitterAges, provSitterMaxKids, provSitterExp, provSitterNotes,
+  ])
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
@@ -385,7 +410,6 @@ export default function WalkerDashboard({
         ...(existing.baby_sitter ?? {}),
         supportedAgeRanges: provSitterAges,
         maxKids: provSitterMaxKids,
-        hasFirstAid: provSitterFirstAid,
         experienceYears: provSitterExp,
         notes: provSitterNotes.trim() || null,
       }
@@ -407,7 +431,7 @@ export default function WalkerDashboard({
   }, [
     capSaving, profile.id, profile.service_attributes, profileServiceTypes, isHebrew,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
-    provSitterAges, provSitterMaxKids, provSitterFirstAid, provSitterExp, provSitterNotes,
+    provSitterAges, provSitterMaxKids, provSitterExp, provSitterNotes,
   ])
 
   const prevCompJobId = useRef<string | null>(null)
@@ -443,9 +467,11 @@ export default function WalkerDashboard({
     (activeJob.booking_timing !== 'scheduled' || activeJob.dispatch_state === 'dispatched')
 
   const requestPrice = topRequest
-    ? topRequest.price != null
-      ? `₪${topRequest.price.toFixed(0)}`
-      : '—'
+    ? topRequest.walker_earnings != null
+      ? `₪${topRequest.walker_earnings.toFixed(0)}`
+      : topRequest.price != null
+        ? `₪${Math.round(topRequest.price * 0.8)}`
+        : '—'
     : '—'
 
   const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
@@ -1788,26 +1814,6 @@ export default function WalkerDashboard({
                               </div>
 
                               <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'עזרה ראשונה / החייאה' : 'First aid / CPR'}</div>
-                                <div style={capChipRowStyle}>
-                                  <button
-                                    type="button"
-                                    onClick={() => setProvSitterFirstAid(true)}
-                                    style={{ ...capChipStyle, ...(provSitterFirstAid ? capChipSelectedStyle : null) }}
-                                  >
-                                    {isHebrew ? 'כן' : 'Yes'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setProvSitterFirstAid(false)}
-                                    style={{ ...capChipStyle, ...(!provSitterFirstAid ? capChipSelectedStyle : null) }}
-                                  >
-                                    {isHebrew ? 'לא' : 'No'}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div style={capFieldStyle}>
                                 <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
                                 <div style={capChipRowStyle}>
                                   {[0, 1, 2, 3, 5, 10].map((yr) => (
@@ -1839,10 +1845,10 @@ export default function WalkerDashboard({
                           <button
                             type="button"
                             onClick={() => void handleSaveCapabilities()}
-                            disabled={capSaving}
+                            disabled={capSaving || !capDirty}
                             style={{
                               ...capSaveButtonStyle,
-                              ...(capSaving ? capSaveButtonDisabledStyle : null),
+                              ...(capSaving || !capDirty ? capSaveButtonDisabledStyle : null),
                             }}
                           >
                             {capSaving
@@ -1851,7 +1857,7 @@ export default function WalkerDashboard({
                           </button>
 
                           {capError && <div style={serviceTypeStatusErrorStyle}>{capError}</div>}
-                          {!capSaving && capSavedAt > 0 && !capError && (
+                          {!capSaving && capSavedAt > 0 && !capDirty && !capError && (
                             <div style={serviceTypeStatusSuccessStyle}>
                               {isHebrew ? 'היכולות נשמרו.' : 'Capabilities saved.'}
                             </div>

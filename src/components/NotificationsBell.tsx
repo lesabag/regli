@@ -24,12 +24,6 @@ interface Toast {
 }
 
 const TOAST_DURATION = 4000
-const CLIENT_TRANSIENT_LIVE_ORDER_TYPES = new Set([
-  'job_accepted',
-  'walker_arrived',
-  'job_completed',
-])
-
 // ─── Notification type config ───────────────────────────────────
 
 interface TypeConfig {
@@ -90,7 +84,6 @@ function getTypeConfig(type: string): TypeConfig {
 }
 
 function isBellVisibleNotification(notification: Notification): boolean {
-  if (CLIENT_TRANSIENT_LIVE_ORDER_TYPES.has(notification.type)) return false
   if (notification.type === 'dispatch_started' && notification.title === 'Your walk is starting') {
     return false
   }

@@ -60,7 +60,6 @@ interface ProviderDogWalkerAttrs {
 interface ProviderBabySitterAttrs {
   supportedAgeRanges: AgeRange[]
   maxKids: number
-  hasFirstAid: boolean
   experienceYears: number
   notes: string
 }
@@ -141,7 +140,7 @@ export default function AuthScreen({
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
   const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [], experienceYears: 0, notes: '' })
-  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], maxKids: 1, hasFirstAid: false, experienceYears: 0, notes: '' })
+  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], maxKids: 1, experienceYears: 0, notes: '' })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
       id: option.value,
@@ -326,7 +325,6 @@ export default function AuthScreen({
           attrs.baby_sitter = {
             supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
             maxKids: provSitterAttrs.maxKids,
-            hasFirstAid: provSitterAttrs.hasFirstAid,
             experienceYears: provSitterAttrs.experienceYears,
             notes: provSitterAttrs.notes.trim() || null,
           }
@@ -732,32 +730,6 @@ export default function AuthScreen({
                                 <span style={chipLabelStyle}>{n}</span>
                               </button>
                             ))}
-                          </div>
-                        </div>
-
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>First aid / CPR certified</label>
-                          <div style={chipRowStyle}>
-                            <button
-                              type="button"
-                              onClick={() => setProvSitterAttrs((prev) => ({ ...prev, hasFirstAid: true }))}
-                              style={{
-                                ...chipStyle,
-                                ...(provSitterAttrs.hasFirstAid ? chipSelectedStyle : null),
-                              }}
-                            >
-                              <span style={chipLabelStyle}>Yes</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setProvSitterAttrs((prev) => ({ ...prev, hasFirstAid: false }))}
-                              style={{
-                                ...chipStyle,
-                                ...(!provSitterAttrs.hasFirstAid ? chipSelectedStyle : null),
-                              }}
-                            >
-                              <span style={chipLabelStyle}>No</span>
-                            </button>
                           </div>
                         </div>
 

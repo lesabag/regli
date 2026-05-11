@@ -2351,6 +2351,18 @@ export default function ClientDashboard({
                       onToggleFavorite={flow.toggleFavoriteWalker}
                     />
                   </BurgerSection>
+
+                  <div style={menuFooterActionWrapStyle}>
+                    <MenuNavRow
+                      icon="↪"
+                      label={t('menu.signOut')}
+                      destructive
+                      onClick={() => {
+                        closeAll()
+                        void handleSignOut()
+                      }}
+                    />
+                  </div>
                 </>
               ) : menuPage === 'futureOrders' ? (
                 <BurgerSection
@@ -2412,18 +2424,6 @@ export default function ClientDashboard({
                       emptySubtitle={t('menu.noWalkHistorySubtitle')}
                     />
                   </BurgerSection>
-
-                  <div style={menuFooterActionWrapStyle}>
-                    <MenuNavRow
-                      icon="↪"
-                      label={t('menu.signOut')}
-                      destructive
-                      onClick={() => {
-                        closeAll()
-                        void handleSignOut()
-                      }}
-                    />
-                  </div>
                 </>
               )}
             </div>
@@ -2847,6 +2847,27 @@ export default function ClientDashboard({
                     >
                       {openSettingsLabel}
                     </button>
+                  </div>
+                ) : hasSelectedProfileService && !flow.location.trim() && !flow.locationLoading ? (
+                  <div
+                    onClick={openAddressPicker}
+                    style={{
+                      marginTop: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 12px',
+                      borderRadius: 16,
+                      background: 'rgba(255,255,255,0.96)',
+                      border: '1px solid rgba(59,130,246,0.25)',
+                      color: '#1E40AF',
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span>📍</span>
+                    <span>{t('booking.addPickupToContinue')}</span>
                   </div>
                 ) : null}
               </div>
