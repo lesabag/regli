@@ -5,7 +5,11 @@ import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
-import { isCompletionReviewRequired } from '../utils/completionReview'
+import {
+  isCompletionReviewRequired,
+  appendProviderIssueMarker,
+  hasProviderIssue,
+} from '../utils/completionReview'
 import { getProviderEarnings } from '../lib/payoutTruth'
 
 interface CapacitorAppState {
@@ -2298,6 +2302,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setError('Wait for the client to confirm arrival before starting.')
         return
       }
+      if (hasProviderIssue(job.notes)) {
+        setError('Waiting for support review before the service can start.')
+        return
+      }
 
       const now = new Date().toISOString()
       const { data, error: startError } = await supabase
@@ -2461,6 +2469,69 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }
     },
     [myJobs, completionBlockedJob, pendingClientConfirmation, profileId, profileName, fetchAll],
+  )
+
+  const reportIssue = useCallback(
+    async (jobId: string): Promise<boolean> => {
+      setError(null)
+
+      const { data: jobRow, error: fetchErr } = await supabase
+        .from('walk_requests')
+        .select('id, notes, client_id, service_started_at, walker_id')
+        .eq('id', jobId)
+        .maybeSingle()
+
+      if (fetchErr || !jobRow) {
+        setError(fetchErr?.message ?? 'Job not found')
+        return false
+      }
+
+      if (jobRow.service_started_at) {
+        setError('Cannot report issue after service has started')
+        return false
+      }
+
+      if (hasProviderIssue(jobRow.notes)) {
+        setSuccessMessage('Issue already reported.')
+        return true
+      }
+
+      const updatedNotes = appendProviderIssueMarker(jobRow.notes, new Date().toISOString())
+      const { error: updateErr } = await supabase
+        .from('walk_requests')
+        .update({ notes: updatedNotes })
+        .eq('id', jobId)
+
+      if (updateErr) {
+        setError(updateErr.message)
+        return false
+      }
+
+      if (jobRow.client_id) {
+        await createNotification({
+          userId: jobRow.client_id,
+          type: 'provider_reported_issue',
+          title: 'Issue Reported',
+          message: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
+          relatedJobId: jobId,
+        })
+      }
+
+      if (jobRow.walker_id) {
+        await createNotification({
+          userId: jobRow.walker_id,
+          type: 'provider_reported_issue',
+          title: 'Issue Reported',
+          message: 'Service is paused until support reviews the request.',
+          relatedJobId: jobId,
+        })
+      }
+
+      setSuccessMessage('Issue reported. Support will review.')
+      await fetchAll()
+      return true
+    },
+    [fetchAll],
   )
 
   const handleRelease = useCallback(
@@ -2812,5 +2883,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     unassignFutureJob,
     handleComplete,
     handleRelease,
+    reportIssue,
   }
 }

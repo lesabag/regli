@@ -1,3 +1,5 @@
+export type ServiceAttributes = Record<string, unknown> | null | undefined
+
 export type WalkerRankingInput = {
   walkerId: string
   distanceKm?: number | null
@@ -5,6 +7,15 @@ export type WalkerRankingInput = {
   reviewCount?: number | null
   affinityProviderSaved?: boolean
   affinityClientSaved?: boolean
+  serviceType?: string | null
+  clientServiceAttributes?: ServiceAttributes
+  providerServiceAttributes?: ServiceAttributes
+}
+
+export type AttributeMatchResult = {
+  attributeScore: number
+  attributeReason: string
+  attributeMatches: string[]
 }
 
 export type RankedWalkerCandidate = {
@@ -20,6 +31,16 @@ export type RankedWalkerCandidate = {
   distanceKm: number | null
   avgRating: number | null
   reviewCount: number
+  attributeScore: number
+  attributeReason: string
+  attributeMatches: string[]
+}
+
+const LEGACY_TO_NORMALIZED_AGE_RANGE: Record<string, '1-2' | '2-4' | '5-7' | '7+'> = {
+  '0-2': '1-2',
+  '3-5': '2-4',
+  '6-10': '5-7',
+  '11+': '7+',
 }
 
 const DISTANCE_WEIGHT = 0.55
@@ -32,6 +53,175 @@ const NEUTRAL_DISTANCE_SCORE = 0.5
 const PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST = 10
 const CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST = 20
 const AFFINITY_SCORE_CAP = 30
+
+const ATTR_DOG_SIZE_BONUS = 0.025
+const ATTR_DOG_SIZE_PENALTY = -0.01
+const ATTR_ENERGY_BONUS = 0.025
+const ATTR_ENERGY_PENALTY = -0.01
+const ATTR_SITTER_FULL_BONUS = 0.05
+const ATTR_SITTER_MISMATCH_PENALTY = -0.02
+
+const AGE_RANGE_MAP: Record<string, [number, number]> = {
+  '1-2': [1, 2],
+  '2-4': [2, 4],
+  '5-7': [5, 7],
+  '7+': [7, 120],
+  '0-2': [0, 2],
+  '3-5': [3, 5],
+  '6-10': [6, 10],
+  '11+': [11, 120],
+}
+
+export function normalizeAgeRangeValue(value: unknown): '1-2' | '2-4' | '5-7' | '7+' | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  if (normalized === '1-2' || normalized === '2-4' || normalized === '5-7' || normalized === '7+') {
+    return normalized
+  }
+  return LEGACY_TO_NORMALIZED_AGE_RANGE[normalized] ?? null
+}
+
+function ageInRange(age: number, range: string): boolean {
+  const bounds = AGE_RANGE_MAP[range]
+  if (!bounds) return false
+  return age >= bounds[0] && age <= bounds[1]
+}
+
+export function computeAttributeScore(
+  serviceType: string | null | undefined,
+  clientAttrs: ServiceAttributes,
+  providerAttrs: ServiceAttributes,
+): AttributeMatchResult {
+  if (!serviceType || !clientAttrs || !providerAttrs) {
+    return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }
+  }
+
+  const normalizedType = serviceType.trim().toLowerCase()
+
+  if (normalizedType === 'dog_walker' || normalizedType === 'dog_walking' || normalizedType === 'dog-walker') {
+    return computeDogWalkerAttributeScore(clientAttrs, providerAttrs)
+  }
+
+  if (normalizedType === 'baby_sitter' || normalizedType === 'babysitter' || normalizedType === 'baby-sitter') {
+    return computeBabySitterAttributeScore(clientAttrs, providerAttrs)
+  }
+
+  return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }
+}
+
+function computeDogWalkerAttributeScore(
+  clientAttrs: Record<string, unknown>,
+  providerAttrs: Record<string, unknown>,
+): AttributeMatchResult {
+  const clientDog = (clientAttrs.dog_walker ?? clientAttrs) as Record<string, unknown>
+  const providerDog = (providerAttrs.dog_walker ?? providerAttrs) as Record<string, unknown>
+
+  const clientDogSize = typeof clientDog.dogSize === 'string' ? clientDog.dogSize : null
+  const clientEnergy = typeof clientDog.energyLevel === 'string' ? clientDog.energyLevel : null
+  const providerSizes = Array.isArray(providerDog.supportedDogSizes) ? providerDog.supportedDogSizes as string[] : null
+  const providerEnergy = Array.isArray(providerDog.supportedEnergyLevels) ? providerDog.supportedEnergyLevels as string[] : null
+
+  let score = 0
+  const matches: string[] = []
+  const reasons: string[] = []
+
+  if (clientDogSize && providerSizes && providerSizes.length > 0) {
+    if (providerSizes.includes(clientDogSize)) {
+      score += ATTR_DOG_SIZE_BONUS
+      matches.push(`dogSize:${clientDogSize}`)
+      reasons.push('size_match')
+    } else {
+      score += ATTR_DOG_SIZE_PENALTY
+      reasons.push('size_mismatch')
+    }
+  }
+
+  if (clientEnergy && providerEnergy && providerEnergy.length > 0) {
+    if (providerEnergy.includes(clientEnergy)) {
+      score += ATTR_ENERGY_BONUS
+      matches.push(`energy:${clientEnergy}`)
+      reasons.push('energy_match')
+    } else {
+      score += ATTR_ENERGY_PENALTY
+      reasons.push('energy_mismatch')
+    }
+  }
+
+  if (reasons.length === 0) {
+    return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }
+  }
+
+  console.log('[AttributeMatching] dog_walker', { score, reasons, matches })
+  const attributeReason =
+    reasons.includes('size_match') && reasons.includes('energy_match')
+      ? 'dog_size_and_energy_match'
+      : reasons.join('_and_')
+  return {
+    attributeScore: Number(score.toFixed(6)),
+    attributeReason,
+    attributeMatches: matches,
+  }
+}
+
+function computeBabySitterAttributeScore(
+  clientAttrs: Record<string, unknown>,
+  providerAttrs: Record<string, unknown>,
+): AttributeMatchResult {
+  const clientSitter = (clientAttrs.baby_sitter ?? clientAttrs) as Record<string, unknown>
+  const providerSitter = (providerAttrs.baby_sitter ?? providerAttrs) as Record<string, unknown>
+
+  const childrenAges = Array.isArray(clientSitter.childrenAges) ? clientSitter.childrenAges : null
+  const providerRanges = Array.isArray(providerSitter.supportedAgeRanges)
+    ? (providerSitter.supportedAgeRanges as unknown[])
+        .map((range) => normalizeAgeRangeValue(range))
+        .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+    : null
+
+  if (!childrenAges || childrenAges.length === 0 || !providerRanges || providerRanges.length === 0) {
+    return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }
+  }
+
+  const numericAges = childrenAges
+    .map((a) => typeof a === 'number' ? a : typeof a === 'string' ? parseInt(a, 10) : NaN)
+    .filter((a) => Number.isFinite(a))
+
+  if (numericAges.length === 0) {
+    return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }
+  }
+
+  let fitCount = 0
+  const matches: string[] = []
+
+  for (const age of numericAges) {
+    const fits = providerRanges.some((range) => ageInRange(age, range))
+    if (fits) {
+      fitCount++
+      matches.push(`age:${age}`)
+    }
+  }
+
+  const ratio = fitCount / numericAges.length
+
+  let score: number
+  let reason: string
+  if (ratio === 1) {
+    score = ATTR_SITTER_FULL_BONUS
+    reason = 'babysitter_age_range_match'
+  } else if (ratio > 0) {
+    score = Number((ratio * ATTR_SITTER_FULL_BONUS).toFixed(6))
+    reason = `babysitter_partial_age_range_match_${fitCount}_${numericAges.length}`
+  } else {
+    score = ATTR_SITTER_MISMATCH_PENALTY
+    reason = 'babysitter_age_range_mismatch'
+  }
+
+  console.log('[AttributeMatching] baby_sitter', { score, reason, matches, numericAges, providerRanges })
+  return {
+    attributeScore: Number(score.toFixed(6)),
+    attributeReason: reason,
+    attributeMatches: matches,
+  }
+}
 
 export function distanceKm(
   lat1: number,
@@ -88,12 +278,19 @@ export function rankWalkerCandidates(inputs: WalkerRankingInput[]): RankedWalker
         distanceScore * DISTANCE_WEIGHT +
         ratingScore * RATING_WEIGHT +
         reviewCountScore * EXPERIENCE_WEIGHT
+
+      const { attributeScore, attributeReason, attributeMatches } = computeAttributeScore(
+        input.serviceType,
+        input.clientServiceAttributes,
+        input.providerServiceAttributes,
+      )
+
       const affinityScore = Math.min(
         (affinityProviderSaved ? PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST : 0) +
           (affinityClientSaved ? CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST : 0),
         AFFINITY_SCORE_CAP,
       )
-      const score = baseScore + affinityScore
+      const score = baseScore + affinityScore + attributeScore
 
       return {
         walkerId: input.walkerId,
@@ -108,6 +305,9 @@ export function rankWalkerCandidates(inputs: WalkerRankingInput[]): RankedWalker
         distanceKm: distanceValue == null ? null : Number(distanceValue.toFixed(3)),
         avgRating: avgRating == null ? null : Number(avgRating.toFixed(3)),
         reviewCount,
+        attributeScore: Number(attributeScore.toFixed(6)),
+        attributeReason,
+        attributeMatches,
       }
     })
     .sort((a, b) => {

@@ -20,7 +20,9 @@ import {
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import { normalizeAgeRangeValue } from '../lib/dispatchRanking'
 import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
+import { hasProviderIssue } from '../utils/completionReview'
 
 const REQUEST_TIMEOUT_SECONDS = 20
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings'
@@ -260,6 +262,9 @@ export default function WalkerDashboard({
   const [compPressed, setCompPressed] = useState(0)
   const [compReview, setCompReview] = useState('')
   const [compRatingDone, setCompRatingDone] = useState(false)
+  const [reportIssueOpen, setReportIssueOpen] = useState(false)
+  const [reportIssueFeedback, setReportIssueFeedback] = useState<string | null>(null)
+  const [reportIssueSubmitting, setReportIssueSubmitting] = useState(false)
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
   const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
@@ -291,7 +296,11 @@ export default function WalkerDashboard({
   })
   const [provSitterAges, setProvSitterAges] = useState<string[]>(() => {
     const sa = profile.service_attributes?.baby_sitter
-    return Array.isArray(sa?.supportedAgeRanges) ? (sa.supportedAgeRanges as string[]) : []
+    return Array.isArray(sa?.supportedAgeRanges)
+      ? (sa.supportedAgeRanges as unknown[])
+          .map((range) => normalizeAgeRangeValue(range))
+          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+      : []
   })
   const [provSitterExp, setProvSitterExp] = useState<number>(() => {
     const sa = profile.service_attributes?.baby_sitter
@@ -309,7 +318,11 @@ export default function WalkerDashboard({
     const origDogEnergy = Array.isArray(dogSa.supportedEnergyLevels) ? (dogSa.supportedEnergyLevels as string[]) : []
     const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
     const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
-    const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges) ? (sitterSa.supportedAgeRanges as string[]) : []
+    const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges)
+      ? (sitterSa.supportedAgeRanges as unknown[])
+          .map((range) => normalizeAgeRangeValue(range))
+          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+      : []
     const origSitterExp = typeof sitterSa.experienceYears === 'number' ? (sitterSa.experienceYears as number) : 0
     const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
     const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
@@ -402,7 +415,9 @@ export default function WalkerDashboard({
     if (profileServiceTypes.includes('baby_sitter')) {
       next.baby_sitter = {
         ...(existing.baby_sitter ?? {}),
-        supportedAgeRanges: provSitterAges,
+        supportedAgeRanges: provSitterAges
+          .map((range) => normalizeAgeRangeValue(range))
+          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null),
         experienceYears: provSitterExp,
         notes: provSitterNotes.trim() || null,
       }
@@ -451,6 +466,8 @@ export default function WalkerDashboard({
   const topRequest = flow.openJobs[0] ?? null
   const activeJob = flow.activeJobs[0] ?? null
   const onTheWayJob = flow.onTheWayJobs[0] ?? null
+  const onTheWayJobHasProviderIssue = hasProviderIssue(onTheWayJob?.notes)
+  const activeJobHasProviderIssue = hasProviderIssue(activeJob?.notes)
   const activeLabels = getServiceLabels(activeJob?.service_type)
   const walkerStartServiceLabel = isHebrew ? 'התחל שירות' : 'Start service'
   const walkerCompleteServiceLabel = isHebrew ? 'סיים שירות' : 'Complete service'
@@ -1771,9 +1788,9 @@ export default function WalkerDashboard({
                               <div style={capFieldStyle}>
                                 <div style={capFieldLabelStyle}>{isHebrew ? 'טווחי גילאים' : 'Age ranges'}</div>
                                 <div style={capChipRowStyle}>
-                                  {(['0-2', '3-5', '6-10', '11+'] as const).map((range) => {
+                                  {(['1-2', '2-4', '5-7', '7+'] as const).map((range) => {
                                     const sel = provSitterAges.includes(range)
-                                    const label = range === '0-2' ? '0–2' : range === '3-5' ? '3–5' : range === '6-10' ? '6–10' : '11+'
+                                    const label = range === '1-2' ? '1–2' : range === '2-4' ? '2–4' : range === '5-7' ? '5–7' : '7+'
                                     return (
                                       <button
                                         key={range}
@@ -2215,33 +2232,67 @@ export default function WalkerDashboard({
                 </div>
               )}
 
-              {flow.screenPhase === 'arrived_pending_confirmation' && (
+              {(flow.screenPhase === 'arrived_pending_confirmation' || flow.screenPhase === 'arrival_confirmed') && (
                 <div style={waitingStateStyle}>
-                  <div style={waitingStateTitleStyle}>Waiting for client to confirm arrival</div>
-                  <div style={waitingStateBodyStyle}>
-                    The service can start as soon as the client confirms you are with them.
+                  <div style={waitingStateTitleStyle}>
+                    {onTheWayJobHasProviderIssue
+                      ? (isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review')
+                      : flow.screenPhase === 'arrived_pending_confirmation'
+                      ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client to confirm arrival')
+                      : (isHebrew ? 'הגעה אושרה' : 'Arrival confirmed')}
                   </div>
+                  <div style={waitingStateBodyStyle}>
+                    {onTheWayJobHasProviderIssue
+                      ? (
+                          isHebrew
+                            ? 'השירות חסום כרגע. דיווחת על בעיה והבקשה ממתינה לבדיקה של צוות התמיכה.'
+                            : 'Service is blocked right now. You reported an issue and the request is waiting for support review.'
+                        )
+                      : flow.screenPhase === 'arrived_pending_confirmation'
+                      ? (isHebrew ? 'השירות יתחיל ברגע שהלקוח יאשר שהגעת.' : 'The service can start as soon as the client confirms you are with them.')
+                      : (isHebrew ? 'אפשר להתחיל את השירות.' : 'You can start the service now.')}
+                  </div>
+                  {onTheWayJobHasProviderIssue ? (
+                    <div style={reportIssueFeedbackStyle}>
+                      {isHebrew ? 'השירות יישאר מושהה עד לעדכון מהתמיכה.' : 'The service will stay paused until support updates the request.'}
+                    </div>
+                  ) : reportIssueFeedback ? (
+                    <div style={reportIssueFeedbackStyle}>
+                      {reportIssueFeedback}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setReportIssueOpen(true)}
+                      disabled={reportIssueSubmitting}
+                      style={reportIssueBtnStyle}
+                    >
+                      {isHebrew ? 'דיווח על בעיה' : 'Report an issue'}
+                    </button>
+                  )}
                 </div>
               )}
 
-              <button
-                onClick={async () => {
-                  await hapticSuccess()
-                  if (flow.screenPhase === 'on_the_way') {
-                    void flow.markArrived(onTheWayJob.id)
-                    return
-                  }
-                  void flow.startService(onTheWayJob.id)
-                }}
-                disabled={flow.screenPhase === 'arrived_pending_confirmation'}
-                style={completeBtnStyle}
-              >
-                {flow.screenPhase === 'on_the_way'
-                  ? 'Arrived'
-                  : flow.screenPhase === 'arrival_confirmed'
-                    ? walkerStartServiceLabel
-                    : 'Waiting for client'}
-              </button>
+              {(!onTheWayJobHasProviderIssue || flow.screenPhase === 'on_the_way') && (
+                <button
+                  onClick={async () => {
+                    await hapticSuccess()
+                    if (flow.screenPhase === 'on_the_way') {
+                      void flow.markArrived(onTheWayJob.id)
+                      return
+                    }
+                    void flow.startService(onTheWayJob.id)
+                  }}
+                  disabled={flow.screenPhase === 'arrived_pending_confirmation'}
+                  style={completeBtnStyle}
+                >
+                  {flow.screenPhase === 'on_the_way'
+                    ? 'Arrived'
+                    : flow.screenPhase === 'arrival_confirmed'
+                      ? walkerStartServiceLabel
+                      : 'Waiting for client'}
+                </button>
+              )}
             </div>
           )}
 
@@ -2279,6 +2330,19 @@ export default function WalkerDashboard({
                 </div>
               )}
 
+              {activeJobHasProviderIssue && (
+                <div style={waitingStateStyle}>
+                  <div style={waitingStateTitleStyle}>
+                    {isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review'}
+                  </div>
+                  <div style={waitingStateBodyStyle}>
+                    {isHebrew
+                      ? 'השירות חסום עד שהבקשה תיבדק ותקבל עדכון מצוות התמיכה.'
+                      : 'Service is blocked until support reviews the request and sends an update.'}
+                  </div>
+                </div>
+              )}
+
               {(activeDurationSummary.elapsedLabel ||
                 activeDurationSummary.plannedLabel ||
                 activeDurationSummary.actualLabel) && (
@@ -2302,41 +2366,43 @@ export default function WalkerDashboard({
                 </div>
               )}
 
-              <button
-                onClick={async () => {
-                  await hapticSuccess()
-                  void flow.handleComplete(activeJob.id)
-                }}
-                disabled={
-                  flow.completingJobId === activeJob.id ||
-                  flow.pendingClientConfirmation === activeJob.id ||
-                  !activeJobCanComplete
-                }
-                style={{
-                  ...completeBtnStyle,
-                  ...(flow.pendingClientConfirmation === activeJob.id ? pendingConfirmationBtnStyle : null),
-                  opacity:
+              {!activeJobHasProviderIssue && (
+                <button
+                  onClick={async () => {
+                    await hapticSuccess()
+                    void flow.handleComplete(activeJob.id)
+                  }}
+                  disabled={
                     flow.completingJobId === activeJob.id ||
                     flow.pendingClientConfirmation === activeJob.id ||
                     !activeJobCanComplete
-                      ? 0.7
-                      : 1,
-                  cursor:
-                    flow.completingJobId === activeJob.id ||
-                    flow.pendingClientConfirmation === activeJob.id ||
-                    !activeJobCanComplete
-                      ? 'not-allowed'
-                      : 'pointer',
-                }}
-              >
-                {flow.completingJobId === activeJob.id
-                  ? 'Completing...'
-                  : flow.pendingClientConfirmation === activeJob.id
-                    ? t('completion.walkerWaiting')
-                    : activeJobCanComplete
-                      ? walkerCompleteServiceLabel
-                      : 'Available at dispatch time'}
-              </button>
+                  }
+                  style={{
+                    ...completeBtnStyle,
+                    ...(flow.pendingClientConfirmation === activeJob.id ? pendingConfirmationBtnStyle : null),
+                    opacity:
+                      flow.completingJobId === activeJob.id ||
+                      flow.pendingClientConfirmation === activeJob.id ||
+                      !activeJobCanComplete
+                        ? 0.7
+                        : 1,
+                    cursor:
+                      flow.completingJobId === activeJob.id ||
+                      flow.pendingClientConfirmation === activeJob.id ||
+                      !activeJobCanComplete
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                >
+                  {flow.completingJobId === activeJob.id
+                    ? 'Completing...'
+                    : flow.pendingClientConfirmation === activeJob.id
+                      ? t('completion.walkerWaiting')
+                      : activeJobCanComplete
+                        ? walkerCompleteServiceLabel
+                        : 'Available at dispatch time'}
+                </button>
+              )}
             </div>
           )}
 
@@ -2629,6 +2695,52 @@ export default function WalkerDashboard({
               }
               onDismiss={flow.dismissCompletion}
             />
+          </div>
+        </div>
+      )}
+
+      {reportIssueOpen && (
+        <div style={completionOverlayStyle}>
+          <div style={completionOverlayBackdropStyle} onClick={() => setReportIssueOpen(false)} />
+          <div style={{ ...completionOverlayCardStyle, background: '#fff', borderRadius: 24, padding: 24 }}>
+            <div style={{ textAlign: 'center', fontSize: 28, marginBottom: 12 }}>⚠️</div>
+            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17, color: '#1E293B', marginBottom: 8 }}>
+              {isHebrew ? 'דיווח בעיה' : 'Report Issue'}
+            </div>
+            <div style={{ textAlign: 'center', fontSize: 14, color: '#64748B', lineHeight: 1.5, marginBottom: 20 }}>
+              {isHebrew
+                ? 'אם אינך יכול להתחיל את השירות, צוות התמיכה ייצור איתך קשר.'
+                : 'If you cannot start the service, our support team will follow up with you.'}
+            </div>
+            <button
+              type="button"
+              disabled={reportIssueSubmitting}
+              onClick={async () => {
+                const jobId = onTheWayJob?.id ?? activeJob?.id
+                if (!jobId) return
+                setReportIssueSubmitting(true)
+                const ok = await flow.reportIssue(jobId)
+                setReportIssueSubmitting(false)
+                setReportIssueOpen(false)
+                if (ok) {
+                  setReportIssueFeedback(isHebrew ? 'הדיווח נשלח. צוות התמיכה יבדוק.' : 'Issue reported. Support will review.')
+                  setTimeout(() => setReportIssueFeedback(null), 5000)
+                }
+              }}
+              style={{ ...completeBtnStyle, background: '#DC2626', maxWidth: '100%', width: '100%', opacity: reportIssueSubmitting ? 0.6 : 1 }}
+            >
+              {reportIssueSubmitting
+                ? (isHebrew ? 'שולח...' : 'Submitting...')
+                : (isHebrew ? 'שלח דיווח' : 'Submit report')}
+            </button>
+            <button
+              type="button"
+              disabled={reportIssueSubmitting}
+              onClick={() => setReportIssueOpen(false)}
+              style={dismissBtnStyle}
+            >
+              {isHebrew ? 'ביטול' : 'Cancel'}
+            </button>
           </div>
         </div>
       )}
@@ -4223,6 +4335,29 @@ const recentRatingsHeadingStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
   color: '#0F172A',
+}
+
+const reportIssueBtnStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 36,
+  borderRadius: 10,
+  border: '1px solid rgba(220, 38, 38, 0.25)',
+  background: '#FEF2F2',
+  color: '#B91C1C',
+  fontSize: 12,
+  fontWeight: 700,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  marginTop: 8,
+  padding: '0 12px',
+}
+
+const reportIssueFeedbackStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#16A34A',
+  textAlign: 'center',
+  marginTop: 8,
 }
 
 const dismissBtnStyle: React.CSSProperties = {

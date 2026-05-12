@@ -36,7 +36,7 @@ type ServiceOption = {
 
 type DogSize = 'S' | 'M' | 'L' | 'XL'
 type EnergyLevel = 'low' | 'medium' | 'high'
-type AgeRange = '0-2' | '3-5' | '6-10' | '11+'
+type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
 
 interface DogWalkerAttrs {
   petName: string
@@ -77,10 +77,10 @@ const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
 ]
 
 const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
-  { value: '0-2', label: '0–2' },
-  { value: '3-5', label: '3–5' },
-  { value: '6-10', label: '6–10' },
-  { value: '11+', label: '11+' },
+  { value: '1-2', label: '1–2' },
+  { value: '2-4', label: '2–4' },
+  { value: '5-7', label: '5–7' },
+  { value: '7+', label: '7+' },
 ]
 
 const EXPERIENCE_YEAR_OPTIONS = [0, 1, 2, 3, 5, 10] as const

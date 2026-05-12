@@ -23,6 +23,7 @@ import {
 } from '../lib/serviceTypes'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
+import { hasProviderIssue } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
@@ -267,6 +268,17 @@ export default function ClientDashboard({
   const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
+  const [clientAttrPetName, setClientAttrPetName] = useState('')
+  const [clientAttrDogSize, setClientAttrDogSize] = useState('')
+  const [clientAttrEnergy, setClientAttrEnergy] = useState('')
+  const [clientAttrNumKids, setClientAttrNumKids] = useState(0)
+  const [clientAttrChildAges, setClientAttrChildAges] = useState<string[]>([''])
+  const [clientAttrSpecialNotes, setClientAttrSpecialNotes] = useState('')
+  const [clientAttrLoaded, setClientAttrLoaded] = useState(false)
+  const [clientAttrSaving, setClientAttrSaving] = useState(false)
+  const [clientAttrSavedAt, setClientAttrSavedAt] = useState(0)
+  const [clientAttrError, setClientAttrError] = useState<string | null>(null)
+  const clientAttrOrigRef = useRef({ petName: '', dogSize: '', energy: '', numKids: 0, childAges: [''], specialNotes: '' })
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
   const appViewportHeightRef = useRef(appViewportHeight)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -392,6 +404,108 @@ export default function ClientDashboard({
     setServiceTypeSaving(false)
     setServiceTypeSavedAt(Date.now())
   }, [profile.id, profileServiceTypes, serviceTypeErrorLabel, serviceTypeSaving])
+
+  useEffect(() => {
+    if (clientAttrLoaded) return
+    let cancelled = false
+    supabase
+      .from('profiles')
+      .select('service_attributes')
+      .eq('id', profile.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return
+        const sa = (data?.service_attributes as Record<string, unknown> | null) ?? {}
+        const dog = (sa.dog_walker ?? {}) as Record<string, unknown>
+        const sitter = (sa.baby_sitter ?? {}) as Record<string, unknown>
+        const petName = typeof dog.petName === 'string' ? dog.petName : ''
+        const dogSize = typeof dog.dogSize === 'string' ? dog.dogSize : ''
+        const energy = typeof dog.energyLevel === 'string' ? dog.energyLevel : ''
+        const numKids = typeof sitter.numberOfKids === 'number' ? sitter.numberOfKids : 0
+        const childAges = Array.isArray(sitter.childrenAges)
+          ? sitter.childrenAges.map((a: unknown) => String(a ?? ''))
+          : ['']
+        const specialNotes = typeof sitter.specialNotes === 'string' ? sitter.specialNotes : ''
+        setClientAttrPetName(petName)
+        setClientAttrDogSize(dogSize)
+        setClientAttrEnergy(energy)
+        setClientAttrNumKids(numKids)
+        setClientAttrChildAges(childAges.length > 0 ? childAges : [''])
+        setClientAttrSpecialNotes(specialNotes)
+        clientAttrOrigRef.current = { petName, dogSize, energy, numKids, childAges: childAges.length > 0 ? childAges : [''], specialNotes }
+        setClientAttrLoaded(true)
+      })
+    return () => { cancelled = true }
+  }, [clientAttrLoaded, profile.id])
+
+  const clientAttrDirty = useMemo(() => {
+    const orig = clientAttrOrigRef.current
+    return (
+      clientAttrPetName !== orig.petName ||
+      clientAttrDogSize !== orig.dogSize ||
+      clientAttrEnergy !== orig.energy ||
+      clientAttrNumKids !== orig.numKids ||
+      clientAttrSpecialNotes !== orig.specialNotes ||
+      clientAttrChildAges.length !== orig.childAges.length ||
+      clientAttrChildAges.some((v, i) => v !== orig.childAges[i])
+    )
+  }, [clientAttrPetName, clientAttrDogSize, clientAttrEnergy, clientAttrNumKids, clientAttrChildAges, clientAttrSpecialNotes])
+
+  const handleSaveClientAttrs = useCallback(async () => {
+    if (clientAttrSaving || !clientAttrDirty) return
+    setClientAttrSaving(true)
+    setClientAttrError(null)
+
+    const { data: currentRow } = await supabase
+      .from('profiles')
+      .select('service_attributes')
+      .eq('id', profile.id)
+      .maybeSingle()
+
+    const existing = (currentRow?.service_attributes as Record<string, unknown> | null) ?? {}
+    const next: Record<string, unknown> = { ...existing }
+
+    if (profileServiceTypes.includes('dog_walker')) {
+      next.dog_walker = {
+        ...((existing.dog_walker ?? {}) as Record<string, unknown>),
+        petName: clientAttrPetName.trim() || null,
+        dogSize: clientAttrDogSize || null,
+        energyLevel: clientAttrEnergy || null,
+      }
+    }
+
+    if (profileServiceTypes.includes('baby_sitter')) {
+      const numericAges = clientAttrChildAges.map((a) => a.trim()).filter(Boolean)
+      next.baby_sitter = {
+        ...((existing.baby_sitter ?? {}) as Record<string, unknown>),
+        numberOfKids: clientAttrNumKids,
+        childrenAges: numericAges,
+        specialNotes: clientAttrSpecialNotes.trim() || null,
+      }
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ service_attributes: next })
+      .eq('id', profile.id)
+
+    if (error) {
+      setClientAttrError(isRtl ? 'שמירה נכשלה' : 'Save failed')
+      setClientAttrSaving(false)
+      return
+    }
+
+    clientAttrOrigRef.current = {
+      petName: clientAttrPetName,
+      dogSize: clientAttrDogSize,
+      energy: clientAttrEnergy,
+      numKids: clientAttrNumKids,
+      childAges: [...clientAttrChildAges],
+      specialNotes: clientAttrSpecialNotes,
+    }
+    setClientAttrSaving(false)
+    setClientAttrSavedAt(Date.now())
+  }, [clientAttrSaving, clientAttrDirty, profile.id, profileServiceTypes, clientAttrPetName, clientAttrDogSize, clientAttrEnergy, clientAttrNumKids, clientAttrChildAges, clientAttrSpecialNotes, isRtl])
 
   useEffect(() => {
     if (!debugFlags().interactionDebug) return
@@ -1552,6 +1666,7 @@ export default function ClientDashboard({
     i18n.resolvedLanguage,
     t,
   ])
+  const activeJobHasProviderIssue = hasProviderIssue(flow.activeJob?.notes)
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -2352,6 +2467,180 @@ export default function ClientDashboard({
                     />
                   </BurgerSection>
 
+                  {clientAttrLoaded && (profileServiceTypes.includes('dog_walker') || profileServiceTypes.includes('baby_sitter')) && (
+                    <section style={burgerSectionStyle}>
+                      <div style={burgerSectionHeaderStyle}>
+                        <div style={burgerSectionTitleStyle}>
+                          {isRtl ? 'פרטי השירות שלי' : 'My service details'}
+                        </div>
+                        <div style={burgerSectionSubtitleStyle}>
+                          {isRtl ? 'ככל שנדע יותר, נתאים לך טוב יותר.' : 'The more we know, the better we match.'}
+                        </div>
+                      </div>
+
+                      <div style={clientAttrEditorStyle}>
+                        {profileServiceTypes.includes('dog_walker') && (
+                          <div style={clientAttrSectionStyle}>
+                            <div style={clientAttrSectionLabelStyle}>
+                              {isRtl ? 'פרטי הכלב' : 'Dog details'}
+                            </div>
+
+                            <div style={clientAttrFieldStyle}>
+                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'שם' : 'Name'}</div>
+                              <input
+                                type="text"
+                                value={clientAttrPetName}
+                                onChange={(e) => setClientAttrPetName(e.target.value)}
+                                placeholder={isRtl ? 'לדוגמה: רקסי' : 'e.g. Rex'}
+                                style={clientAttrInputStyle}
+                              />
+                            </div>
+
+                            <div style={clientAttrFieldStyle}>
+                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גודל' : 'Size'}</div>
+                              <div style={clientAttrChipRowStyle}>
+                                {([
+                                  { value: 'S' as const, label: isRtl ? 'קטן' : 'S', desc: '<10kg' },
+                                  { value: 'M' as const, label: isRtl ? 'בינוני' : 'M', desc: '10–25kg' },
+                                  { value: 'L' as const, label: isRtl ? 'גדול' : 'L', desc: '25–40kg' },
+                                  { value: 'XL' as const, label: isRtl ? 'ענק' : 'XL', desc: '40kg+' },
+                                ]).map((opt) => {
+                                  const sel = clientAttrDogSize === opt.value
+                                  return (
+                                    <button
+                                      key={opt.value}
+                                      type="button"
+                                      onClick={() => setClientAttrDogSize(sel ? '' : opt.value)}
+                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+
+                            <div style={clientAttrFieldStyle}>
+                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'רמת אנרגיה' : 'Energy level'}</div>
+                              <div style={clientAttrChipRowStyle}>
+                                {(['low', 'medium', 'high'] as const).map((level) => {
+                                  const sel = clientAttrEnergy === level
+                                  const label = level === 'low' ? (isRtl ? 'נמוכה' : 'Low')
+                                    : level === 'medium' ? (isRtl ? 'בינונית' : 'Medium')
+                                    : (isRtl ? 'גבוהה' : 'High')
+                                  return (
+                                    <button
+                                      key={level}
+                                      type="button"
+                                      onClick={() => setClientAttrEnergy(sel ? '' : level)}
+                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                    >
+                                      {label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {profileServiceTypes.includes('baby_sitter') && (
+                          <div style={clientAttrSectionStyle}>
+                            <div style={clientAttrSectionLabelStyle}>
+                              {isRtl ? 'פרטי הילדים' : 'Children details'}
+                            </div>
+
+                            <div style={clientAttrFieldStyle}>
+                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'מספר ילדים' : 'Number of kids'}</div>
+                              <div style={clientAttrChipRowStyle}>
+                                {[1, 2, 3, 4, 5].map((n) => {
+                                  const sel = clientAttrNumKids === n
+                                  return (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => {
+                                        setClientAttrNumKids(sel ? 0 : n)
+                                        if (!sel && clientAttrChildAges.length < n) {
+                                          setClientAttrChildAges((prev) => {
+                                            const next = [...prev]
+                                            while (next.length < n) next.push('')
+                                            return next
+                                          })
+                                        }
+                                      }}
+                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                    >
+                                      {n}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+
+                            {clientAttrNumKids > 0 && (
+                              <div style={clientAttrFieldStyle}>
+                                <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גיל כל ילד' : 'Age of each child'}</div>
+                                <div style={clientAttrAgesRowStyle}>
+                                  {clientAttrChildAges.slice(0, clientAttrNumKids).map((age, idx) => (
+                                    <input
+                                      key={idx}
+                                      type="number"
+                                      min="0"
+                                      max="18"
+                                      value={age}
+                                      onChange={(e) => {
+                                        setClientAttrChildAges((prev) => {
+                                          const next = [...prev]
+                                          next[idx] = e.target.value
+                                          return next
+                                        })
+                                      }}
+                                      placeholder={`${idx + 1}`}
+                                      style={clientAttrAgeInputStyle}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <div style={clientAttrFieldStyle}>
+                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הערות מיוחדות' : 'Special notes'}</div>
+                              <textarea
+                                value={clientAttrSpecialNotes}
+                                onChange={(e) => setClientAttrSpecialNotes(e.target.value)}
+                                placeholder={isRtl ? 'לדוגמה: אלרגיה לבוטנים' : 'e.g. Peanut allergy'}
+                                rows={2}
+                                style={clientAttrTextareaStyle}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveClientAttrs()}
+                          disabled={clientAttrSaving || !clientAttrDirty}
+                          style={{
+                            ...clientAttrSaveButtonStyle,
+                            ...(clientAttrSaving || !clientAttrDirty ? clientAttrSaveButtonDisabledStyle : null),
+                          }}
+                        >
+                          {clientAttrSaving
+                            ? (isRtl ? 'שומר...' : 'Saving...')
+                            : (isRtl ? 'שמור שינויים' : 'Save changes')}
+                        </button>
+
+                        {clientAttrError && <div style={serviceTypeStatusErrorStyle}>{clientAttrError}</div>}
+                        {!clientAttrSaving && clientAttrSavedAt > 0 && !clientAttrDirty && !clientAttrError && (
+                          <div style={serviceTypeStatusSuccessStyle}>
+                            {isRtl ? 'הפרטים נשמרו בהצלחה.' : 'Details saved successfully.'}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+
                   <div style={menuFooterActionWrapStyle}>
                     <MenuNavRow
                       icon="↪"
@@ -2731,31 +3020,49 @@ export default function ClientDashboard({
 
           {(flow.screenState === 'tracking' || flow.screenState === 'active') && flow.activeJob && (
             <div style={sheetContentStyle}>
-              <TrackingCard
-                walkerName={
-                  flow.activeJob.walker_id
-                    ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
-                    : t('common.provider')
-                }
-                phase={
-                  flow.screenPhase === 'in_progress' ||
-                  flow.screenPhase === 'arrival_confirmed' ||
-                  flow.screenPhase === 'arrived_pending_confirmation'
-                    ? flow.screenPhase
-                    : 'on_the_way'
-                }
-                isArrived={flow.isArrived}
-                etaMinutes={flow.etaMinutes}
-                displayEtaSeconds={flow.displayEtaSeconds}
-                distanceMeters={flow.distanceMeters}
-                gpsQuality={trackingGpsQuality}
-                activeTitle={t('tracking.walkInProgress')}
-                onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
-                confirmingArrival={flow.arrivalConfirming}
-                elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
-                plannedLabel={localizeMinuteUnitLabel(trackingDurationSummary.plannedLabel)}
-                actualLabel={localizeMinuteUnitLabel(trackingDurationSummary.actualLabel)}
-              />
+              {activeJobHasProviderIssue ? (
+                <div style={providerIssueClientCardStyle}>
+                  <div style={providerIssueClientBadgeStyle}>
+                    {isRtl ? 'בהמתנה לבדיקת התמיכה' : 'Waiting for support review'}
+                  </div>
+                  <div style={providerIssueClientTitleStyle}>
+                    {isRtl
+                      ? 'הספק דיווח על בעיה'
+                      : 'Provider reported an issue'}
+                  </div>
+                  <div style={providerIssueClientBodyStyle}>
+                    {isRtl
+                      ? 'הספק דיווח על בעיה. צוות התמיכה בודק את הבקשה לפני שהשירות יוכל להתחיל.'
+                      : 'Provider reported an issue. Support is reviewing the request before the service can begin.'}
+                  </div>
+                </div>
+              ) : (
+                <TrackingCard
+                  walkerName={
+                    flow.activeJob.walker_id
+                      ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
+                      : t('common.provider')
+                  }
+                  phase={
+                    flow.screenPhase === 'in_progress' ||
+                    flow.screenPhase === 'arrival_confirmed' ||
+                    flow.screenPhase === 'arrived_pending_confirmation'
+                      ? flow.screenPhase
+                      : 'on_the_way'
+                  }
+                  isArrived={flow.isArrived}
+                  etaMinutes={flow.etaMinutes}
+                  displayEtaSeconds={flow.displayEtaSeconds}
+                  distanceMeters={flow.distanceMeters}
+                  gpsQuality={trackingGpsQuality}
+                  activeTitle={t('tracking.walkInProgress')}
+                  onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
+                  confirmingArrival={flow.arrivalConfirming}
+                  elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
+                  plannedLabel={localizeMinuteUnitLabel(trackingDurationSummary.plannedLabel)}
+                  actualLabel={localizeMinuteUnitLabel(trackingDurationSummary.actualLabel)}
+                />
+              )}
             </div>
           )}
 
@@ -5579,6 +5886,133 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
   color: '#DC2626',
 }
 
+const clientAttrEditorStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 20,
+  marginTop: 12,
+}
+
+const clientAttrSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  padding: '16px 14px',
+  background: '#F8FAFC',
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+}
+
+const clientAttrSectionLabelStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+  letterSpacing: 0.2,
+}
+
+const clientAttrFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 7,
+}
+
+const clientAttrFieldLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#64748B',
+  letterSpacing: 0.1,
+}
+
+const clientAttrChipRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+}
+
+const clientAttrChipStyle: React.CSSProperties = {
+  minWidth: 46,
+  height: 36,
+  borderRadius: 12,
+  border: '1.5px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  fontSize: 13,
+  fontWeight: 700,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  padding: '0 14px',
+  transition: 'background 120ms, border-color 120ms, color 120ms',
+}
+
+const clientAttrChipSelectedStyle: React.CSSProperties = {
+  background: '#3B82F6',
+  borderColor: '#3B82F6',
+  color: '#FFF',
+}
+
+const clientAttrInputStyle: React.CSSProperties = {
+  width: '100%',
+  height: 40,
+  borderRadius: 12,
+  border: '1.5px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 14,
+  fontFamily: 'inherit',
+  padding: '0 14px',
+  outline: 'none',
+  boxSizing: 'border-box',
+}
+
+const clientAttrAgesRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+}
+
+const clientAttrAgeInputStyle: React.CSSProperties = {
+  width: 58,
+  height: 40,
+  borderRadius: 12,
+  border: '1.5px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 14,
+  fontFamily: 'inherit',
+  textAlign: 'center',
+  outline: 'none',
+  boxSizing: 'border-box',
+}
+
+const clientAttrTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  borderRadius: 12,
+  border: '1.5px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 14,
+  fontFamily: 'inherit',
+  padding: '10px 14px',
+  resize: 'vertical',
+  outline: 'none',
+  boxSizing: 'border-box',
+}
+
+const clientAttrSaveButtonStyle: React.CSSProperties = {
+  width: '100%',
+  height: 46,
+  borderRadius: 14,
+  border: 'none',
+  background: '#3B82F6',
+  color: '#FFF',
+  fontSize: 15,
+  fontWeight: 800,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  transition: 'opacity 120ms',
+}
+
+const clientAttrSaveButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.4,
+  cursor: 'default',
+}
 
 const burgerSectionHeaderStyle: React.CSSProperties = {
   display: 'flex',
@@ -6232,4 +6666,38 @@ const expressCheckoutSetupBadgeStyle: React.CSSProperties = {
   background: 'rgba(241,245,249,0.9)',
   borderRadius: 999,
   padding: '2px 8px',
+}
+
+const providerIssueClientCardStyle: React.CSSProperties = {
+  borderRadius: 28,
+  padding: 24,
+  background: 'linear-gradient(180deg, rgba(255,251,235,0.98) 0%, rgba(255,255,255,0.98) 100%)',
+  border: '1px solid rgba(245, 158, 11, 0.22)',
+  boxShadow: '0 18px 44px rgba(15, 23, 42, 0.08)',
+  display: 'grid',
+  gap: 12,
+}
+
+const providerIssueClientBadgeStyle: React.CSSProperties = {
+  justifySelf: 'start',
+  padding: '6px 12px',
+  borderRadius: 999,
+  background: 'rgba(245, 158, 11, 0.14)',
+  color: '#B45309',
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: '0.01em',
+}
+
+const providerIssueClientTitleStyle: React.CSSProperties = {
+  color: '#111827',
+  fontSize: 24,
+  fontWeight: 900,
+  lineHeight: 1.05,
+}
+
+const providerIssueClientBodyStyle: React.CSSProperties = {
+  color: '#6B7280',
+  fontSize: 15,
+  lineHeight: 1.6,
 }

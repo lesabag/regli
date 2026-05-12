@@ -7,7 +7,7 @@ import {
   sanitizeCandidates,
   type RankedCandidate,
 } from '../_shared/dispatch.ts'
-import { rankDispatchCandidatesByFinalScore } from '../_shared/dispatchRanking.ts'
+import { rankDispatchCandidatesByFinalScore, computeAttributeScore } from '../_shared/dispatchRanking.ts'
 
 type StartDispatchBody = {
   requestId?: string
@@ -54,16 +54,23 @@ function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<s
       ? Number(safeMeta.base_score.toFixed(6))
       : null
   const affinityScore = normalizeAffinityScore(safeMeta)
-  const finalScore = baseScore == null ? null : Number((baseScore + affinityScore).toFixed(6))
 
   if (source) {
     persistedMeta.source = source
   }
 
+  const attributeScore = typeof safeMeta.attribute_score === 'number' && Number.isFinite(safeMeta.attribute_score)
+    ? Number(safeMeta.attribute_score.toFixed(6))
+    : 0
+  const finalScore = baseScore == null ? null : Number((baseScore + affinityScore + attributeScore).toFixed(6))
+
   persistedMeta.base_score = baseScore
   persistedMeta.affinity_score = affinityScore
   persistedMeta.affinity_provider_saved = safeMeta.affinity_provider_saved === true
   persistedMeta.affinity_client_saved = safeMeta.affinity_client_saved === true
+  persistedMeta.attribute_score = attributeScore
+  persistedMeta.attribute_reason = typeof safeMeta.attribute_reason === 'string' ? safeMeta.attribute_reason : 'neutral_missing_attributes'
+  persistedMeta.attribute_matches = Array.isArray(safeMeta.attribute_matches) ? safeMeta.attribute_matches : []
   persistedMeta.final_score = finalScore
 
   return persistedMeta
@@ -73,7 +80,10 @@ function getPersistedCandidateScore(candidate: RankedCandidate): number {
   const meta = candidate.meta ?? {}
   const baseScore = getBaseScore(candidate)
   const affinityScore = normalizeAffinityScore(meta)
-  return Number((baseScore + affinityScore).toFixed(6))
+  const attributeScore = typeof meta.attribute_score === 'number' && Number.isFinite(meta.attribute_score)
+    ? meta.attribute_score
+    : 0
+  return Number((baseScore + affinityScore + attributeScore).toFixed(6))
 }
 
 function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
@@ -137,13 +147,18 @@ function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
   const meta = candidate.meta ?? {}
   const baseScore = getBaseScore(candidate)
   const affinityScore = normalizeAffinityScore(meta)
-  const finalScore = Number((baseScore + affinityScore).toFixed(6))
+  const attributeScore =
+    typeof meta.attribute_score === 'number' && Number.isFinite(meta.attribute_score)
+      ? meta.attribute_score
+      : 0
+  const finalScore = Number((baseScore + affinityScore + attributeScore).toFixed(6))
   return {
     rank,
     walkerId: candidate.walkerId,
     score: finalScore,
     base_score: baseScore,
     affinity_score: affinityScore,
+    attribute_score: attributeScore,
     final_score: finalScore,
     affinity_provider_saved: meta.affinity_provider_saved === true,
     affinity_client_saved: meta.affinity_client_saved === true,
@@ -160,6 +175,10 @@ function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
     review_count:
       typeof meta.review_count === 'number' ? meta.review_count : null,
     source: typeof meta.source === 'string' ? meta.source : null,
+    attribute_reason:
+      typeof meta.attribute_reason === 'string' ? meta.attribute_reason : 'neutral_missing_attributes',
+    attribute_matches:
+      Array.isArray(meta.attribute_matches) ? meta.attribute_matches : [],
   }
 }
 
@@ -306,16 +325,19 @@ serve(async (req) => {
     let providerSavedCustomerIds = new Set<string>()
     let customerSavedProviderIds = new Set<string>()
     let matchingServiceWalkerIds: Set<string> | null = null
+    let providerServiceAttrsById = new Map<string, Record<string, unknown>>()
+    let clientServiceAttributes: Record<string, unknown> | null = null
 
     if (candidateWalkerIds.length > 0) {
       const [
         { data: walkerProfileRows, error: walkerProfilesError },
         { data: favoriteCustomersRows, error: favoriteCustomersError },
         { data: favoriteWalkersRows, error: favoriteWalkersError },
+        { data: clientProfileRow },
       ] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, role, is_online, service_type, service_types')
+          .select('id, role, is_online, service_type, service_types, service_attributes')
           .in('id', candidateWalkerIds),
         supabase
           .from('favorite_customers')
@@ -327,7 +349,16 @@ serve(async (req) => {
           .select('walker_id')
           .eq('client_id', clientId ?? '')
           .in('walker_id', candidateWalkerIds),
+        clientId
+          ? supabase
+              .from('profiles')
+              .select('service_attributes')
+              .eq('id', clientId)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
       ])
+
+      clientServiceAttributes = (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
 
       if (walkerProfilesError) {
         console.error('[start-dispatch] failed loading candidate service types', {
@@ -343,8 +374,15 @@ serve(async (req) => {
             is_online?: boolean | null
             service_type: string | null
             service_types?: string[] | string | null
+            service_attributes?: Record<string, unknown> | null
           }> | null
         ) ?? [])
+
+        for (const row of candidateCapabilityRows) {
+          if (row.service_attributes && typeof row.service_attributes === 'object') {
+            providerServiceAttrsById.set(row.id, row.service_attributes)
+          }
+        }
 
         candidateCapabilityRows.forEach((row) => {
           const normalizedServiceTypes = getNormalizedServiceTypes(row.service_types)
@@ -418,6 +456,17 @@ serve(async (req) => {
         const providerSavedCustomer = providerSavedCustomerIds.has(candidate.walkerId)
         const customerSavedProvider = customerSavedProviderIds.has(candidate.walkerId)
         const baseScore = getBaseScore(candidate)
+
+        const providerAttrs = providerServiceAttrsById.get(candidate.walkerId) ?? null
+        const attrResult = computeAttributeScore(
+          requestProviderServiceType,
+          clientServiceAttributes,
+          providerAttrs,
+        )
+        const candidateAttrScore = typeof candidate.meta?.attribute_score === 'number'
+          ? candidate.meta.attribute_score
+          : attrResult.attributeScore
+
         const [rankedSelection] = rankDispatchCandidatesByFinalScore([
           {
             walkerId: candidate.walkerId,
@@ -427,9 +476,11 @@ serve(async (req) => {
             distanceKm: toFiniteNumber(candidate.meta?.distance_km),
             avgRating: toFiniteNumber(candidate.meta?.avg_rating),
             reviewCount: toFiniteNumber(candidate.meta?.review_count),
+            attributeScore: candidateAttrScore,
           },
         ])
         const affinityScore = rankedSelection?.affinityScore ?? 0
+        const attributeScore = rankedSelection?.attributeScore ?? candidateAttrScore
         const finalScore = rankedSelection?.finalScore ?? baseScore
         const meta = {
           ...(candidate.meta ?? {}),
@@ -437,6 +488,9 @@ serve(async (req) => {
           affinity_score: affinityScore,
           affinity_provider_saved: providerSavedCustomer,
           affinity_client_saved: customerSavedProvider,
+          attribute_score: attributeScore,
+          attribute_reason: attrResult.attributeReason,
+          attribute_matches: attrResult.attributeMatches,
           final_score: finalScore,
         }
 
@@ -447,6 +501,8 @@ serve(async (req) => {
           walker_id: candidate.walkerId,
           base_score: baseScore,
           affinity_score: affinityScore,
+          attribute_score: attributeScore,
+          attribute_reason: attrResult.attributeReason,
           final_score: finalScore,
           affinity_provider_saved: providerSavedCustomer,
           affinity_client_saved: customerSavedProvider,
@@ -539,6 +595,7 @@ serve(async (req) => {
         distanceKm: toFiniteNumber(candidate.meta?.distance_km),
         avgRating: toFiniteNumber(candidate.meta?.avg_rating),
         reviewCount: toFiniteNumber(candidate.meta?.review_count),
+        attributeScore: typeof candidate.meta?.attribute_score === 'number' ? candidate.meta.attribute_score : 0,
       })),
     )
 
@@ -559,6 +616,16 @@ serve(async (req) => {
             affinity_score: selection.affinityScore,
             affinity_provider_saved: selection.affinityProviderSaved,
             affinity_client_saved: selection.affinityClientSaved,
+            attribute_score:
+              typeof candidate.meta?.attribute_score === 'number' && Number.isFinite(candidate.meta.attribute_score)
+                ? Number(candidate.meta.attribute_score.toFixed(6))
+                : 0,
+            attribute_reason:
+              typeof candidate.meta?.attribute_reason === 'string'
+                ? candidate.meta.attribute_reason
+                : 'neutral_missing_attributes',
+            attribute_matches:
+              Array.isArray(candidate.meta?.attribute_matches) ? candidate.meta.attribute_matches : [],
             final_score: selection.finalScore,
           },
         }

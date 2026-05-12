@@ -228,6 +228,7 @@ type DispatchWalkerProfile = {
   last_lng: number | null
   service_type?: string | null
   service_types?: string[] | string | null
+  service_attributes?: Record<string, unknown> | null
 }
 
 type DispatchRatingRow = {
@@ -3249,16 +3250,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setCurrentJob(createdJob)
         lastActiveJobIdRef.current = createdJob.id
 
-        const { data: walkers, error: walkersError } = await supabase
-          .from('profiles')
-          .select('id, last_lat, last_lng, service_type, service_types')
-          .eq('role', 'walker')
-          .eq('is_online', true)
+        const [{ data: walkers, error: walkersError }, { data: clientProfileRow }] = await Promise.all([
+          supabase
+            .from('profiles')
+            .select('id, last_lat, last_lng, service_type, service_types, service_attributes')
+            .eq('role', 'walker')
+            .eq('is_online', true),
+          supabase
+            .from('profiles')
+            .select('service_attributes')
+            .eq('id', profileId)
+            .maybeSingle(),
+        ])
 
         if (walkersError) {
           throw new Error(walkersError.message)
         }
 
+        const clientServiceAttributes = (clientProfileRow?.service_attributes as Record<string, unknown> | null) ?? null
         const requestedProviderServiceType = normalizeProviderServiceType(
           createdJob.service_type ?? normalizedRequestServiceType,
         )
@@ -3326,6 +3335,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
           }
         }
 
+        const walkerServiceAttrsById = new Map(
+          allOnlineWalkers
+            .filter((w) => w.service_attributes)
+            .map((w) => [w.id, w.service_attributes as Record<string, unknown>]),
+        )
+
         const ranked = rankWalkerCandidates(
           allOnlineWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
@@ -3348,6 +3363,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
               reviewCount: ratingStats?.count ?? 0,
               affinityProviderSaved: providerSavedCustomerIds.has(walker.id),
               affinityClientSaved: customerSavedProviderIds.has(walker.id),
+              serviceType: requestedProviderServiceType,
+              clientServiceAttributes: clientServiceAttributes,
+              providerServiceAttributes: walkerServiceAttrsById.get(walker.id) ?? null,
             }
           }),
         ).map((candidate) => ({
@@ -3365,6 +3383,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
             distance_km: candidate.distanceKm,
             avg_rating: candidate.avgRating,
             review_count: candidate.reviewCount,
+            attribute_score: candidate.attributeScore,
+            attribute_reason: candidate.attributeReason,
+            attribute_matches: candidate.attributeMatches,
           },
         }))
 

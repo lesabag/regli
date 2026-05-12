@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../services/supabaseClient'
 
+const ADMIN_DISPATCH_REFRESH_MS = 12_000
+
 type RequestRow = {
   id: string
   dog_name: string | null
@@ -54,7 +56,7 @@ export default function AdminDispatchLive() {
 
     const refreshInterval = setInterval(() => {
       void fetchAll()
-    }, 4000)
+    }, ADMIN_DISPATCH_REFRESH_MS)
 
     const tickInterval = setInterval(() => {
       forceTick((x) => x + 1)

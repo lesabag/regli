@@ -26,6 +26,7 @@ type WalkerRow = {
   last_lng: number | null
   service_type: string | null
   service_types?: string[] | string | null
+  service_attributes?: Record<string, unknown> | null
 }
 
 type RatingRow = {
@@ -296,7 +297,7 @@ serve(async (req) => {
         // 🔍 fetch online walkers
         const { data: walkers, error: walkersError } = await supabase
           .from('profiles')
-          .select('id, last_lat, last_lng, service_type, service_types')
+          .select('id, last_lat, last_lng, service_type, service_types, service_attributes')
           .eq('role', 'walker')
           .eq('is_online', true)
 
@@ -401,8 +402,17 @@ serve(async (req) => {
 
         let providerSavedCustomerIds = new Set<string>()
         let customerSavedProviderIds = new Set<string>()
+        let clientServiceAttributes: Record<string, unknown> | null = null
+
+        const walkerServiceAttrsById = new Map<string, Record<string, unknown>>()
+        for (const walker of onlineWalkers) {
+          if (walker.service_attributes && typeof walker.service_attributes === 'object') {
+            walkerServiceAttrsById.set(walker.id, walker.service_attributes)
+          }
+        }
+
         if (walkerIds.length > 0 && job.client_id) {
-          const [{ data: favoriteCustomersRows, error: favoriteCustomersError }, { data: favoriteWalkersRows, error: favoriteWalkersError }] =
+          const [{ data: favoriteCustomersRows, error: favoriteCustomersError }, { data: favoriteWalkersRows, error: favoriteWalkersError }, { data: clientProfileRow }] =
             await Promise.all([
               supabase
                 .from('favorite_customers')
@@ -414,7 +424,14 @@ serve(async (req) => {
                 .select('walker_id')
                 .eq('client_id', job.client_id)
                 .in('walker_id', walkerIds),
+              supabase
+                .from('profiles')
+                .select('service_attributes')
+                .eq('id', job.client_id)
+                .maybeSingle(),
             ])
+
+          clientServiceAttributes = (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
 
           if (favoriteCustomersError) {
             await supabase.rpc('log_dispatch_event', {
@@ -460,6 +477,9 @@ serve(async (req) => {
               reviewCount: ratingStats?.count ?? 0,
               affinityProviderSaved: providerSavedCustomerIds.has(walker.id),
               affinityClientSaved: customerSavedProviderIds.has(walker.id),
+              serviceType: requestedProviderServiceType,
+              clientServiceAttributes: clientServiceAttributes,
+              providerServiceAttributes: walkerServiceAttrsById.get(walker.id) ?? null,
             }
           }),
         ).map((candidate) => ({
@@ -477,6 +497,9 @@ serve(async (req) => {
             distance_km: candidate.distanceKm,
             avg_rating: candidate.avgRating,
             review_count: candidate.reviewCount,
+            attribute_score: candidate.attributeScore,
+            attribute_reason: candidate.attributeReason,
+            attribute_matches: candidate.attributeMatches,
           },
         }))
 

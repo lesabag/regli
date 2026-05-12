@@ -3,6 +3,8 @@ import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import {
   cleanCompletionReviewNotes,
   COMPLETION_REVIEW_MARKER,
+  PROVIDER_ISSUE_MARKER,
+  isProviderIssueReported,
 } from '../utils/completionReview'
 
 interface ProfileRow {
@@ -13,6 +15,8 @@ interface ProfileRow {
 
 interface DisputeRow {
   id: string
+  client_id: string | null
+  walker_id: string | null
   created_at: string | null
   service_completed_at: string | null
   payment_status: string | null
@@ -40,32 +44,73 @@ interface RejectDisputeResponse {
   paymentStatus?: string
 }
 
+type ActionType = 'approve_payout' | 'reject_payout' | 'resume_service' | 'cancel_request'
+
 type ActionState = {
   jobId: string
-  type: 'approve' | 'reject'
+  type: ActionType
 } | null
 
-function normalizeProfile(profile: DisputeRow['client']): ProfileRow | null {
+type ResolvedCaseType = 'provider_issue' | 'completion_dispute'
+
+interface ReviewProviderIssueResponse {
+  success?: boolean
+  error?: string
+  details?: string
+  jobId?: string
+  action?: 'resume' | 'cancel'
+  status?: string
+  paymentStatus?: string
+}
+
+function normalizeProfile(profile: DisputeRow['client'] | DisputeRow['walker']): ProfileRow | null {
   if (!profile) return null
   return Array.isArray(profile) ? profile[0] ?? null : profile
 }
 
-function profileName(profile: ProfileRow | null): string {
-  if (!profile) return '-'
-  return profile.full_name || profile.email || profile.id.slice(0, 8)
+function profileName(profile: ProfileRow | null, fallbackId?: string | null): string {
+  if (profile) return profile.full_name || profile.email || profile.id.slice(0, 8)
+  if (fallbackId) return fallbackId.slice(0, 8)
+  return '-'
 }
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return '-'
   const dt = new Date(value)
   if (Number.isNaN(dt.getTime())) return '-'
-  return dt.toLocaleString([], {
+  return dt.toLocaleDateString([], {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+  }) + ' • ' + dt.toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatRelativeTime(value: string | null | undefined, nowMs: number): string {
+  if (!value) return '-'
+  const ts = new Date(value).getTime()
+  if (Number.isNaN(ts)) return '-'
+  const diffMs = Math.max(0, nowMs - ts)
+  const diffMin = Math.floor(diffMs / 60_000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin} min ago`
+  const diffHours = Math.floor(diffMin / 60)
+  if (diffHours < 24) return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`
+  const diffDays = Math.floor(diffHours / 24)
+  return diffDays === 1 ? '1 day ago' : `${diffDays} days ago`
+}
+
+function renderTimestampCell(value: string | null | undefined, nowMs: number) {
+  return (
+    <div style={timestampWrapStyle}>
+      <div style={timestampPrimaryStyle}>{formatDateTime(value)}</div>
+      {value && value !== '-' && (
+        <div style={timestampSecondaryStyle}>{formatRelativeTime(value, nowMs)}</div>
+      )}
+    </div>
+  )
 }
 
 function paymentPill(status: string | null): CSSProperties {
@@ -90,6 +135,7 @@ export default function AdminDisputes() {
   const [loading, setLoading] = useState(true)
   const [actionState, setActionState] = useState<ActionState>(null)
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
 
   const fetchDisputes = useCallback(async () => {
     setLoading(true)
@@ -97,6 +143,8 @@ export default function AdminDisputes() {
       .from('walk_requests')
       .select(`
         id,
+        client_id,
+        walker_id,
         created_at,
         service_completed_at,
         payment_status,
@@ -104,7 +152,7 @@ export default function AdminDisputes() {
         client:profiles!walk_requests_client_id_fkey ( id, full_name, email ),
         walker:profiles!walk_requests_walker_id_fkey ( id, full_name, email )
       `)
-      .ilike('notes', `%${COMPLETION_REVIEW_MARKER}%`)
+      .or(`notes.ilike.%${COMPLETION_REVIEW_MARKER}%,notes.ilike.%${PROVIDER_ISSUE_MARKER}%`)
       .order('service_completed_at', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false })
 
@@ -139,6 +187,11 @@ export default function AdminDisputes() {
     return () => window.clearTimeout(timer)
   }, [feedback])
 
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const disputes = useMemo(
     () =>
       rows.map((row) => ({
@@ -146,12 +199,18 @@ export default function AdminDisputes() {
         clientProfile: normalizeProfile(row.client),
         walkerProfile: normalizeProfile(row.walker),
         cleanedNotes: cleanCompletionReviewNotes(row.notes),
+        caseType: (isProviderIssueReported(row.notes) ? 'provider_issue' : 'completion_dispute') as ResolvedCaseType,
       })),
     [rows],
   )
 
   const runAction = useCallback(
-    async (jobId: string, type: 'approve' | 'reject', task: () => Promise<string | null>) => {
+    async (
+      jobId: string,
+      type: ActionType,
+      successMessage: string,
+      task: () => Promise<string | null>,
+    ) => {
       setActionState({ jobId, type })
       setFeedback(null)
       try {
@@ -159,10 +218,7 @@ export default function AdminDisputes() {
         if (error) {
           setFeedback({ ok: false, message: error })
         } else {
-          setFeedback({
-            ok: true,
-            message: type === 'approve' ? 'Dispute approved and payment captured.' : 'Dispute rejected and payment canceled.',
-          })
+          setFeedback({ ok: true, message: successMessage })
           await fetchDisputes()
         }
       } catch (err) {
@@ -177,9 +233,9 @@ export default function AdminDisputes() {
     [fetchDisputes],
   )
 
-  const handleApprove = useCallback(
+  const handleApprovePayout = useCallback(
     (jobId: string) => {
-      void runAction(jobId, 'approve', async () => {
+      void runAction(jobId, 'approve_payout', 'Payout approved and payment captured.', async () => {
         const { data, error } = await invokeEdgeFunction<CapturePaymentResponse>('capture-payment', {
           body: {
             requestId: jobId,
@@ -196,9 +252,9 @@ export default function AdminDisputes() {
     [runAction],
   )
 
-  const handleReject = useCallback(
+  const handleRejectPayout = useCallback(
     (jobId: string) => {
-      void runAction(jobId, 'reject', async () => {
+      void runAction(jobId, 'reject_payout', 'Payout rejected and payment authorization canceled.', async () => {
         const { data, error } = await invokeEdgeFunction<RejectDisputeResponse>(
           'reject-completion-dispute',
           { body: { jobId } },
@@ -213,12 +269,44 @@ export default function AdminDisputes() {
     [runAction],
   )
 
+  const handleResumeService = useCallback(
+    (jobId: string) => {
+      void runAction(jobId, 'resume_service', 'Service resumed. Provider and client were notified.', async () => {
+        const { data, error } = await invokeEdgeFunction<ReviewProviderIssueResponse>('review-provider-issue', {
+          body: { jobId, action: 'resume' },
+        })
+        if (error) return error
+        if (data && !data.success) {
+          return data.details || data.error || 'Resume failed.'
+        }
+        return null
+      })
+    },
+    [runAction],
+  )
+
+  const handleCancelRequest = useCallback(
+    (jobId: string) => {
+      void runAction(jobId, 'cancel_request', 'Request cancelled. Provider and client were notified.', async () => {
+        const { data, error } = await invokeEdgeFunction<ReviewProviderIssueResponse>('review-provider-issue', {
+          body: { jobId, action: 'cancel' },
+        })
+        if (error) return error
+        if (data && !data.success) {
+          return data.details || data.error || 'Cancel failed.'
+        }
+        return null
+      })
+    },
+    [runAction],
+  )
+
   return (
     <div style={shellStyle}>
       <div style={headerStyle}>
         <div>
           <h3 style={titleStyle}>Disputes</h3>
-          <p style={subtitleStyle}>Client-reported completion issues waiting for review.</p>
+          <p style={subtitleStyle}>Reported issues waiting for review.</p>
         </div>
         <div style={countBadgeStyle}>{loading ? '...' : disputes.length}</div>
       </div>
@@ -246,6 +334,7 @@ export default function AdminDisputes() {
             <thead>
               <tr>
                 <th style={thStyle}>Job</th>
+                <th style={thStyle}>Type</th>
                 <th style={thStyle}>Client</th>
                 <th style={thStyle}>Provider</th>
                 <th style={thStyle}>Created</th>
@@ -258,18 +347,33 @@ export default function AdminDisputes() {
             <tbody>
               {disputes.map((row) => {
                 const busy = actionState?.jobId === row.id
-                const approving = busy && actionState?.type === 'approve'
-                const rejecting = busy && actionState?.type === 'reject'
+                const resuming = busy && actionState?.type === 'resume_service'
+                const cancelling = busy && actionState?.type === 'cancel_request'
+                const approving = busy && actionState?.type === 'approve_payout'
+                const rejecting = busy && actionState?.type === 'reject_payout'
+                const isProviderIssue = row.caseType === 'provider_issue'
 
                 return (
                   <tr key={row.id} style={rowStyle}>
                     <td style={tdStyle}>
                       <div style={monoStyle}>{row.id}</div>
                     </td>
-                    <td style={tdStyle}>{profileName(row.clientProfile)}</td>
-                    <td style={tdStyle}>{profileName(row.walkerProfile)}</td>
-                    <td style={tdStyle}>{formatDateTime(row.created_at)}</td>
-                    <td style={tdStyle}>{formatDateTime(row.service_completed_at)}</td>
+                    <td style={tdStyle}>
+                      <span style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 8,
+                        background: isProviderIssue ? '#FEF3C7' : '#FEE2E2',
+                        color: isProviderIssue ? '#92400E' : '#991B1B',
+                      }}>
+                        {isProviderIssue ? 'Provider issue' : 'Client payout dispute'}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>{profileName(row.clientProfile, row.client_id)}</td>
+                    <td style={tdStyle}>{profileName(row.walkerProfile, row.walker_id)}</td>
+                    <td style={tdStyle}>{renderTimestampCell(row.created_at, nowMs)}</td>
+                    <td style={tdStyle}>{renderTimestampCell(row.service_completed_at, nowMs)}</td>
                     <td style={tdStyle}>
                       <span style={paymentPill(row.payment_status)}>{row.payment_status || 'unpaid'}</span>
                     </td>
@@ -278,30 +382,61 @@ export default function AdminDisputes() {
                     </td>
                     <td style={tdStyle}>
                       <div style={actionsStyle}>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleApprove(row.id)}
-                          style={{
-                            ...approveButtonStyle,
-                            opacity: busy ? 0.65 : 1,
-                            cursor: busy ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          {approving ? 'Approving...' : 'Approve'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleReject(row.id)}
-                          style={{
-                            ...rejectButtonStyle,
-                            opacity: busy ? 0.65 : 1,
-                            cursor: busy ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          {rejecting ? 'Rejecting...' : 'Reject'}
-                        </button>
+                        {isProviderIssue ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResumeService(row.id)}
+                              style={{
+                                ...approveButtonStyle,
+                                opacity: busy ? 0.65 : 1,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {resuming ? 'Resuming...' : 'Resume service'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleCancelRequest(row.id)}
+                              style={{
+                                ...rejectButtonStyle,
+                                opacity: busy ? 0.65 : 1,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {cancelling ? 'Cancelling...' : 'Cancel request'}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleApprovePayout(row.id)}
+                              style={{
+                                ...approveButtonStyle,
+                                opacity: busy ? 0.65 : 1,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {approving ? 'Approving...' : 'Approve payout'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleRejectPayout(row.id)}
+                              style={{
+                                ...rejectButtonStyle,
+                                opacity: busy ? 0.65 : 1,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {rejecting ? 'Rejecting...' : 'Reject payout'}
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -321,6 +456,25 @@ const shellStyle: CSSProperties = {
   borderRadius: 20,
   padding: 20,
   boxShadow: '0 16px 40px rgba(15,23,42,0.05)',
+}
+
+const timestampWrapStyle: CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const timestampPrimaryStyle: CSSProperties = {
+  color: '#0F172A',
+  fontSize: 13,
+  fontWeight: 700,
+  whiteSpace: 'nowrap',
+}
+
+const timestampSecondaryStyle: CSSProperties = {
+  color: '#94A3B8',
+  fontSize: 11,
+  fontWeight: 500,
+  whiteSpace: 'nowrap',
 }
 
 const headerStyle: CSSProperties = {
