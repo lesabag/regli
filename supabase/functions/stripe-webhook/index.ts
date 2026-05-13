@@ -7,6 +7,142 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, stripe-signature',
 }
 
+type SupabaseAdmin = ReturnType<typeof createClient>
+type LogCtx = { event_id: string; event_type: string }
+
+function normalizeCurrency(value: string | null | undefined): string {
+  if (typeof value !== 'string') return 'ils'
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z]{3}$/.test(normalized) ? normalized : 'ils'
+}
+
+function toMajor(amountMinor: number): number {
+  return Math.round((amountMinor / 100) * 100) / 100
+}
+
+function toMinor(amountMajor: number): number {
+  return Math.max(0, Math.round(amountMajor * 100))
+}
+
+function roundMajor(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+async function upsertWalletTransaction(
+  supabaseAdmin: SupabaseAdmin,
+  params: {
+    walkerId: string
+    jobId: string
+    type: 'refund' | 'transfer_reversal'
+    amount: number
+    currency: string
+    status: 'partial' | 'succeeded' | 'failed'
+    description: string
+  },
+) {
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('wallet_transactions')
+    .select('id')
+    .eq('walker_id', params.walkerId)
+    .eq('job_id', params.jobId)
+    .eq('type', params.type)
+    .maybeSingle()
+
+  if (existingError) {
+    console.error('[webhook] wallet tx lookup failed', { job_id: params.jobId, type: params.type, error: existingError.message })
+    return
+  }
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from('wallet_transactions')
+      .update({
+        amount: params.amount,
+        currency: params.currency,
+        status: params.status,
+        description: params.description,
+      })
+      .eq('id', existing.id)
+
+    if (error) {
+      console.error('[webhook] wallet tx update failed', { job_id: params.jobId, type: params.type, error: error.message })
+    }
+    return
+  }
+
+  const { error } = await supabaseAdmin
+    .from('wallet_transactions')
+    .insert({
+      walker_id: params.walkerId,
+      job_id: params.jobId,
+      type: params.type,
+      status: params.status,
+      amount: params.amount,
+      currency: params.currency,
+      description: params.description,
+    })
+
+  if (error && error.code !== '23505') {
+    console.error('[webhook] wallet tx insert failed', { job_id: params.jobId, type: params.type, error: error.message })
+  }
+}
+
+async function upsertBalanceAdjustment(
+  supabaseAdmin: SupabaseAdmin,
+  params: {
+    walkerId: string
+    jobId: string
+    amount: number
+    description: string
+  },
+) {
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('walker_balance_adjustments')
+    .select('id')
+    .eq('walker_id', params.walkerId)
+    .eq('job_id', params.jobId)
+    .eq('type', 'refund_debit')
+    .maybeSingle()
+
+  if (existingError) {
+    console.error('[webhook] balance adjustment lookup failed', { job_id: params.jobId, error: existingError.message })
+    return
+  }
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from('walker_balance_adjustments')
+      .update({
+        amount: params.amount,
+        description: params.description,
+      })
+      .eq('id', existing.id)
+
+    if (error) {
+      console.error('[webhook] balance adjustment update failed', { job_id: params.jobId, error: error.message })
+    }
+    return
+  }
+
+  const { error } = await supabaseAdmin
+    .from('walker_balance_adjustments')
+    .insert({
+      walker_id: params.walkerId,
+      job_id: params.jobId,
+      type: 'refund_debit',
+      amount: params.amount,
+      description: params.description,
+    })
+
+  if (error && error.code !== '23505') {
+    console.error('[webhook] balance adjustment insert failed', { job_id: params.jobId, error: error.message })
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -120,7 +256,7 @@ serve(async (req: Request) => {
         break
 
       case 'charge.refunded':
-        await handleChargeRefunded(supabaseAdmin, event, logCtx)
+        await handleChargeRefunded(supabaseAdmin, stripe, event, logCtx)
         break
 
       default:
@@ -138,9 +274,6 @@ serve(async (req: Request) => {
 })
 
 // ─── Payment Intent handlers ────────────────────────────────────
-
-type SupabaseAdmin = ReturnType<typeof createClient>
-type LogCtx = { event_id: string; event_type: string }
 
 async function handlePaymentIntentAmountCapturableUpdated(supabaseAdmin: SupabaseAdmin, event: Stripe.Event, logCtx: LogCtx) {
   const pi = event.data.object as Stripe.PaymentIntent
@@ -410,6 +543,8 @@ async function handleTransferReversed(supabaseAdmin: SupabaseAdmin, event: Strip
     .from('walker_payouts')
     .update({
       status: 'reversed',
+      reversed_amount: toMajor(Math.max(0, transfer.amount_reversed ?? transfer.amount ?? 0)),
+      reversed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq('job_id', jobId)
@@ -568,10 +703,14 @@ async function handlePayoutFailed(supabaseAdmin: SupabaseAdmin, event: Stripe.Ev
 
 // ─── Refund handler ────────────────────────────────────────────
 
-async function handleChargeRefunded(supabaseAdmin: SupabaseAdmin, event: Stripe.Event, logCtx: LogCtx) {
+async function handleChargeRefunded(
+  supabaseAdmin: SupabaseAdmin,
+  stripe: Stripe,
+  event: Stripe.Event,
+  logCtx: LogCtx,
+) {
   const charge = event.data.object as Stripe.Charge
 
-  // Find the job by payment intent
   const paymentIntentId = charge.payment_intent as string | null
   if (!paymentIntentId) {
     console.log('[webhook] charge.refunded: no payment_intent on charge', logCtx)
@@ -580,7 +719,7 @@ async function handleChargeRefunded(supabaseAdmin: SupabaseAdmin, event: Stripe.
 
   const { data: job, error: findErr } = await supabaseAdmin
     .from('walk_requests')
-    .select('id, walker_id, payment_status, dog_name')
+    .select('id, client_id, walker_id, payment_status, dog_name, price, walker_earnings, walker_amount, refunded_amount, refund_currency')
     .eq('stripe_payment_intent_id', paymentIntentId)
     .single()
 
@@ -590,125 +729,204 @@ async function handleChargeRefunded(supabaseAdmin: SupabaseAdmin, event: Stripe.
   }
 
   const ctx = { ...logCtx, job_id: job.id, pi_id: paymentIntentId, walker_id: job.walker_id }
+  const capturedAmountMinor = Math.max(
+    typeof charge.amount_captured === 'number' ? charge.amount_captured : 0,
+    typeof charge.amount === 'number' ? charge.amount : 0,
+  )
+  const totalRefundedMinor = Math.max(0, charge.amount_refunded ?? 0)
+  const refundCurrency = normalizeCurrency(charge.currency || job.refund_currency)
+  const isFullyRefunded = capturedAmountMinor > 0 ? totalRefundedMinor >= capturedAmountMinor : charge.refunded === true
+  const providerNetMajor = roundMajor(
+    job.walker_amount ??
+      job.walker_earnings ??
+      (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0),
+  )
+  const providerTargetRefundMajor = roundMajor(
+    capturedAmountMinor > 0
+      ? clamp((providerNetMajor * totalRefundedMinor) / capturedAmountMinor, 0, providerNetMajor)
+      : providerNetMajor,
+  )
 
-  // Update job payment status to refunded
   const { error: jobUpdateErr } = await supabaseAdmin
     .from('walk_requests')
-    .update({ payment_status: 'refunded' })
+    .update({
+      payment_status: isFullyRefunded ? 'refunded' : job.payment_status,
+      refunded_amount: toMajor(totalRefundedMinor),
+      refund_currency: refundCurrency,
+      refunded_at: new Date().toISOString(),
+    })
     .eq('id', job.id)
 
   if (jobUpdateErr) {
     console.error('[webhook] charge.refunded: failed to update job:', ctx, jobUpdateErr)
   } else {
-    console.log('[webhook] charge.refunded: job marked refunded', ctx)
+    console.log('[webhook] charge.refunded: job refund state synced', {
+      ...ctx,
+      capturedAmountMinor,
+      totalRefundedMinor,
+      isFullyRefunded,
+      refundCurrency,
+    })
   }
 
-  // Mark the corresponding payout as refunded (block future payouts)
   const { data: payout } = await supabaseAdmin
     .from('walker_payouts')
-    .select('id, status, walker_id, net_amount')
+    .select('id, status, walker_id, net_amount, stripe_transfer_id, reversed_amount, stripe_transfer_reversal_id')
     .eq('job_id', job.id)
     .maybeSingle()
 
   if (payout) {
-    const { error: payoutErr } = await supabaseAdmin
-      .from('walker_payouts')
-      .update({
-        status: 'refunded',
-        failure_reason: 'Charge was refunded',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', payout.id)
+    let reversalStatus: 'failed' | 'partial' | 'reversed' | 'not_needed' = 'not_needed'
+    let reversalAmountMajor = roundMajor(payout.reversed_amount ?? 0)
 
-    if (payoutErr) {
-      console.error('[webhook] charge.refunded: failed to update payout:', ctx, payoutErr)
-    } else {
-      console.log('[webhook] charge.refunded: payout marked refunded', { ...ctx, payout_id: payout.id })
-    }
+    if (payout.stripe_transfer_id) {
+      try {
+        const transfer = await stripe.transfers.retrieve(payout.stripe_transfer_id)
+        const transferAmountMinor = Math.max(0, transfer.amount ?? 0)
+        const currentReversedMinor = Math.max(
+          typeof transfer.amount_reversed === 'number' ? transfer.amount_reversed : 0,
+          toMinor(payout.reversed_amount ?? 0),
+        )
+        const targetReversedMinor =
+          capturedAmountMinor > 0
+            ? clamp(Math.round((transferAmountMinor * totalRefundedMinor) / capturedAmountMinor), 0, transferAmountMinor)
+            : transferAmountMinor
+        const reversalDeltaMinor = Math.max(0, targetReversedMinor - currentReversedMinor)
 
-    // Create balance adjustment (debit) to offset the walker's credited earnings
-    if (payout.walker_id && payout.net_amount > 0) {
-      const { error: adjErr } = await supabaseAdmin
-        .from('walker_balance_adjustments')
-        .insert({
-          walker_id: payout.walker_id,
-          job_id: job.id,
-          type: 'refund_debit',
-          amount: -payout.net_amount, // negative = debit
-          description: `Refund debit: ${job.dog_name || 'walk'} (charge refunded)`,
-        })
+        if (reversalDeltaMinor > 0) {
+          const reversal = await stripe.transfers.createReversal(
+            payout.stripe_transfer_id,
+            {
+              amount: reversalDeltaMinor,
+              metadata: {
+                request_id: job.id,
+                payment_intent_id: paymentIntentId,
+                refund_event_id: event.id,
+              },
+            },
+            {
+              idempotencyKey: `regli_refund_webhook_reversal_${job.id}_${currentReversedMinor}_${reversalDeltaMinor}`,
+            },
+          )
 
-      if (adjErr) {
-        // Unique constraint means we already recorded this — safe to ignore
-        if (adjErr.message?.includes('duplicate') || adjErr.code === '23505') {
-          console.log('[webhook] charge.refunded: balance adjustment already exists', { ...ctx, payout_id: payout.id })
-        } else {
-          console.error('[webhook] charge.refunded: failed to create balance adjustment:', ctx, adjErr)
-        }
-      } else {
-        console.log('[webhook] charge.refunded: balance adjustment created', { ...ctx, debit_amount: -payout.net_amount })
-      }
-    }
-
-    // Notify walker
-    if (payout.walker_id) {
-      await supabaseAdmin
-        .from('notifications')
-        .insert({
-          user_id: payout.walker_id,
-          type: 'charge_refunded',
-          title: 'Payment Refunded',
-          message: `A payment of ${payout.net_amount} ILS for ${job.dog_name || 'a walk'} has been refunded. This amount has been deducted from your balance.`,
-          related_job_id: job.id,
-        })
-        .then(({ error }) => {
-          if (error) console.error('[webhook] Failed to notify walker about refund:', ctx, error)
-        })
-    }
-  } else {
-    // No payout record exists — still create a balance adjustment if walker was credited via wallet
-    if (job.walker_id) {
-      // Look up what was credited to wallet for this job
-      const { data: walletTx } = await supabaseAdmin
-        .from('wallet_transactions')
-        .select('amount')
-        .eq('job_id', job.id)
-        .eq('walker_id', job.walker_id)
-        .eq('type', 'credit')
-        .maybeSingle()
-
-      const debitAmount = walletTx?.amount ?? 0
-      if (debitAmount > 0) {
-        const { error: adjErr } = await supabaseAdmin
-          .from('walker_balance_adjustments')
-          .insert({
-            walker_id: job.walker_id,
-            job_id: job.id,
-            type: 'refund_debit',
-            amount: -debitAmount,
-            description: `Refund debit: ${job.dog_name || 'walk'} (charge refunded, no transfer)`,
+          reversalAmountMajor = toMajor(currentReversedMinor + reversalDeltaMinor)
+          reversalStatus = currentReversedMinor + reversalDeltaMinor >= transferAmountMinor ? 'reversed' : 'partial'
+          console.log('[TransferReversal]', {
+            requestId: job.id,
+            action: 'webhook_reversal',
+            result: reversalStatus,
+            transferId: payout.stripe_transfer_id,
+            reversalId: reversal.id,
+            reversalDeltaMinor,
           })
 
-        if (adjErr && !adjErr.message?.includes('duplicate') && adjErr.code !== '23505') {
-          console.error('[webhook] charge.refunded: failed to create balance adjustment (no payout):', ctx, adjErr)
-        } else {
-          console.log('[webhook] charge.refunded: balance adjustment created (no payout)', { ...ctx, debit_amount: -debitAmount })
-        }
-      }
+          const { error: payoutErr } = await supabaseAdmin
+            .from('walker_payouts')
+            .update({
+              status: reversalStatus === 'reversed' ? 'reversed' : payout.status,
+              reversed_amount: reversalAmountMajor,
+              reversed_at: new Date().toISOString(),
+              stripe_transfer_reversal_id: reversal.id,
+              failure_reason: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', payout.id)
 
-      // Notify walker
-      await supabaseAdmin
-        .from('notifications')
-        .insert({
-          user_id: job.walker_id,
-          type: 'charge_refunded',
-          title: 'Payment Refunded',
-          message: `A payment for ${job.dog_name || 'a walk'} has been refunded. This may affect your balance.`,
-          related_job_id: job.id,
+          if (payoutErr) {
+            console.error('[webhook] charge.refunded: failed to update payout after reversal:', ctx, payoutErr)
+          }
+        } else if (isFullyRefunded && payout.status !== 'reversed' && !payout.stripe_transfer_reversal_id) {
+          const { error: payoutErr } = await supabaseAdmin
+            .from('walker_payouts')
+            .update({
+              status: 'refunded',
+              failure_reason: 'Charge was refunded',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', payout.id)
+
+          if (payoutErr) {
+            console.error('[webhook] charge.refunded: failed to sync payout refund state:', ctx, payoutErr)
+          }
+        } else {
+          reversalAmountMajor = toMajor(currentReversedMinor)
+          reversalStatus = currentReversedMinor >= transferAmountMinor ? 'reversed' : 'partial'
+        }
+
+        if (payout.walker_id && reversalAmountMajor > 0) {
+          await upsertWalletTransaction(supabaseAdmin, {
+            walkerId: payout.walker_id,
+            jobId: job.id,
+            type: 'transfer_reversal',
+            amount: -reversalAmountMajor,
+            currency: refundCurrency,
+            status: reversalStatus === 'reversed' ? 'succeeded' : 'partial',
+            description: `Transfer reversal for ${job.dog_name || 'service refund'}`,
+          })
+        }
+      } catch (reversalError) {
+        reversalStatus = 'failed'
+        console.error('[TransferReversal]', {
+          requestId: job.id,
+          action: 'webhook_reversal',
+          result: 'failed',
+          transferId: payout.stripe_transfer_id,
+          error: reversalError instanceof Error ? reversalError.message : 'Unknown',
         })
-        .then(({ error }) => {
-          if (error) console.error('[webhook] Failed to notify walker about refund (no payout):', ctx, error)
-        })
+      }
     }
+
+    if (payout.walker_id && providerTargetRefundMajor > 0) {
+      await upsertBalanceAdjustment(supabaseAdmin, {
+        walkerId: payout.walker_id,
+        jobId: job.id,
+        amount: -providerTargetRefundMajor,
+        description: `Refund debit: ${job.dog_name || 'service'} (${isFullyRefunded ? 'refunded' : 'partially refunded'})`,
+      })
+
+      await upsertWalletTransaction(supabaseAdmin, {
+        walkerId: payout.walker_id,
+        jobId: job.id,
+        type: 'refund',
+        amount: -providerTargetRefundMajor,
+        currency: refundCurrency,
+        status: isFullyRefunded ? 'succeeded' : 'partial',
+        description: `Customer refund for ${job.dog_name || 'service'}`,
+      })
+    }
+  } else {
+    if (job.walker_id) {
+      await upsertBalanceAdjustment(supabaseAdmin, {
+        walkerId: job.walker_id,
+        jobId: job.id,
+        amount: -providerTargetRefundMajor,
+        description: `Refund debit: ${job.dog_name || 'service'} (${isFullyRefunded ? 'refunded' : 'partially refunded'})`,
+      })
+
+      await upsertWalletTransaction(supabaseAdmin, {
+        walkerId: job.walker_id,
+        jobId: job.id,
+        type: 'refund',
+        amount: -providerTargetRefundMajor,
+        currency: refundCurrency,
+        status: isFullyRefunded ? 'succeeded' : 'partial',
+        description: `Customer refund for ${job.dog_name || 'service'}`,
+      })
+    }
+  }
+
+  if (job.client_id) {
+    await supabaseAdmin
+      .from('notifications')
+      .insert({
+        user_id: job.client_id,
+        type: 'refund_issued',
+        title: 'Refund issued',
+        message: isFullyRefunded ? 'Your payment was refunded.' : 'A partial refund was issued for your request.',
+        related_job_id: job.id,
+      })
+      .then(({ error }) => {
+        if (error) console.error('[webhook] Failed to notify client about refund:', ctx, error)
+      })
   }
 }

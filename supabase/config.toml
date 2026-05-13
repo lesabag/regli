@@ -34,6 +34,9 @@ verify_jwt = false
 [functions.create-transfer]
 verify_jwt = false
 
+[functions.refund-payment]
+verify_jwt = false
+
 [functions.retry-failed-transfers]
 verify_jwt = false
 

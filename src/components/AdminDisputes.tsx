@@ -20,6 +20,8 @@ interface DisputeRow {
   created_at: string | null
   service_completed_at: string | null
   payment_status: string | null
+  refunded_amount: number | null
+  refund_currency: string | null
   notes: string | null
   client?: ProfileRow | ProfileRow[] | null
   walker?: ProfileRow | ProfileRow[] | null
@@ -45,6 +47,7 @@ interface RejectDisputeResponse {
 }
 
 type ActionType = 'approve_payout' | 'reject_payout' | 'resume_service' | 'reassign_provider' | 'cancel_request'
+  | 'refund'
 
 type ActionState = {
   jobId: string
@@ -61,6 +64,19 @@ interface ReviewProviderIssueResponse {
   action?: 'resume' | 'reassign' | 'cancel'
   status?: string
   paymentStatus?: string
+}
+
+interface RefundPaymentResponse {
+  success?: boolean
+  error?: string
+  details?: string
+  jobId?: string
+  refundId?: string
+  refundStatus?: 'refunded' | 'partially_refunded' | 'already_refunded'
+  refundedAmount?: number
+  currency?: string
+  reversalStatus?: 'not_needed' | 'pending' | 'reversed' | 'partial' | 'failed'
+  alreadyRefunded?: boolean
 }
 
 function normalizeProfile(profile: DisputeRow['client'] | DisputeRow['walker']): ProfileRow | null {
@@ -113,7 +129,7 @@ function renderTimestampCell(value: string | null | undefined, nowMs: number) {
   )
 }
 
-function paymentPill(status: string | null): CSSProperties {
+function paymentPill(status: string | null, refundedAmount: number | null): CSSProperties {
   const base: CSSProperties = {
     display: 'inline-block',
     padding: '4px 10px',
@@ -122,12 +138,21 @@ function paymentPill(status: string | null): CSSProperties {
     fontWeight: 700,
     whiteSpace: 'nowrap',
   }
+  if ((refundedAmount ?? 0) > 0 && status !== 'refunded') {
+    return { ...base, background: '#FEF3C7', color: '#92400E' }
+  }
   if (status === 'authorized' || status === 'requires_capture') {
     return { ...base, background: '#EDE9FE', color: '#6D28D9' }
   }
   if (status === 'paid') return { ...base, background: '#DCFCE7', color: '#166534' }
+  if (status === 'refunded') return { ...base, background: '#E2E8F0', color: '#475569' }
   if (status === 'failed') return { ...base, background: '#FEE2E2', color: '#B91C1C' }
   return { ...base, background: '#E2E8F0', color: '#475569' }
+}
+
+function paymentLabel(status: string | null, refundedAmount: number | null): string {
+  if ((refundedAmount ?? 0) > 0 && status !== 'refunded') return 'partially refunded'
+  return status || 'unpaid'
 }
 
 export default function AdminDisputes() {
@@ -148,6 +173,8 @@ export default function AdminDisputes() {
         created_at,
         service_completed_at,
         payment_status,
+        refunded_amount,
+        refund_currency,
         notes,
         client:profiles!walk_requests_client_id_fkey ( id, full_name, email ),
         walker:profiles!walk_requests_walker_id_fkey ( id, full_name, email )
@@ -317,6 +344,41 @@ export default function AdminDisputes() {
     [runAction],
   )
 
+  const handleRefund = useCallback(
+    (jobId: string) => {
+      void runAction(jobId, 'refund', 'Refund issued. Status will refresh after Stripe reconciliation.', async () => {
+        const { data, error } = await invokeEdgeFunction<RefundPaymentResponse>('refund-payment', {
+          body: { jobId },
+        })
+        if (error) return error
+        if (!data?.success) {
+          return data?.details || data?.error || 'Refund failed.'
+        }
+        if (data.alreadyRefunded || data.refundStatus === 'already_refunded') {
+          setFeedback({ ok: true, message: 'This request is already fully refunded.' })
+          await fetchDisputes()
+          return null
+        }
+        const reversalLabel =
+          data.reversalStatus === 'failed'
+            ? ' Reversal sync needs manual review.'
+            : data.reversalStatus === 'partial'
+              ? ' Transfer reversal was partially applied.'
+              : data.reversalStatus === 'reversed'
+                ? ' Transfer reversal completed.'
+                : ''
+        const refundLabel =
+          data.refundStatus === 'partially_refunded'
+            ? 'Partial refund issued.'
+            : 'Refund issued.'
+        setFeedback({ ok: true, message: `${refundLabel}${reversalLabel}`.trim() })
+        await fetchDisputes()
+        return null
+      })
+    },
+    [fetchDisputes, runAction],
+  )
+
   return (
     <div style={shellStyle}>
       <div style={headerStyle}>
@@ -368,7 +430,11 @@ export default function AdminDisputes() {
                 const cancelling = busy && actionState?.type === 'cancel_request'
                 const approving = busy && actionState?.type === 'approve_payout'
                 const rejecting = busy && actionState?.type === 'reject_payout'
+                const refunding = busy && actionState?.type === 'refund'
                 const isProviderIssue = row.caseType === 'provider_issue'
+                const refundedAmount = row.refunded_amount ?? 0
+                const canRefund = row.payment_status === 'paid' || (refundedAmount > 0 && row.payment_status !== 'refunded')
+                const alreadyRefunded = row.payment_status === 'refunded'
 
                 return (
                   <tr key={row.id} style={rowStyle}>
@@ -392,7 +458,9 @@ export default function AdminDisputes() {
                     <td style={tdStyle}>{renderTimestampCell(row.created_at, nowMs)}</td>
                     <td style={tdStyle}>{renderTimestampCell(row.service_completed_at, nowMs)}</td>
                     <td style={tdStyle}>
-                      <span style={paymentPill(row.payment_status)}>{row.payment_status || 'unpaid'}</span>
+                      <span style={paymentPill(row.payment_status, row.refunded_amount)}>
+                        {paymentLabel(row.payment_status, row.refunded_amount)}
+                      </span>
                     </td>
                     <td style={tdStyle}>
                       <div style={notesStyle}>{row.cleanedNotes || '—'}</div>
@@ -437,6 +505,20 @@ export default function AdminDisputes() {
                             >
                               {cancelling ? 'Cancelling...' : 'Cancel request'}
                             </button>
+                            {canRefund || alreadyRefunded ? (
+                              <button
+                                type="button"
+                                disabled={busy || alreadyRefunded}
+                                onClick={() => handleRefund(row.id)}
+                                style={{
+                                  ...secondaryButtonStyle,
+                                  opacity: busy || alreadyRefunded ? 0.65 : 1,
+                                  cursor: busy || alreadyRefunded ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {alreadyRefunded ? 'Already refunded' : refunding ? 'Refunding...' : 'Refund'}
+                              </button>
+                            ) : null}
                           </>
                         ) : (
                           <>
@@ -464,6 +546,20 @@ export default function AdminDisputes() {
                             >
                               {rejecting ? 'Rejecting...' : 'Reject payout'}
                             </button>
+                            {canRefund || alreadyRefunded ? (
+                              <button
+                                type="button"
+                                disabled={busy || alreadyRefunded}
+                                onClick={() => handleRefund(row.id)}
+                                style={{
+                                  ...secondaryButtonStyle,
+                                  opacity: busy || alreadyRefunded ? 0.65 : 1,
+                                  cursor: busy || alreadyRefunded ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {alreadyRefunded ? 'Already refunded' : refunding ? 'Refunding...' : 'Refund'}
+                              </button>
+                            ) : null}
                           </>
                         )}
                       </div>
