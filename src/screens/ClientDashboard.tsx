@@ -23,7 +23,7 @@ import {
 } from '../lib/serviceTypes'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
-import { hasProviderIssue } from '../utils/completionReview'
+import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
@@ -1338,6 +1338,8 @@ export default function ClientDashboard({
           walker_id: typeof item.walker_id === 'string' ? item.walker_id : null,
           walker_name: walkerName,
           hidden_by_client: item.hidden_by_client === true,
+          payment_status: typeof item.payment_status === 'string' ? item.payment_status : null,
+          notes: typeof item.notes === 'string' ? item.notes : null,
           review: ratingInfo?.review ?? null,
           rating: ratingInfo?.rating ?? null,
           client_lat: typeof item.client_lat === 'number' ? item.client_lat : null,
@@ -2377,6 +2379,19 @@ export default function ClientDashboard({
                     role="client"
                     compact
                     onBookAgain={handleBookAgain}
+                    onSecondaryAction={(item) => {
+                      const itemId = typeof item.id === 'string' ? item.id : String(item.id ?? '')
+                      if (!itemId) return
+                      void flow.reportHistoryIssue(itemId)
+                    }}
+                    secondaryActionLabel={t('completion.rejectCompletion')}
+                    shouldShowSecondaryAction={(item) =>
+                      item.status === 'completed' &&
+                      item.payment_status === 'paid' &&
+                      !isCompletionReviewRequired(
+                        typeof item.notes === 'string' ? item.notes : null,
+                      )
+                    }
                     onHide={anyFlow.hideHistoryItem}
                     favoriteWalkerIds={flow.favoriteWalkerIds}
                     onToggleFavoriteWalker={flow.toggleFavoriteWalker}

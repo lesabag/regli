@@ -60,6 +60,9 @@ type GroupedHistoryProps = {
   onRebook?: (item: HistoryItem) => void
   onDetails?: (item: HistoryItem) => void
   onSelect?: (item: HistoryItem) => void
+  onSecondaryAction?: (item: HistoryItem) => Promise<void> | void
+  secondaryActionLabel?: string
+  shouldShowSecondaryAction?: (item: HistoryItem) => boolean
   onHide?: (id: string) => Promise<void> | void
   favoriteWalkerIds?: Set<string>
   onToggleFavoriteWalker?: (walkerId: string) => Promise<void> | void
@@ -175,6 +178,9 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
                     hideLabel={hideLabel}
                     favoriteLabel={favoriteLabel}
                     onDetails={() => handleDetails(item)}
+                    onSecondaryAction={props.onSecondaryAction ? () => props.onSecondaryAction?.(item) : undefined}
+                    secondaryActionLabel={props.secondaryActionLabel}
+                    showSecondaryAction={props.shouldShowSecondaryAction?.(item) === true}
                     favoriteWalkerIds={props.favoriteWalkerIds}
                     onToggleFavoriteWalker={props.onToggleFavoriteWalker}
                     favoriteClientIds={props.favoriteClientIds}
@@ -203,6 +209,9 @@ type SwipeHistoryRowProps = {
   hideLabel: string
   favoriteLabel: string
   onDetails: () => void
+  onSecondaryAction?: () => Promise<void> | void
+  secondaryActionLabel?: string
+  showSecondaryAction: boolean
   favoriteWalkerIds?: Set<string>
   onToggleFavoriteWalker?: (walkerId: string) => Promise<void> | void
   favoriteClientIds?: Set<string>
@@ -220,6 +229,9 @@ function SwipeHistoryRow({
   hideLabel,
   favoriteLabel,
   onDetails,
+  onSecondaryAction,
+  secondaryActionLabel,
+  showSecondaryAction,
   favoriteWalkerIds,
   onToggleFavoriteWalker,
   favoriteClientIds,
@@ -510,6 +522,20 @@ function SwipeHistoryRow({
                   </button>
                 ) : null}
               </div>
+            ) : null}
+
+            {showSecondaryAction && secondaryActionLabel ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void onSecondaryAction?.()
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                style={{ ...styles.issueActionButton, ...(compact ? compactStyles.issueActionButton : null) }}
+              >
+                {secondaryActionLabel}
+              </button>
             ) : null}
           </div>
         </div>
@@ -1330,6 +1356,19 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
+  issueActionButton: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    padding: '0 14px',
+    borderRadius: 999,
+    border: '1px solid rgba(248, 113, 113, 0.32)',
+    background: 'rgba(127, 29, 29, 0.18)',
+    color: '#FCA5A5',
+    fontSize: 12.5,
+    fontWeight: 800,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
   emptyCard: {
     borderRadius: 22,
     padding: 18,
@@ -1437,6 +1476,11 @@ const compactStyles: Partial<Record<string, React.CSSProperties>> = {
   reviewText: {
     fontSize: 12.5,
     lineHeight: 1.32,
+  },
+  issueActionButton: {
+    minHeight: 31,
+    padding: '0 12px',
+    fontSize: 12,
   },
   emptyCard: {
     borderRadius: 18,

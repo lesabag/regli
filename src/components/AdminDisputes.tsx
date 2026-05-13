@@ -13,6 +13,14 @@ interface ProfileRow {
   email: string | null
 }
 
+interface PayoutRow {
+  id: string
+  net_amount: number | null
+  reversed_amount: number | null
+  currency: string | null
+  status: string | null
+}
+
 interface DisputeRow {
   id: string
   client_id: string | null
@@ -20,9 +28,11 @@ interface DisputeRow {
   created_at: string | null
   service_completed_at: string | null
   payment_status: string | null
+  price: number | null
   refunded_amount: number | null
   refund_currency: string | null
   notes: string | null
+  payout?: PayoutRow | PayoutRow[] | null
   client?: ProfileRow | ProfileRow[] | null
   walker?: ProfileRow | ProfileRow[] | null
 }
@@ -79,9 +89,20 @@ interface RefundPaymentResponse {
   alreadyRefunded?: boolean
 }
 
+type RefundModalState = {
+  rowId: string
+  amountInput: string
+  validationError: string | null
+} | null
+
 function normalizeProfile(profile: DisputeRow['client'] | DisputeRow['walker']): ProfileRow | null {
   if (!profile) return null
   return Array.isArray(profile) ? profile[0] ?? null : profile
+}
+
+function normalizePayout(payout: DisputeRow['payout']): PayoutRow | null {
+  if (!payout) return null
+  return Array.isArray(payout) ? payout[0] ?? null : payout
 }
 
 function profileName(profile: ProfileRow | null, fallbackId?: string | null): string {
@@ -116,6 +137,13 @@ function formatRelativeTime(value: string | null | undefined, nowMs: number): st
   if (diffHours < 24) return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`
   const diffDays = Math.floor(diffHours / 24)
   return diffDays === 1 ? '1 day ago' : `${diffDays} days ago`
+}
+
+function formatMoney(value: number | null | undefined, currency: string | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  const normalizedCurrency = (currency || 'ILS').toUpperCase()
+  if (normalizedCurrency === 'ILS') return `₪${value}`
+  return `${normalizedCurrency} ${value}`
 }
 
 function renderTimestampCell(value: string | null | undefined, nowMs: number) {
@@ -161,6 +189,7 @@ export default function AdminDisputes() {
   const [actionState, setActionState] = useState<ActionState>(null)
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [refundModal, setRefundModal] = useState<RefundModalState>(null)
 
   const fetchDisputes = useCallback(async () => {
     setLoading(true)
@@ -173,9 +202,11 @@ export default function AdminDisputes() {
         created_at,
         service_completed_at,
         payment_status,
+        price,
         refunded_amount,
         refund_currency,
         notes,
+        payout:walker_payouts!walker_payouts_job_id_fkey ( id, net_amount, reversed_amount, currency, status ),
         client:profiles!walk_requests_client_id_fkey ( id, full_name, email ),
         walker:profiles!walk_requests_walker_id_fkey ( id, full_name, email )
       `)
@@ -219,16 +250,31 @@ export default function AdminDisputes() {
     return () => window.clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    if (!refundModal) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setRefundModal(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [refundModal])
+
   const disputes = useMemo(
     () =>
       rows.map((row) => ({
         ...row,
         clientProfile: normalizeProfile(row.client),
         walkerProfile: normalizeProfile(row.walker),
+        payoutRow: normalizePayout(row.payout),
         cleanedNotes: cleanCompletionReviewNotes(row.notes),
         caseType: (isProviderIssueReported(row.notes) ? 'provider_issue' : 'completion_dispute') as ResolvedCaseType,
       })),
     [rows],
+  )
+
+  const refundModalRow = useMemo(
+    () => (refundModal ? disputes.find((row) => row.id === refundModal.rowId) ?? null : null),
+    [disputes, refundModal],
   )
 
   const runAction = useCallback(
@@ -345,10 +391,10 @@ export default function AdminDisputes() {
   )
 
   const handleRefund = useCallback(
-    (jobId: string) => {
+    (jobId: string, amount?: number) => {
       void runAction(jobId, 'refund', 'Refund issued. Status will refresh after Stripe reconciliation.', async () => {
         const { data, error } = await invokeEdgeFunction<RefundPaymentResponse>('refund-payment', {
-          body: { jobId },
+          body: amount != null ? { jobId, amount } : { jobId },
         })
         if (error) return error
         if (!data?.success) {
@@ -372,12 +418,45 @@ export default function AdminDisputes() {
             ? 'Partial refund issued.'
             : 'Refund issued.'
         setFeedback({ ok: true, message: `${refundLabel}${reversalLabel}`.trim() })
+        setRefundModal(null)
         await fetchDisputes()
         return null
       })
     },
     [fetchDisputes, runAction],
   )
+
+  const openRefundModal = useCallback((rowId: string) => {
+    setRefundModal({
+      rowId,
+      amountInput: '',
+      validationError: null,
+    })
+  }, [])
+
+  const validateRefundAmount = useCallback((row: (typeof disputes)[number], amountText: string) => {
+    const originalAmount = row.price ?? 0
+    const refundedAmount = row.refunded_amount ?? 0
+    const remainingRefundableAmount = Math.max(0, originalAmount - refundedAmount)
+    const normalized = amountText.trim()
+    if (!normalized) return 'Enter a refund amount.'
+    if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return 'Enter a valid amount with up to 2 decimals.'
+    const parsed = Number(normalized)
+    if (!Number.isFinite(parsed) || parsed <= 0) return 'Refund amount must be greater than 0.'
+    if (parsed > remainingRefundableAmount) return 'Refund amount cannot exceed the remaining refundable amount.'
+    return null
+  }, [disputes])
+
+  const handlePartialRefundSubmit = useCallback(() => {
+    if (!refundModalRow || !refundModal) return
+    const validationError = validateRefundAmount(refundModalRow, refundModal.amountInput)
+    if (validationError) {
+      setRefundModal((prev) => (prev ? { ...prev, validationError } : prev))
+      return
+    }
+
+    handleRefund(refundModalRow.id, Number(refundModal.amountInput))
+  }, [handleRefund, refundModal, refundModalRow, validateRefundAmount])
 
   return (
     <div style={shellStyle}>
@@ -432,7 +511,12 @@ export default function AdminDisputes() {
                 const rejecting = busy && actionState?.type === 'reject_payout'
                 const refunding = busy && actionState?.type === 'refund'
                 const isProviderIssue = row.caseType === 'provider_issue'
+                const originalAmount = row.price ?? 0
                 const refundedAmount = row.refunded_amount ?? 0
+                const payoutCurrency = row.payoutRow?.currency ?? row.refund_currency ?? 'ils'
+                const reversedAmount = row.payoutRow?.reversed_amount ?? 0
+                const remainingRefundableAmount = Math.max(0, originalAmount - refundedAmount)
+                const remainingPayoutAmount = Math.max(0, (row.payoutRow?.net_amount ?? 0) - reversedAmount)
                 const canRefund = row.payment_status === 'paid' || (refundedAmount > 0 && row.payment_status !== 'refunded')
                 const alreadyRefunded = row.payment_status === 'refunded'
 
@@ -458,9 +542,31 @@ export default function AdminDisputes() {
                     <td style={tdStyle}>{renderTimestampCell(row.created_at, nowMs)}</td>
                     <td style={tdStyle}>{renderTimestampCell(row.service_completed_at, nowMs)}</td>
                     <td style={tdStyle}>
-                      <span style={paymentPill(row.payment_status, row.refunded_amount)}>
-                        {paymentLabel(row.payment_status, row.refunded_amount)}
-                      </span>
+                      <div style={paymentCellStyle}>
+                        <span style={paymentPill(row.payment_status, row.refunded_amount)}>
+                          {paymentLabel(row.payment_status, row.refunded_amount)}
+                        </span>
+                        {refundedAmount > 0 ? (
+                          <span style={amountMetaStyle}>
+                            Refunded: {formatMoney(refundedAmount, row.refund_currency)}
+                          </span>
+                        ) : null}
+                        {originalAmount > 0 ? (
+                          <span style={amountMetaStyle}>
+                            Remaining refundable: {formatMoney(remainingRefundableAmount, row.refund_currency)}
+                          </span>
+                        ) : null}
+                        {row.payoutRow?.net_amount != null ? (
+                          <span style={amountMetaStyle}>
+                            Reversed: {formatMoney(reversedAmount, payoutCurrency)}
+                          </span>
+                        ) : null}
+                        {row.payoutRow?.net_amount != null ? (
+                          <span style={amountMetaStyle}>
+                            Remaining payout: {formatMoney(remainingPayoutAmount, payoutCurrency)}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td style={tdStyle}>
                       <div style={notesStyle}>{row.cleanedNotes || '—'}</div>
@@ -509,7 +615,7 @@ export default function AdminDisputes() {
                               <button
                                 type="button"
                                 disabled={busy || alreadyRefunded}
-                                onClick={() => handleRefund(row.id)}
+                                onClick={() => openRefundModal(row.id)}
                                 style={{
                                   ...secondaryButtonStyle,
                                   opacity: busy || alreadyRefunded ? 0.65 : 1,
@@ -550,7 +656,7 @@ export default function AdminDisputes() {
                               <button
                                 type="button"
                                 disabled={busy || alreadyRefunded}
-                                onClick={() => handleRefund(row.id)}
+                                onClick={() => openRefundModal(row.id)}
                                 style={{
                                   ...secondaryButtonStyle,
                                   opacity: busy || alreadyRefunded ? 0.65 : 1,
@@ -571,6 +677,109 @@ export default function AdminDisputes() {
           </table>
         </div>
       )}
+
+      {refundModalRow ? (
+        <div style={modalOverlayStyle} onClick={() => setRefundModal(null)}>
+          <div style={modalSheetStyle} onClick={(event) => event.stopPropagation()}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <h4 style={modalTitleStyle}>Refund payment</h4>
+                <p style={modalSubtitleStyle}>Choose a full refund or enter a partial refund amount.</p>
+              </div>
+              <button type="button" onClick={() => setRefundModal(null)} style={modalCloseButtonStyle}>
+                ✕
+              </button>
+            </div>
+
+            <div style={modalMetricsGridStyle}>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Original payment</div>
+                <div style={metricValueStyle}>{formatMoney(refundModalRow.price, refundModalRow.refund_currency)}</div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Refunded so far</div>
+                <div style={metricValueStyle}>{formatMoney(refundModalRow.refunded_amount ?? 0, refundModalRow.refund_currency)}</div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Remaining refundable</div>
+                <div style={metricValueStyle}>
+                  {formatMoney(Math.max(0, (refundModalRow.price ?? 0) - (refundModalRow.refunded_amount ?? 0)), refundModalRow.refund_currency)}
+                </div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Walker payout</div>
+                <div style={metricValueStyle}>{formatMoney(refundModalRow.payoutRow?.net_amount ?? 0, refundModalRow.payoutRow?.currency ?? refundModalRow.refund_currency)}</div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Already reversed</div>
+                <div style={metricValueStyle}>{formatMoney(refundModalRow.payoutRow?.reversed_amount ?? 0, refundModalRow.payoutRow?.currency ?? refundModalRow.refund_currency)}</div>
+              </div>
+              <div style={metricCardStyle}>
+                <div style={metricLabelStyle}>Remaining payout exposure</div>
+                <div style={metricValueStyle}>
+                  {formatMoney(
+                    Math.max(0, (refundModalRow.payoutRow?.net_amount ?? 0) - (refundModalRow.payoutRow?.reversed_amount ?? 0)),
+                    refundModalRow.payoutRow?.currency ?? refundModalRow.refund_currency,
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <label style={fieldLabelStyle}>
+              <span>Refund amount (₪)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={refundModal?.amountInput ?? ''}
+                onChange={(event) =>
+                  setRefundModal((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          amountInput: event.target.value,
+                          validationError: null,
+                        }
+                      : prev,
+                  )
+                }
+                placeholder="15"
+                style={fieldInputStyle}
+              />
+            </label>
+
+            {refundModal?.validationError ? (
+              <div style={validationTextStyle}>{refundModal.validationError}</div>
+            ) : null}
+
+            <div style={modalActionsStyle}>
+              <button
+                type="button"
+                disabled={actionState?.type === 'refund' || (refundModalRow.price ?? 0) <= (refundModalRow.refunded_amount ?? 0)}
+                onClick={handlePartialRefundSubmit}
+                style={{
+                  ...secondaryButtonStyle,
+                  ...modalActionButtonStyle,
+                  opacity: actionState?.type === 'refund' ? 0.65 : 1,
+                }}
+              >
+                {actionState?.type === 'refund' ? 'Refunding...' : 'Partial refund'}
+              </button>
+              <button
+                type="button"
+                disabled={actionState?.type === 'refund' || (refundModalRow.price ?? 0) <= (refundModalRow.refunded_amount ?? 0)}
+                onClick={() => handleRefund(refundModalRow.id)}
+                style={{
+                  ...approveButtonStyle,
+                  ...modalActionButtonStyle,
+                  opacity: actionState?.type === 'refund' ? 0.65 : 1,
+                }}
+              >
+                {actionState?.type === 'refund' ? 'Refunding...' : 'Full refund'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -600,6 +809,141 @@ const timestampSecondaryStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 500,
   whiteSpace: 'nowrap',
+}
+
+const paymentCellStyle: CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const amountMetaStyle: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#64748B',
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+}
+
+const modalOverlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.42)',
+  zIndex: 80,
+  display: 'flex',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  padding: 16,
+  boxSizing: 'border-box',
+}
+
+const modalSheetStyle: CSSProperties = {
+  width: 'min(680px, 100%)',
+  maxHeight: 'min(86vh, 100%)',
+  overflowY: 'auto',
+  background: '#FFFFFF',
+  borderRadius: 24,
+  boxShadow: '0 24px 64px rgba(15,23,42,0.24)',
+  border: '1px solid #E2E8F0',
+  padding: 20,
+  display: 'grid',
+  gap: 16,
+}
+
+const modalHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const modalTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 20,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const modalSubtitleStyle: CSSProperties = {
+  margin: '4px 0 0',
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const modalCloseButtonStyle: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: '#475569',
+  fontSize: 20,
+  cursor: 'pointer',
+  padding: 0,
+  width: 32,
+  height: 32,
+}
+
+const modalMetricsGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+  gap: 10,
+}
+
+const metricCardStyle: CSSProperties = {
+  borderRadius: 16,
+  border: '1px solid #E2E8F0',
+  background: '#F8FAFC',
+  padding: 12,
+  display: 'grid',
+  gap: 4,
+}
+
+const metricLabelStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+}
+
+const metricValueStyle: CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const fieldLabelStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#334155',
+}
+
+const fieldInputStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 44,
+  borderRadius: 14,
+  border: '1px solid #CBD5E1',
+  padding: '0 14px',
+  fontSize: 16,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  outline: 'none',
+}
+
+const validationTextStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#B91C1C',
+}
+
+const modalActionsStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+}
+
+const modalActionButtonStyle: CSSProperties = {
+  minHeight: 44,
 }
 
 const headerStyle: CSSProperties = {

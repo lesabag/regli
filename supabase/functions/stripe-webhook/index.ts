@@ -143,6 +143,78 @@ async function upsertBalanceAdjustment(
   }
 }
 
+async function upsertNotification(
+  supabaseAdmin: SupabaseAdmin,
+  params: {
+    userId: string | null | undefined
+    type: string
+    title: string
+    message: string
+    relatedJobId: string
+  },
+) {
+  if (!params.userId) return
+
+  const { data: existing, error: lookupError } = await supabaseAdmin
+    .from('notifications')
+    .select('id')
+    .eq('user_id', params.userId)
+    .eq('type', params.type)
+    .eq('related_job_id', params.relatedJobId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (lookupError) {
+    console.error('[webhook] notification lookup failed', {
+      user_id: params.userId,
+      type: params.type,
+      related_job_id: params.relatedJobId,
+      error: lookupError.message,
+    })
+    return
+  }
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({
+        title: params.title,
+        message: params.message,
+      })
+      .eq('id', existing.id)
+
+    if (error) {
+      console.error('[webhook] notification update failed', {
+        user_id: params.userId,
+        type: params.type,
+        related_job_id: params.relatedJobId,
+        error: error.message,
+      })
+    }
+    return
+  }
+
+  const { error } = await supabaseAdmin
+    .from('notifications')
+    .insert({
+      user_id: params.userId,
+      type: params.type,
+      title: params.title,
+      message: params.message,
+      related_job_id: params.relatedJobId,
+    })
+
+  if (error) {
+    console.error('[webhook] notification insert failed', {
+      user_id: params.userId,
+      type: params.type,
+      related_job_id: params.relatedJobId,
+      error: error.message,
+    })
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -554,28 +626,6 @@ async function handleTransferReversed(supabaseAdmin: SupabaseAdmin, event: Strip
   } else {
     console.log('[webhook] transfer.reversed: payout updated', ctx)
   }
-
-  // Notify walker
-  const { data: payout } = await supabaseAdmin
-    .from('walker_payouts')
-    .select('walker_id, net_amount')
-    .eq('job_id', jobId)
-    .maybeSingle()
-
-  if (payout?.walker_id) {
-    await supabaseAdmin
-      .from('notifications')
-      .insert({
-        user_id: payout.walker_id,
-        type: 'transfer_reversed',
-        title: 'Transfer Reversed',
-        message: `A transfer of ${payout.net_amount} ILS has been reversed. Please contact support.`,
-        related_job_id: jobId,
-      })
-      .then(({ error }) => {
-        if (error) console.error('[webhook] Failed to notify walker about reversal:', { ...ctx, walker_id: payout.walker_id }, error)
-      })
-  }
 }
 
 // ─── Connect: payout events (Stripe → walker bank) ─────────────
@@ -719,7 +769,7 @@ async function handleChargeRefunded(
 
   const { data: job, error: findErr } = await supabaseAdmin
     .from('walk_requests')
-    .select('id, client_id, walker_id, payment_status, dog_name, price, walker_earnings, walker_amount, refunded_amount, refund_currency')
+    .select('id, client_id, walker_id, selected_walker_id, payment_status, dog_name, price, walker_earnings, walker_amount, refunded_amount, refund_currency')
     .eq('stripe_payment_intent_id', paymentIntentId)
     .single()
 
@@ -728,12 +778,16 @@ async function handleChargeRefunded(
     return
   }
 
-  const ctx = { ...logCtx, job_id: job.id, pi_id: paymentIntentId, walker_id: job.walker_id }
+  const resolvedWalkerId = job.walker_id || job.selected_walker_id
+  const ctx = { ...logCtx, job_id: job.id, pi_id: paymentIntentId, walker_id: resolvedWalkerId }
+  const previousRefundedMajor = roundMajor(job.refunded_amount ?? 0)
   const capturedAmountMinor = Math.max(
     typeof charge.amount_captured === 'number' ? charge.amount_captured : 0,
     typeof charge.amount === 'number' ? charge.amount : 0,
   )
   const totalRefundedMinor = Math.max(0, charge.amount_refunded ?? 0)
+  const totalRefundedMajor = toMajor(totalRefundedMinor)
+  const refundDeltaMajor = roundMajor(Math.max(0, totalRefundedMajor - previousRefundedMajor))
   const refundCurrency = normalizeCurrency(charge.currency || job.refund_currency)
   const isFullyRefunded = capturedAmountMinor > 0 ? totalRefundedMinor >= capturedAmountMinor : charge.refunded === true
   const providerNetMajor = roundMajor(
@@ -775,9 +829,15 @@ async function handleChargeRefunded(
     .eq('job_id', job.id)
     .maybeSingle()
 
+  let walkerNotificationUserId: string | null = null
+  let walkerNotificationType: 'transfer_reversed' | 'payout_adjusted' | null = null
+  let walkerNotificationTitle: string | null = null
+  let walkerNotificationMessage: string | null = null
+
   if (payout) {
     let reversalStatus: 'failed' | 'partial' | 'reversed' | 'not_needed' = 'not_needed'
     let reversalAmountMajor = roundMajor(payout.reversed_amount ?? 0)
+    let reversalDeltaMajor = 0
 
     if (payout.stripe_transfer_id) {
       try {
@@ -810,6 +870,7 @@ async function handleChargeRefunded(
           )
 
           reversalAmountMajor = toMajor(currentReversedMinor + reversalDeltaMinor)
+          reversalDeltaMajor = toMajor(reversalDeltaMinor)
           reversalStatus = currentReversedMinor + reversalDeltaMinor >= transferAmountMinor ? 'reversed' : 'partial'
           console.log('[TransferReversal]', {
             requestId: job.id,
@@ -892,19 +953,39 @@ async function handleChargeRefunded(
         currency: refundCurrency,
         status: isFullyRefunded ? 'succeeded' : 'partial',
         description: `Customer refund for ${job.dog_name || 'service'}`,
-      })
+        })
+    }
+
+    if (payout.walker_id && providerTargetRefundMajor > 0) {
+      const fullPayoutAmount = roundMajor(payout.net_amount ?? providerTargetRefundMajor)
+      const walkerTitle =
+        reversalStatus === 'reversed'
+          ? 'Transfer reversed'
+          : reversalStatus === 'partial'
+            ? 'Partial payout reversal'
+            : 'Payout adjusted'
+      const walkerMessage =
+        reversalStatus === 'reversed'
+          ? `Your payout of ₪${fullPayoutAmount} was fully reversed due to a refund.`
+          : reversalStatus === 'partial'
+            ? `₪${reversalDeltaMajor || providerTargetRefundMajor} was deducted from your payout due to a partial refund.`
+            : `₪${providerTargetRefundMajor} was deducted from your payout due to a refund.`
+      walkerNotificationUserId = payout.walker_id
+      walkerNotificationType = reversalStatus === 'failed' ? 'payout_adjusted' : 'transfer_reversed'
+      walkerNotificationTitle = walkerTitle
+      walkerNotificationMessage = walkerMessage
     }
   } else {
-    if (job.walker_id) {
+    if (resolvedWalkerId) {
       await upsertBalanceAdjustment(supabaseAdmin, {
-        walkerId: job.walker_id,
+        walkerId: resolvedWalkerId,
         jobId: job.id,
         amount: -providerTargetRefundMajor,
         description: `Refund debit: ${job.dog_name || 'service'} (${isFullyRefunded ? 'refunded' : 'partially refunded'})`,
       })
 
       await upsertWalletTransaction(supabaseAdmin, {
-        walkerId: job.walker_id,
+        walkerId: resolvedWalkerId,
         jobId: job.id,
         type: 'refund',
         amount: -providerTargetRefundMajor,
@@ -912,21 +993,38 @@ async function handleChargeRefunded(
         status: isFullyRefunded ? 'succeeded' : 'partial',
         description: `Customer refund for ${job.dog_name || 'service'}`,
       })
+
+      walkerNotificationUserId = resolvedWalkerId
+      walkerNotificationType = 'payout_adjusted'
+      walkerNotificationTitle = isFullyRefunded ? 'Transfer reversed' : 'Partial payout reversal'
+      walkerNotificationMessage = isFullyRefunded
+        ? `Your payout of ₪${providerTargetRefundMajor} was fully reversed due to a refund.`
+        : `₪${providerTargetRefundMajor} was deducted from your payout due to a partial refund.`
     }
   }
 
+  if (walkerNotificationUserId && walkerNotificationType && walkerNotificationTitle && walkerNotificationMessage) {
+    await upsertNotification(supabaseAdmin, {
+      userId: walkerNotificationUserId,
+      type: walkerNotificationType,
+      title: walkerNotificationTitle,
+      message: walkerNotificationMessage,
+      relatedJobId: job.id,
+    })
+  }
+
   if (job.client_id) {
-    await supabaseAdmin
-      .from('notifications')
-      .insert({
-        user_id: job.client_id,
-        type: 'refund_issued',
-        title: 'Refund issued',
-        message: isFullyRefunded ? 'Your payment was refunded.' : 'A partial refund was issued for your request.',
-        related_job_id: job.id,
-      })
-      .then(({ error }) => {
-        if (error) console.error('[webhook] Failed to notify client about refund:', ctx, error)
-      })
+    const capturedAmountMajor = toMajor(capturedAmountMinor)
+    const clientTitle = isFullyRefunded ? 'Refund issued' : 'Partial refund issued'
+    const clientMessage = isFullyRefunded
+      ? `Your payment of ₪${capturedAmountMajor} was fully refunded.`
+      : `₪${refundDeltaMajor} was refunded to your payment method.`
+    await upsertNotification(supabaseAdmin, {
+      userId: job.client_id,
+      type: 'refund_issued',
+      title: clientTitle,
+      message: clientMessage,
+      relatedJobId: job.id,
+    })
   }
 }

@@ -2761,6 +2761,58 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearSearchAttempt,
   ])
 
+  const reportHistoryIssue = useCallback(async (jobId: string) => {
+    const trimmedJobId = jobId.trim()
+    if (!trimmedJobId) return
+
+    setError(null)
+    setSuccessMessage(null)
+
+    const targetJob =
+      completedJobs.find((job) => job.id === trimmedJobId) ??
+      (currentJob?.id === trimmedJobId ? currentJob : null) ??
+      (await fetchJobById(trimmedJobId))
+
+    if (!targetJob) {
+      setError('Order not found')
+      return
+    }
+
+    const nextNotes = appendCompletionReviewMarker(targetJob.notes, new Date().toISOString())
+
+    if (nextNotes === (targetJob.notes ?? '').trim()) {
+      setSuccessMessage('Issue already reported. Support will review it.')
+      return
+    }
+
+    const { data, error: updateErr } = await supabase
+      .from('walk_requests')
+      .update({ notes: nextNotes })
+      .eq('id', trimmedJobId)
+      .eq('client_id', profileId)
+      .eq('status', 'completed')
+      .select(JOB_SELECT)
+      .maybeSingle()
+
+    if (updateErr) {
+      setError(updateErr.message)
+      return
+    }
+
+    const updatedJob = (data as WalkRequestRow | null) ?? null
+    if (updatedJob) {
+      setCompletedJobs((prev) =>
+        prev.map((job) => (job.id === updatedJob.id ? { ...job, ...updatedJob } : job)),
+      )
+      if (currentJob?.id === updatedJob.id) {
+        setCurrentJob((prev) => mergeWalkRequest(prev, updatedJob))
+      }
+    }
+
+    setSuccessMessage('Issue reported. Support will review it.')
+    void fetchCurrentAndLists()
+  }, [completedJobs, currentJob, fetchCurrentAndLists, fetchJobById, profileId])
+
   const dismissCompletionReview = useCallback(() => {
     if (!completionReviewJob) return
     const nextIds = new Set(dismissedCompletionReviewIds)
@@ -3582,6 +3634,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     pendingCompletionConfirmation,
     confirmCompletion,
     rejectCompletion,
+    reportHistoryIssue,
     dismissCompletionReview,
     tipSubmitting,
     ratedJobIds,

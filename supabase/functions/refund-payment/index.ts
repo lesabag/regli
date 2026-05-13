@@ -146,6 +146,78 @@ async function upsertBalanceAdjustment(
   }
 }
 
+async function upsertNotification(
+  supabaseAdmin: SupabaseAdmin,
+  params: {
+    userId: string | null | undefined
+    type: string
+    title: string
+    message: string
+    relatedJobId: string
+  },
+) {
+  if (!params.userId) return
+
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('notifications')
+    .select('id')
+    .eq('user_id', params.userId)
+    .eq('type', params.type)
+    .eq('related_job_id', params.relatedJobId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existingError) {
+    console.error('[Refund] notification lookup failed', {
+      userId: params.userId,
+      type: params.type,
+      relatedJobId: params.relatedJobId,
+      error: existingError.message,
+    })
+    return
+  }
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({
+        title: params.title,
+        message: params.message,
+      })
+      .eq('id', existing.id)
+
+    if (error) {
+      console.error('[Refund] notification update failed', {
+        userId: params.userId,
+        type: params.type,
+        relatedJobId: params.relatedJobId,
+        error: error.message,
+      })
+    }
+    return
+  }
+
+  const { error } = await supabaseAdmin
+    .from('notifications')
+    .insert({
+      user_id: params.userId,
+      type: params.type,
+      title: params.title,
+      message: params.message,
+      related_job_id: params.relatedJobId,
+    })
+
+  if (error) {
+    console.error('[Refund] notification insert failed', {
+      userId: params.userId,
+      type: params.type,
+      relatedJobId: params.relatedJobId,
+      error: error.message,
+    })
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -508,40 +580,6 @@ serve(async (req: Request) => {
       console.error('[Refund] job update failed', { requestId: jobId, error: jobUpdateError.message })
     }
 
-    if (job.client_id) {
-      await supabaseAdmin
-        .from('notifications')
-        .insert({
-          user_id: job.client_id,
-          type: 'refund_issued',
-          title: 'Refund issued',
-          message: isFullyRefunded
-            ? 'Your payment was refunded.'
-            : 'A partial refund was issued for your request.',
-          related_job_id: jobId,
-        })
-        .then(({ error }) => {
-          if (error) console.error('[Refund] client notification failed', { requestId: jobId, error: error.message })
-        })
-    }
-
-    if (walkerId && providerTargetRefundMajor > 0) {
-      await supabaseAdmin
-        .from('notifications')
-        .insert({
-          user_id: walkerId,
-          type: reversalStatus === 'failed' ? 'payout_adjusted' : 'transfer_reversed',
-          title: reversalStatus === 'failed' ? 'Payout adjusted' : 'Transfer reversed',
-          message: reversalStatus === 'failed'
-            ? `A refund was issued for ${job.dog_name || 'this service'}. Your balance was adjusted.`
-            : `A refund was issued for ${job.dog_name || 'this service'}. Your payout was adjusted.`,
-          related_job_id: jobId,
-        })
-        .then(({ error }) => {
-          if (error) console.error('[Refund] provider notification failed', { requestId: jobId, error: error.message })
-        })
-    }
-
     console.log('[Refund]', {
       requestId: jobId,
       action: 'refund',
@@ -554,6 +592,43 @@ serve(async (req: Request) => {
       transferReversalId,
       reversalStatus,
     })
+
+    const clientNotificationTitle = isFullyRefunded ? 'Refund issued' : 'Partial refund issued'
+    const clientNotificationMessage = isFullyRefunded
+      ? `Your payment of ₪${toMajor(capturedAmountMinor)} was fully refunded.`
+      : `₪${toMajor(desiredRefundMinor)} was refunded to your payment method.`
+
+    await upsertNotification(supabaseAdmin, {
+      userId: job.client_id,
+      type: 'refund_issued',
+      title: clientNotificationTitle,
+      message: clientNotificationMessage,
+      relatedJobId: jobId,
+    })
+
+    if (walkerId && providerTargetRefundMajor > 0) {
+      const walkerNotificationType = reversalStatus === 'failed' ? 'payout_adjusted' : 'transfer_reversed'
+      const walkerNotificationTitle =
+        reversalStatus === 'reversed'
+          ? 'Transfer reversed'
+          : reversalStatus === 'partial'
+            ? 'Partial payout reversal'
+            : 'Payout adjusted'
+      const walkerNotificationMessage =
+        reversalStatus === 'reversed'
+          ? `Your payout of ₪${providerNetMajor} was fully reversed due to a refund.`
+          : reversalStatus === 'partial'
+            ? `₪${reversalAmountMajor || providerTargetRefundMajor} was deducted from your payout due to a partial refund.`
+            : `₪${providerTargetRefundMajor} was deducted from your payout due to a refund.`
+
+      await upsertNotification(supabaseAdmin, {
+        userId: walkerId,
+        type: walkerNotificationType,
+        title: walkerNotificationTitle,
+        message: walkerNotificationMessage,
+        relatedJobId: jobId,
+      })
+    }
 
     return new Response(
       JSON.stringify({
