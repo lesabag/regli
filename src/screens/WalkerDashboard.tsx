@@ -311,6 +311,10 @@ export default function WalkerDashboard({
     : 'Saved customers for quick reference.'
   const noPreferredCustomersLabel = isRtl ? 'אין עדיין לקוחות מועדפים.' : 'No preferred customers yet.'
   const profileServiceOptions = useMemo(() => getProfileServiceOptions(isHebrew), [isHebrew])
+  const profileServiceIconByType = useMemo(
+    () => new Map(profileServiceOptions.map((option) => [option.value, option.icon])),
+    [profileServiceOptions],
+  )
   const serviceTypeSectionTitle = isHebrew ? 'סוג שירות' : 'Service type'
   const serviceTypeSectionSubtitle = isHebrew
     ? 'בחר את סוג השירות הראשי שאתה מציע.'
@@ -349,6 +353,14 @@ export default function WalkerDashboard({
   const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
   const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות' : 'Manage availability'
   const unavailableTodayLabel = isHebrew ? 'לא זמין היום' : 'Unavailable today'
+  const greetingSubtitle = isHebrew ? 'כיף לראות אותך!' : 'Good to see you!'
+  const performanceTitle = isHebrew ? 'ביצועים' : 'Performance'
+  const walletTitle = isHebrew ? 'ארנק' : 'Wallet'
+  const reviewsLabel = isHebrew ? 'ביקורות' : 'Reviews'
+  const completedLabel = isHebrew ? 'הושלמו' : 'Completed'
+  const onlineLabel = isHebrew ? 'מחובר' : 'Online'
+  const readyForOrdersTitle = isHebrew ? 'מוכן להזמנות' : 'Ready for orders'
+  const nearbyRequestsBody = isHebrew ? 'בקשות קרובות יופיעו כאן.' : 'Nearby requests will appear here.'
   const availabilityDayLabels = useMemo(
     () => [
       isHebrew ? 'א׳' : 'Sun',
@@ -920,13 +932,6 @@ export default function WalkerDashboard({
 
   const incomingTitle = i18n.resolvedLanguage === 'he' ? 'הזמנה חדשה' : 'New order arrived'
   const idleHeroTitle = flow.isOnline ? (isHebrew ? 'מצב מחובר' : 'Connected') : (isHebrew ? 'לא מחובר' : 'Offline')
-  const idleHeroSubtitle = flow.isOnline
-    ? isHebrew
-      ? 'מוכן להזמנות'
-      : 'Ready for orders'
-    : isHebrew
-      ? 'התחבר כדי להתחיל לקבל הזמנות'
-      : 'Go online to start receiving orders'
   const idleWaitingTitle = flow.isOnline
     ? isHebrew
       ? 'מחכה להזמנות…'
@@ -1480,6 +1485,187 @@ export default function WalkerDashboard({
     await handleStripeSetup(true)
   }, [flow.stripeReadyForOnline, flow.toggleOnline, handleStripeSetup, hasSelectedProfileService, isCheckingPayout, serviceSelectionRequiredLabel])
 
+  const renderTodayAvailabilityCard = useCallback(() => {
+    if (todayAvailabilityRows.length === 0) return null
+
+    return (
+      <div style={todayAvailabilityCardStyle}>
+        <div style={todayAvailabilityHeaderStyle}>
+          <div style={todayAvailabilityTitleStyle}>{todayAvailabilityTitle}</div>
+          <button type="button" onClick={handleManageAvailability} style={todayAvailabilityManageButtonStyle}>
+            <span>{todayAvailabilityManageLabel}</span>
+            <span style={todayAvailabilityManageChevronStyle}>›</span>
+          </button>
+        </div>
+        <div style={todayAvailabilityListStyle}>
+          {todayAvailabilityRows.map((item, index) => (
+            <div
+              key={item.serviceType}
+              style={{
+                ...todayAvailabilityRowStyle,
+                ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+              }}
+            >
+              <div style={todayAvailabilityServiceWrapStyle}>
+                <div style={todayAvailabilityServiceIconStyle}>
+                  {profileServiceIconByType.get(item.serviceType) ?? '•'}
+                </div>
+                <span style={todayAvailabilityServiceLabelStyle}>{item.label}</span>
+              </div>
+              {item.isAvailable ? (
+                <span style={todayAvailabilityTimePillStyle}>{item.summary}</span>
+              ) : (
+                <span style={todayAvailabilityUnavailableStyle}>{item.summary}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }, [
+    handleManageAvailability,
+    profileServiceIconByType,
+    todayAvailabilityManageLabel,
+    todayAvailabilityRows,
+    todayAvailabilityTitle,
+  ])
+
+  const renderHomeDashboard = useCallback((connected: boolean) => (
+    <div className="sheet-state-enter">
+      <div style={homeDashboardTopStackStyle}>
+        <div style={{ ...homeStatusCardStyle, ...(connected ? homeStatusCardOnlineStyle : null) }}>
+          <div style={homeStatusContentStyle}>
+            <div style={homeStatusBadgeStyle}>
+              <span style={homeStatusDotStyle} />
+              <span>{connected ? onlineLabel : idleHeroTitle}</span>
+            </div>
+            <div style={homeStatusTitleStyle}>{readyForOrdersTitle}</div>
+            <div style={homeStatusBodyStyle}>{nearbyRequestsBody}</div>
+          </div>
+          <div style={homeStatusRightStyle}>
+            <div style={homeStatusAccentOrbStyle} />
+            <button
+              type="button"
+              onClick={() => void handleOnlineToggle()}
+              style={{
+                ...homeStatusToggleStyle,
+                background: connected ? 'linear-gradient(180deg, #22C55E 0%, #16A34A 100%)' : '#D6DEE8',
+              }}
+            >
+              <div
+                style={{
+                  ...homeStatusToggleKnobStyle,
+                  transform: connected ? 'translateX(20px)' : 'translateX(0)',
+                }}
+              />
+            </button>
+          </div>
+        </div>
+
+        {renderTodayAvailabilityCard()}
+
+        <div style={waitingCardStyle}>
+          <div style={waitingCardCopyStyle}>
+            <div style={waitingCardTitleStyle}>{idleWaitingTitle}</div>
+            <div style={waitingCardBodyStyle}>{idleWaitingBody}</div>
+          </div>
+          <div style={waitingCardVisualWrapStyle}>
+            <RadarVisual />
+          </div>
+        </div>
+      </div>
+
+      <div style={dashboardSectionStyle}>
+        <div style={dashboardSectionTitleStyle}>{performanceTitle}</div>
+        <div style={performanceGridStyle}>
+          <div style={performanceMetricCardStyle}>
+            <div style={{ ...performanceMetricIconStyle, background: 'rgba(245, 158, 11, 0.12)', color: '#D97706' }}>★</div>
+            <div style={performanceMetricValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</div>
+            <div style={performanceMetricMetaStyle}>{reviewsLabel}</div>
+          </div>
+          <div style={performanceMetricCardStyle}>
+            <div style={{ ...performanceMetricIconStyle, background: 'rgba(59, 130, 246, 0.12)', color: '#2563EB' }}>✓</div>
+            <div style={performanceMetricValueStyle}>{completedJobsCount}</div>
+            <div style={performanceMetricMetaStyle}>{completedLabel}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={dashboardSectionStyle}>
+        <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
+        <div style={walletDashboardGridStyle}>
+          <div style={walletDashboardMetricCardStyle}>
+            <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
+            <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
+          </div>
+          <div style={walletDashboardMetricCardStyle}>
+            <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending balance'}</div>
+            <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
+          </div>
+        </div>
+        <div style={walletDashboardStatusRowStyle}>
+          {flow.connectLoading ? (
+            <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
+          ) : walletPayoutReady ? (
+            <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
+          ) : (
+            <>
+              <span style={walletStatusWarningStyle}>
+                {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setPayoutCtaAnimationStopped(true)
+                  void handleStripeSetup(false)
+                }}
+                disabled={isCheckingPayout}
+                style={{
+                  ...walletSetupButtonStyle,
+                  ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
+                  ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
+                  ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
+                }}
+              >
+                {isCheckingPayout
+                  ? isHebrew
+                    ? 'בודק...'
+                    : 'Checking...'
+                  : isHebrew
+                    ? 'הגדר תשלומים'
+                    : 'Set up payouts'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  ), [
+    completedJobsCount,
+    flow.avgRating,
+    flow.connectLoading,
+    flow.wallet.availableBalance,
+    flow.wallet.pendingEarnings,
+    handleOnlineToggle,
+    handleStripeSetup,
+    idleHeroTitle,
+    idleWaitingBody,
+    idleWaitingTitle,
+    isCheckingPayout,
+    isHebrew,
+    nearbyRequestsBody,
+    onlineLabel,
+    payoutCtaAnimationStopped,
+    payoutCtaNudgeActive,
+    readyForOrdersTitle,
+    renderTodayAvailabilityCard,
+    reviewsLabel,
+    completedLabel,
+    performanceTitle,
+    walletPayoutReady,
+    walletTitle,
+  ])
+
   return (
     <>
       <style>{`
@@ -1539,61 +1725,61 @@ export default function WalkerDashboard({
       <div className="walker-dashboard-screen" style={screenStyle}>
         <div style={dashboardBackgroundStyle}>
           <div style={headerStyle}>
-            <div style={headerIdentityRowStyle}>
-              <ProfileAvatar
-                url={photo.avatarUrl}
-                name={walkerName}
-                size={48}
-                borderRadius={18}
-                onClick={() => fileInputRef.current?.click()}
-              />
-              <div style={headerIdentityStyle}>
-                <h2 style={greetingStyle}>{greetingLabel}</h2>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) photo.uploadAvatar(file)
-                    e.target.value = ''
-                  }}
-                />
-                {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
-                {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
-              </div>
-            </div>
-
             <div style={headerTopRowStyle}>
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuPage('main')
-                  setBurgerOpen((v) => !v)
-                }}
-                style={headerMenuBtnStyle}
-                aria-label={t('menu.menu')}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
-                  <line x1="4" y1="7" x2="20" y2="7" />
-                  <line x1="4" y1="12" x2="20" y2="12" />
-                  <line x1="4" y1="17" x2="20" y2="17" />
-                </svg>
-              </button>
-
-              {isActiveOrCompleted ? (
-                <div style={activeSessionChipStyle}>
-                  {flow.screenState === 'active' ? activeLabels.activeTitle : t('tracking.onTheWay')}
+              <div style={headerIdentityRowStyle}>
+                <ProfileAvatar
+                  url={photo.avatarUrl}
+                  name={walkerName}
+                  size={50}
+                  borderRadius={18}
+                  onClick={() => fileInputRef.current?.click()}
+                />
+                <div style={headerIdentityStyle}>
+                  <h2 style={greetingStyle}>{greetingLabel}</h2>
+                  <div style={headerSubtitleStyle}>{greetingSubtitle}</div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) photo.uploadAvatar(file)
+                      e.target.value = ''
+                    }}
+                  />
+                  {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
+                  {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
                 </div>
-              ) : (
-                <div />
-              )}
+              </div>
 
-              <div style={bellWrapStyle}>
-                <NotificationsBell />
+              <div style={headerActionsStyle}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuPage('main')
+                    setBurgerOpen((v) => !v)
+                  }}
+                  style={headerMenuBtnStyle}
+                  aria-label={t('menu.menu')}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
+                    <line x1="4" y1="7" x2="20" y2="7" />
+                    <line x1="4" y1="12" x2="20" y2="12" />
+                    <line x1="4" y1="17" x2="20" y2="17" />
+                  </svg>
+                </button>
+
+                <div style={bellWrapStyle}>
+                  <NotificationsBell />
+                </div>
               </div>
             </div>
+            {isActiveOrCompleted ? (
+              <div style={activeSessionChipStyle}>
+                {flow.screenState === 'active' ? activeLabels.activeTitle : t('tracking.onTheWay')}
+              </div>
+            ) : null}
           </div>
 
           {showStripeGate && (
@@ -2443,281 +2629,9 @@ export default function WalkerDashboard({
             </div>
           )}
 
-          {flow.screenState === 'offline' && (
-            <div className="sheet-state-enter">
-              <div style={idleHeroStyle}>
-                <div style={idleHeroGlowStyle} />
-                <div style={idleHeroBadgeStyle}>{idleHeroTitle}</div>
-                <button
-                  type="button"
-                  onClick={() => void handleOnlineToggle()}
-                  style={{
-                    ...idleHeroToggleStyle,
-                    background: flow.isOnline ? 'linear-gradient(180deg, #16A34A 0%, #15803D 100%)' : '#CBD5E1',
-                  }}
-                >
-                  <div
-                    style={{
-                    ...idleHeroToggleKnobStyle,
-                      transform: flow.isOnline ? 'translateX(28px)' : 'translateX(0)',
-                    }}
-                  />
-                </button>
-                <div style={idleHeroTitleStyle}>{idleHeroSubtitle}</div>
-                <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
-              </div>
+          {flow.screenState === 'offline' && renderHomeDashboard(false)}
 
-              {todayAvailabilityRows.length > 0 && (
-                <div style={todayAvailabilityCardStyle}>
-                  <div style={todayAvailabilityHeaderStyle}>
-                    <div style={todayAvailabilityTitleStyle}>{todayAvailabilityTitle}</div>
-                    <button type="button" onClick={handleManageAvailability} style={todayAvailabilityManageButtonStyle}>
-                      {todayAvailabilityManageLabel}
-                    </button>
-                  </div>
-                  <div style={todayAvailabilityListStyle}>
-                    {todayAvailabilityRows.map((item, index) => (
-                      <div
-                        key={item.serviceType}
-                        style={{
-                          ...todayAvailabilityRowStyle,
-                          ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
-                        }}
-                      >
-                        <span style={todayAvailabilityServiceLabelStyle}>{item.label}</span>
-                        {item.isAvailable ? (
-                          <span style={todayAvailabilityTimePillStyle}>{item.summary}</span>
-                        ) : (
-                          <span style={todayAvailabilityUnavailableStyle}>{item.summary}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={idleCardGridStyle}>
-                <div style={idleRadarCardStyle}>
-                  <RadarVisual />
-                  <div style={idleInfoCardTextWrapStyle}>
-                    <div style={idleInfoCardTitleStyle}>{idleWaitingTitle}</div>
-                    <div style={idleInfoCardBodyStyle}>
-                      {flow.connectLoading
-                        ? 'Checking payout setup...'
-                        : isHebrew
-                          ? 'הפעל את מצב המחובר כדי להתחיל לקבל בקשות קרובות.'
-                          : 'Turn on connected mode to start receiving nearby requests.'}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={idleStatsCardStyle}>
-                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'נתונים מהירים' : 'Quick stats'}</div>
-                  <div style={idleStatsGridStyle}>
-                    <div style={idleStatItemStyle}>
-                      <span style={idleStatLabelStyle}>{isHebrew ? 'דירוג' : 'Rating'}</span>
-                      <span style={idleStatValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</span>
-                    </div>
-                    <div style={idleStatItemStyle}>
-                      <span style={idleStatLabelStyle}>{isHebrew ? 'הושלמו' : 'Completed'}</span>
-                      <span style={idleStatValueStyle}>{completedJobsCount}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={walletCardStyle}>
-                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'ארנק' : 'Wallet'}</div>
-                  <div style={walletGridStyle}>
-                    <div style={walletMetricStyle}>
-                      <span style={walletMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available'}</span>
-                      <span style={walletMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</span>
-                    </div>
-                    <div style={walletMetricStyle}>
-                      <span style={walletMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending'}</span>
-                      <span style={walletMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</span>
-                    </div>
-                  </div>
-                  <div style={walletStatusWrapStyle}>
-                    {flow.connectLoading ? (
-                      <span style={walletStatusNeutralStyle}>
-                        {isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}
-                      </span>
-                    ) : walletPayoutReady ? (
-                      <span style={walletStatusReadyStyle}>
-                        {isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}
-                      </span>
-                    ) : (
-                      <>
-                        <span style={walletStatusWarningStyle}>
-                          {isHebrew
-                            ? 'השלם הגדרת תשלומים כדי לקבל כספים'
-                            : 'Complete payout setup to receive earnings'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPayoutCtaAnimationStopped(true)
-                            void handleStripeSetup(false)
-                          }}
-                          disabled={isCheckingPayout}
-                          style={{
-                            ...walletSetupButtonStyle,
-                            ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
-                            ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
-                            ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
-                          }}
-                        >
-                          {isCheckingPayout
-                            ? isHebrew
-                              ? 'בודק...'
-                              : 'Checking...'
-                            : isHebrew
-                              ? 'הגדר תשלומים'
-                              : 'Set up payouts'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {flow.screenState === 'waiting' && (
-            <div className="sheet-state-enter">
-              <div style={{ ...idleHeroStyle, ...idleHeroOnlineStyle }}>
-                <div style={idleHeroGlowStyle} />
-                <div style={{ ...idleHeroBadgeStyle, background: 'rgba(22, 163, 74, 0.12)', color: '#15803D' }}>
-                  {idleHeroTitle}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleOnlineToggle()}
-                  style={{
-                    ...idleHeroToggleStyle,
-                    background: 'linear-gradient(180deg, #16A34A 0%, #15803D 100%)',
-                  }}
-                >
-                  <div
-                    style={{
-                      ...idleHeroToggleKnobStyle,
-                      transform: 'translateX(28px)',
-                    }}
-                  />
-                </button>
-                <div style={idleHeroTitleStyle}>{idleHeroSubtitle}</div>
-                <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
-              </div>
-
-              {todayAvailabilityRows.length > 0 && (
-                <div style={todayAvailabilityCardStyle}>
-                  <div style={todayAvailabilityHeaderStyle}>
-                    <div style={todayAvailabilityTitleStyle}>{todayAvailabilityTitle}</div>
-                    <button type="button" onClick={handleManageAvailability} style={todayAvailabilityManageButtonStyle}>
-                      {todayAvailabilityManageLabel}
-                    </button>
-                  </div>
-                  <div style={todayAvailabilityListStyle}>
-                    {todayAvailabilityRows.map((item, index) => (
-                      <div
-                        key={item.serviceType}
-                        style={{
-                          ...todayAvailabilityRowStyle,
-                          ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
-                        }}
-                      >
-                        <span style={todayAvailabilityServiceLabelStyle}>{item.label}</span>
-                        {item.isAvailable ? (
-                          <span style={todayAvailabilityTimePillStyle}>{item.summary}</span>
-                        ) : (
-                          <span style={todayAvailabilityUnavailableStyle}>{item.summary}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={idleCardGridStyle}>
-                <div style={idleRadarCardStyle}>
-                  <RadarVisual />
-                  <div style={idleInfoCardTextWrapStyle}>
-                    <div style={idleInfoCardTitleStyle}>{idleWaitingTitle}</div>
-                    <div style={idleInfoCardBodyStyle}>{idleWaitingBody}</div>
-                  </div>
-                </div>
-
-                <div style={idleStatsCardStyle}>
-                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'נתונים מהירים' : 'Quick stats'}</div>
-                  <div style={idleStatsGridStyle}>
-                    <div style={idleStatItemStyle}>
-                      <span style={idleStatLabelStyle}>{isHebrew ? 'דירוג' : 'Rating'}</span>
-                      <span style={idleStatValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</span>
-                    </div>
-                    <div style={idleStatItemStyle}>
-                      <span style={idleStatLabelStyle}>{isHebrew ? 'הושלמו' : 'Completed'}</span>
-                      <span style={idleStatValueStyle}>{completedJobsCount}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={walletCardStyle}>
-                  <div style={idleInfoCardTitleStyle}>{isHebrew ? 'ארנק' : 'Wallet'}</div>
-                  <div style={walletGridStyle}>
-                    <div style={walletMetricStyle}>
-                      <span style={walletMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available'}</span>
-                      <span style={walletMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</span>
-                    </div>
-                    <div style={walletMetricStyle}>
-                      <span style={walletMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending'}</span>
-                      <span style={walletMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</span>
-                    </div>
-                  </div>
-                  <div style={walletStatusWrapStyle}>
-                    {flow.connectLoading ? (
-                      <span style={walletStatusNeutralStyle}>
-                        {isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}
-                      </span>
-                    ) : walletPayoutReady ? (
-                      <span style={walletStatusReadyStyle}>
-                        {isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}
-                      </span>
-                    ) : (
-                      <>
-                        <span style={walletStatusWarningStyle}>
-                          {isHebrew
-                            ? 'השלם הגדרת תשלומים כדי לקבל כספים'
-                            : 'Complete payout setup to receive earnings'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPayoutCtaAnimationStopped(true)
-                            void handleStripeSetup(false)
-                          }}
-                          disabled={isCheckingPayout}
-                          style={{
-                            ...walletSetupButtonStyle,
-                            ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
-                            ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
-                            ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
-                          }}
-                        >
-                          {isCheckingPayout
-                            ? isHebrew
-                              ? 'בודק...'
-                              : 'Checking...'
-                            : isHebrew
-                              ? 'הגדר תשלומים'
-                              : 'Set up payouts'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {flow.screenState === 'waiting' && renderHomeDashboard(true)}
 
           {flow.screenState === 'on_the_way' && onTheWayJob && (
             <div className="sheet-state-enter" style={activeCardStyle}>
@@ -3343,7 +3257,7 @@ function EarningsMetric({
 
 function RadarVisual() {
   return (
-    <div style={idleRadarVisualStyle} aria-hidden="true">
+    <div style={waitingCardVisualStyle} aria-hidden="true">
       <svg viewBox="0 0 320 150" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
         <defs>
           <radialGradient id="walkerRadarGlow" cx="50%" cy="50%" r="62%">
@@ -3441,28 +3355,31 @@ const screenStyle: React.CSSProperties = {
 
 const dashboardBackgroundStyle: React.CSSProperties = {
   minHeight: '100dvh',
+  background: 'linear-gradient(180deg, #FAFBFD 0%, #F4F7FB 100%)',
 }
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'stretch',
-  gap: 6,
-  margin: 'calc(10px + env(safe-area-inset-top)) 18px 4px',
+  gap: 8,
+  margin: 'calc(14px + env(safe-area-inset-top)) 18px 10px',
   padding: '0',
   position: 'sticky',
   top: 0,
   zIndex: 20,
-  background: 'transparent',
+  background: 'linear-gradient(180deg, rgba(250,251,253,0.96) 0%, rgba(250,251,253,0.88) 72%, rgba(250,251,253,0) 100%)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
 }
 
 const headerMenuBtnStyle: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  borderRadius: 14,
+  width: 42,
+  height: 42,
+  borderRadius: 16,
   border: '1px solid rgba(226,232,240,0.9)',
-  background: 'rgba(255,255,255,0.92)',
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
+  background: 'rgba(255,255,255,0.96)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
   display: 'grid',
   placeItems: 'center',
   cursor: 'pointer',
@@ -3470,26 +3387,34 @@ const headerMenuBtnStyle: React.CSSProperties = {
 
 const greetingStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 21,
-  fontWeight: 800,
+  fontSize: 24,
+  fontWeight: 900,
   lineHeight: 1.1,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 }
 
+const headerSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.35,
+  color: '#64748B',
+  fontWeight: 600,
+}
+
 const headerTopRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
+  gap: 12,
 }
 
 const headerIdentityRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 12,
+  gap: 14,
   padding: '0',
+  minWidth: 0,
 }
 
 const headerIdentityStyle: React.CSSProperties = {
@@ -3499,21 +3424,28 @@ const headerIdentityStyle: React.CSSProperties = {
   gap: 2,
 }
 
+const headerActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+}
+
 const bellWrapStyle: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  borderRadius: 14,
-  background: 'rgba(255,255,255,0.92)',
+  width: 42,
+  height: 42,
+  borderRadius: 16,
+  background: 'rgba(255,255,255,0.96)',
   border: '1px solid rgba(226,232,240,0.9)',
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
   display: 'grid',
   placeItems: 'center',
 }
 
 const activeSessionChipStyle: React.CSSProperties = {
-  padding: '8px 10px',
+  alignSelf: 'flex-start',
+  padding: '7px 10px',
   borderRadius: 999,
-  background: 'rgba(224, 242, 254, 0.92)',
+  background: 'rgba(224, 242, 254, 0.96)',
   color: '#0369A1',
   fontSize: 11,
   fontWeight: 800,
@@ -4529,10 +4461,16 @@ const futureOrderMetaStyle: React.CSSProperties = {
 }
 
 const contentStyle: React.CSSProperties = {
-  padding: '2px 18px calc(20px + env(safe-area-inset-bottom))',
+  padding: '6px 18px calc(24px + env(safe-area-inset-bottom))',
   display: 'grid',
-  gap: 8,
+  gap: 12,
   boxSizing: 'border-box',
+}
+
+const homeDashboardTopStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+  marginBottom: 4,
 }
 
 const toastErrorStyle: React.CSSProperties = {
@@ -4569,51 +4507,79 @@ const toastDismissStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const idleHeroStyle: React.CSSProperties = {
+const homeStatusCardStyle: React.CSSProperties = {
   position: 'relative',
   overflow: 'hidden',
-  padding: '16px 16px 14px',
+  padding: '15px 18px',
   borderRadius: 28,
   background:
-    'radial-gradient(circle at top, rgba(91,124,250,0.18) 0%, rgba(91,124,250,0.04) 28%, rgba(255,255,255,0.96) 62%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  border: '1px solid rgba(226,232,240,0.9)',
-  boxShadow: '0 18px 40px rgba(15,23,42,0.10)',
-  display: 'grid',
-  justifyItems: 'center',
-  gap: 6,
+    'linear-gradient(180deg, #FFFFFF 0%, #F9FBFD 100%)',
+  border: '1px solid rgba(226,232,240,0.95)',
+  boxShadow: '0 14px 28px rgba(15,23,42,0.06)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 14,
 }
 
-const idleHeroOnlineStyle: React.CSSProperties = {
+const homeStatusCardOnlineStyle: React.CSSProperties = {
   background:
-    'radial-gradient(circle at top, rgba(22,163,74,0.18) 0%, rgba(22,163,74,0.04) 28%, rgba(255,255,255,0.96) 62%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+    'linear-gradient(180deg, #FFFFFF 0%, #F8FCFA 100%)',
 }
 
-const idleHeroGlowStyle: React.CSSProperties = {
-  position: 'absolute',
-  inset: 'auto auto -30px -30px',
-  width: 120,
-  height: 120,
-  borderRadius: '50%',
-  background: 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0) 70%)',
-  pointerEvents: 'none',
-}
-
-const idleHeroBadgeStyle: React.CSSProperties = {
+const homeStatusContentStyle: React.CSSProperties = {
   position: 'relative',
   zIndex: 1,
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+}
+
+const homeStatusRightStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 72,
+  height: 62,
+  display: 'grid',
+  placeItems: 'center',
+  flexShrink: 0,
+}
+
+const homeStatusAccentOrbStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: -8,
+  top: -6,
+  width: 74,
+  height: 74,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(34,197,94,0.16) 0%, rgba(34,197,94,0.04) 52%, rgba(34,197,94,0) 74%)',
+}
+
+const homeStatusBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  justifySelf: 'start',
   padding: '5px 9px',
   borderRadius: 999,
-  background: 'rgba(91,124,250,0.10)',
-  color: '#4157B2',
+  background: 'rgba(34, 197, 94, 0.10)',
+  color: '#15803D',
   fontSize: 10,
   fontWeight: 800,
 }
 
-const idleHeroToggleStyle: React.CSSProperties = {
+const homeStatusDotStyle: React.CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: '50%',
+  background: '#22C55E',
+  boxShadow: '0 0 0 4px rgba(34, 197, 94, 0.12)',
+}
+
+const homeStatusToggleStyle: React.CSSProperties = {
   position: 'relative',
   zIndex: 1,
-  width: 66,
-  height: 38,
+  width: 50,
+  height: 30,
   borderRadius: 999,
   border: 'none',
   padding: 3,
@@ -4622,49 +4588,36 @@ const idleHeroToggleStyle: React.CSSProperties = {
   transition: 'background 0.2s ease',
 }
 
-const idleHeroToggleKnobStyle: React.CSSProperties = {
-  width: 32,
-  height: 32,
+const homeStatusToggleKnobStyle: React.CSSProperties = {
+  width: 24,
+  height: 24,
   borderRadius: '50%',
   background: '#FFFFFF',
-  boxShadow: '0 8px 16px rgba(15,23,42,0.18)',
+  boxShadow: '0 6px 14px rgba(15,23,42,0.16)',
   transition: 'transform 0.2s ease',
 }
 
-const idleHeroTitleStyle: React.CSSProperties = {
-  position: 'relative',
-  zIndex: 1,
-  fontSize: 20,
+const homeStatusTitleStyle: React.CSSProperties = {
+  fontSize: 19,
   lineHeight: 1.08,
   fontWeight: 900,
   color: '#0F172A',
-  textAlign: 'center',
 }
 
-const idleHeroBodyStyle: React.CSSProperties = {
-  position: 'relative',
-  zIndex: 1,
-  maxWidth: 280,
-  fontSize: 12,
+const homeStatusBodyStyle: React.CSSProperties = {
+  fontSize: 11,
   lineHeight: 1.35,
   color: '#64748B',
-  textAlign: 'center',
-}
-
-const idleCardGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 6,
 }
 
 const todayAvailabilityCardStyle: React.CSSProperties = {
   borderRadius: 24,
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
   border: '1px solid #E7EDF4',
-  boxShadow: '0 12px 24px rgba(15,23,42,0.05)',
-  padding: '12px 14px',
+  boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
+  padding: '12px 14px 10px',
   display: 'grid',
-  gap: 10,
-  marginBottom: 6,
+  gap: 7,
 }
 
 const todayAvailabilityHeaderStyle: React.CSSProperties = {
@@ -4675,19 +4628,27 @@ const todayAvailabilityHeaderStyle: React.CSSProperties = {
 }
 
 const todayAvailabilityTitleStyle: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 800,
   color: '#0F172A',
 }
 
 const todayAvailabilityManageButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
   border: 'none',
   background: 'transparent',
   padding: 0,
   color: '#2563EB',
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 700,
   cursor: 'pointer',
+}
+
+const todayAvailabilityManageChevronStyle: React.CSSProperties = {
+  fontSize: 16,
+  lineHeight: 1,
 }
 
 const todayAvailabilityListStyle: React.CSSProperties = {
@@ -4707,48 +4668,94 @@ const todayAvailabilityRowWithDividerStyle: React.CSSProperties = {
 }
 
 const todayAvailabilityServiceLabelStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 700,
   color: '#0F172A',
+}
+
+const todayAvailabilityServiceWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+}
+
+const todayAvailabilityServiceIconStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 11,
+  display: 'grid',
+  placeItems: 'center',
+  background: '#F4F7FB',
+  border: '1px solid #E6EDF5',
+  fontSize: 14,
+  lineHeight: 1,
+  flexShrink: 0,
 }
 
 const todayAvailabilityTimePillStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  minHeight: 28,
-  padding: '0 10px',
+  minHeight: 26,
+  padding: '0 9px',
   borderRadius: 999,
   background: '#F7FBFF',
   border: '1px solid #E4EDF6',
   color: '#0F172A',
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 700,
   whiteSpace: 'nowrap',
 }
 
 const todayAvailabilityUnavailableStyle: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 600,
   color: '#94A3B8',
 }
 
-const idleRadarCardStyle: React.CSSProperties = {
+const waitingCardStyle: React.CSSProperties = {
   position: 'relative',
   overflow: 'hidden',
-  borderRadius: 22,
+  borderRadius: 24,
   background:
-    'radial-gradient(circle at 20% 20%, rgba(91,124,250,0.14) 0%, rgba(91,124,250,0.04) 24%, rgba(255,255,255,0.96) 60%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
-  padding: '12px 12px 14px',
-  display: 'grid',
-  gap: 8,
+    'radial-gradient(circle at 80% 40%, rgba(91,124,250,0.12) 0%, rgba(91,124,250,0.03) 28%, rgba(255,255,255,0) 54%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  border: '1px solid #E4EBF3',
+  boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
+  padding: '12px 14px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
 }
 
-const idleRadarVisualStyle: React.CSSProperties = {
+const waitingCardCopyStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  minWidth: 0,
+}
+
+const waitingCardTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const waitingCardBodyStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const waitingCardVisualWrapStyle: React.CSSProperties = {
+  width: 92,
+  minWidth: 92,
+  opacity: 0.96,
+}
+
+const waitingCardVisualStyle: React.CSSProperties = {
   position: 'relative',
-  height: 92,
-  borderRadius: 18,
+  height: 72,
+  borderRadius: 16,
   background:
     'radial-gradient(circle at center, rgba(91,124,250,0.12) 0%, rgba(91,124,250,0.04) 28%, rgba(255,255,255,0) 29%), linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(248,250,252,0.98) 100%)',
   border: '1px solid rgba(226,232,240,0.9)',
@@ -4756,105 +4763,102 @@ const idleRadarVisualStyle: React.CSSProperties = {
   placeItems: 'center',
 }
 
-const idleInfoCardTextWrapStyle: React.CSSProperties = {
+const dashboardSectionStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 8,
 }
 
-const idleStatsCardStyle: React.CSSProperties = {
-  borderRadius: 22,
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
-  padding: 10,
-  display: 'grid',
-  gap: 7,
+const dashboardSectionTitleStyle: React.CSSProperties = {
+  fontSize: 17,
+  fontWeight: 800,
+  color: '#0F172A',
 }
 
-const idleInfoCardTitleStyle: React.CSSProperties = {
+const performanceGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 8,
+}
+
+const performanceMetricCardStyle: React.CSSProperties = {
+  padding: '11px 12px 10px',
+  borderRadius: 20,
+  background: '#FFFFFF',
+  border: '1px solid #E7EDF4',
+  boxShadow: '0 8px 16px rgba(15,23,42,0.035)',
+  display: 'grid',
+  gap: 6,
+}
+
+const performanceMetricIconStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 10,
+  display: 'grid',
+  placeItems: 'center',
   fontSize: 14,
-  fontWeight: 800,
+  lineHeight: 1,
+}
+
+const performanceMetricValueStyle: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 900,
   color: '#0F172A',
 }
 
-const idleInfoCardBodyStyle: React.CSSProperties = {
-  fontSize: 12,
+const performanceMetricMetaStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
+  lineHeight: 1.3,
+}
+
+const walletDashboardGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 8,
+}
+
+const walletDashboardMetricCardStyle: React.CSSProperties = {
+  padding: '11px 12px 10px',
+  borderRadius: 20,
+  background: '#FFFFFF',
+  border: '1px solid #E7EDF4',
+  boxShadow: '0 8px 16px rgba(15,23,42,0.035)',
+  display: 'grid',
+  gap: 5,
+}
+
+const walletDashboardMetricLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
   lineHeight: 1.35,
-  color: '#64748B',
 }
 
-const idleStatsGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 6,
-}
-
-const idleStatItemStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  borderRadius: 14,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-  display: 'grid',
-  gap: 2,
-}
-
-const idleStatLabelStyle: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 800,
-  color: '#64748B',
-  letterSpacing: '0.05em',
-  textTransform: 'uppercase',
-}
-
-const idleStatValueStyle: React.CSSProperties = {
-  fontSize: 15,
+const walletDashboardMetricValueStyle: React.CSSProperties = {
+  fontSize: 19,
   fontWeight: 900,
   color: '#0F172A',
 }
 
-const walletCardStyle: React.CSSProperties = {
-  borderRadius: 22,
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
-  padding: 10,
-  display: 'grid',
-  gap: 8,
+const walletDashboardStatusRowStyle: React.CSSProperties = {
+  minHeight: 32,
+  padding: '0 2px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexWrap: 'wrap',
 }
 
-const walletGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 6,
-}
-
-const walletMetricStyle: React.CSSProperties = {
-  padding: '9px 10px',
-  borderRadius: 14,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-  display: 'grid',
-  gap: 4,
-}
-
-const walletMetricLabelStyle: React.CSSProperties = {
-  fontSize: 9,
+const walletDashboardReadyStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#15803D',
   fontWeight: 800,
-  color: '#64748B',
-  letterSpacing: '0.05em',
-  textTransform: 'uppercase',
-}
-
-const walletMetricValueStyle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  color: '#0F172A',
-}
-
-const walletStatusWrapStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-  marginTop: 2,
+  padding: '6px 10px',
+  borderRadius: 999,
+  background: 'rgba(34, 197, 94, 0.10)',
 }
 
 const walletStatusNeutralStyle: React.CSSProperties = {
@@ -4862,13 +4866,6 @@ const walletStatusNeutralStyle: React.CSSProperties = {
   lineHeight: 1.35,
   color: '#64748B',
   fontWeight: 700,
-}
-
-const walletStatusReadyStyle: React.CSSProperties = {
-  fontSize: 11,
-  lineHeight: 1.35,
-  color: '#15803D',
-  fontWeight: 800,
 }
 
 const walletStatusWarningStyle: React.CSSProperties = {
