@@ -14,9 +14,14 @@ import { supabase } from '../services/supabaseClient'
 import { formatShortAddress } from '../utils/addressFormat'
 import { getServiceLabels } from '../utils/serviceLifecycle'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
+import {
+  BUSINESS_TIMEZONE,
+  type ProviderAvailabilityRow,
+} from '../utils/providerAvailability'
 import i18n from '../i18n'
 import {
   getProfileServiceOptions,
+  getProfileServiceTypeLabel,
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
@@ -31,6 +36,18 @@ type EarningsPeriod = 'today' | 'week' | 'month'
 type AppRole = 'client' | 'walker' | 'admin'
 
 type ServiceAttributes = Record<string, Record<string, unknown>>
+type AvailabilityFormRow = {
+  dayOfWeek: number
+  isActive: boolean
+  startTime: string
+  endTime: string
+}
+
+type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
+
+const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
+const DEFAULT_AVAILABILITY_START = '09:00'
+const DEFAULT_AVAILABILITY_END = '17:00'
 
 interface WalkerDashboardProps {
   profile: {
@@ -167,6 +184,53 @@ function startOfMonthMs(): number {
   return date.getTime()
 }
 
+function normalizeAvailabilityTimeValue(value: string | null | undefined): string {
+  if (typeof value !== 'string' || !value.trim()) return DEFAULT_AVAILABILITY_START
+  return value.slice(0, 5)
+}
+
+function buildDefaultAvailabilityRows(): AvailabilityFormRow[] {
+  return AVAILABILITY_DAY_ORDER.map((dayOfWeek) => ({
+    dayOfWeek,
+    isActive: false,
+    startTime: DEFAULT_AVAILABILITY_START,
+    endTime: DEFAULT_AVAILABILITY_END,
+  }))
+}
+
+function buildAvailabilityState(rows: ProviderAvailabilityRow[]): AvailabilityFormState {
+  const nextState: AvailabilityFormState = {
+    dog_walker: buildDefaultAvailabilityRows(),
+    baby_sitter: buildDefaultAvailabilityRows(),
+  }
+
+  for (const row of rows) {
+    const serviceType = normalizeProfileServiceTypes([row.service_type])[0]
+    if (!serviceType) continue
+    if (typeof row.day_of_week !== 'number' || row.day_of_week < 0 || row.day_of_week > 6) continue
+    const targetIndex = nextState[serviceType].findIndex((entry) => entry.dayOfWeek === row.day_of_week)
+    if (targetIndex < 0) continue
+
+    nextState[serviceType][targetIndex] = {
+      dayOfWeek: row.day_of_week,
+      isActive: row.is_active !== false,
+      startTime: normalizeAvailabilityTimeValue(row.start_time ?? DEFAULT_AVAILABILITY_START),
+      endTime: normalizeAvailabilityTimeValue(row.end_time ?? DEFAULT_AVAILABILITY_END),
+    }
+  }
+
+  return nextState
+}
+
+function parseAvailabilityInputMinutes(value: string): number | null {
+  const [hoursRaw, minutesRaw] = value.split(':')
+  const hours = Number(hoursRaw)
+  const minutes = Number(minutesRaw)
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null
+  return hours * 60 + minutes
+}
+
 function providerAutoOnlineStorageKey(profileId: string) {
   return `regli_provider_auto_online_${profileId}`
 }
@@ -248,6 +312,41 @@ export default function WalkerDashboard({
   const serviceTypeErrorLabel = isHebrew
     ? 'לא הצלחנו לשמור את סוג השירות.'
     : 'We could not save the service type.'
+  const availabilitySectionTitle = isHebrew ? 'שעות עבודה' : 'Working hours'
+  const availabilitySectionSubtitle = isHebrew
+    ? 'לקוחות יראו אותך רק בזמן שאתה זמין לשירות שנבחר.'
+    : 'Clients only see you when you are available for the selected service.'
+  const availabilityTimezoneLabel = isHebrew
+    ? `כל השעות לפי שעון ישראל (${BUSINESS_TIMEZONE}).`
+    : `All times use Israel time (${BUSINESS_TIMEZONE}).`
+  const availabilityUnsetLabel = isHebrew
+    ? 'בלי שעות מוגדרות תישאר לא זמין עד לשמירה.'
+    : 'Without saved hours, you stay unavailable until you set them.'
+  const availabilitySaveLabel = isHebrew ? 'שמור שעות' : 'Save hours'
+  const availabilitySavingLabel = isHebrew ? 'שומר שעות...' : 'Saving hours...'
+  const availabilitySavedLabel = isHebrew ? 'שעות העבודה נשמרו.' : 'Working hours saved.'
+  const availabilityErrorLabel = isHebrew ? 'לא הצלחנו לשמור את השעות.' : 'We could not save working hours.'
+  const availabilitySelectServiceLabel = isHebrew
+    ? 'בחר לפחות שירות אחד כדי להגדיר שעות עבודה.'
+    : 'Choose at least one service before setting working hours.'
+  const availabilityInvalidRangeLabel = isHebrew
+    ? 'שעת הסיום חייבת להיות אחרי שעת ההתחלה.'
+    : 'End time must be after start time.'
+  const availabilityEnabledLabel = isHebrew ? 'זמין' : 'Active'
+  const availabilityStartLabel = isHebrew ? 'התחלה' : 'Start'
+  const availabilityEndLabel = isHebrew ? 'סיום' : 'End'
+  const availabilityDayLabels = useMemo(
+    () => [
+      isHebrew ? 'א׳' : 'Sun',
+      isHebrew ? 'ב׳' : 'Mon',
+      isHebrew ? 'ג׳' : 'Tue',
+      isHebrew ? 'ד׳' : 'Wed',
+      isHebrew ? 'ה׳' : 'Thu',
+      isHebrew ? 'ו׳' : 'Fri',
+      isHebrew ? 'ש׳' : 'Sat',
+    ],
+    [isHebrew],
+  )
 
   const [burgerOpen, setBurgerOpen] = useState(false)
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
@@ -274,6 +373,11 @@ export default function WalkerDashboard({
   const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
+  const [availabilityRows, setAvailabilityRows] = useState<AvailabilityFormState>(() => buildAvailabilityState([]))
+  const [availabilityLoading, setAvailabilityLoading] = useState(true)
+  const [availabilitySaving, setAvailabilitySaving] = useState(false)
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null)
+  const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
   const [capSaving, setCapSaving] = useState(false)
   const [capSavedAt, setCapSavedAt] = useState(0)
@@ -359,6 +463,53 @@ export default function WalkerDashboard({
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadAvailability = async () => {
+      setAvailabilityLoading(true)
+      setAvailabilityError(null)
+
+      const { data, error } = await supabase
+        .from('provider_availability')
+        .select('provider_id, service_type, day_of_week, start_time, end_time, is_active')
+        .eq('provider_id', profile.id)
+
+      if (cancelled) return
+
+      if (error) {
+        console.warn('[WalkerDashboard] failed to load provider_availability:', error.message)
+        setAvailabilityError(availabilityErrorLabel)
+        setAvailabilityLoading(false)
+        return
+      }
+
+      setAvailabilityRows(buildAvailabilityState((data as ProviderAvailabilityRow[] | null) ?? []))
+      setAvailabilityLoading(false)
+    }
+
+    void loadAvailability()
+
+    return () => {
+      cancelled = true
+    }
+  }, [availabilityErrorLabel, profile.id])
+
+  const handleAvailabilityRowChange = useCallback((
+    serviceType: ProfileServiceType,
+    dayOfWeek: number,
+    patch: Partial<AvailabilityFormRow>,
+  ) => {
+    setAvailabilityRows((prev) => ({
+      ...prev,
+      [serviceType]: prev[serviceType].map((row) => (
+        row.dayOfWeek === dayOfWeek
+          ? { ...row, ...patch }
+          : row
+      )),
+    }))
+  }, [])
+
   const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
     if (serviceTypeSaving) return
     const previousServiceTypes = profileServiceTypes
@@ -440,6 +591,67 @@ export default function WalkerDashboard({
     capSaving, profile.id, profile.service_attributes, profileServiceTypes, isHebrew,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
+  ])
+
+  const handleSaveAvailability = useCallback(async () => {
+    if (availabilitySaving) return
+    if (profileServiceTypes.length === 0) {
+      setAvailabilityError(availabilitySelectServiceLabel)
+      return
+    }
+
+    const activeRows = profileServiceTypes.flatMap((serviceType) =>
+      availabilityRows[serviceType]
+        .filter((row) => row.isActive)
+        .map((row) => ({ serviceType, row })),
+    )
+
+    for (const entry of activeRows) {
+      const startMinutes = parseAvailabilityInputMinutes(entry.row.startTime)
+      const endMinutes = parseAvailabilityInputMinutes(entry.row.endTime)
+      if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) {
+        setAvailabilityError(availabilityInvalidRangeLabel)
+        return
+      }
+    }
+
+    setAvailabilitySaving(true)
+    setAvailabilityError(null)
+
+    const payload = profileServiceTypes.flatMap((serviceType) =>
+      availabilityRows[serviceType].map((row) => ({
+        provider_id: profile.id,
+        service_type: serviceType,
+        day_of_week: row.dayOfWeek,
+        start_time: `${row.startTime}:00`,
+        end_time: `${row.endTime}:00`,
+        is_active: row.isActive,
+      })),
+    )
+
+    const { error } = await supabase
+      .from('provider_availability')
+      .upsert(payload, {
+        onConflict: 'provider_id,service_type,day_of_week',
+      })
+
+    if (error) {
+      console.warn('[WalkerDashboard] failed to save provider_availability:', error.message)
+      setAvailabilityError(availabilityErrorLabel)
+      setAvailabilitySaving(false)
+      return
+    }
+
+    setAvailabilitySaving(false)
+    setAvailabilitySavedAt(Date.now())
+  }, [
+    availabilityErrorLabel,
+    availabilityInvalidRangeLabel,
+    availabilityRows,
+    availabilitySaving,
+    availabilitySelectServiceLabel,
+    profile.id,
+    profileServiceTypes,
   ])
 
   const prevCompJobId = useRef<string | null>(null)
@@ -1697,6 +1909,105 @@ export default function WalkerDashboard({
                         <div style={serviceTypeStatusErrorStyle}>{serviceTypeSaveError}</div>
                       ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
+                      ) : null}
+                    </BurgerSection>
+
+                    <BurgerSection title={availabilitySectionTitle} subtitle={availabilitySectionSubtitle}>
+                      <div style={availabilityIntroStyle}>
+                        <span>{availabilityTimezoneLabel}</span>
+                        <span>{availabilityUnsetLabel}</span>
+                      </div>
+
+                      {availabilityLoading ? (
+                        <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
+                      ) : profileServiceTypes.length === 0 ? (
+                        <div style={availabilityEmptyStyle}>{availabilitySelectServiceLabel}</div>
+                      ) : (
+                        <>
+                          {profileServiceTypes.map((serviceType) => (
+                            <div key={serviceType} style={availabilityServiceCardStyle}>
+                              <div style={availabilityServiceHeaderStyle}>
+                                <div style={availabilityServiceTitleStyle}>
+                                  {getProfileServiceTypeLabel(serviceType, isHebrew)}
+                                </div>
+                              </div>
+
+                              <div style={availabilityGridStyle}>
+                                {availabilityRows[serviceType].map((row) => (
+                                  <div key={`${serviceType}-${row.dayOfWeek}`} style={availabilityDayRowStyle}>
+                                    <div style={availabilityDayHeaderStyle}>
+                                      <span style={availabilityDayLabelStyle}>{availabilityDayLabels[row.dayOfWeek]}</span>
+                                      <label style={availabilityToggleLabelStyle}>
+                                        <input
+                                          type="checkbox"
+                                          checked={row.isActive}
+                                          onChange={(event) => {
+                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                              isActive: event.target.checked,
+                                            })
+                                          }}
+                                        />
+                                        <span>{availabilityEnabledLabel}</span>
+                                      </label>
+                                    </div>
+
+                                    <div style={availabilityTimeInputsStyle}>
+                                      <label style={availabilityTimeFieldStyle}>
+                                        <span style={availabilityTimeLabelStyle}>{availabilityStartLabel}</span>
+                                        <input
+                                          type="time"
+                                          value={row.startTime}
+                                          disabled={!row.isActive}
+                                          onChange={(event) => {
+                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                              startTime: event.target.value,
+                                            })
+                                          }}
+                                          style={availabilityTimeInputStyle}
+                                        />
+                                      </label>
+
+                                      <label style={availabilityTimeFieldStyle}>
+                                        <span style={availabilityTimeLabelStyle}>{availabilityEndLabel}</span>
+                                        <input
+                                          type="time"
+                                          value={row.endTime}
+                                          disabled={!row.isActive}
+                                          onChange={(event) => {
+                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                              endTime: event.target.value,
+                                            })
+                                          }}
+                                          style={availabilityTimeInputStyle}
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleSaveAvailability()
+                            }}
+                            disabled={availabilitySaving}
+                            style={{
+                              ...availabilitySaveButtonStyle,
+                              opacity: availabilitySaving ? 0.72 : 1,
+                            }}
+                          >
+                            {availabilitySaving ? availabilitySavingLabel : availabilitySaveLabel}
+                          </button>
+                        </>
+                      )}
+
+                      {availabilityError ? (
+                        <div style={serviceTypeStatusErrorStyle}>{availabilityError}</div>
+                      ) : !availabilitySaving && availabilitySavedAt > 0 ? (
+                        <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
                       ) : null}
                     </BurgerSection>
 
@@ -3647,6 +3958,134 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: '#DC2626',
+}
+
+const availabilityIntroStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  marginBottom: 12,
+  fontSize: 12,
+  color: '#64748B',
+  fontWeight: 600,
+}
+
+const availabilityLoadingStyle: React.CSSProperties = {
+  padding: '16px 18px',
+  borderRadius: 20,
+  border: '1px dashed #CBD5E1',
+  background: '#F8FAFC',
+  color: '#64748B',
+  fontSize: 14,
+  fontWeight: 600,
+}
+
+const availabilityEmptyStyle: React.CSSProperties = {
+  padding: '16px 18px',
+  borderRadius: 20,
+  border: '1px dashed #CBD5E1',
+  background: '#F8FAFC',
+  color: '#64748B',
+  fontSize: 14,
+  fontWeight: 600,
+}
+
+const availabilityServiceCardStyle: React.CSSProperties = {
+  marginBottom: 12,
+  padding: '14px 14px 12px',
+  borderRadius: 20,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.05)',
+}
+
+const availabilityServiceHeaderStyle: React.CSSProperties = {
+  marginBottom: 10,
+}
+
+const availabilityServiceTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const availabilityGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const availabilityDayRowStyle: React.CSSProperties = {
+  borderRadius: 18,
+  border: '1px solid #E2E8F0',
+  background: '#F8FAFC',
+  padding: '12px 12px 10px',
+}
+
+const availabilityDayHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  marginBottom: 10,
+}
+
+const availabilityDayLabelStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const availabilityToggleLabelStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#334155',
+}
+
+const availabilityTimeInputsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+}
+
+const availabilityTimeFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const availabilityTimeLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#64748B',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+}
+
+const availabilityTimeInputStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 42,
+  borderRadius: 14,
+  border: '1px solid #D7E0EA',
+  background: '#FFFFFF',
+  color: '#0F172A',
+  fontSize: 14,
+  fontWeight: 700,
+  padding: '0 12px',
+  boxSizing: 'border-box',
+}
+
+const availabilitySaveButtonStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 48,
+  marginTop: 12,
+  borderRadius: 16,
+  border: 'none',
+  background: '#08153B',
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
 const emptyMenuCardStyle: React.CSSProperties = {

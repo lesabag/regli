@@ -1,6 +1,11 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import Stripe from 'https://esm.sh/stripe@17.5.0?target=denonext'
+import {
+  groupProviderAvailabilityRows,
+  isProviderAvailableAt,
+  type ProviderAvailabilityRow,
+} from '../_shared/providerAvailability.ts'
 import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
 
 const corsHeaders = {
@@ -134,9 +139,11 @@ async function buildRankedCandidatesForReassignment(params: {
   requestId: string
   clientId: string | null
   requestServiceType: string | null | undefined
+  bookingTiming: string | null | undefined
+  scheduledFor: string | null | undefined
   excludedWalkerId: string | null
 }) {
-  const { supabaseAdmin, clientId, requestServiceType, excludedWalkerId } = params
+  const { supabaseAdmin, clientId, requestServiceType, bookingTiming, scheduledFor, excludedWalkerId } = params
   const { data: walkers, error: walkersError } = await supabaseAdmin
     .from('profiles')
     .select('id, service_type, service_types, service_attributes')
@@ -148,10 +155,39 @@ async function buildRankedCandidatesForReassignment(params: {
   }
 
   const requestedProviderServiceType = normalizeProviderServiceType(requestServiceType)
-  const eligibleWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
+  const serviceMatchedWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
     if (excludedWalkerId && walker.id === excludedWalkerId) return false
     return providerSupportsRequestedService(walker, requestedProviderServiceType)
   })
+  let availabilityRows: ProviderAvailabilityRow[] = []
+  if (serviceMatchedWalkers.length > 0) {
+    const { data: availabilityData, error: availabilityError } = await supabaseAdmin
+      .from('provider_availability')
+      .select('provider_id, service_type, day_of_week, start_time, end_time, is_active')
+      .in('provider_id', serviceMatchedWalkers.map((walker) => walker.id))
+      .eq('is_active', true)
+
+    if (availabilityError) {
+      throw new Error(`provider availability lookup failed: ${availabilityError.message}`)
+    }
+
+    availabilityRows = (availabilityData as ProviderAvailabilityRow[] | null) ?? []
+  }
+
+  const availabilityByProvider = groupProviderAvailabilityRows(availabilityRows)
+  const availabilityReferenceAt =
+    bookingTiming === 'scheduled'
+      ? scheduledFor
+      : new Date().toISOString()
+  const eligibleWalkers = serviceMatchedWalkers.filter((walker) =>
+    availabilityReferenceAt
+      ? isProviderAvailableAt(
+          availabilityByProvider.get(walker.id) ?? [],
+          requestedProviderServiceType,
+          availabilityReferenceAt,
+        )
+      : false,
+  )
 
   const walkerIds = eligibleWalkers.map((walker) => walker.id)
   let ratingsByWalker = new Map<string, { total: number; count: number }>()
@@ -572,6 +608,8 @@ serve(async (req: Request) => {
         requestId: jobId,
         clientId: job.client_id,
         requestServiceType: job.service_type,
+        bookingTiming: job.booking_timing,
+        scheduledFor: job.scheduled_for,
         excludedWalkerId: oldProviderId,
       })
 

@@ -1564,6 +1564,7 @@ export default function ClientDashboard({
     flow.hasUserLocation ? flow.userLocation : null,
     flow.hasUserLocation && showNearbyWalkers,
     requestServiceType,
+    flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
   )
 
   const mapUserLocation: [number, number] =

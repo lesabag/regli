@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
+import {
+  fetchProviderAvailabilityRows,
+  groupProviderAvailabilityRows,
+  isProviderAvailableAt,
+  type ProviderAvailabilityRow,
+} from '../utils/providerAvailability'
 
 export interface NearbyWalker {
   id: string
@@ -56,16 +62,20 @@ export function useNearbyWalkers(
   userLocation: [number, number] | null,
   enabled: boolean,
   serviceTypeFilter?: ProfileServiceType | null,
+  availabilityAt?: string | null,
 ): NearbyWalker[] {
   const [walkers, setWalkers] = useState<NearbyWalker[]>([])
   const userLocRef = useRef(userLocation)
   userLocRef.current = userLocation
   const serviceTypeFilterRef = useRef(serviceTypeFilter ?? null)
   serviceTypeFilterRef.current = serviceTypeFilter ?? null
+  const availabilityAtRef = useRef(availabilityAt ?? null)
+  availabilityAtRef.current = availabilityAt ?? null
 
   const prevPosRef = useRef<Map<string, [number, number]>>(new Map())
   const lastSeenPosRef = useRef<Map<string, [number, number]>>(new Map())
   const bearingRef = useRef<Map<string, BearingEntry>>(new Map())
+  const availabilityByProviderRef = useRef<Map<string, ProviderAvailabilityRow[]>>(new Map())
 
   const removeWalker = useCallback((id: string) => {
     prevPosRef.current.delete(id)
@@ -133,6 +143,7 @@ export function useNearbyWalkers(
   const fetchNearby = useCallback(async () => {
     const loc = userLocRef.current
     if (!loc) {
+      availabilityByProviderRef.current = new Map()
       setWalkers([])
       return
     }
@@ -147,18 +158,34 @@ export function useNearbyWalkers(
       .limit(30)
 
     if (error || !data) {
+      availabilityByProviderRef.current = new Map()
+      setWalkers([])
+      return
+    }
+
+    const expectedServiceType = serviceTypeFilterRef.current
+    const availabilityReferenceAt = availabilityAtRef.current ?? new Date().toISOString()
+    const providerIds = data.map((row) => row.id).filter((value): value is string => typeof value === 'string' && value.length > 0)
+    try {
+      const availabilityRows = await fetchProviderAvailabilityRows(providerIds, expectedServiceType)
+      availabilityByProviderRef.current = groupProviderAvailabilityRows(availabilityRows)
+    } catch (availabilityError) {
+      console.warn('[useNearbyWalkers] availability lookup failed:', availabilityError)
+      availabilityByProviderRef.current = new Map()
       setWalkers([])
       return
     }
 
     const activeIds = new Set<string>()
     const nearby: NearbyWalker[] = []
-    const expectedServiceType = serviceTypeFilterRef.current
 
     for (const w of data) {
       if (w.is_online !== true) continue
       if (w.last_lat == null || w.last_lng == null) continue
       if (!walkerSupportsService(w, expectedServiceType)) continue
+      if (!isProviderAvailableAt(availabilityByProviderRef.current.get(w.id) ?? [], expectedServiceType, availabilityReferenceAt)) {
+        continue
+      }
 
       if (haversineKm(loc[0], loc[1], w.last_lat, w.last_lng) <= MAX_DISTANCE_KM) {
         activeIds.add(w.id)
@@ -195,6 +222,7 @@ export function useNearbyWalkers(
       const loc = userLocRef.current
       if (!loc) return
       const expectedServiceType = serviceTypeFilterRef.current
+      const availabilityReferenceAt = availabilityAtRef.current ?? new Date().toISOString()
 
       if (row.role && row.role !== 'walker') return
 
@@ -204,6 +232,10 @@ export function useNearbyWalkers(
       }
 
       if (!walkerSupportsService(row, expectedServiceType)) {
+        removeWalker(row.id)
+        return
+      }
+      if (!isProviderAvailableAt(availabilityByProviderRef.current.get(row.id) ?? [], expectedServiceType, availabilityReferenceAt)) {
         removeWalker(row.id)
         return
       }
@@ -241,6 +273,7 @@ export function useNearbyWalkers(
 
   useEffect(() => {
     if (!enabled) {
+      availabilityByProviderRef.current = new Map()
       setWalkers([])
       return
     }
@@ -280,6 +313,11 @@ export function useNearbyWalkers(
       supabase.removeChannel(channel)
     }
   }, [enabled, fetchNearby, applyRealtimeUpdate, serviceTypeFilter])
+
+  useEffect(() => {
+    if (!enabled) return
+    void fetchNearby()
+  }, [availabilityAt, enabled, fetchNearby, serviceTypeFilter])
 
   return walkers
 }

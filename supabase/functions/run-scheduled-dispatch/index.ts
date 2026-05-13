@@ -5,6 +5,11 @@ import {
   getEnv,
   jsonResponse,
 } from '../_shared/dispatch.ts'
+import {
+  groupProviderAvailabilityRows,
+  isProviderAvailableAt,
+  type ProviderAvailabilityRow,
+} from '../_shared/providerAvailability.ts'
 import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
 
 function getScheduledDispatchLeadMinutes(): number {
@@ -336,20 +341,10 @@ serve(async (req) => {
         }
 
         const requestedProviderServiceType = normalizeProviderServiceType(job.service_type)
-        const onlineWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
+        const matchingServiceWalkers = ((walkers as WalkerRow[] | null) ?? []).filter((walker) => {
           return providerSupportsRequestedService(walker, requestedProviderServiceType)
         })
-        const walkerIds = onlineWalkers.map((walker) => walker.id)
-
-        console.log('[run-scheduled-dispatch] candidates after service_type filtering', {
-          requestId: job.id,
-          requestServiceType: job.service_type ?? null,
-          normalizedProviderServiceType: requestedProviderServiceType,
-          onlineWalkerCount: (walkers as WalkerRow[] | null)?.length ?? 0,
-          filteredCandidateCount: onlineWalkers.length,
-        })
-
-        if (onlineWalkers.length === 0) {
+        if (matchingServiceWalkers.length === 0) {
           const { error: updateError } = await supabase
             .from('walk_requests')
             .update({
@@ -367,6 +362,75 @@ serve(async (req) => {
                 retry_later: true,
                 request_service_type: job.service_type ?? null,
                 normalized_provider_service_type: requestedProviderServiceType,
+              },
+            })
+            noCandidates++
+          }
+          continue
+        }
+
+        let availabilityRows: ProviderAvailabilityRow[] = []
+        try {
+          const { data: availabilityData, error: availabilityError } = await supabase
+            .from('provider_availability')
+            .select('provider_id, service_type, day_of_week, start_time, end_time, is_active')
+            .in('provider_id', matchingServiceWalkers.map((walker) => walker.id))
+            .eq('is_active', true)
+
+          if (availabilityError) {
+            throw availabilityError
+          }
+          availabilityRows = (availabilityData as ProviderAvailabilityRow[] | null) ?? []
+        } catch (availabilityError) {
+          const message = availabilityError instanceof Error ? availabilityError.message : 'availability lookup failed'
+          await supabase.rpc('log_dispatch_event', {
+            p_request_id: job.id,
+            p_attempt_id: null,
+            p_event_type: 'scheduled_provider_availability_lookup_failed',
+            p_payload: { error: message, retry_later: true },
+          })
+          continue
+        }
+
+        const availabilityByProvider = groupProviderAvailabilityRows(availabilityRows)
+        const onlineWalkers = matchingServiceWalkers.filter((walker) =>
+          isProviderAvailableAt(
+            availabilityByProvider.get(walker.id) ?? [],
+            requestedProviderServiceType,
+            job.scheduled_for!,
+          ),
+        )
+        const walkerIds = onlineWalkers.map((walker) => walker.id)
+
+        console.log('[run-scheduled-dispatch] candidates after service_type filtering', {
+          requestId: job.id,
+          requestServiceType: job.service_type ?? null,
+          normalizedProviderServiceType: requestedProviderServiceType,
+          onlineWalkerCount: (walkers as WalkerRow[] | null)?.length ?? 0,
+          serviceTypeCandidateCount: matchingServiceWalkers.length,
+          availabilityCandidateCount: onlineWalkers.length,
+        })
+
+        if (onlineWalkers.length === 0) {
+          const { error: updateError } = await supabase
+            .from('walk_requests')
+            .update({
+              dispatch_state: 'queued',
+              smart_dispatch_state: 'idle',
+            })
+            .eq('id', job.id)
+
+          if (!updateError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_no_available_providers_waiting',
+              p_payload: {
+                retry_later: true,
+                request_service_type: job.service_type ?? null,
+                normalized_provider_service_type: requestedProviderServiceType,
+                service_type_candidate_count: matchingServiceWalkers.length,
+                availability_candidate_count: 0,
               },
             })
             noCandidates++

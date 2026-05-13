@@ -7,6 +7,11 @@ import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
+import {
+  fetchProviderAvailabilityRows,
+  groupProviderAvailabilityRows,
+  isProviderAvailableAt,
+} from '../utils/providerAvailability'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
@@ -3338,7 +3343,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
         const matchingWalkers = allOnlineWalkers.filter((walker) => {
           return walkerSupportsRequestedService(walker, requestedProviderServiceType)
         })
-        const walkerIds = allOnlineWalkers.map((walker) => walker.id)
+        const availabilityReferenceAt =
+          createdJob.booking_timing === 'scheduled'
+            ? createdJob.scheduled_for
+            : new Date().toISOString()
+
+        const availabilityRows = await fetchProviderAvailabilityRows(
+          matchingWalkers.map((walker) => walker.id),
+          requestedProviderServiceType,
+        )
+        const availabilityByProvider = groupProviderAvailabilityRows(availabilityRows)
+        const availableWalkers = matchingWalkers.filter((walker) =>
+          availabilityReferenceAt
+            ? isProviderAvailableAt(
+                availabilityByProvider.get(walker.id) ?? [],
+                requestedProviderServiceType,
+                availabilityReferenceAt,
+              )
+            : false,
+        )
+        const walkerIds = availableWalkers.map((walker) => walker.id)
 
         let ratingsByWalker = new Map<string, { total: number; count: number }>()
         if (walkerIds.length > 0) {
@@ -3399,13 +3423,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
         }
 
         const walkerServiceAttrsById = new Map(
-          allOnlineWalkers
+          availableWalkers
             .filter((w) => w.service_attributes)
             .map((w) => [w.id, w.service_attributes as Record<string, unknown>]),
         )
 
         const ranked = rankWalkerCandidates(
-          allOnlineWalkers.map((walker) => {
+          availableWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
             const hasWalkerLocation =
               userLocation &&
@@ -3457,6 +3481,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
           onlineWalkerCount: allOnlineWalkers.length,
           matchingWalkerCount: matchingWalkers.length,
+          availableWalkerCount: availableWalkers.length,
           rankedCandidateCount: ranked.length,
         })
 
