@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
-import { formatShortAddress } from '../utils/addressFormat'
+import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import {
   getProfileServiceOptions,
   type ProfileServiceType,
@@ -105,16 +105,10 @@ function getStepTitle(mode: OnboardingMode, step: SignupStep, role: AppRole) {
 }
 
 async function reverseGeocodeLocation(lat: number, lng: number): Promise<string> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}`,
-    )
-    if (!res.ok) throw new Error('reverse geocode failed')
-    const data = await res.json()
-    return formatShortAddress(data?.display_name, data?.address) || 'Current location detected'
-  } catch {
-    return 'Current location detected'
-  }
+  return reverseGeocodeAddress(lat, lng, {
+    language: 'en',
+    fallbackLabel: 'Current location detected',
+  })
 }
 
 export default function AuthScreen({

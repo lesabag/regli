@@ -7,6 +7,7 @@ import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
+import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
   appendCompletionReviewMarker,
@@ -983,48 +984,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
       try {
         const lang = i18n.resolvedLanguage || 'he'
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lng}&accept-language=${lang}`,
-        )
-        const data = await res.json()
-        if (cancelled) return
-
-        const formattedAddress = formatShortAddress(data?.display_name, data?.address)
-        const displayAddress =
-          typeof data?.display_name === 'string' &&
-          !/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(data.display_name.trim())
-            ? data.display_name.trim()
-            : ''
-        const address = formattedAddress || displayAddress
-
-        if (!address) {
-          throw new Error('Reverse geocode did not return a human-readable address')
-        }
-
-        console.log('[ReverseGeocode]', {
-          lat: Number(lat.toFixed(5)),
-          lng: Number(lng.toFixed(5)),
-          house_number: data?.address?.house_number ?? null,
-          street_number: data?.address?.street_number ?? null,
-          addr_housenumber: data?.address?.['addr:housenumber'] ?? null,
-          addr_streetnumber: data?.address?.['addr:streetnumber'] ?? null,
-          building_number: data?.address?.building_number ?? data?.address?.buildingNumber ?? null,
-          road:
-            data?.address?.road ??
-            data?.address?.route ??
-            data?.address?.street ??
-            data?.address?.pedestrian ??
-            null,
-          city:
-            data?.address?.city ??
-            data?.address?.locality ??
-            data?.address?.town ??
-            data?.address?.village ??
-            null,
-          displayAddress: displayAddress || null,
-          formattedAddress: formattedAddress || null,
-          finalAddress: address,
+        const address = await reverseGeocodeAddress(lat, lng, {
+          language: lang,
+          fallbackLabel: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
         })
+        if (cancelled) {
+          return latestResolvedLocationRef.current || location.trim() || address
+        }
 
         _setLocation((prev) => {
           if (force) {
@@ -1048,7 +1014,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         })
         return address
       } catch {
-        if (cancelled) return latestResolvedLocationRef.current || location.trim()
+        if (cancelled) return latestResolvedLocationRef.current || location.trim() || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
         const previousReadableAddress =
           latestResolvedLocationRef.current.trim() ||
           location.trim() ||
