@@ -59,8 +59,8 @@ BEGIN
       coalesce(nullif(wr.service_type, ''), 'unknown') AS service_type,
       wr.status,
       wr.booking_timing,
-      wr.dispatch_state,
-      wr.smart_dispatch_state,
+      nullif(btrim(wr.dispatch_state::text), '') AS dispatch_state_text,
+      nullif(btrim(wr.smart_dispatch_state::text), '') AS smart_dispatch_state_text,
       wr.smart_dispatch_last_error,
       wr.walker_id,
       wr.notes,
@@ -69,7 +69,7 @@ BEGIN
       ar.first_accepted_at,
       coalesce(ar.attempt_count, 0) AS attempt_count,
       (
-        coalesce(wr.smart_dispatch_state, '') = 'exhausted'
+        coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') = 'exhausted'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%all candidates exhausted%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service_type%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service type%'
@@ -79,7 +79,7 @@ BEGIN
         wr.walker_id IS NOT NULL
         OR wr.status IN ('accepted', 'completed')
         OR ar.first_accepted_at IS NOT NULL
-        OR coalesce(wr.smart_dispatch_state, '') = 'assigned'
+        OR coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') = 'assigned'
       ) AS is_matched
     FROM walk_requests wr
     LEFT JOIN attempt_rollup ar
@@ -87,8 +87,8 @@ BEGIN
     WHERE wr.created_at >= p_since
       AND (
         wr.booking_timing IS DISTINCT FROM 'scheduled'
-        OR coalesce(wr.dispatch_state, '') = 'dispatched'
-        OR coalesce(wr.smart_dispatch_state, '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
+        OR coalesce(nullif(btrim(wr.dispatch_state::text), ''), '') = 'dispatched'
+        OR coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
         OR coalesce(ar.attempt_count, 0) > 0
       )
   ),
@@ -101,8 +101,8 @@ BEGIN
         AND NOT fr.is_exhausted
         AND (
           fr.attempt_count > 0
-          OR coalesce(fr.smart_dispatch_state, '') IN ('idle', 'dispatching', 'cancelled')
-          OR coalesce(fr.dispatch_state, '') IN ('queued', 'dispatched')
+          OR coalesce(fr.smart_dispatch_state_text, '') IN ('idle', 'dispatching', 'cancelled')
+          OR coalesce(fr.dispatch_state_text, '') IN ('queued', 'dispatched')
         )
         AND coalesce(fr.notes, '') NOT ILIKE '%[SYSTEM:PROVIDER_REPORTED_ISSUE]%'
       ) AS is_client_cancelled_while_searching
@@ -171,8 +171,8 @@ BEGIN
       coalesce(nullif(wr.service_type, ''), 'unknown') AS service_type,
       wr.status,
       wr.booking_timing,
-      wr.dispatch_state,
-      wr.smart_dispatch_state,
+      nullif(btrim(wr.dispatch_state::text), '') AS dispatch_state_text,
+      nullif(btrim(wr.smart_dispatch_state::text), '') AS smart_dispatch_state_text,
       wr.smart_dispatch_last_error,
       wr.walker_id,
       wr.notes,
@@ -181,7 +181,7 @@ BEGIN
       ar.first_accepted_at,
       coalesce(ar.attempt_count, 0) AS attempt_count,
       (
-        coalesce(wr.smart_dispatch_state, '') = 'exhausted'
+        coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') = 'exhausted'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%all candidates exhausted%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service_type%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service type%'
@@ -191,7 +191,7 @@ BEGIN
         wr.walker_id IS NOT NULL
         OR wr.status IN ('accepted', 'completed')
         OR ar.first_accepted_at IS NOT NULL
-        OR coalesce(wr.smart_dispatch_state, '') = 'assigned'
+        OR coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') = 'assigned'
       ) AS is_matched
     FROM walk_requests wr
     LEFT JOIN attempt_rollup ar
@@ -199,8 +199,8 @@ BEGIN
     WHERE wr.created_at >= p_since
       AND (
         wr.booking_timing IS DISTINCT FROM 'scheduled'
-        OR coalesce(wr.dispatch_state, '') = 'dispatched'
-        OR coalesce(wr.smart_dispatch_state, '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
+        OR coalesce(nullif(btrim(wr.dispatch_state::text), ''), '') = 'dispatched'
+        OR coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
         OR coalesce(ar.attempt_count, 0) > 0
       )
   ),
@@ -213,8 +213,8 @@ BEGIN
         AND NOT fr.is_exhausted
         AND (
           fr.attempt_count > 0
-          OR coalesce(fr.smart_dispatch_state, '') IN ('idle', 'dispatching', 'cancelled')
-          OR coalesce(fr.dispatch_state, '') IN ('queued', 'dispatched')
+          OR coalesce(fr.smart_dispatch_state_text, '') IN ('idle', 'dispatching', 'cancelled')
+          OR coalesce(fr.dispatch_state_text, '') IN ('queued', 'dispatched')
         )
         AND coalesce(fr.notes, '') NOT ILIKE '%[SYSTEM:PROVIDER_REPORTED_ISSUE]%'
       ) AS is_client_cancelled_while_searching
@@ -275,19 +275,21 @@ BEGIN
   ),
   filtered_requests AS (
     SELECT
-      wr.smart_dispatch_last_error
+      wr.smart_dispatch_last_error,
+      nullif(btrim(wr.dispatch_state::text), '') AS dispatch_state_text,
+      nullif(btrim(wr.smart_dispatch_state::text), '') AS smart_dispatch_state_text
     FROM walk_requests wr
     LEFT JOIN attempt_rollup ar
       ON ar.request_id = wr.id
     WHERE wr.created_at >= p_since
       AND (
         wr.booking_timing IS DISTINCT FROM 'scheduled'
-        OR coalesce(wr.dispatch_state, '') = 'dispatched'
-        OR coalesce(wr.smart_dispatch_state, '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
+        OR coalesce(nullif(btrim(wr.dispatch_state::text), ''), '') = 'dispatched'
+        OR coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') IN ('dispatching', 'assigned', 'exhausted', 'cancelled')
         OR coalesce(ar.attempt_count, 0) > 0
       )
       AND (
-        coalesce(wr.smart_dispatch_state, '') = 'exhausted'
+        coalesce(nullif(btrim(wr.smart_dispatch_state::text), ''), '') = 'exhausted'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%all candidates exhausted%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service_type%'
         OR coalesce(wr.smart_dispatch_last_error, '') ILIKE '%no matching providers for service type%'
