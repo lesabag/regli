@@ -44,7 +44,7 @@ interface RejectDisputeResponse {
   paymentStatus?: string
 }
 
-type ActionType = 'approve_payout' | 'reject_payout' | 'resume_service' | 'cancel_request'
+type ActionType = 'approve_payout' | 'reject_payout' | 'resume_service' | 'reassign_provider' | 'cancel_request'
 
 type ActionState = {
   jobId: string
@@ -58,7 +58,7 @@ interface ReviewProviderIssueResponse {
   error?: string
   details?: string
   jobId?: string
-  action?: 'resume' | 'cancel'
+  action?: 'resume' | 'reassign' | 'cancel'
   status?: string
   paymentStatus?: string
 }
@@ -285,6 +285,22 @@ export default function AdminDisputes() {
     [runAction],
   )
 
+  const handleReassignProvider = useCallback(
+    (jobId: string) => {
+      void runAction(jobId, 'reassign_provider', 'Provider reassignment started. The client was moved back to searching.', async () => {
+        const { data, error } = await invokeEdgeFunction<ReviewProviderIssueResponse>('review-provider-issue', {
+          body: { jobId, action: 'reassign' },
+        })
+        if (error) return error
+        if (data && !data.success) {
+          return data.details || data.error || 'Reassign failed.'
+        }
+        return null
+      })
+    },
+    [runAction],
+  )
+
   const handleCancelRequest = useCallback(
     (jobId: string) => {
       void runAction(jobId, 'cancel_request', 'Request cancelled. Provider and client were notified.', async () => {
@@ -348,6 +364,7 @@ export default function AdminDisputes() {
               {disputes.map((row) => {
                 const busy = actionState?.jobId === row.id
                 const resuming = busy && actionState?.type === 'resume_service'
+                const reassigning = busy && actionState?.type === 'reassign_provider'
                 const cancelling = busy && actionState?.type === 'cancel_request'
                 const approving = busy && actionState?.type === 'approve_payout'
                 const rejecting = busy && actionState?.type === 'reject_payout'
@@ -395,6 +412,18 @@ export default function AdminDisputes() {
                               }}
                             >
                               {resuming ? 'Resuming...' : 'Resume service'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleReassignProvider(row.id)}
+                              style={{
+                                ...secondaryButtonStyle,
+                                opacity: busy ? 0.65 : 1,
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {reassigning ? 'Reassigning...' : 'Reassign provider'}
                             </button>
                             <button
                               type="button"
@@ -590,6 +619,16 @@ const rejectButtonStyle: CSSProperties = {
   border: '1px solid #FCA5A5',
   background: '#FFF1F2',
   color: '#BE123C',
+  borderRadius: 12,
+  padding: '10px 14px',
+  fontSize: 13,
+  fontWeight: 800,
+}
+
+const secondaryButtonStyle: CSSProperties = {
+  border: '1px solid #BFDBFE',
+  background: '#EFF6FF',
+  color: '#1D4ED8',
   borderRadius: 12,
   padding: '10px 14px',
   fontSize: 13,
