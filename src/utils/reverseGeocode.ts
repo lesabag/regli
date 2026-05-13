@@ -12,11 +12,93 @@ type ReverseGeocodeOptions = {
   fallbackLabel?: string
 }
 
+type ReverseGeocodeCacheEntry = {
+  lat: number
+  lng: number
+  language: string
+  address: string
+  timestamp: number
+}
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const REVERSE_GEOCODE_CACHE_TTL_MS = 10 * 60 * 1000
+const REVERSE_GEOCODE_CACHE_DISTANCE_METERS = 75
+const REVERSE_GEOCODE_CACHE_MAX_ENTRIES = 24
+const CACHE_LOG_THROTTLE_MS = 60 * 1000
+const reverseGeocodeCache: ReverseGeocodeCacheEntry[] = []
+const reverseGeocodeInflight = new Map<string, Promise<string>>()
+let lastCacheHitLogAt = 0
 
 function roundCoord(value: number): number {
   return Number(value.toFixed(5))
+}
+
+function toRadians(value: number): number {
+  return (value * Math.PI) / 180
+}
+
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const earthRadius = 6371000
+  const dLat = toRadians(lat2 - lat1)
+  const dLng = toRadians(lng2 - lng1)
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2)
+  return 2 * earthRadius * Math.asin(Math.sqrt(a))
+}
+
+function getInflightKey(lat: number, lng: number, language: string): string {
+  return `${language}:${lat.toFixed(4)}:${lng.toFixed(4)}`
+}
+
+function readCachedAddress(lat: number, lng: number, language: string): string | null {
+  const now = Date.now()
+  const match = reverseGeocodeCache.find((entry) =>
+    entry.language === language &&
+    now - entry.timestamp <= REVERSE_GEOCODE_CACHE_TTL_MS &&
+    distanceMeters(entry.lat, entry.lng, lat, lng) <= REVERSE_GEOCODE_CACHE_DISTANCE_METERS,
+  )
+
+  if (!match) return null
+
+  if (now - lastCacheHitLogAt > CACHE_LOG_THROTTLE_MS) {
+    lastCacheHitLogAt = now
+    console.log('[ReverseGeocodeProvider]', {
+      provider: 'cache',
+      lat: roundCoord(lat),
+      lng: roundCoord(lng),
+      finalAddress: match.address,
+    })
+  }
+
+  return match.address
+}
+
+function writeCachedAddress(lat: number, lng: number, language: string, address: string) {
+  const nextEntry: ReverseGeocodeCacheEntry = {
+    lat,
+    lng,
+    language,
+    address,
+    timestamp: Date.now(),
+  }
+
+  for (let index = reverseGeocodeCache.length - 1; index >= 0; index -= 1) {
+    const entry = reverseGeocodeCache[index]
+    if (
+      entry.language === language &&
+      distanceMeters(entry.lat, entry.lng, lat, lng) <= REVERSE_GEOCODE_CACHE_DISTANCE_METERS
+    ) {
+      reverseGeocodeCache.splice(index, 1)
+    }
+  }
+
+  reverseGeocodeCache.unshift(nextEntry)
+  if (reverseGeocodeCache.length > REVERSE_GEOCODE_CACHE_MAX_ENTRIES) {
+    reverseGeocodeCache.length = REVERSE_GEOCODE_CACHE_MAX_ENTRIES
+  }
 }
 
 async function requestGoogleReverseGeocode(
@@ -138,38 +220,63 @@ export async function reverseGeocodeAddress(
   options?: ReverseGeocodeOptions,
 ): Promise<string> {
   const fallbackLabel = options?.fallbackLabel || 'Current location detected'
+  const language = options?.language || 'he'
 
-  try {
-    const googleAddress = await requestGoogleReverseGeocode(lat, lng, options?.language)
-    if (googleAddress) return googleAddress
-  } catch (error) {
-    console.warn('[GoogleReverseGeocode]', {
-      lat: roundCoord(lat),
-      lng: roundCoord(lng),
-      result: 'error',
-      message: error instanceof Error ? error.message : 'unknown_error',
-    })
+  const cachedAddress = readCachedAddress(lat, lng, language)
+  if (cachedAddress) {
+    return cachedAddress
   }
 
-  try {
-    const nominatimAddress = await requestNominatimReverseGeocode(lat, lng, options?.language)
-    if (nominatimAddress) return nominatimAddress
-  } catch (error) {
+  const inflightKey = getInflightKey(lat, lng, language)
+  const existingInflight = reverseGeocodeInflight.get(inflightKey)
+  if (existingInflight) {
+    return existingInflight
+  }
+
+  const request = (async () => {
+    try {
+      const googleAddress = await requestGoogleReverseGeocode(lat, lng, language)
+      if (googleAddress) {
+        writeCachedAddress(lat, lng, language, googleAddress)
+        return googleAddress
+      }
+    } catch (error) {
+      console.warn('[GoogleReverseGeocode]', {
+        lat: roundCoord(lat),
+        lng: roundCoord(lng),
+        result: 'error',
+        message: error instanceof Error ? error.message : 'unknown_error',
+      })
+    }
+
+    try {
+      const nominatimAddress = await requestNominatimReverseGeocode(lat, lng, language)
+      if (nominatimAddress) {
+        writeCachedAddress(lat, lng, language, nominatimAddress)
+        return nominatimAddress
+      }
+    } catch (error) {
+      console.warn('[ReverseGeocodeProvider]', {
+        provider: 'nominatim',
+        lat: roundCoord(lat),
+        lng: roundCoord(lng),
+        result: 'error',
+        message: error instanceof Error ? error.message : 'unknown_error',
+      })
+    }
+
     console.warn('[ReverseGeocodeProvider]', {
-      provider: 'nominatim',
+      provider: 'fallback_label',
       lat: roundCoord(lat),
       lng: roundCoord(lng),
-      result: 'error',
-      message: error instanceof Error ? error.message : 'unknown_error',
+      finalAddress: fallbackLabel,
     })
-  }
 
-  console.warn('[ReverseGeocodeProvider]', {
-    provider: 'fallback_label',
-    lat: roundCoord(lat),
-    lng: roundCoord(lng),
-    finalAddress: fallbackLabel,
+    return fallbackLabel
+  })().finally(() => {
+    reverseGeocodeInflight.delete(inflightKey)
   })
 
-  return fallbackLabel
+  reverseGeocodeInflight.set(inflightKey, request)
+  return request
 }

@@ -254,6 +254,9 @@ const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
 const LOCATION_REFRESH_METERS = 50
 const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
+const IDLE_HYDRATION_POLL_MS = 45_000
+const ACTIVE_HYDRATION_POLL_MS = 10_000
+const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 
 
 function pad(n: number): string {
@@ -634,6 +637,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const currentOnlyRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const hydrationRunIdRef = useRef(0)
   const realtimeHydrationAtRef = useRef<Map<string, number>>(new Map())
+  const reverseGeocodeSkipLoggedAtRef = useRef(0)
   const addressSourceRef = useRef<AddressSource>('gps')
   const searchStartTimeRef = useRef<number | null>(null)
   const searchTimerRequestIdRef = useRef<string | null>(null)
@@ -982,6 +986,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const nextCoords: [number, number] = [lat, lng]
       const lastCoords = lastGeocodeCoordsRef.current
       if (!force && lastCoords && geoDistanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
+        const now = Date.now()
+        if (now - reverseGeocodeSkipLoggedAtRef.current > REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS) {
+          reverseGeocodeSkipLoggedAtRef.current = now
+          console.log('[ReverseGeocodeProvider]', {
+            provider: 'client_cache',
+            result: 'skip_same_coords',
+            lat: Number(lat.toFixed(5)),
+            lng: Number(lng.toFixed(5)),
+          })
+        }
         return latestResolvedLocationRef.current || location.trim() || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
       }
 
@@ -1053,7 +1067,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setGpsQualityBase('live')
       setLocationLoading(false)
       if (addressSourceRef.current === 'gps' && reverseGeocodeRef.current) {
-        void reverseGeocodeRef.current(lat, lng, { force: true })
+        void reverseGeocodeRef.current(lat, lng)
       }
     }
 
@@ -2065,7 +2079,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     const pollId = window.setInterval(
       () => refresh(screenState === 'idle' ? 'poll_idle' : 'poll_active'),
-      screenState === 'idle' ? 12_000 : 10_000,
+      screenState === 'idle' ? IDLE_HYDRATION_POLL_MS : ACTIVE_HYDRATION_POLL_MS,
     )
 
     const refreshWhenVisible = () => {
