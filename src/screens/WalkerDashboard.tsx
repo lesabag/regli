@@ -1108,6 +1108,24 @@ export default function WalkerDashboard({
   }, [flow.stripeReadyForOnline])
 
   useEffect(() => {
+    if (!burgerOpen) return
+
+    const previousBodyOverflow = document.body.style.overflow
+    const previousHtmlOverflow = document.documentElement.style.overflow
+    const previousBodyTouchAction = document.body.style.touchAction
+
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.touchAction = 'none'
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow
+      document.documentElement.style.overflow = previousHtmlOverflow
+      document.body.style.touchAction = previousBodyTouchAction
+    }
+  }, [burgerOpen])
+
+  useEffect(() => {
     const refreshConnect = () => {
       void flow.fetchConnectStatus()
     }
@@ -1239,185 +1257,192 @@ export default function WalkerDashboard({
         }
       `}</style>
       <div className="walker-dashboard-screen" style={screenStyle}>
-        <div style={headerStyle}>
-          <div style={headerIdentityRowStyle}>
-            <ProfileAvatar
-              url={photo.avatarUrl}
-              name={walkerName}
-              size={48}
-              borderRadius={18}
-              onClick={() => fileInputRef.current?.click()}
-            />
-            <div style={headerIdentityStyle}>
-              <h2 style={greetingStyle}>{greetingLabel}</h2>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) photo.uploadAvatar(file)
-                  e.target.value = ''
-                }}
+        <div
+          style={{
+            ...dashboardBackgroundStyle,
+            ...(burgerOpen ? dashboardBackgroundBlockedStyle : null),
+          }}
+          aria-hidden={burgerOpen}
+        >
+          <div style={headerStyle}>
+            <div style={headerIdentityRowStyle}>
+              <ProfileAvatar
+                url={photo.avatarUrl}
+                name={walkerName}
+                size={48}
+                borderRadius={18}
+                onClick={() => fileInputRef.current?.click()}
               />
-              {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
-              {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
+              <div style={headerIdentityStyle}>
+                <h2 style={greetingStyle}>{greetingLabel}</h2>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) photo.uploadAvatar(file)
+                    e.target.value = ''
+                  }}
+                />
+                {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
+                {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
+              </div>
+            </div>
+
+            <div style={headerTopRowStyle}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuPage('main')
+                  setBurgerOpen((v) => !v)
+                }}
+                style={headerMenuBtnStyle}
+                aria-label={t('menu.menu')}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
+                  <line x1="4" y1="7" x2="20" y2="7" />
+                  <line x1="4" y1="12" x2="20" y2="12" />
+                  <line x1="4" y1="17" x2="20" y2="17" />
+                </svg>
+              </button>
+
+              {isActiveOrCompleted ? (
+                <div style={activeSessionChipStyle}>
+                  {flow.screenState === 'active' ? activeLabels.activeTitle : t('tracking.onTheWay')}
+                </div>
+              ) : (
+                <div />
+              )}
+
+              <div style={bellWrapStyle}>
+                <NotificationsBell />
+              </div>
             </div>
           </div>
 
-          <div style={headerTopRowStyle}>
-            <button
-              type="button"
-              onClick={() => {
-                setMenuPage('main')
-                setBurgerOpen((v) => !v)
-              }}
-              style={headerMenuBtnStyle}
-              aria-label={t('menu.menu')}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F172A" strokeWidth="2.2" strokeLinecap="round">
-                <line x1="4" y1="7" x2="20" y2="7" />
-                <line x1="4" y1="12" x2="20" y2="12" />
-                <line x1="4" y1="17" x2="20" y2="17" />
-              </svg>
-            </button>
-
-            {isActiveOrCompleted ? (
-              <div style={activeSessionChipStyle}>
-                {flow.screenState === 'active' ? activeLabels.activeTitle : t('tracking.onTheWay')}
-              </div>
-            ) : (
-              <div />
-            )}
-
-            <div style={bellWrapStyle}>
-              <NotificationsBell />
-            </div>
-          </div>
-        </div>
-
-        {showStripeGate && (
-          <>
-            <div style={stripeGateOverlayStyle} onClick={() => setShowStripeGate(false)} />
-            <div style={stripeGateCardStyle}>
-              <div style={stripeGateEyebrowStyle}>Payout setup</div>
-              <div style={stripeGateTitleStyle}>You&apos;re almost ready to go online</div>
-              <div style={stripeGateBodyStyle}>
-                Complete your payout setup to start receiving requests.
-              </div>
-              <div style={stripeGateActionsStyle}>
-                <button
-                  type="button"
-                  disabled={isCheckingPayout}
-                  onClick={() => void handleStripeSetup(false)}
-                  style={{
-                    ...stripeGatePrimaryStyle,
-                    ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
-                  }}
-                >
-                  {isCheckingPayout ? 'Checking...' : 'Complete setup'}
-                </button>
-                <button type="button" onClick={() => setShowStripeGate(false)} style={stripeGateSecondaryStyle}>
-                  Maybe later
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {showOnboardingWow && (
-          <>
-            <div style={stripeGateOverlayStyle} onClick={() => setShowOnboardingWow(false)} />
-            <div style={stripeGateCardStyle}>
-              <div style={stripeGateEyebrowStyle}>First step</div>
-              <div style={stripeGateTitleStyle}>
-                {flow.connectLoading
-                  ? 'Checking payout setup'
-                  : flow.stripeReadyForOnline
-                    ? 'Ready to receive your first request?'
-                    : 'Complete payout setup to go online'}
-              </div>
-              <div style={stripeGateBodyStyle}>
-                {flow.connectLoading
-                  ? 'We are checking your payout status so we can get you online smoothly.'
-                  : flow.stripeReadyForOnline
-                    ? 'Turn on availability whenever you’re ready to start receiving bookings.'
-                    : 'Set up payouts once so you can receive requests and get paid.'}
-              </div>
-              <div style={stripeGateActionsStyle}>
-                <button
-                  type="button"
-                  disabled={isCheckingPayout}
-                  onClick={() => void handleOnboardingWowPrimary()}
-                  style={{
-                    ...stripeGatePrimaryStyle,
-                    ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
-                  }}
-                >
-                  {flow.connectLoading
-                    ? 'Checking...'
-                    : flow.stripeReadyForOnline
-                      ? 'Go online'
-                      : isCheckingPayout
-                        ? 'Checking...'
-                        : 'Complete setup'}
-                </button>
-                {!flow.connectLoading && !flow.stripeReadyForOnline ? (
-                  <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
-                    Maybe later
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
-                    Maybe later
-                  </button>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-
-        {burgerOpen && (
-          <>
-            <div style={menuOverlayStyle} onClick={closeAll} />
-            <div
-              style={{
-                ...menuPanelStyle,
-                ...(isRtl ? menuPanelRtlStyle : menuPanelLtrStyle),
-              }}
-            >
-              <div style={menuHeaderRowStyle}>
-                <div style={menuHeaderLeftStyle}>
+          {showStripeGate && (
+            <>
+              <div style={stripeGateOverlayStyle} onClick={() => setShowStripeGate(false)} />
+              <div style={stripeGateCardStyle}>
+                <div style={stripeGateEyebrowStyle}>Payout setup</div>
+                <div style={stripeGateTitleStyle}>You&apos;re almost ready to go online</div>
+                <div style={stripeGateBodyStyle}>
+                  Complete your payout setup to start receiving requests.
+                </div>
+                <div style={stripeGateActionsStyle}>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (menuPage !== 'main') {
-                        setMenuPage('main')
-                      } else {
-                        closeAll()
-                      }
+                    disabled={isCheckingPayout}
+                    onClick={() => void handleStripeSetup(false)}
+                    style={{
+                      ...stripeGatePrimaryStyle,
+                      ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
                     }}
-                    style={menuBackButtonStyle}
-                    aria-label={menuPage !== 'main' ? t('common.back') : t('common.close')}
                   >
-                    {menuPage !== 'main' ? '‹' : '✕'}
+                    {isCheckingPayout ? 'Checking...' : 'Complete setup'}
                   </button>
-                  <span style={menuTitleStyle}>
-                    {menuPage === 'settings'
-                      ? t('menu.settings')
-                      : menuPage === 'history'
-                        ? t('menu.tripHistory')
-                        : menuPage === 'futureOrders'
-                          ? t('menu.futureOrders')
-                          : menuPage === 'earnings'
-                            ? (isHebrew ? 'רווחים' : 'Earnings')
-                          : t('menu.menu')}
-                  </span>
+                  <button type="button" onClick={() => setShowStripeGate(false)} style={stripeGateSecondaryStyle}>
+                    Maybe later
+                  </button>
                 </div>
               </div>
+            </>
+          )}
 
-              <div className="walker-menu-scroll" style={menuScrollAreaStyle}>
-                {menuPage === 'history' ? (
+          {showOnboardingWow && (
+            <>
+              <div style={stripeGateOverlayStyle} onClick={() => setShowOnboardingWow(false)} />
+              <div style={stripeGateCardStyle}>
+                <div style={stripeGateEyebrowStyle}>First step</div>
+                <div style={stripeGateTitleStyle}>
+                  {flow.connectLoading
+                    ? 'Checking payout setup'
+                    : flow.stripeReadyForOnline
+                      ? 'Ready to receive your first request?'
+                      : 'Complete payout setup to go online'}
+                </div>
+                <div style={stripeGateBodyStyle}>
+                  {flow.connectLoading
+                    ? 'We are checking your payout status so we can get you online smoothly.'
+                    : flow.stripeReadyForOnline
+                      ? 'Turn on availability whenever you’re ready to start receiving bookings.'
+                      : 'Set up payouts once so you can receive requests and get paid.'}
+                </div>
+                <div style={stripeGateActionsStyle}>
+                  <button
+                    type="button"
+                    disabled={isCheckingPayout}
+                    onClick={() => void handleOnboardingWowPrimary()}
+                    style={{
+                      ...stripeGatePrimaryStyle,
+                      ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
+                    }}
+                  >
+                    {flow.connectLoading
+                      ? 'Checking...'
+                      : flow.stripeReadyForOnline
+                        ? 'Go online'
+                        : isCheckingPayout
+                          ? 'Checking...'
+                          : 'Complete setup'}
+                  </button>
+                  {!flow.connectLoading && !flow.stripeReadyForOnline ? (
+                    <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
+                      Maybe later
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
+                      Maybe later
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {burgerOpen && (
+            <>
+              <div style={menuOverlayStyle} onClick={closeAll} />
+              <div
+                style={{
+                  ...menuPanelStyle,
+                  ...(isRtl ? menuPanelRtlStyle : menuPanelLtrStyle),
+                }}
+              >
+                <div style={menuHeaderRowStyle}>
+                  <div style={menuHeaderLeftStyle}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (menuPage !== 'main') {
+                          setMenuPage('main')
+                        } else {
+                          closeAll()
+                        }
+                      }}
+                      style={menuBackButtonStyle}
+                      aria-label={menuPage !== 'main' ? t('common.back') : t('common.close')}
+                    >
+                      {menuPage !== 'main' ? '‹' : '✕'}
+                    </button>
+                    <span style={menuTitleStyle}>
+                      {menuPage === 'settings'
+                        ? t('menu.settings')
+                        : menuPage === 'history'
+                          ? t('menu.tripHistory')
+                          : menuPage === 'futureOrders'
+                            ? t('menu.futureOrders')
+                            : menuPage === 'earnings'
+                              ? (isHebrew ? 'רווחים' : 'Earnings')
+                            : t('menu.menu')}
+                    </span>
+                  </div>
+                </div>
+              
+                <div className="walker-menu-scroll" style={menuScrollAreaStyle}>
+                  {menuPage === 'history' ? (
                   <BurgerSection title={t('menu.tripHistory')} subtitle={t('menu.allHistorySubtitle')}>
                       <GroupedHistory
                         items={allHistoryItems}
@@ -1961,13 +1986,13 @@ export default function WalkerDashboard({
                       />
                     </BurgerSection>
                   </>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          </>
-        )}
+            </>
+          )}
 
-        <div style={contentStyle}>
+          <div style={contentStyle}>
           {flow.error && (
             <div style={toastErrorStyle}>
               <span>{friendlyError(flow.error)}</span>
@@ -2529,6 +2554,7 @@ export default function WalkerDashboard({
               </button>
             </div>
           )}
+          </div>
         </div>
       </div>
 
@@ -2917,6 +2943,14 @@ const screenStyle: React.CSSProperties = {
   scrollbarWidth: 'none',
   msOverflowStyle: 'none',
   WebkitOverflowScrolling: 'touch',
+}
+
+const dashboardBackgroundStyle: React.CSSProperties = {
+  minHeight: '100dvh',
+}
+
+const dashboardBackgroundBlockedStyle: React.CSSProperties = {
+  pointerEvents: 'none',
 }
 
 const headerStyle: React.CSSProperties = {

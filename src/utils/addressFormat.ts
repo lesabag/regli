@@ -1,10 +1,16 @@
 type AddressParts = {
   house_number?: string | null
   street_number?: string | null
+  streetnumber?: string | null
   houseNumber?: string | null
   housenumber?: string | null
   number?: string | null
   'addr:housenumber'?: string | null
+  'addr:streetnumber'?: string | null
+  building_number?: string | null
+  buildingNumber?: string | null
+  building_no?: string | null
+  house?: string | null
   road?: string | null
   route?: string | null
   street?: string | null
@@ -21,6 +27,8 @@ type AddressParts = {
   county?: string | null
   country?: string | null
 }
+
+let lastAddressFormatLogSignature = ''
 
 const COUNTRY_HINTS = new Set([
   'israel',
@@ -66,10 +74,16 @@ function fromObject(address: AddressParts): string {
   const houseNumber = cleanPart(
     address.house_number ??
       address.street_number ??
+      address.streetnumber ??
       address.houseNumber ??
       address.housenumber ??
       address.number ??
-      address['addr:housenumber'],
+      address['addr:housenumber'] ??
+      address['addr:streetnumber'] ??
+      address.building_number ??
+      address.buildingNumber ??
+      address.building_no ??
+      address.house,
   )
   const city = cleanPart(
     address.city ?? address.locality ?? address.town ?? address.village ?? address.municipality,
@@ -154,9 +168,99 @@ export function formatShortAddress(
   if (objectValue && stringValue) {
     const objectHasNumber = /\d/.test(objectValue)
     const stringHasNumber = /\d/.test(stringValue)
-    if (!objectHasNumber && stringHasNumber) return stringValue
-    return objectValue
+    const finalValue = !objectHasNumber && stringHasNumber ? stringValue : objectValue
+    if (addressParts) {
+      const logPayload = {
+        raw: raw || null,
+        street:
+          cleanPart(
+            addressParts.road ??
+              addressParts.route ??
+              addressParts.street ??
+              addressParts.pedestrian ??
+              addressParts.footway,
+          ) || null,
+        houseNumber:
+          cleanPart(
+            addressParts.house_number ??
+              addressParts.street_number ??
+              addressParts.streetnumber ??
+              addressParts.houseNumber ??
+              addressParts.housenumber ??
+              addressParts.number ??
+              addressParts['addr:housenumber'] ??
+              addressParts['addr:streetnumber'] ??
+              addressParts.building_number ??
+              addressParts.buildingNumber ??
+              addressParts.building_no ??
+              addressParts.house,
+          ) || null,
+        city:
+          cleanPart(
+            addressParts.city ??
+              addressParts.locality ??
+              addressParts.town ??
+              addressParts.village ??
+              addressParts.municipality,
+          ) || null,
+        objectValue: objectValue || null,
+        stringValue: stringValue || null,
+        finalValue: finalValue || null,
+      }
+      const signature = JSON.stringify(logPayload)
+      if (signature !== lastAddressFormatLogSignature) {
+        lastAddressFormatLogSignature = signature
+        console.log('[AddressFormat]', logPayload)
+      }
+    }
+    return finalValue
   }
 
-  return objectValue || stringValue
+  const finalValue = objectValue || stringValue
+  if (addressParts) {
+    const logPayload = {
+      raw: raw || null,
+      street:
+        cleanPart(
+          addressParts.road ??
+            addressParts.route ??
+            addressParts.street ??
+            addressParts.pedestrian ??
+            addressParts.footway,
+        ) || null,
+      houseNumber:
+        cleanPart(
+          addressParts.house_number ??
+            addressParts.street_number ??
+            addressParts.streetnumber ??
+            addressParts.houseNumber ??
+            addressParts.housenumber ??
+            addressParts.number ??
+            addressParts['addr:housenumber'] ??
+            addressParts['addr:streetnumber'] ??
+            addressParts.building_number ??
+            addressParts.buildingNumber ??
+            addressParts.building_no ??
+            addressParts.house,
+        ) || null,
+      city:
+        cleanPart(
+          addressParts.city ??
+            addressParts.locality ??
+            addressParts.town ??
+            addressParts.village ??
+            addressParts.municipality,
+        ) || null,
+      objectValue: objectValue || null,
+      stringValue: stringValue || null,
+      finalValue: finalValue || null,
+    }
+    const signature = JSON.stringify(logPayload)
+    if (signature !== lastAddressFormatLogSignature) {
+      lastAddressFormatLogSignature = signature
+      console.log('[AddressFormat]', logPayload)
+    }
+  }
+
+  return finalValue
 }

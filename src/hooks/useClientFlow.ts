@@ -476,6 +476,16 @@ function isFutureScheduledJob(job: WalkRequestRow): boolean {
   return job.dispatch_state !== 'dispatched'
 }
 
+function isScheduledFutureQueue(job: WalkRequestRow): boolean {
+  return (
+    job.booking_timing === 'scheduled' &&
+    job.status !== 'completed' &&
+    job.status !== 'cancelled' &&
+    job.dispatch_state === 'queued' &&
+    job.smart_dispatch_state === 'idle'
+  )
+}
+
 function isCurrentClientJob(job: WalkRequestRow): boolean {
   if (job.booking_timing !== 'scheduled') return true
   return job.dispatch_state === 'dispatched'
@@ -990,6 +1000,31 @@ export function useClientFlow(profileId: string, _profileName: string) {
         if (!address) {
           throw new Error('Reverse geocode did not return a human-readable address')
         }
+
+        console.log('[ReverseGeocode]', {
+          lat: Number(lat.toFixed(5)),
+          lng: Number(lng.toFixed(5)),
+          house_number: data?.address?.house_number ?? null,
+          street_number: data?.address?.street_number ?? null,
+          addr_housenumber: data?.address?.['addr:housenumber'] ?? null,
+          addr_streetnumber: data?.address?.['addr:streetnumber'] ?? null,
+          building_number: data?.address?.building_number ?? data?.address?.buildingNumber ?? null,
+          road:
+            data?.address?.road ??
+            data?.address?.route ??
+            data?.address?.street ??
+            data?.address?.pedestrian ??
+            null,
+          city:
+            data?.address?.city ??
+            data?.address?.locality ??
+            data?.address?.town ??
+            data?.address?.village ??
+            null,
+          displayAddress: displayAddress || null,
+          formattedAddress: formattedAddress || null,
+          finalAddress: address,
+        })
 
         _setLocation((prev) => {
           if (force) {
@@ -1635,6 +1670,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
       screenPhase,
     })
 
+    const hasFutureScheduledQueuedJob = currentRows.some(isScheduledFutureQueue)
+
     if (!row) {
       setCompletionReviewJob(null)
       if (
@@ -1642,13 +1679,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
         currentJobId &&
         !isAuthoritativeRecoveryReason(reason)
       ) {
+          return
+      }
+      if (hasFutureScheduledQueuedJob) {
+        setAvailabilityNotice(null)
+        clearActiveState()
         return
       }
       if (exhaustedRow && exhaustedRow.id !== dismissedExhaustedRequestIdRef.current) {
         const belongsToCurrentFlow =
           exhaustedRow.id === currentJobId ||
-          exhaustedRow.id === lastActiveJobIdRef.current ||
-          screenState === 'searching'
+          exhaustedRow.id === lastActiveJobIdRef.current
 
         if (belongsToCurrentFlow) {
           setCurrentJob((prev) => mergeWalkRequest(prev, exhaustedRow))
@@ -2150,14 +2191,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
           const belongsToCurrentFlow =
             updated.id === currentJobIdRef.current ||
-            updated.id === lastActiveJobIdRef.current ||
-            screenStateRef.current === 'searching'
+            updated.id === lastActiveJobIdRef.current
 
           const previousPhase = lifecyclePhaseRef.current.get(updated.id) ?? 'idle'
           const nextPhase = getServicePhase(updated)
           lifecyclePhaseRef.current.set(updated.id, nextPhase)
 
-          if (updated.smart_dispatch_state === 'exhausted' && belongsToCurrentFlow) {
+          if (
+            updated.smart_dispatch_state === 'exhausted' &&
+            !isScheduledFutureQueue(updated) &&
+            belongsToCurrentFlow
+          ) {
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
@@ -2297,6 +2341,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setCompletionReviewJob(null)
             if (updated.id === currentJobIdRef.current) {
               if (
+                !isScheduledFutureQueue(updated) &&
                 typeof updated.smart_dispatch_last_error === 'string' &&
                 (
                   updated.smart_dispatch_last_error.toLowerCase().includes('all candidates exhausted') ||
