@@ -12,6 +12,7 @@ import AdminDisputes from '../components/AdminDisputes'
 import MatchingDebugV2 from '../components/MatchingDebugV2'
 import AdminDispatchLive from '../components/AdminDispatchLive'
 import AdminFinance from '../components/AdminFinance'
+import AdminSearchAnalytics from '../components/AdminSearchAnalytics'
 
 type Tab =
   | 'overview'
@@ -207,13 +208,19 @@ export default function AdminDashboard() {
         {tab === 'overview' && (
           <>
             <AdminKpiPanel timeRange={timeRange} />
+            <AdminSearchAnalytics timeRange={timeRange} />
             <AdminAlerts />
           </>
         )}
 
         {tab === 'dispatch' && <AdminDispatchLive />}
         {tab === 'alerts' && <AdminAlerts />}
-        {tab === 'matching' && <MatchingDebugV2 />}
+        {tab === 'matching' && (
+          <>
+            <AdminSearchAnalytics timeRange={timeRange} />
+            <MatchingDebugV2 />
+          </>
+        )}
         {tab === 'supply' && <AdminSupplyDemand timeRange={timeRange} />}
         {tab === 'pricing' && <AdminPricing />}
         {tab === 'finance' && <AdminFinance timeRange={timeRange} />}
