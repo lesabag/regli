@@ -1257,13 +1257,7 @@ export default function WalkerDashboard({
         }
       `}</style>
       <div className="walker-dashboard-screen" style={screenStyle}>
-        <div
-          style={{
-            ...dashboardBackgroundStyle,
-            ...(burgerOpen ? dashboardBackgroundBlockedStyle : null),
-          }}
-          aria-hidden={burgerOpen}
-        >
+        <div style={dashboardBackgroundStyle}>
           <div style={headerStyle}>
             <div style={headerIdentityRowStyle}>
               <ProfileAvatar
@@ -2947,10 +2941,6 @@ const screenStyle: React.CSSProperties = {
 
 const dashboardBackgroundStyle: React.CSSProperties = {
   minHeight: '100dvh',
-}
-
-const dashboardBackgroundBlockedStyle: React.CSSProperties = {
-  pointerEvents: 'none',
 }
 
 const headerStyle: React.CSSProperties = {
