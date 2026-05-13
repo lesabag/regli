@@ -231,6 +231,14 @@ function parseAvailabilityInputMinutes(value: string): number | null {
   return hours * 60 + minutes
 }
 
+function getAvailabilityRowKey(serviceType: ProfileServiceType, dayOfWeek: number): string {
+  return `${serviceType}-${dayOfWeek}`
+}
+
+function formatAvailabilityTimeRange(startTime: string, endTime: string): string {
+  return `${startTime}\u2013${endTime}`
+}
+
 function providerAutoOnlineStorageKey(profileId: string) {
   return `regli_provider_auto_online_${profileId}`
 }
@@ -335,6 +343,12 @@ export default function WalkerDashboard({
   const availabilityEnabledLabel = isHebrew ? 'זמין' : 'Active'
   const availabilityStartLabel = isHebrew ? 'התחלה' : 'Start'
   const availabilityEndLabel = isHebrew ? 'סיום' : 'End'
+  const availabilityUnavailableLabel = isHebrew ? 'לא זמין' : 'Unavailable'
+  const availabilityEditLabel = isHebrew ? 'ערוך שעות' : 'Edit hours'
+  const availabilityAutoEnableLabel = isHebrew ? 'הפעל יום זה כדי לקבוע שעות.' : 'Turn this day on to set hours.'
+  const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
+  const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות' : 'Manage availability'
+  const unavailableTodayLabel = isHebrew ? 'לא זמין היום' : 'Unavailable today'
   const availabilityDayLabels = useMemo(
     () => [
       isHebrew ? 'א׳' : 'Sun',
@@ -378,6 +392,7 @@ export default function WalkerDashboard({
   const [availabilitySaving, setAvailabilitySaving] = useState(false)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
+  const [expandedAvailabilityKey, setExpandedAvailabilityKey] = useState<string | null>(null)
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
   const [capSaving, setCapSaving] = useState(false)
   const [capSavedAt, setCapSavedAt] = useState(0)
@@ -509,6 +524,37 @@ export default function WalkerDashboard({
       )),
     }))
   }, [])
+
+  const handleAvailabilityToggle = useCallback((
+    serviceType: ProfileServiceType,
+    dayOfWeek: number,
+    nextIsActive: boolean,
+  ) => {
+    handleAvailabilityRowChange(serviceType, dayOfWeek, {
+      isActive: nextIsActive,
+    })
+
+    const rowKey = getAvailabilityRowKey(serviceType, dayOfWeek)
+    if (nextIsActive) {
+      setExpandedAvailabilityKey(rowKey)
+    } else {
+      setExpandedAvailabilityKey((current) => (current === rowKey ? null : current))
+    }
+  }, [handleAvailabilityRowChange])
+
+  const handleAvailabilityRowPress = useCallback((
+    serviceType: ProfileServiceType,
+    row: AvailabilityFormRow,
+  ) => {
+    const rowKey = getAvailabilityRowKey(serviceType, row.dayOfWeek)
+
+    if (!row.isActive) {
+      handleAvailabilityToggle(serviceType, row.dayOfWeek, true)
+      return
+    }
+
+    setExpandedAvailabilityKey((current) => (current === rowKey ? null : rowKey))
+  }, [handleAvailabilityToggle])
 
   const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
     if (serviceTypeSaving) return
@@ -896,6 +942,23 @@ export default function WalkerDashboard({
       ? 'הפעל את מצב המחובר כדי לקבל הזמנות חדשות בזמן אמת.'
       : 'Turn on your connected mode to receive new orders in real time.'
   const completedJobsCount = flow.completedJobs.filter((job) => job.status === 'completed').length
+  const todayDayOfWeek = new Date().getDay()
+  const todayAvailabilityRows = useMemo(
+    () =>
+      profileServiceTypes.map((serviceType) => {
+        const todayRow = availabilityRows[serviceType].find((row) => row.dayOfWeek === todayDayOfWeek) ?? null
+        return {
+          serviceType,
+          label: getProfileServiceTypeLabel(serviceType, isHebrew),
+          isAvailable: !!todayRow?.isActive,
+          summary:
+            todayRow?.isActive
+              ? formatAvailabilityTimeRange(todayRow.startTime, todayRow.endTime)
+              : unavailableTodayLabel,
+        }
+      }),
+    [availabilityRows, isHebrew, profileServiceTypes, todayDayOfWeek, unavailableTodayLabel],
+  )
   const walletPayoutReady =
     !!flow.connectStatus?.connected &&
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
@@ -1284,6 +1347,11 @@ export default function WalkerDashboard({
     setShowStripeGate(false)
     await flow.toggleOnline()
   }, [flow, hasSelectedProfileService, serviceSelectionRequiredLabel])
+
+  const handleManageAvailability = useCallback(() => {
+    setBurgerOpen(true)
+    setMenuPage('settings')
+  }, [])
 
   const handleStripeSetup = useCallback(async (rememberAutoOnline = false) => {
     if (isCheckingPayout) return
@@ -1913,10 +1981,8 @@ export default function WalkerDashboard({
                     </BurgerSection>
 
                     <BurgerSection title={availabilitySectionTitle} subtitle={availabilitySectionSubtitle}>
-                      <div style={availabilityIntroStyle}>
-                        <span>{availabilityTimezoneLabel}</span>
-                        <span>{availabilityUnsetLabel}</span>
-                      </div>
+                      <div style={availabilityIntroStyle}>{availabilityUnsetLabel}</div>
+                      <div style={availabilityTimezonePillStyle}>{availabilityTimezoneLabel}</div>
 
                       {availabilityLoading ? (
                         <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
@@ -1933,57 +1999,122 @@ export default function WalkerDashboard({
                               </div>
 
                               <div style={availabilityGridStyle}>
-                                {availabilityRows[serviceType].map((row) => (
-                                  <div key={`${serviceType}-${row.dayOfWeek}`} style={availabilityDayRowStyle}>
-                                    <div style={availabilityDayHeaderStyle}>
-                                      <span style={availabilityDayLabelStyle}>{availabilityDayLabels[row.dayOfWeek]}</span>
-                                      <label style={availabilityToggleLabelStyle}>
+                                {availabilityRows[serviceType].map((row, index) => {
+                                  const rowKey = getAvailabilityRowKey(serviceType, row.dayOfWeek)
+                                  const isExpanded = expandedAvailabilityKey === rowKey
+                                  return (
+                                    <div
+                                      key={rowKey}
+                                      style={{
+                                        ...availabilityDayBlockStyle,
+                                        ...(row.isActive ? availabilityDayBlockActiveStyle : null),
+                                        ...(index > 0 ? availabilityDayBlockWithDividerStyle : null),
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAvailabilityRowPress(serviceType, row)}
+                                        style={availabilityRowButtonStyle}
+                                      >
+                                        <div style={availabilityRowDayWrapStyle}>
+                                          <span style={availabilityDayLabelStyle}>{availabilityDayLabels[row.dayOfWeek]}</span>
+                                        </div>
+
+                                        <div style={availabilityRowMetaStyle}>
+                                          <span style={row.isActive ? availabilityTimePillStyle : availabilityUnavailableTextStyle}>
+                                            {row.isActive
+                                              ? `${row.startTime} → ${row.endTime}`
+                                              : availabilityUnavailableLabel}
+                                          </span>
+                                          <span
+                                            style={{
+                                              ...availabilityChevronStyle,
+                                              ...(isExpanded ? availabilityChevronExpandedStyle : null),
+                                            }}
+                                          >
+                                            ›
+                                          </span>
+                                        </div>
+                                      </button>
+
+                                      <label
+                                        style={availabilityToggleShellStyle}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                        }}
+                                      >
                                         <input
                                           type="checkbox"
                                           checked={row.isActive}
                                           onChange={(event) => {
-                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
-                                              isActive: event.target.checked,
-                                            })
+                                            handleAvailabilityToggle(serviceType, row.dayOfWeek, event.target.checked)
                                           }}
+                                          style={availabilityToggleInputStyle}
+                                          aria-label={`${availabilityDayLabels[row.dayOfWeek]} ${availabilityEnabledLabel}`}
                                         />
-                                        <span>{availabilityEnabledLabel}</span>
-                                      </label>
-                                    </div>
-
-                                    <div style={availabilityTimeInputsStyle}>
-                                      <label style={availabilityTimeFieldStyle}>
-                                        <span style={availabilityTimeLabelStyle}>{availabilityStartLabel}</span>
-                                        <input
-                                          type="time"
-                                          value={row.startTime}
-                                          disabled={!row.isActive}
-                                          onChange={(event) => {
-                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
-                                              startTime: event.target.value,
-                                            })
+                                        <span
+                                          style={{
+                                            ...availabilityToggleTrackStyle,
+                                            ...(row.isActive ? availabilityToggleTrackActiveStyle : null),
                                           }}
-                                          style={availabilityTimeInputStyle}
-                                        />
+                                        >
+                                          <span
+                                            style={{
+                                              ...availabilityToggleThumbStyle,
+                                              ...(row.isActive ? availabilityToggleThumbActiveStyle : null),
+                                            }}
+                                          />
+                                        </span>
                                       </label>
 
-                                      <label style={availabilityTimeFieldStyle}>
-                                        <span style={availabilityTimeLabelStyle}>{availabilityEndLabel}</span>
-                                        <input
-                                          type="time"
-                                          value={row.endTime}
-                                          disabled={!row.isActive}
-                                          onChange={(event) => {
-                                            handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
-                                              endTime: event.target.value,
-                                            })
-                                          }}
-                                          style={availabilityTimeInputStyle}
-                                        />
-                                      </label>
+                                      <div
+                                        style={{
+                                          ...availabilityEditorWrapStyle,
+                                          ...(isExpanded ? availabilityEditorWrapExpandedStyle : null),
+                                        }}
+                                      >
+                                        <div style={availabilityEditorStyle}>
+                                          {row.isActive ? (
+                                            <>
+                                              <div style={availabilityEditorHeaderStyle}>{availabilityEditLabel}</div>
+                                              <div style={availabilityTimeInputsStyle}>
+                                                <label style={availabilityTimeFieldStyle}>
+                                                  <span style={availabilityTimeLabelStyle}>{availabilityStartLabel}</span>
+                                                  <input
+                                                    type="time"
+                                                    value={row.startTime}
+                                                    onChange={(event) => {
+                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                                        startTime: event.target.value,
+                                                      })
+                                                    }}
+                                                    style={availabilityTimeInputStyle}
+                                                  />
+                                                </label>
+
+                                                <label style={availabilityTimeFieldStyle}>
+                                                  <span style={availabilityTimeLabelStyle}>{availabilityEndLabel}</span>
+                                                  <input
+                                                    type="time"
+                                                    value={row.endTime}
+                                                    onChange={(event) => {
+                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                                        endTime: event.target.value,
+                                                      })
+                                                    }}
+                                                    style={availabilityTimeInputStyle}
+                                                  />
+                                                </label>
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div style={availabilityEditorHintStyle}>{availabilityAutoEnableLabel}</div>
+                                          )}
+                                        </div>
+                                      </div>
                                     </div>
-                                  </div>
-                                ))}
+                                  )
+                                })}
                               </div>
                             </div>
                           ))}
@@ -2336,6 +2467,35 @@ export default function WalkerDashboard({
                 <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
               </div>
 
+              {todayAvailabilityRows.length > 0 && (
+                <div style={todayAvailabilityCardStyle}>
+                  <div style={todayAvailabilityHeaderStyle}>
+                    <div style={todayAvailabilityTitleStyle}>{todayAvailabilityTitle}</div>
+                    <button type="button" onClick={handleManageAvailability} style={todayAvailabilityManageButtonStyle}>
+                      {todayAvailabilityManageLabel}
+                    </button>
+                  </div>
+                  <div style={todayAvailabilityListStyle}>
+                    {todayAvailabilityRows.map((item, index) => (
+                      <div
+                        key={item.serviceType}
+                        style={{
+                          ...todayAvailabilityRowStyle,
+                          ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+                        }}
+                      >
+                        <span style={todayAvailabilityServiceLabelStyle}>{item.label}</span>
+                        {item.isAvailable ? (
+                          <span style={todayAvailabilityTimePillStyle}>{item.summary}</span>
+                        ) : (
+                          <span style={todayAvailabilityUnavailableStyle}>{item.summary}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div style={idleCardGridStyle}>
                 <div style={idleRadarCardStyle}>
                   <RadarVisual />
@@ -2448,6 +2608,35 @@ export default function WalkerDashboard({
                 <div style={idleHeroTitleStyle}>{idleHeroSubtitle}</div>
                 <div style={idleHeroBodyStyle}>{idleWaitingBody}</div>
               </div>
+
+              {todayAvailabilityRows.length > 0 && (
+                <div style={todayAvailabilityCardStyle}>
+                  <div style={todayAvailabilityHeaderStyle}>
+                    <div style={todayAvailabilityTitleStyle}>{todayAvailabilityTitle}</div>
+                    <button type="button" onClick={handleManageAvailability} style={todayAvailabilityManageButtonStyle}>
+                      {todayAvailabilityManageLabel}
+                    </button>
+                  </div>
+                  <div style={todayAvailabilityListStyle}>
+                    {todayAvailabilityRows.map((item, index) => (
+                      <div
+                        key={item.serviceType}
+                        style={{
+                          ...todayAvailabilityRowStyle,
+                          ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+                        }}
+                      >
+                        <span style={todayAvailabilityServiceLabelStyle}>{item.label}</span>
+                        {item.isAvailable ? (
+                          <span style={todayAvailabilityTimePillStyle}>{item.summary}</span>
+                        ) : (
+                          <span style={todayAvailabilityUnavailableStyle}>{item.summary}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={idleCardGridStyle}>
                 <div style={idleRadarCardStyle}>
@@ -3961,12 +4150,25 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
 }
 
 const availabilityIntroStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  marginBottom: 12,
-  fontSize: 12,
+  marginBottom: 10,
+  fontSize: 13,
+  lineHeight: 1.5,
   color: '#64748B',
   fontWeight: 600,
+}
+
+const availabilityTimezonePillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  minHeight: 32,
+  padding: '0 12px',
+  borderRadius: 999,
+  background: '#F3F7FB',
+  border: '1px solid #E2E8F0',
+  color: '#475569',
+  fontSize: 12,
+  fontWeight: 700,
+  marginBottom: 14,
 }
 
 const availabilityLoadingStyle: React.CSSProperties = {
@@ -3991,87 +4193,224 @@ const availabilityEmptyStyle: React.CSSProperties = {
 
 const availabilityServiceCardStyle: React.CSSProperties = {
   marginBottom: 12,
-  padding: '14px 14px 12px',
-  borderRadius: 20,
-  border: '1px solid #E2E8F0',
+  padding: '12px 14px',
+  borderRadius: 24,
+  border: '1px solid #E7EDF4',
   background: '#FFFFFF',
-  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.05)',
+  boxShadow: '0 14px 34px rgba(15, 23, 42, 0.06)',
 }
 
 const availabilityServiceHeaderStyle: React.CSSProperties = {
-  marginBottom: 10,
+  marginBottom: 8,
 }
 
 const availabilityServiceTitleStyle: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: 16,
   fontWeight: 800,
   color: '#0F172A',
 }
 
 const availabilityGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 10,
 }
 
-const availabilityDayRowStyle: React.CSSProperties = {
-  borderRadius: 18,
-  border: '1px solid #E2E8F0',
-  background: '#F8FAFC',
-  padding: '12px 12px 10px',
+const availabilityDayBlockStyle: React.CSSProperties = {
+  position: 'relative',
+  borderRadius: 16,
+  transition: 'background-color 180ms ease, border-color 180ms ease',
 }
 
-const availabilityDayHeaderStyle: React.CSSProperties = {
+const availabilityDayBlockActiveStyle: React.CSSProperties = {
+  background: '#FBFDFF',
+}
+
+const availabilityDayBlockWithDividerStyle: React.CSSProperties = {
+  borderTop: '1px solid #EEF2F7',
+}
+
+const availabilityRowButtonStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 54,
+  padding: '0 66px 0 0',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
-  marginBottom: 10,
+  gap: 12,
+  background: 'transparent',
+  border: 'none',
+  textAlign: 'left',
+  cursor: 'pointer',
+}
+
+const availabilityRowDayWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  minWidth: 42,
 }
 
 const availabilityDayLabelStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
+  fontSize: 16,
+  fontWeight: 700,
   color: '#0F172A',
 }
 
-const availabilityToggleLabelStyle: React.CSSProperties = {
+const availabilityRowMetaStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 8,
+  minWidth: 0,
+}
+
+const availabilityTimePillStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 8,
-  fontSize: 12,
+  minHeight: 30,
+  maxWidth: '100%',
+  padding: '0 11px',
+  borderRadius: 999,
+  background: '#F7FBFF',
+  border: '1px solid #E6EEF6',
+  color: '#0F172A',
+  fontSize: 14,
   fontWeight: 700,
-  color: '#334155',
+  whiteSpace: 'nowrap',
+}
+
+const availabilityUnavailableTextStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 500,
+  color: '#A1ACBB',
+}
+
+const availabilityChevronStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 20,
+  lineHeight: 1,
+  color: '#94A3B8',
+  fontWeight: 700,
+  transition: 'transform 180ms ease, color 180ms ease',
+}
+
+const availabilityChevronExpandedStyle: React.CSSProperties = {
+  transform: 'rotate(90deg)',
+  color: '#64748B',
+}
+
+const availabilityToggleShellStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 10,
+  right: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 54,
+  height: 34,
+  cursor: 'pointer',
+}
+
+const availabilityToggleInputStyle: React.CSSProperties = {
+  position: 'absolute',
+  opacity: 0,
+  pointerEvents: 'none',
+}
+
+const availabilityToggleTrackStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 46,
+  height: 28,
+  borderRadius: 999,
+  background: '#D5DDE7',
+  transition: 'background 160ms ease',
+  boxShadow: 'inset 0 0 0 1px rgba(15,23,42,0.04)',
+}
+
+const availabilityToggleTrackActiveStyle: React.CSSProperties = {
+  background: '#22C55E',
+}
+
+const availabilityToggleThumbStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 3,
+  left: 3,
+  width: 22,
+  height: 22,
+  borderRadius: '50%',
+  background: '#FFFFFF',
+  boxShadow: '0 2px 6px rgba(15, 23, 42, 0.18)',
+  transition: 'transform 160ms ease',
+}
+
+const availabilityToggleThumbActiveStyle: React.CSSProperties = {
+  transform: 'translateX(18px)',
+}
+
+const availabilityEditorStyle: React.CSSProperties = {
+  padding: '0 0 6px',
+}
+
+const availabilityEditorWrapStyle: React.CSSProperties = {
+  maxHeight: 0,
+  opacity: 0,
+  overflow: 'hidden',
+  transform: 'translateY(-4px)',
+  transition: 'max-height 220ms ease, opacity 180ms ease, transform 180ms ease',
+}
+
+const availabilityEditorWrapExpandedStyle: React.CSSProperties = {
+  maxHeight: 148,
+  opacity: 1,
+  transform: 'translateY(0)',
+}
+
+const availabilityEditorHeaderStyle: React.CSSProperties = {
+  marginBottom: 6,
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#64748B',
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+}
+
+const availabilityEditorHintStyle: React.CSSProperties = {
+  padding: '0 0 2px',
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#94A3B8',
 }
 
 const availabilityTimeInputsStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 10,
+  gap: 8,
 }
 
 const availabilityTimeFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
 const availabilityTimeLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
-  color: '#64748B',
+  color: '#7B8794',
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
 }
 
 const availabilityTimeInputStyle: React.CSSProperties = {
   width: '100%',
-  minHeight: 42,
+  minHeight: 40,
   borderRadius: 14,
-  border: '1px solid #D7E0EA',
-  background: '#FFFFFF',
+  border: '1px solid #E7EDF4',
+  background: '#FBFCFE',
   color: '#0F172A',
   fontSize: 14,
-  fontWeight: 700,
-  padding: '0 12px',
+  fontWeight: 600,
+  padding: '0 11px',
   boxSizing: 'border-box',
 }
 
@@ -4315,6 +4654,82 @@ const idleHeroBodyStyle: React.CSSProperties = {
 const idleCardGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
+}
+
+const todayAvailabilityCardStyle: React.CSSProperties = {
+  borderRadius: 24,
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
+  border: '1px solid #E7EDF4',
+  boxShadow: '0 12px 24px rgba(15,23,42,0.05)',
+  padding: '12px 14px',
+  display: 'grid',
+  gap: 10,
+  marginBottom: 6,
+}
+
+const todayAvailabilityHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const todayAvailabilityTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const todayAvailabilityManageButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  color: '#2563EB',
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: 'pointer',
+}
+
+const todayAvailabilityListStyle: React.CSSProperties = {
+  display: 'grid',
+}
+
+const todayAvailabilityRowStyle: React.CSSProperties = {
+  minHeight: 44,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const todayAvailabilityRowWithDividerStyle: React.CSSProperties = {
+  borderTop: '1px solid #EEF2F7',
+}
+
+const todayAvailabilityServiceLabelStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#0F172A',
+}
+
+const todayAvailabilityTimePillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  minHeight: 28,
+  padding: '0 10px',
+  borderRadius: 999,
+  background: '#F7FBFF',
+  border: '1px solid #E4EDF6',
+  color: '#0F172A',
+  fontSize: 13,
+  fontWeight: 700,
+  whiteSpace: 'nowrap',
+}
+
+const todayAvailabilityUnavailableStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: '#94A3B8',
 }
 
 const idleRadarCardStyle: React.CSSProperties = {
