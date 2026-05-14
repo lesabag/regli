@@ -1043,9 +1043,7 @@ serve(async (req) => {
       const { error: resetStateError } = await supabase
         .from('walk_requests')
         .update({
-          ...(requestRow.booking_timing === 'scheduled'
-            ? { dispatch_state: 'queued' }
-            : {}),
+          dispatch_state: 'queued',
           smart_dispatch_state: 'idle',
           smart_dispatch_last_error: message,
           smart_dispatch_expires_at: null,
@@ -1081,188 +1079,188 @@ serve(async (req) => {
       createdAttemptStatus,
     })
 
-    if (requestRow.booking_timing === 'scheduled') {
-      const attemptId = String(firstAdvanceRow.attempt_id)
+    const attemptId = String(firstAdvanceRow.attempt_id)
 
-      console.log('[start-dispatch] verifying scheduled dispatch rows before markDispatched', {
-        version: START_DISPATCH_VERSION,
-        requestId,
-        attemptId,
-      })
+    console.log('[start-dispatch] verifying live dispatch rows before markDispatched', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      attemptId,
+      bookingTiming: requestRow.booking_timing ?? null,
+    })
 
-      const [
-        { count: candidateCountAfterAdvance, error: candidateCheckError },
-        { data: attemptAfterAdvance, error: attemptCheckError },
-      ] = await Promise.all([
-        supabase
-          .from('dispatch_candidates')
-          .select('id', { count: 'exact', head: true })
-          .eq('request_id', requestId),
-        supabase
-          .from('dispatch_attempts')
-          .select('id, status, expires_at')
-          .eq('id', attemptId)
-          .eq('request_id', requestId)
-          .eq('status', 'pending')
-          .gt('expires_at', new Date().toISOString())
-          .maybeSingle(),
-      ])
-
-      console.log('[start-dispatch] scheduled verification result', {
-        version: START_DISPATCH_VERSION,
-        requestId,
-        attemptId,
-        candidateCountAfterAdvance,
-        candidateCheckError: candidateCheckError?.message ?? null,
-        attemptAfterAdvance,
-        attemptCheckError: attemptCheckError?.message ?? null,
-      })
-
-      if (candidateCheckError || attemptCheckError || !candidateCountAfterAdvance || !attemptAfterAdvance) {
-        const message =
-          candidateCheckError?.message ??
-          attemptCheckError?.message ??
-          'dispatch rows missing after opening scheduled attempt'
-
-        console.error('[start-dispatch] scheduled verification failed before markDispatched', {
-          version: START_DISPATCH_VERSION,
-          requestId,
-          attemptId,
-          message,
-        })
-
-        const { error: resetStateError } = await supabase
-          .from('walk_requests')
-          .update({
-            dispatch_state: 'queued',
-            smart_dispatch_state: 'idle',
-            smart_dispatch_last_error: message,
-            smart_dispatch_expires_at: null,
-          })
-          .eq('id', requestId)
-          .eq('status', 'open')
-          .is('walker_id', null)
-
-        if (resetStateError) {
-          console.error('[start-dispatch] failed to reset missing scheduled dispatch rows', {
-            version: START_DISPATCH_VERSION,
-            requestId,
-            error: resetStateError.message,
-          })
-        }
-
-        return jsonResponse(
-          409,
-          {
-            ok: false,
-            error: message,
-            requestId,
-            timeoutSeconds,
-            candidateCount: rankedCandidates.length,
-            advanceResult,
-          },
-          corsHeaders,
-        )
-      }
-
-      console.warn('[start-dispatch] MARKING REQUEST DISPATCHED', {
-        version: START_DISPATCH_VERSION,
-        requestId,
-        attemptId,
-        candidateCountAfterAdvance,
-      })
-
-      const { error: markDispatchedError } = await supabase
-        .from('walk_requests')
-        .update({
-          dispatch_state: 'dispatched',
-          smart_dispatch_state: 'dispatching',
-          smart_dispatch_last_error: null,
-        })
-        .eq('id', requestId)
-        .eq('status', 'open')
-        .is('walker_id', null)
-
-      if (markDispatchedError) {
-        console.error('[start-dispatch] failed to mark scheduled request dispatched', {
-          version: START_DISPATCH_VERSION,
-          requestId,
-          attemptId,
-          error: markDispatchedError.message,
-        })
-        return jsonResponse(
-          500,
-          {
-            ok: false,
-            error: 'failed to mark scheduled request dispatched',
-            details: markDispatchedError.message,
-          },
-          corsHeaders,
-        )
-      }
-
-      const { data: liveAttemptAfterMark, error: liveAttemptAfterMarkError } = await supabase
+    const [
+      { count: candidateCountAfterAdvance, error: candidateCheckError },
+      { data: attemptAfterAdvance, error: attemptCheckError },
+    ] = await Promise.all([
+      supabase
+        .from('dispatch_candidates')
+        .select('id', { count: 'exact', head: true })
+        .eq('request_id', requestId),
+      supabase
         .from('dispatch_attempts')
         .select('id, status, expires_at')
         .eq('id', attemptId)
         .eq('request_id', requestId)
         .eq('status', 'pending')
         .gt('expires_at', new Date().toISOString())
-        .maybeSingle()
+        .maybeSingle(),
+    ])
 
-      console.log('[start-dispatch] live attempt check after markDispatched', {
+    console.log('[start-dispatch] live row verification result', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      attemptId,
+      candidateCountAfterAdvance,
+      candidateCheckError: candidateCheckError?.message ?? null,
+      attemptAfterAdvance,
+      attemptCheckError: attemptCheckError?.message ?? null,
+    })
+
+    if (candidateCheckError || attemptCheckError || !candidateCountAfterAdvance || !attemptAfterAdvance) {
+      const message =
+        candidateCheckError?.message ??
+        attemptCheckError?.message ??
+        'dispatch rows missing after opening dispatch attempt'
+
+      console.error('[start-dispatch] live row verification failed before markDispatched', {
         version: START_DISPATCH_VERSION,
         requestId,
         attemptId,
-        liveAttemptAfterMark,
-        liveAttemptAfterMarkError: liveAttemptAfterMarkError?.message ?? null,
+        message,
       })
 
-      if (liveAttemptAfterMarkError || !liveAttemptAfterMark) {
-        const message =
-          liveAttemptAfterMarkError?.message ??
-          'scheduled dispatch attempt missing after marking request dispatched'
+      const { error: resetStateError } = await supabase
+        .from('walk_requests')
+        .update({
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'idle',
+          smart_dispatch_last_error: message,
+          smart_dispatch_expires_at: null,
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .is('walker_id', null)
 
-        console.error('[start-dispatch] live attempt missing after markDispatched', {
+      if (resetStateError) {
+        console.error('[start-dispatch] failed to reset missing dispatch rows', {
           version: START_DISPATCH_VERSION,
           requestId,
-          attemptId,
-          message,
+          error: resetStateError.message,
         })
-
-        const { error: resetStateError } = await supabase
-          .from('walk_requests')
-          .update({
-            dispatch_state: 'queued',
-            smart_dispatch_state: 'idle',
-            smart_dispatch_last_error: message,
-            smart_dispatch_expires_at: null,
-          })
-          .eq('id', requestId)
-          .eq('status', 'open')
-          .is('walker_id', null)
-
-        if (resetStateError) {
-          console.error('[start-dispatch] failed to reset missing live scheduled attempt', {
-            version: START_DISPATCH_VERSION,
-            requestId,
-            error: resetStateError.message,
-          })
-        }
-
-        return jsonResponse(
-          409,
-          {
-            ok: false,
-            error: message,
-            requestId,
-            timeoutSeconds,
-            candidateCount: rankedCandidates.length,
-            advanceResult,
-          },
-          corsHeaders,
-        )
       }
+
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: message,
+          requestId,
+          timeoutSeconds,
+          candidateCount: rankedCandidates.length,
+          advanceResult,
+        },
+        corsHeaders,
+      )
+    }
+
+    console.warn('[start-dispatch] MARKING REQUEST DISPATCHED', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      attemptId,
+      candidateCountAfterAdvance,
+      bookingTiming: requestRow.booking_timing ?? null,
+    })
+
+    const { error: markDispatchedError } = await supabase
+      .from('walk_requests')
+      .update({
+        dispatch_state: 'dispatched',
+        smart_dispatch_state: 'dispatching',
+        smart_dispatch_last_error: null,
+      })
+      .eq('id', requestId)
+      .eq('status', 'open')
+      .is('walker_id', null)
+
+    if (markDispatchedError) {
+      console.error('[start-dispatch] failed to mark request dispatched', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        attemptId,
+        error: markDispatchedError.message,
+      })
+      return jsonResponse(
+        500,
+        {
+          ok: false,
+          error: 'failed to mark request dispatched',
+          details: markDispatchedError.message,
+        },
+        corsHeaders,
+      )
+    }
+
+    const { data: liveAttemptAfterMark, error: liveAttemptAfterMarkError } = await supabase
+      .from('dispatch_attempts')
+      .select('id, status, expires_at')
+      .eq('id', attemptId)
+      .eq('request_id', requestId)
+      .eq('status', 'pending')
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle()
+
+    console.log('[start-dispatch] live attempt check after markDispatched', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      attemptId,
+      liveAttemptAfterMark,
+      liveAttemptAfterMarkError: liveAttemptAfterMarkError?.message ?? null,
+    })
+
+    if (liveAttemptAfterMarkError || !liveAttemptAfterMark) {
+      const message =
+        liveAttemptAfterMarkError?.message ??
+        'dispatch attempt missing after marking request dispatched'
+
+      console.error('[start-dispatch] live attempt missing after markDispatched', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        attemptId,
+        message,
+      })
+
+      const { error: resetStateError } = await supabase
+        .from('walk_requests')
+        .update({
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'idle',
+          smart_dispatch_last_error: message,
+          smart_dispatch_expires_at: null,
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .is('walker_id', null)
+
+      if (resetStateError) {
+        console.error('[start-dispatch] failed to reset missing live dispatch attempt', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: resetStateError.message,
+        })
+      }
+
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: message,
+          requestId,
+          timeoutSeconds,
+          candidateCount: rankedCandidates.length,
+          advanceResult,
+        },
+        corsHeaders,
+      )
     }
 
     console.log('[start-dispatch] success', {
@@ -1274,7 +1272,7 @@ serve(async (req) => {
       createdAttemptId,
       createdAttemptStatus,
       finalRequestState: {
-        dispatch_state: requestRow.booking_timing === 'scheduled' ? 'dispatched' : 'dispatching',
+        dispatch_state: 'dispatched',
         smart_dispatch_state: 'dispatching',
       },
     })
