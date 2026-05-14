@@ -404,6 +404,7 @@ export default function WalkerDashboard({
   const [availabilitySaving, setAvailabilitySaving] = useState(false)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
+  const availabilityRowsRef = useRef(availabilityRows)
   const [expandedAvailabilityKey, setExpandedAvailabilityKey] = useState<string | null>(null)
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
   const [capSaving, setCapSaving] = useState(false)
@@ -491,36 +492,55 @@ export default function WalkerDashboard({
   }, [profile.service_type, profile.service_types])
 
   useEffect(() => {
-    let cancelled = false
+    availabilityRowsRef.current = availabilityRows
+  }, [availabilityRows])
 
-    const loadAvailability = async () => {
-      setAvailabilityLoading(true)
-      setAvailabilityError(null)
-
+  const loadAvailability = useCallback(async (): Promise<ProviderAvailabilityRow[] | null> => {
+    try {
       const { data, error } = await supabase
         .from('provider_availability')
         .select('provider_id, service_type, day_of_week, start_time, end_time, is_active')
         .eq('provider_id', profile.id)
 
-      if (cancelled) return
-
       if (error) {
         console.warn('[WalkerDashboard] failed to load provider_availability:', error.message)
         setAvailabilityError(availabilityErrorLabel)
-        setAvailabilityLoading(false)
-        return
+        return null
       }
 
-      setAvailabilityRows(buildAvailabilityState((data as ProviderAvailabilityRow[] | null) ?? []))
-      setAvailabilityLoading(false)
+      const rows = (data as ProviderAvailabilityRow[] | null) ?? []
+      setAvailabilityRows(buildAvailabilityState(rows))
+      setAvailabilityError(null)
+      return rows
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn('[WalkerDashboard] unexpected provider_availability load error:', message)
+      setAvailabilityError(availabilityErrorLabel)
+      return null
+    }
+  }, [availabilityErrorLabel, profile.id])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const runAvailabilityLoad = async () => {
+      setAvailabilityLoading(true)
+      try {
+        if (cancelled) return
+        await loadAvailability()
+      } finally {
+        if (!cancelled) {
+          setAvailabilityLoading(false)
+        }
+      }
     }
 
-    void loadAvailability()
+    void runAvailabilityLoad()
 
     return () => {
       cancelled = true
     }
-  }, [availabilityErrorLabel, profile.id])
+  }, [loadAvailability])
 
   const handleAvailabilityRowChange = useCallback((
     serviceType: ProfileServiceType,
@@ -658,8 +678,9 @@ export default function WalkerDashboard({
       return
     }
 
+    const rowsToSave = availabilityRowsRef.current
     const activeRows = profileServiceTypes.flatMap((serviceType) =>
-      availabilityRows[serviceType]
+      rowsToSave[serviceType]
         .filter((row) => row.isActive)
         .map((row) => ({ serviceType, row })),
     )
@@ -677,7 +698,7 @@ export default function WalkerDashboard({
     setAvailabilityError(null)
 
     const payload = profileServiceTypes.flatMap((serviceType) =>
-      availabilityRows[serviceType].map((row) => ({
+      rowsToSave[serviceType].map((row) => ({
         provider_id: profile.id,
         service_type: serviceType,
         day_of_week: row.dayOfWeek,
@@ -700,14 +721,22 @@ export default function WalkerDashboard({
       return
     }
 
-    setAvailabilitySaving(false)
-    setAvailabilitySavedAt(Date.now())
+    try {
+      const refreshedRows = await loadAvailability()
+      if (refreshedRows == null) {
+        return
+      }
+
+      setAvailabilitySavedAt(Date.now())
+    } finally {
+      setAvailabilitySaving(false)
+    }
   }, [
     availabilityErrorLabel,
     availabilityInvalidRangeLabel,
-    availabilityRows,
     availabilitySaving,
     availabilitySelectServiceLabel,
+    loadAvailability,
     profile.id,
     profileServiceTypes,
   ])
@@ -2172,6 +2201,8 @@ export default function WalkerDashboard({
 
                       {availabilityLoading ? (
                         <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
+                      ) : availabilityError ? (
+                        <div style={availabilityEmptyStyle}>{availabilityError}</div>
                       ) : profileServiceTypes.length === 0 ? (
                         <div style={availabilityEmptyStyle}>{availabilitySelectServiceLabel}</div>
                       ) : (
@@ -2223,21 +2254,17 @@ export default function WalkerDashboard({
                                         </div>
                                       </button>
 
-                                      <label
+                                      <button
+                                        type="button"
                                         style={availabilityToggleShellStyle}
+                                        aria-label={`${availabilityDayLabels[row.dayOfWeek]} ${availabilityEnabledLabel}`}
+                                        aria-pressed={row.isActive}
+                                        role="switch"
                                         onClick={(event) => {
                                           event.stopPropagation()
+                                          handleAvailabilityToggle(serviceType, row.dayOfWeek, !row.isActive)
                                         }}
                                       >
-                                        <input
-                                          type="checkbox"
-                                          checked={row.isActive}
-                                          onChange={(event) => {
-                                            handleAvailabilityToggle(serviceType, row.dayOfWeek, event.target.checked)
-                                          }}
-                                          style={availabilityToggleInputStyle}
-                                          aria-label={`${availabilityDayLabels[row.dayOfWeek]} ${availabilityEnabledLabel}`}
-                                        />
                                         <span
                                           style={{
                                             ...availabilityToggleTrackStyle,
@@ -2251,7 +2278,7 @@ export default function WalkerDashboard({
                                             }}
                                           />
                                         </span>
-                                      </label>
+                                      </button>
 
                                       <div
                                         style={{
@@ -2321,7 +2348,7 @@ export default function WalkerDashboard({
                         </>
                       )}
 
-                      {availabilityError ? (
+                      {availabilityError && !availabilityLoading ? (
                         <div style={serviceTypeStatusErrorStyle}>{availabilityError}</div>
                       ) : !availabilitySaving && availabilitySavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
@@ -4242,12 +4269,6 @@ const availabilityToggleShellStyle: React.CSSProperties = {
   width: 54,
   height: 34,
   cursor: 'pointer',
-}
-
-const availabilityToggleInputStyle: React.CSSProperties = {
-  position: 'absolute',
-  opacity: 0,
-  pointerEvents: 'none',
 }
 
 const availabilityToggleTrackStyle: React.CSSProperties = {
