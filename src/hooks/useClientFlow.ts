@@ -292,7 +292,15 @@ function parseWallClockDate(value: string | null | undefined): Date | null {
 
   if (!match) return null
 
-  const [, year, month, day, hour, minute, second] = match
+  const year = match[1]
+  const month = match[2]
+  const day = match[3]
+  const hour = match[4]
+  const minute = match[5]
+  const second = match[6]
+
+  if (!year || !month || !day || !hour || !minute) return null
+
   const dt = new Date(
     Number(year),
     Number(month) - 1,
@@ -432,6 +440,14 @@ function isDispatchUnavailableMessage(message: string): boolean {
     normalized.includes('no matching providers for service_type') ||
     normalized.includes('no matching providers for service type') ||
     normalized.includes('no providers available')
+  )
+}
+
+function isNonFatalSearchPreparationMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase()
+  return (
+    normalized.includes('no ranked candidates provided') ||
+    normalized.includes('no candidates available')
   )
 }
 
@@ -650,6 +666,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const currentJobIdRef = useRef<string | null>(null)
   const currentJobRef = useRef<WalkRequestRow | null>(null)
   const screenStateRef = useRef<ScreenState>('idle')
+  const previousScreenStateRef = useRef<ScreenState>('idle')
+  const previousScreenPhaseRef = useRef<ServicePhase>('idle')
+  const optimisticSearchingJobIdRef = useRef<string | null>(null)
   const walkerNameByIdRef = useRef<Map<string, string>>(new Map())
   const ratedJobIdsRef = useRef<Set<string>>(new Set())
   const fetchCurrentAndListsRef = useRef<(reason?: string) => Promise<void>>(async () => {})
@@ -840,6 +859,30 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setSearchStartTime(null)
     setSearchClockNow(Date.now())
   }, [])
+
+  const startOptimisticSearching = useCallback((jobId: string, reason: string, details?: Record<string, unknown>) => {
+    optimisticSearchingJobIdRef.current = jobId
+    console.log('[useClientFlow] entering searching UI', {
+      profileId,
+      jobId,
+      reason,
+      ...details,
+    })
+    beginSearchAttempt(jobId)
+    setScreenPhase('searching')
+    setScreenState('searching')
+  }, [beginSearchAttempt, profileId])
+
+  const clearOptimisticSearching = useCallback((reason: string, details?: Record<string, unknown>) => {
+    if (!optimisticSearchingJobIdRef.current) return
+    console.log('[useClientFlow] clearing optimistic searching hold', {
+      profileId,
+      jobId: optimisticSearchingJobIdRef.current,
+      reason,
+      ...details,
+    })
+    optimisticSearchingJobIdRef.current = null
+  }, [profileId])
 
   useEffect(() => {
     try {
@@ -1686,13 +1729,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
       : null
 
   const clearActiveState = useCallback(() => {
+    clearOptimisticSearching('clear_active_state')
     setScreenState('idle')
     setScreenPhase('idle')
     setCompletionReviewJob(null)
     setCurrentJob(null)
     setCurrentJobId(null)
     clearSearchAttempt()
-  }, [clearSearchAttempt])
+  }, [clearOptimisticSearching, clearSearchAttempt])
 
   const resetBookingInputs = useCallback((reason: string) => {
     console.log('[useClientFlow] reset booking inputs', {
@@ -1745,6 +1789,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       currentJobId,
       screenState,
       screenPhase,
+      optimisticSearchingJobId: optimisticSearchingJobIdRef.current,
     })
 
     const hasFutureScheduledQueuedJob = currentRows.some(isScheduledFutureQueue)
@@ -1752,10 +1797,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (!row) {
       setCompletionReviewJob(null)
       if (
-        screenState === 'searching' &&
-        currentJobId &&
+        (screenState === 'searching' || optimisticSearchingJobIdRef.current != null) &&
+        (currentJobId || optimisticSearchingJobIdRef.current) &&
         !isAuthoritativeRecoveryReason(reason)
       ) {
+          console.log('[useClientFlow] preserving searching UI during non-authoritative recovery gap', {
+            profileId,
+            reason,
+            currentJobId,
+            optimisticSearchingJobId: optimisticSearchingJobIdRef.current,
+          })
           return
       }
       if (hasFutureScheduledQueuedJob) {
@@ -1769,6 +1820,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           exhaustedRow.id === lastActiveJobIdRef.current
 
         if (belongsToCurrentFlow) {
+          clearOptimisticSearching('apply_current_rows_exhausted', { requestId: exhaustedRow.id, reason })
           setCurrentJob((prev) => mergeWalkRequest(prev, exhaustedRow))
           setCurrentJobId(exhaustedRow.id)
           lastActiveJobIdRef.current = exhaustedRow.id
@@ -1791,6 +1843,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     lastActiveJobIdRef.current = row.id
     if (row.walker_id) void loadWalkerName(row.walker_id)
     if (isCompletionReviewJob(row)) {
+      clearOptimisticSearching('apply_current_rows_completion_review', { requestId: row.id, reason })
       const walkerLabel = row.walker_id ? walkerNameById.get(row.walker_id) || 'Provider' : 'Provider'
       setCompletionReviewJob(
         shouldShowCompletionReview(row.id)
@@ -1810,13 +1863,30 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setCompletionReviewJob(null)
     setScreenPhase(nextPhase)
     setScreenState(mapScreenStateFromPhase(nextPhase))
+    console.log('[useClientFlow] current request row applied', {
+      profileId,
+      reason,
+      requestId: row.id,
+      status: row.status,
+      dispatch_state: row.dispatch_state,
+      smart_dispatch_state: row.smart_dispatch_state,
+      nextPhase,
+    })
     if (nextPhase === 'searching') {
       void hydrateSearchAttemptFromDispatch(row.id, 'applyCurrentRows')
+    } else {
+      clearOptimisticSearching('apply_current_rows_terminal_or_active', {
+        requestId: row.id,
+        nextPhase,
+        status: row.status,
+      })
     }
     if (row.status === 'accepted') {
+      clearOptimisticSearching('apply_current_rows_accepted', { requestId: row.id, reason })
       clearSearchAttempt()
     }
   }, [
+    clearOptimisticSearching,
     clearSearchAttempt,
     clearActiveState,
     currentJobId,
@@ -2155,6 +2225,21 @@ export function useClientFlow(profileId: string, _profileName: string) {
   ])
 
   useEffect(() => {
+    if (previousScreenStateRef.current === screenState && previousScreenPhaseRef.current === screenPhase) return
+    console.log('[useClientFlow] screen transition', {
+      profileId,
+      fromState: previousScreenStateRef.current,
+      toState: screenState,
+      fromPhase: previousScreenPhaseRef.current,
+      toPhase: screenPhase,
+      currentJobId,
+      optimisticSearchingJobId: optimisticSearchingJobIdRef.current,
+    })
+    previousScreenStateRef.current = screenState
+    previousScreenPhaseRef.current = screenPhase
+  }, [currentJobId, profileId, screenPhase, screenState])
+
+  useEffect(() => {
     logRecovery('[Recovery]', 'client cold-start hydration scheduled', { profileId })
     void fetchCurrentAndListsRef.current('cold_start')
   }, [profileId])
@@ -2279,6 +2364,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             !isScheduledFutureQueue(updated) &&
             belongsToCurrentFlow
           ) {
+            clearOptimisticSearching('realtime_exhausted', { requestId: updated.id })
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
@@ -2299,6 +2385,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
             !isSuppressed &&
             currentJobIdRef.current === updated.id
           ) {
+            console.log('[useClientFlow] realtime current request update', {
+              profileId,
+              requestId: updated.id,
+              status: updated.status,
+              dispatch_state: updated.dispatch_state,
+              smart_dispatch_state: updated.smart_dispatch_state,
+              nextPhase,
+            })
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
@@ -2306,11 +2400,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
             setScreenState(mapScreenStateFromPhase(nextPhase))
             if (nextPhase === 'searching') {
               void hydrateSearchAttemptFromDispatchRef.current(updated.id, 'realtime_update')
+            } else {
+              clearOptimisticSearching('realtime_non_searching_update', {
+                requestId: updated.id,
+                nextPhase,
+                status: updated.status,
+              })
             }
           }
 
           if (updated.status === 'accepted' && !isSuppressed && currentJobIdRef.current === updated.id) {
             const labels = getServiceLabels(updated.service_type)
+            clearOptimisticSearching('realtime_accepted', { requestId: updated.id })
             setCurrentJob((prev) => mergeWalkRequest(prev, updated))
             setCurrentJobId(updated.id)
             lastActiveJobIdRef.current = updated.id
@@ -2426,6 +2527,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
                   updated.smart_dispatch_last_error.toLowerCase().includes('no matching providers for service type')
                 )
               ) {
+                clearOptimisticSearching('realtime_cancelled_exhausted', { requestId: updated.id })
                 setCurrentJob((prev) => mergeWalkRequest(prev, updated))
                 setCurrentJobId(updated.id)
                 lastActiveJobIdRef.current = updated.id
@@ -2436,6 +2538,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 void fetchCurrentAndListsRef.current('realtime_cancelled_exhausted')
                 return
               }
+              clearOptimisticSearching('realtime_cancelled', { requestId: updated.id })
               clearActiveStateRef.current()
             }
           }
@@ -3309,6 +3412,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     try {
+      console.log('[useClientFlow] request submit start', {
+        profileId,
+        bookingTiming: effectiveBookingTiming,
+        requestServiceType: normalizedRequestServiceType,
+        scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
+        hasLocation: !!bookingLocation,
+        hasName: !!effectiveDogName,
+        hasDuration: !!effectiveDuration,
+        hasSavedCard: !!savedCard,
+        priceILS: effectivePriceILS,
+      })
       setLoading(true)
       setError(null)
       setSuccessMessage(null)
@@ -3391,6 +3505,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const jobId = response.data.jobId
+      console.log('[useClientFlow] create-payment-intent success', {
+        profileId,
+        jobId,
+        bookingTiming: effectiveBookingTiming,
+        paymentStatus: response.data.paymentStatus ?? null,
+      })
       console.log('[useClientFlow] resolved request/job id', {
         jobId,
         bookingTiming: effectiveBookingTiming,
@@ -3455,6 +3575,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setCurrentJobId(createdJob.id)
         setCurrentJob(createdJob)
         lastActiveJobIdRef.current = createdJob.id
+        startOptimisticSearching(createdJob.id, 'request_created_before_dispatch', {
+          status: createdJob.status,
+          dispatch_state: createdJob.dispatch_state,
+          smart_dispatch_state: createdJob.smart_dispatch_state,
+        })
 
         const [{ data: walkers, error: walkersError }, { data: clientProfileRow }] = await Promise.all([
           supabase
@@ -3623,28 +3748,42 @@ export function useClientFlow(profileId: string, _profileName: string) {
           rankedCandidateCount: ranked.length,
         })
 
-        const dispatchResult = await startDispatch({
-          requestId: createdJob.id,
-          rankedCandidates: ranked,
-          resetExisting: true,
-        })
+        if (ranked.length === 0) {
+          console.warn('[useClientFlow] start-dispatch nonfatal no-candidates', {
+            profileId,
+            requestId: createdJob.id,
+            requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
+            onlineWalkerCount: allOnlineWalkers.length,
+            matchingWalkerCount: matchingWalkers.length,
+            availableWalkerCount: availableWalkers.length,
+          })
+          console.log('[useClientFlow] optimistic searching hold retained', {
+            profileId,
+            requestId: createdJob.id,
+            reason: 'no_ranked_candidates_provided',
+          })
+        } else {
+          const dispatchResult = await startDispatch({
+            requestId: createdJob.id,
+            rankedCandidates: ranked,
+            resetExisting: true,
+          })
 
-        console.log('[useClientFlow] start-dispatch response', {
-          requestId: createdJob.id,
-          dispatchResult,
-        })
+          console.log('[useClientFlow] start-dispatch response', {
+            requestId: createdJob.id,
+            dispatchResult,
+          })
 
-        if (!dispatchResult.ok) {
-          throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
+          if (!dispatchResult.ok) {
+            throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
+          }
         }
 
-        beginSearchAttempt(createdJob.id)
-        setScreenState('searching')
-        setScreenPhase('searching')
         setSuccessMessage('Searching for a walker...')
       } else {
         resetBookingInputs('request_created_scheduled')
         dismissedExhaustedRequestIdRef.current = null
+        clearOptimisticSearching('request_created_scheduled')
         clearSearchAttempt()
         setScreenState('idle')
         setCurrentJob(null)
@@ -3665,12 +3804,33 @@ export function useClientFlow(profileId: string, _profileName: string) {
           error: err,
         })
       }
+      const nonFatalSearchPreparation =
+        createdJobId != null &&
+        effectiveBookingTiming === 'asap' &&
+        isNonFatalSearchPreparationMessage(message)
       const wasCancelled =
         message.toLowerCase().includes('request is not open') &&
         createdJobId != null &&
         suppressedActiveRequestIdsRef.current.has(createdJobId)
       if (wasCancelled) {
         // Suppress — user already cancelled; showing this would overwrite the success message
+      } else if (nonFatalSearchPreparation) {
+        console.warn('[useClientFlow] retaining optimistic searching after nonfatal dispatch preparation result', {
+          profileId,
+          requestId: createdJobId,
+          bookingTiming: effectiveBookingTiming,
+          message,
+        })
+        console.log('[useClientFlow] optimistic searching hold retained', {
+          profileId,
+          requestId: createdJobId,
+          reason: 'request_walk_nonfatal_dispatch_preparation',
+        })
+        setError(null)
+        setAvailabilityNotice(null)
+        setSuccessMessage('Searching for a walker...')
+        void fetchCurrentAndLists('request_walk_nonfatal_dispatch_preparation')
+        return
       } else if (isDispatchUnavailableMessage(message)) {
         setError(null)
         setAvailabilityNotice({
@@ -3681,6 +3841,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setError(message)
         setAvailabilityNotice(null)
       }
+      clearOptimisticSearching('request_walk_failed', {
+        createdJobId,
+        message,
+        bookingTiming: effectiveBookingTiming,
+      })
       setScreenState('idle')
       clearSearchAttempt()
       setCurrentJob(null)
@@ -3691,7 +3856,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [
     adjustedPriceILS,
     bookingTiming,
-    beginSearchAttempt,
+    clearOptimisticSearching,
     clearSearchAttempt,
     dogName,
     duration,
@@ -3704,6 +3869,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     stripeCustomerId,
     saveReusableServiceName,
     resetBookingInputs,
+    startOptimisticSearching,
   ])
 
   return {
