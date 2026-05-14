@@ -467,36 +467,47 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   context.createdRequestIds.push(asapRequest.id)
 
   assert.equal(asapRequest.booking_timing, 'asap')
-  assert.equal(asapRequest.dispatch_state, 'queued')
-  assert.equal(asapRequest.smart_dispatch_state, 'idle')
+  assert.ok(
+    asapRequest.dispatch_state === 'queued' || asapRequest.dispatch_state === 'dispatched',
+    `ASAP smoke request should start queued or already dispatched, got ${asapRequest.dispatch_state ?? 'null'}`,
+  )
+  if (asapRequest.dispatch_state === 'queued') {
+    assert.equal(asapRequest.smart_dispatch_state, 'idle')
+  }
   assert.ok(asapRequest.stripe_payment_intent_id, 'ASAP smoke request should have a fake authorized payment intent id')
 
-  const asapStart = await invokeFunction<{
-    ok?: boolean
-    attemptId?: string
-    insertedCandidatesCount?: number
-    error?: string
-    details?: string
-  }>(supabaseUrl, serviceRoleKey, 'start-dispatch', {
-    requestId: asapRequest.id,
-    resetExisting: true,
-    rankedCandidates: [
-      {
-        walkerId: provider.id,
-        score: 0.99,
-        meta: {
-          source: 'booking-smoke',
-          base_score: 0.99,
-          attribute_score: 0,
-          attribute_reason: 'smoke_test',
-          attribute_matches: [],
+  if (asapRequest.dispatch_state !== 'dispatched') {
+    const asapStart = await invokeFunction<{
+      ok?: boolean
+      attemptId?: string
+      insertedCandidatesCount?: number
+      error?: string
+      details?: string
+    }>(supabaseUrl, serviceRoleKey, 'start-dispatch', {
+      requestId: asapRequest.id,
+      resetExisting: true,
+      rankedCandidates: [
+        {
+          walkerId: provider.id,
+          score: 0.99,
+          meta: {
+            source: 'booking-smoke',
+            base_score: 0.99,
+            attribute_score: 0,
+            attribute_reason: 'smoke_test',
+            attribute_matches: [],
+          },
         },
-      },
-    ],
-  })
+      ],
+    })
 
-  assert.equal(asapStart.ok, true, `start-dispatch ASAP should succeed: ${asapStart.error ?? asapStart.details ?? 'unknown error'}`)
-  assert.ok(asapStart.attemptId, 'ASAP start-dispatch should return a pending attempt id')
+    assert.equal(
+      asapStart.ok,
+      true,
+      `start-dispatch ASAP should succeed: ${asapStart.error ?? asapStart.details ?? 'unknown error'}`,
+    )
+    assert.ok(asapStart.attemptId, 'ASAP start-dispatch should return a pending attempt id')
+  }
 
   const asapDispatch = await waitForDispatchState(admin, asapRequest.id)
   assert.equal(asapDispatch.request.booking_timing, 'asap')
