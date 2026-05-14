@@ -64,13 +64,16 @@ const WALKER_AMOUNT_ILS = 28
 const REQUEST_TIMEOUT_MS = 30_000
 const POLL_INTERVAL_MS = 1_000
 
+function getMissingRequiredEnvVars(): string[] {
+  return REQUIRED_ENV_VARS.filter((name) => !process.env[name])
+}
+
 function requireEnv(name: (typeof REQUIRED_ENV_VARS)[number]): string {
   const value = process.env[name]
-  if (!value) {
-    throw new Error(
-      `Missing required env var ${name}. Required for booking smoke tests: ${REQUIRED_ENV_VARS.join(', ')}`,
-    )
-  }
+  assert.ok(
+    value,
+    `Missing required env var ${name}. Required for booking smoke tests: ${REQUIRED_ENV_VARS.join(', ')}`,
+  )
   return value
 }
 
@@ -323,63 +326,48 @@ async function waitForDispatchState(
 }
 
 async function assertCronHealth(admin: SupabaseClient): Promise<void> {
-  const { data: jobs, error: jobsError } = await admin
-    .schema('cron')
-    .from('job')
-    .select('jobid, jobname, schedule, active, command')
-    .eq('jobname', 'run-scheduled-dispatch')
-
-  if (jobsError) {
-    throw new Error(`Failed to query cron.job for run-scheduled-dispatch: ${jobsError.message}`)
+  const { data, error } = await admin.rpc('get_run_scheduled_dispatch_cron_health')
+  if (error) {
+    throw new Error(`Failed to query get_run_scheduled_dispatch_cron_health(): ${error.message}`)
   }
 
-  const cronJobs = (jobs as Array<{
-    jobid: number
-    jobname: string
-    schedule: string
-    active: boolean
-    command: string
+  const healthRows = (data as Array<{
+    cron_schema_available: boolean | null
+    job_exists: boolean | null
+    job_active: boolean | null
+    job_schedule: string | null
+    recent_run_status: string | null
+    recent_return_message: string | null
+    recent_started_at: string | null
   }> | null) ?? []
 
-  const activeJob = cronJobs.find((job) => job.active)
-  assert.ok(activeJob, 'Expected an active cron.job entry for run-scheduled-dispatch')
-  assert.ok(
-    !activeJob.command.includes('your-project.supabase.co'),
-    'run-scheduled-dispatch cron command still points to placeholder project URL',
+  assert.ok(healthRows.length > 0, 'Expected get_run_scheduled_dispatch_cron_health() to return one row')
+
+  const health = healthRows[0]
+  assert.equal(
+    health.cron_schema_available,
+    true,
+    'Expected cron schema/extension to be available for run-scheduled-dispatch health checks',
+  )
+  assert.equal(
+    health.job_exists,
+    true,
+    'Expected a configured cron job for run-scheduled-dispatch',
+  )
+  assert.equal(
+    health.job_active,
+    true,
+    'Expected the run-scheduled-dispatch cron job to be active',
   )
 
-  const { data: runDetails, error: runDetailsError } = await admin
-    .schema('cron')
-    .from('job_run_details')
-    .select('jobid, status, return_message, start_time, end_time')
-    .eq('jobid', activeJob.jobid)
-    .order('start_time', { ascending: false })
-    .limit(5)
-
-  if (runDetailsError) {
-    throw new Error(`Failed to query cron.job_run_details for run-scheduled-dispatch: ${runDetailsError.message}`)
-  }
-
-  const recentRuns = (runDetails as Array<{
-    jobid: number
-    status: string | null
-    return_message: string | null
-    start_time: string | null
-    end_time: string | null
-  }> | null) ?? []
-
-  assert.ok(recentRuns.length > 0, 'Expected recent cron.job_run_details rows for run-scheduled-dispatch')
-
-  const latestRun = recentRuns[0]
-  const returnMessage = latestRun.return_message ?? ''
+  const returnMessage = health.recent_return_message ?? ''
   const looksMisconfigured =
-    /current_setting|app\.settings|null\/functions\/v1\/run-scheduled-dispatch/i.test(returnMessage) ||
-    (/0 rows/i.test(returnMessage) && activeJob.command.includes("current_setting('app.settings.supabase_url', true)"))
+    /current_setting|app\.settings|null\/functions\/v1\/run-scheduled-dispatch|your-project\.supabase\.co/i.test(returnMessage)
 
   assert.equal(
-    latestRun.status,
+    health.recent_run_status,
     'succeeded',
-    `run-scheduled-dispatch cron latest run is not succeeded: ${latestRun.status ?? 'unknown'} / ${returnMessage}`,
+    `run-scheduled-dispatch cron latest run is not succeeded: ${health.recent_run_status ?? 'unknown'} / ${returnMessage}`,
   )
   assert.ok(
     !looksMisconfigured,
@@ -413,6 +401,12 @@ async function cleanup(context: SmokeContext): Promise<void> {
 }
 
 test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled dispatch', { timeout: 180_000 }, async (t) => {
+  const missingEnvVars = getMissingRequiredEnvVars()
+  if (missingEnvVars.length > 0) {
+    t.skip(`Booking smoke env not configured: ${missingEnvVars.join(', ')}`)
+    return
+  }
+
   const { admin, supabaseUrl, serviceRoleKey } = buildAdminClient()
   const runId = `smoke-${Date.now()}`
 
