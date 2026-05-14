@@ -303,11 +303,88 @@ serve(async (req) => {
       return jsonResponse(409, { ok: false, error: 'request already assigned' }, corsHeaders)
     }
 
-    if (!resetExisting && requestRow.smart_dispatch_state === 'dispatching') {
+    let effectiveDispatchState = requestRow.dispatch_state
+    let effectiveSmartDispatchState = requestRow.smart_dispatch_state
+
+    if (requestRow.dispatch_state === 'dispatched' || requestRow.smart_dispatch_state === 'dispatching') {
+      const [
+        { count: existingCandidateCount, error: existingCandidateCountError },
+        { count: existingPendingAttemptCount, error: existingPendingAttemptCountError },
+      ] = await Promise.all([
+        supabase
+          .from('dispatch_candidates')
+          .select('id', { count: 'exact', head: true })
+          .eq('request_id', requestId),
+        supabase
+          .from('dispatch_attempts')
+          .select('id', { count: 'exact', head: true })
+          .eq('request_id', requestId)
+          .eq('status', 'pending')
+          .gt('expires_at', new Date().toISOString()),
+      ])
+
+      console.log('[start-dispatch] existing dispatch state check', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        dispatchState: requestRow.dispatch_state ?? null,
+        smartDispatchState: requestRow.smart_dispatch_state ?? null,
+        existingCandidateCount,
+        existingCandidateCountError: existingCandidateCountError?.message ?? null,
+        existingPendingAttemptCount,
+        existingPendingAttemptCountError: existingPendingAttemptCountError?.message ?? null,
+      })
+
+      if (!existingCandidateCountError && !existingPendingAttemptCountError) {
+        const hasLiveDispatchRows = (existingCandidateCount ?? 0) > 0 || (existingPendingAttemptCount ?? 0) > 0
+        if (!hasLiveDispatchRows) {
+          console.warn('[start-dispatch] repairing stale dispatched request state without live rows', {
+            version: START_DISPATCH_VERSION,
+            requestId,
+            dispatchState: requestRow.dispatch_state ?? null,
+            smartDispatchState: requestRow.smart_dispatch_state ?? null,
+          })
+
+          const { error: staleRepairError } = await supabase
+            .from('walk_requests')
+            .update({
+              dispatch_state: 'queued',
+              smart_dispatch_state: 'idle',
+              smart_dispatch_last_error: 'stale dispatch state repaired before restart',
+              smart_dispatch_expires_at: null,
+            })
+            .eq('id', requestId)
+            .eq('status', 'open')
+            .is('walker_id', null)
+
+          if (staleRepairError) {
+            console.error('[start-dispatch] failed repairing stale dispatched request state', {
+              version: START_DISPATCH_VERSION,
+              requestId,
+              error: staleRepairError.message,
+            })
+            return jsonResponse(
+              500,
+              {
+                ok: false,
+                error: 'failed to repair stale dispatch state',
+                details: staleRepairError.message,
+              },
+              corsHeaders,
+            )
+          }
+
+          effectiveDispatchState = 'queued'
+          effectiveSmartDispatchState = 'idle'
+        }
+      }
+    }
+
+    if (!resetExisting && effectiveSmartDispatchState === 'dispatching') {
       console.warn('[start-dispatch] dispatch already active', {
         version: START_DISPATCH_VERSION,
         requestId,
-        smartDispatchState: requestRow.smart_dispatch_state,
+        smartDispatchState: effectiveSmartDispatchState,
+        dispatchState: effectiveDispatchState,
       })
       return jsonResponse(409, { ok: false, error: 'dispatch already active' }, corsHeaders)
     }
@@ -518,10 +595,11 @@ serve(async (req) => {
     console.log('[start-dispatch] candidates after service_type filtering', {
       version: START_DISPATCH_VERSION,
       requestId,
+      action: 'matching_started',
       requestServiceType: requestRow.service_type ?? null,
       normalizedProviderServiceType: requestProviderServiceType,
       candidateCountBeforeServiceTypeFilter: rankedCandidates.length,
-      candidateCountAfterServiceTypeFilter: affinityRankedCandidates.length,
+      providersFoundCount: affinityRankedCandidates.length,
     })
 
     if (affinityRankedCandidates.length === 0) {
@@ -846,7 +924,65 @@ serve(async (req) => {
       )
     }
 
-    console.log('[start-dispatch] initializing request dispatch state', {
+    const { count: persistedCandidateCount, error: persistedCandidateCountError } = await supabase
+      .from('dispatch_candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('request_id', requestId)
+
+    console.log('[start-dispatch] candidate persistence verification', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      providersFoundCount: rerankedCandidates.length,
+      candidatesInsertedCount: candidateRows.length,
+      persistedCandidateCount,
+      persistedCandidateCountError: persistedCandidateCountError?.message ?? null,
+    })
+
+    if (persistedCandidateCountError || !persistedCandidateCount) {
+      const message =
+        persistedCandidateCountError?.message ??
+        'dispatch candidates missing immediately after insert'
+
+      console.error('[start-dispatch] candidate persistence verification failed', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        message,
+      })
+
+      const { error: resetStateError } = await supabase
+        .from('walk_requests')
+        .update({
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'idle',
+          smart_dispatch_last_error: message,
+          smart_dispatch_expires_at: null,
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .is('walker_id', null)
+
+      if (resetStateError) {
+        console.error('[start-dispatch] failed to reset request after candidate persistence failure', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: resetStateError.message,
+        })
+      }
+
+      return jsonResponse(
+        409,
+        {
+          ok: false,
+          error: message,
+          requestId,
+          providersFoundCount: rerankedCandidates.length,
+          insertedCandidatesCount: candidateRows.length,
+        },
+        corsHeaders,
+      )
+    }
+
+    console.log('[start-dispatch] initializing request dispatch metadata', {
       version: START_DISPATCH_VERSION,
       requestId,
     })
@@ -854,7 +990,6 @@ serve(async (req) => {
     const { error: initRequestError } = await supabase
       .from('walk_requests')
       .update({
-        smart_dispatch_state: 'dispatching',
         smart_dispatch_cursor: 0,
         smart_dispatch_started_at: new Date().toISOString(),
         smart_dispatch_expires_at: null,
@@ -916,7 +1051,9 @@ serve(async (req) => {
       p_attempt_id: null,
       p_event_type: 'dispatch_started',
       p_payload: {
-        candidateCount: rankedCandidates.length,
+        providersFoundCount: rerankedCandidates.length,
+        candidateCount: rerankedCandidates.length,
+        candidatesInsertedCount: persistedCandidateCount,
         timeoutSeconds,
         version: START_DISPATCH_VERSION,
       },
@@ -1091,6 +1228,7 @@ serve(async (req) => {
     const [
       { count: candidateCountAfterAdvance, error: candidateCheckError },
       { data: attemptAfterAdvance, error: attemptCheckError },
+      { count: pendingAttemptCountAfterAdvance, error: pendingAttemptCountError },
     ] = await Promise.all([
       supabase
         .from('dispatch_candidates')
@@ -1104,22 +1242,39 @@ serve(async (req) => {
         .eq('status', 'pending')
         .gt('expires_at', new Date().toISOString())
         .maybeSingle(),
+      supabase
+        .from('dispatch_attempts')
+        .select('id', { count: 'exact', head: true })
+        .eq('request_id', requestId)
+        .eq('status', 'pending')
+        .gt('expires_at', new Date().toISOString()),
     ])
 
     console.log('[start-dispatch] live row verification result', {
       version: START_DISPATCH_VERSION,
       requestId,
       attemptId,
+      providersFoundCount: rerankedCandidates.length,
+      candidatesInsertedCount: persistedCandidateCount,
       candidateCountAfterAdvance,
       candidateCheckError: candidateCheckError?.message ?? null,
       attemptAfterAdvance,
       attemptCheckError: attemptCheckError?.message ?? null,
+      pendingAttemptCountAfterAdvance,
+      pendingAttemptCountError: pendingAttemptCountError?.message ?? null,
     })
 
-    if (candidateCheckError || attemptCheckError || !candidateCountAfterAdvance || !attemptAfterAdvance) {
+    if (
+      candidateCheckError ||
+      attemptCheckError ||
+      pendingAttemptCountError ||
+      !candidateCountAfterAdvance ||
+      !attemptAfterAdvance
+    ) {
       const message =
         candidateCheckError?.message ??
         attemptCheckError?.message ??
+        pendingAttemptCountError?.message ??
         'dispatch rows missing after opening dispatch attempt'
 
       console.error('[start-dispatch] live row verification failed before markDispatched', {
@@ -1163,12 +1318,20 @@ serve(async (req) => {
       )
     }
 
-    console.warn('[start-dispatch] MARKING REQUEST DISPATCHED', {
+    console.warn('[start-dispatch] final dispatch transition', {
       version: START_DISPATCH_VERSION,
       requestId,
+      action: 'dispatch_transition',
       attemptId,
+      providersFoundCount: rerankedCandidates.length,
+      candidatesInsertedCount: persistedCandidateCount,
       candidateCountAfterAdvance,
+      attemptsInsertedCount: pendingAttemptCountAfterAdvance,
       bookingTiming: requestRow.booking_timing ?? null,
+      nextRequestState: {
+        dispatch_state: 'dispatched',
+        smart_dispatch_state: 'dispatching',
+      },
     })
 
     const { error: markDispatchedError } = await supabase
@@ -1198,6 +1361,29 @@ serve(async (req) => {
         },
         corsHeaders,
       )
+    }
+
+    const { error: finalTransitionEventError } = await supabase.rpc('log_dispatch_event', {
+      p_request_id: requestId,
+      p_attempt_id: attemptId,
+      p_event_type: 'dispatch_transitioned',
+      p_payload: {
+        providersFoundCount: rerankedCandidates.length,
+        candidatesInsertedCount: persistedCandidateCount,
+        attemptsInsertedCount: pendingAttemptCountAfterAdvance,
+        dispatchState: 'dispatched',
+        smartDispatchState: 'dispatching',
+        version: START_DISPATCH_VERSION,
+      },
+    })
+
+    if (finalTransitionEventError) {
+      console.error('[start-dispatch] failed logging dispatch_transitioned', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        attemptId,
+        error: finalTransitionEventError.message,
+      })
     }
 
     const { data: liveAttemptAfterMark, error: liveAttemptAfterMarkError } = await supabase

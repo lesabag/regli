@@ -584,7 +584,11 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   const asapDispatch = await waitForDispatchState(admin, asapRequest.id, provider.id)
   assert.equal(asapDispatch.request.booking_timing, 'asap')
   assert.equal(asapDispatch.request.status, 'open')
-  assert.equal(asapDispatch.request.dispatch_state, 'dispatching')
+  assert.equal(
+    asapDispatch.request.dispatch_state,
+    'dispatched',
+    'ASAP request should only become dispatched once live dispatch rows exist',
+  )
   assert.equal(asapDispatch.request.smart_dispatch_state, 'dispatching')
   assert.ok(asapDispatch.candidates.length > 0, 'ASAP dispatch should create dispatch_candidates rows')
   assert.ok(asapDispatch.attempts.length > 0, 'ASAP dispatch should create dispatch_attempts rows')
