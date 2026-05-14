@@ -30,3 +30,16 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Run booking dispatch smoke tests
+        if: ${{ secrets.SUPABASE_URL != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.SUPABASE_ANON_KEY != '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          STRIPE_TEST_PAYMENT_METHOD: ${{ secrets.STRIPE_TEST_PAYMENT_METHOD }}
+        run: npm run test:booking-smoke
+
+      - name: Booking smoke env notice
+        if: ${{ !(secrets.SUPABASE_URL != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' && secrets.SUPABASE_ANON_KEY != '') }}
+        run: echo "Skipping booking smoke tests. Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_ANON_KEY GitHub secrets to enable them."
