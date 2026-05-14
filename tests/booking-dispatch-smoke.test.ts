@@ -24,6 +24,11 @@ type WalkRequestRow = {
   status: string | null
   dispatch_state: string | null
   smart_dispatch_state: string | null
+  smart_dispatch_cursor?: number | null
+  smart_dispatch_started_at?: string | null
+  smart_dispatch_completed_at?: string | null
+  smart_dispatch_expires_at?: string | null
+  smart_assigned_attempt_id?: string | null
   payment_status: string | null
   stripe_payment_intent_id: string | null
   service_type: string | null
@@ -208,6 +213,11 @@ async function createAuthorizedRequest(
     status: 'open',
     dispatch_state: 'queued',
     smart_dispatch_state: 'idle',
+    smart_dispatch_cursor: 0,
+    smart_dispatch_started_at: null,
+    smart_dispatch_completed_at: null,
+    smart_dispatch_expires_at: null,
+    smart_assigned_attempt_id: null,
     smart_dispatch_last_error: null,
     payment_status: 'authorized',
     payment_authorized_at: nowIso,
@@ -232,14 +242,59 @@ async function createAuthorizedRequest(
   const { data, error } = await admin
     .from('walk_requests')
     .insert(insertRow)
-    .select('id, client_id, booking_timing, scheduled_for, status, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id, service_type')
+    .select(
+      'id, client_id, booking_timing, scheduled_for, status, dispatch_state, smart_dispatch_state, smart_dispatch_cursor, smart_dispatch_started_at, smart_dispatch_completed_at, smart_dispatch_expires_at, smart_assigned_attempt_id, payment_status, stripe_payment_intent_id, service_type',
+    )
     .single()
 
   if (error || !data) {
     throw new Error(`Failed to create smoke walk_request (${input.bookingTiming}): ${error?.message ?? 'unknown error'}`)
   }
 
-  return data as WalkRequestRow
+  const insertedRow = data as WalkRequestRow
+
+  console.log('[booking-dispatch-smoke] inserted smoke request', {
+    bookingTiming: input.bookingTiming,
+    requestId: insertedRow.id,
+    insertedState: {
+      status: insertedRow.status ?? null,
+      dispatch_state: insertedRow.dispatch_state ?? null,
+      smart_dispatch_state: insertedRow.smart_dispatch_state ?? null,
+      smart_dispatch_cursor: insertedRow.smart_dispatch_cursor ?? null,
+      smart_dispatch_started_at: insertedRow.smart_dispatch_started_at ?? null,
+      smart_dispatch_completed_at: insertedRow.smart_dispatch_completed_at ?? null,
+      smart_dispatch_expires_at: insertedRow.smart_dispatch_expires_at ?? null,
+      smart_assigned_attempt_id: insertedRow.smart_assigned_attempt_id ?? null,
+      payment_status: insertedRow.payment_status ?? null,
+      scheduled_for: insertedRow.scheduled_for ?? null,
+    },
+  })
+
+  const invalidPreDispatchState =
+    insertedRow.dispatch_state !== 'queued' ||
+    insertedRow.smart_dispatch_state !== 'idle' ||
+    (insertedRow.smart_dispatch_cursor ?? 0) !== 0 ||
+    insertedRow.smart_dispatch_started_at != null ||
+    insertedRow.smart_dispatch_completed_at != null ||
+    insertedRow.smart_dispatch_expires_at != null ||
+    insertedRow.smart_assigned_attempt_id != null
+
+  if (invalidPreDispatchState) {
+    throw new Error(
+      `Smoke request fixture/default/trigger is wrong for ${input.bookingTiming}: expected queued/idle pre-dispatch state, got ${JSON.stringify({
+        requestId: insertedRow.id,
+        dispatch_state: insertedRow.dispatch_state ?? null,
+        smart_dispatch_state: insertedRow.smart_dispatch_state ?? null,
+        smart_dispatch_cursor: insertedRow.smart_dispatch_cursor ?? null,
+        smart_dispatch_started_at: insertedRow.smart_dispatch_started_at ?? null,
+        smart_dispatch_completed_at: insertedRow.smart_dispatch_completed_at ?? null,
+        smart_dispatch_expires_at: insertedRow.smart_dispatch_expires_at ?? null,
+        smart_assigned_attempt_id: insertedRow.smart_assigned_attempt_id ?? null,
+      })}`,
+    )
+  }
+
+  return insertedRow
 }
 
 async function invokeFunction<T>(
