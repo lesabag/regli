@@ -47,6 +47,17 @@ type DispatchCandidateRow = {
   meta: Record<string, unknown> | null
 }
 
+type DispatchDebugSnapshot = {
+  request: Record<string, unknown> | null
+  providerProfile: Record<string, unknown> | null
+  providerAvailability: Record<string, unknown>[]
+  dispatchCandidates: Record<string, unknown>[]
+  dispatchAttempts: Record<string, unknown>[]
+  dispatchEvents: Record<string, unknown>[]
+  matchingLogs: Record<string, unknown>[] | null
+  matchingLogsError: string | null
+}
+
 const REQUIRED_ENV_VARS = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
@@ -99,27 +110,6 @@ function headersWithServiceRole(serviceRoleKey: string): HeadersInit {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function businessDayOfWeek(at: Date): number {
-  const weekday = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jerusalem',
-    weekday: 'short',
-  }).format(at)
-
-  const map: Record<string, number> = {
-    Sun: 0,
-    Mon: 1,
-    Tue: 2,
-    Wed: 3,
-    Thu: 4,
-    Fri: 5,
-    Sat: 6,
-  }
-
-  const value = map[weekday]
-  assert.notEqual(value, undefined, `Unsupported weekday ${weekday}`)
-  return value
 }
 
 async function createTestUser(
@@ -175,16 +165,17 @@ async function upsertProfile(
   }
 }
 
-async function seedProviderAvailability(admin: SupabaseClient, providerId: string, at: Date): Promise<void> {
-  const dayOfWeek = businessDayOfWeek(at)
-  const { error } = await admin.from('provider_availability').upsert({
+async function seedProviderAvailability(admin: SupabaseClient, providerId: string): Promise<void> {
+  const rows = Array.from({ length: 7 }, (_, dayOfWeek) => ({
     provider_id: providerId,
     service_type: TEST_SERVICE_TYPE,
     day_of_week: dayOfWeek,
     start_time: '00:00:00',
     end_time: '23:59:00',
     is_active: true,
-  }, {
+  }))
+
+  const { error } = await admin.from('provider_availability').upsert(rows, {
     onConflict: 'provider_id,service_type,day_of_week',
   })
 
@@ -210,6 +201,9 @@ async function createAuthorizedRequest(
     service_type: TEST_SERVICE_TYPE,
     dog_name: input.dogName,
     location: `Smoke address ${input.bookingTiming}`,
+    address: `Smoke address ${input.bookingTiming}`,
+    client_lat: TEST_LAT,
+    client_lng: TEST_LNG,
     notes: `[SMOKE_TEST:${input.bookingTiming}] booking-dispatch smoke`,
     status: 'open',
     dispatch_state: 'queued',
@@ -267,9 +261,71 @@ async function invokeFunction<T>(
   return json as T
 }
 
+async function fetchDispatchDebugSnapshot(
+  admin: SupabaseClient,
+  requestId: string,
+  providerId: string,
+): Promise<DispatchDebugSnapshot> {
+  const [
+    requestResult,
+    providerResult,
+    availabilityResult,
+    candidatesResult,
+    attemptsResult,
+    eventsResult,
+    matchingLogsResult,
+  ] = await Promise.all([
+    admin.from('walk_requests').select('*').eq('id', requestId).maybeSingle(),
+    admin
+      .from('profiles')
+      .select('id, role, is_online, service_type, service_types, last_lat, last_lng, service_attributes')
+      .eq('id', providerId)
+      .maybeSingle(),
+    admin
+      .from('provider_availability')
+      .select('provider_id, service_type, day_of_week, start_time, end_time, is_active')
+      .eq('provider_id', providerId)
+      .order('day_of_week', { ascending: true }),
+    admin
+      .from('dispatch_candidates')
+      .select('id, request_id, walker_id, score, rank, meta')
+      .eq('request_id', requestId)
+      .order('rank', { ascending: true }),
+    admin
+      .from('dispatch_attempts')
+      .select('id, request_id, walker_id, status, attempt_no, expires_at')
+      .eq('request_id', requestId)
+      .order('attempt_no', { ascending: true }),
+    admin
+      .from('dispatch_events')
+      .select('id, request_id, attempt_id, event_type, payload, created_at')
+      .eq('request_id', requestId)
+      .order('created_at', { ascending: true }),
+    admin
+      .from('matching_logs')
+      .select('*')
+      .eq('request_id', requestId)
+      .order('created_at', { ascending: true }),
+  ])
+
+  return {
+    request: (requestResult.data as Record<string, unknown> | null) ?? null,
+    providerProfile: (providerResult.data as Record<string, unknown> | null) ?? null,
+    providerAvailability: ((availabilityResult.data as Record<string, unknown>[] | null) ?? []),
+    dispatchCandidates: ((candidatesResult.data as Record<string, unknown>[] | null) ?? []),
+    dispatchAttempts: ((attemptsResult.data as Record<string, unknown>[] | null) ?? []),
+    dispatchEvents: ((eventsResult.data as Record<string, unknown>[] | null) ?? []),
+    matchingLogs: matchingLogsResult.error
+      ? null
+      : ((matchingLogsResult.data as Record<string, unknown>[] | null) ?? []),
+    matchingLogsError: matchingLogsResult.error?.message ?? null,
+  }
+}
+
 async function waitForDispatchState(
   admin: SupabaseClient,
   requestId: string,
+  providerId: string,
 ): Promise<{
   request: WalkRequestRow
   attempts: DispatchAttemptRow[]
@@ -322,7 +378,15 @@ async function waitForDispatchState(
     await delay(POLL_INTERVAL_MS)
   }
 
-  throw new Error(`Timed out waiting for dispatch rows for request ${requestId}`)
+  const debugSnapshot = await fetchDispatchDebugSnapshot(admin, requestId, providerId)
+  console.error('[booking-dispatch-smoke] dispatch rows missing after timeout', {
+    requestId,
+    providerId,
+    debugSnapshot,
+  })
+  throw new Error(
+    `Timed out waiting for dispatch rows for request ${requestId}. Debug snapshot: ${JSON.stringify(debugSnapshot)}`,
+  )
 }
 
 async function assertCronHealth(admin: SupabaseClient): Promise<void> {
@@ -456,8 +520,16 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
     role: 'client',
   })
 
-  const now = new Date()
-  await seedProviderAvailability(admin, provider.id, now)
+  await seedProviderAvailability(admin, provider.id)
+
+  const providerFixture = await fetchDispatchDebugSnapshot(admin, '00000000-0000-0000-0000-000000000000', provider.id)
+  assert.equal(providerFixture.providerProfile?.role, 'walker')
+  assert.equal(providerFixture.providerProfile?.is_online, true)
+  assert.equal(providerFixture.providerProfile?.service_type, TEST_SERVICE_TYPE)
+  assert.ok(
+    Array.isArray(providerFixture.providerAvailability) && providerFixture.providerAvailability.length >= 7,
+    'Expected smoke provider availability rows for all weekdays',
+  )
 
   const asapRequest = await createAuthorizedRequest(admin, {
     clientId: asapClient.id,
@@ -504,12 +576,12 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
     assert.equal(
       asapStart.ok,
       true,
-      `start-dispatch ASAP should succeed: ${asapStart.error ?? asapStart.details ?? 'unknown error'}`,
+      `start-dispatch ASAP should succeed: ${JSON.stringify(asapStart)}`,
     )
     assert.ok(asapStart.attemptId, 'ASAP start-dispatch should return a pending attempt id')
   }
 
-  const asapDispatch = await waitForDispatchState(admin, asapRequest.id)
+  const asapDispatch = await waitForDispatchState(admin, asapRequest.id, provider.id)
   assert.equal(asapDispatch.request.booking_timing, 'asap')
   assert.equal(asapDispatch.request.status, 'open')
   assert.equal(asapDispatch.request.dispatch_state, 'dispatching')
@@ -521,7 +593,6 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   assert.equal(asapDispatch.attempts[0]?.status, 'pending')
 
   const scheduledForDate = new Date(Date.now() + 5 * 60 * 1000)
-  await seedProviderAvailability(admin, provider.id, scheduledForDate)
   const scheduledRequest = await createAuthorizedRequest(admin, {
     clientId: scheduledClient.id,
     dogName: `Smoke Scheduled ${runId}`,
@@ -554,11 +625,11 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
     assert.equal(
       scheduledRun.ok,
       true,
-      `run-scheduled-dispatch should succeed: ${scheduledRun.error ?? scheduledRun.details ?? 'unknown error'}`,
+      `run-scheduled-dispatch should succeed: ${JSON.stringify(scheduledRun)}`,
     )
   }
 
-  const scheduledDispatch = await waitForDispatchState(admin, scheduledRequest.id)
+  const scheduledDispatch = await waitForDispatchState(admin, scheduledRequest.id, provider.id)
   assert.equal(scheduledDispatch.request.booking_timing, 'scheduled')
   assert.ok(scheduledDispatch.request.scheduled_for, 'Scheduled request should still have scheduled_for after dispatch')
   assert.ok(scheduledDispatch.candidates.length > 0, 'Scheduled dispatch should create dispatch_candidates rows')
