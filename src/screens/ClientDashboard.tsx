@@ -3316,14 +3316,20 @@ export default function ClientDashboard({
               <button
                 type="button"
                 data-control="calendar-button"
+                disabled={!hasFutureOrders && !canSubmitBooking}
                 onClick={() => {
+                  if (!hasFutureOrders && !canSubmitBooking) {
+                    console.log('[ClientDashboard] schedule entry CTA blocked by shared validation', {
+                      canSubmitBooking,
+                      bookingBlockedReasons,
+                      requestServiceType: effectiveRequestServiceType,
+                      currentBookingPriceILS,
+                    })
+                    return
+                  }
                   markFirstInteractionHandler('client-dashboard:calendar-button')
                   if (hasFutureOrders) {
                     openFutureOrdersMenu()
-                  } else if (!isBabySitterMode && dogWalkerDurationValue <= 0) {
-                    setGuidedBookingField('duration')
-                    markFirstInteractionVisual('client-dashboard:calendar-button')
-                    void hapticLight()
                   } else {
                     openScheduleSheet()
                   }
@@ -3331,6 +3337,7 @@ export default function ClientDashboard({
                 style={{
                   ...stickyCalendarButtonStyle,
                   ...(flow.bookingTiming === 'scheduled' || hasFutureOrders ? stickyCalendarButtonActiveStyle : null),
+                  ...(!hasFutureOrders && !canSubmitBooking ? stickyCalendarButtonDisabledStyle : null),
                   position: 'relative' as const,
                 }}
                 aria-label={hasFutureOrders ? t('menu.openFutureOrders') : t('booking.schedule')}
@@ -5393,6 +5400,12 @@ const stickyCalendarButtonActiveStyle: React.CSSProperties = {
   borderColor: '#BFDBFE',
   background: '#EFF6FF',
   color: '#1D4ED8',
+}
+
+const stickyCalendarButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.42,
+  cursor: 'not-allowed',
+  boxShadow: 'none',
 }
 
 const stickyCalendarDotStyle: React.CSSProperties = {
