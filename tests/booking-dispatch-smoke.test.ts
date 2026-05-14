@@ -202,8 +202,6 @@ async function createAuthorizedRequest(
     dog_name: input.dogName,
     location: `Smoke address ${input.bookingTiming}`,
     address: `Smoke address ${input.bookingTiming}`,
-    client_lat: TEST_LAT,
-    client_lng: TEST_LNG,
     notes: `[SMOKE_TEST:${input.bookingTiming}] booking-dispatch smoke`,
     status: 'open',
     dispatch_state: 'queued',
