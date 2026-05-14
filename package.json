@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
+    "test:booking-smoke": "node --test --experimental-strip-types tests/booking-dispatch-smoke.test.ts",
     "lint": "eslint .",
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync ios",
