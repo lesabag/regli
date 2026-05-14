@@ -211,6 +211,8 @@ async function createAuthorizedRequest(
     user_lng: TEST_LNG,
     notes: `[SMOKE_TEST:${input.bookingTiming}] booking-dispatch smoke`,
     status: 'open',
+    walker_id: null,
+    selected_walker_id: null,
     dispatch_state: 'queued',
     smart_dispatch_state: 'idle',
     smart_dispatch_cursor: 0,
@@ -256,6 +258,7 @@ async function createAuthorizedRequest(
   console.log('[booking-dispatch-smoke] inserted smoke request', {
     bookingTiming: input.bookingTiming,
     requestId: insertedRow.id,
+    insertPayload: insertRow,
     insertedState: {
       status: insertedRow.status ?? null,
       dispatch_state: insertedRow.dispatch_state ?? null,
@@ -282,6 +285,7 @@ async function createAuthorizedRequest(
   if (invalidPreDispatchState) {
     throw new Error(
       `Smoke request fixture/default/trigger is wrong for ${input.bookingTiming}: expected queued/idle pre-dispatch state, got ${JSON.stringify({
+        insertPayload: insertRow,
         requestId: insertedRow.id,
         dispatch_state: insertedRow.dispatch_state ?? null,
         smart_dispatch_state: insertedRow.smart_dispatch_state ?? null,
