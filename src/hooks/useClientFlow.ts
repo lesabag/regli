@@ -591,6 +591,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [availabilityNotice, setAvailabilityNotice] = useState<AvailabilityNotice>(null)
+  const [bookingComposerResetKey, setBookingComposerResetKey] = useState(0)
 
   const [gpsQualityBase, setGpsQualityBase] = useState<GpsQuality>('live')
   const [completionJob, setCompletionJob] = useState<CompletionJob>(null)
@@ -1693,10 +1694,22 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearSearchAttempt()
   }, [clearSearchAttempt])
 
-  const resetBookingComposerAfterCompletion = useCallback(() => {
+  const resetBookingInputs = useCallback((reason: string) => {
+    console.log('[useClientFlow] reset booking inputs', {
+      profileId,
+      reason,
+      bookingTimingBefore: bookingTiming,
+      scheduledForBefore: scheduledFor,
+      durationBefore: duration,
+    })
     setBookingTiming('asap')
     setScheduledFor(getNowPlus15LocalInput())
-    _setDuration(null)
+    _setDuration('20min')
+    setBookingComposerResetKey((current) => current + 1)
+  }, [bookingTiming, duration, profileId, scheduledFor])
+
+  const resetBookingComposerAfterCompletion = useCallback(() => {
+    resetBookingInputs('completion')
     setLoading(false)
     setError(null)
     setSuccessMessage(null)
@@ -1707,7 +1720,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setCompletionRatingSubmitting(false)
     setTipSubmitting(false)
     clearActiveState()
-  }, [clearActiveState])
+  }, [clearActiveState, resetBookingInputs])
 
   const applyCurrentRows = useCallback((currentRows: WalkRequestRow[], reason = 'unknown') => {
     const row = getNewestActiveRequest(
@@ -2928,6 +2941,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (!currentJobId) {
       staleActiveCutoffRef.current = Date.now()
       clearActiveState()
+      resetBookingInputs('cancel_search_no_job')
       return
     }
 
@@ -2952,9 +2966,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
+    console.log('[useClientFlow] cancelSearch cleanup complete', {
+      profileId,
+      cancelledJobId,
+      bookingTiming,
+      scheduledFor,
+    })
+    resetBookingInputs('cancel_search_success')
     setSuccessMessage('Request cancelled')
     void fetchCurrentAndLists()
-  }, [currentJobId, profileId, fetchCurrentAndLists, clearActiveState])
+  }, [bookingTiming, clearActiveState, currentJobId, fetchCurrentAndLists, profileId, resetBookingInputs, scheduledFor])
 
   const cancelScheduledJob = useCallback(async (id: string) => {
     const { error: cancelError } = await supabase
@@ -2969,9 +2990,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
+    console.log('[useClientFlow] cancelScheduledJob cleanup complete', {
+      profileId,
+      cancelledJobId: id,
+      bookingTiming,
+      scheduledFor,
+    })
+    resetBookingInputs('cancel_scheduled_success')
     setSuccessMessage('Scheduled walk cancelled')
     void fetchCurrentAndLists()
-  }, [profileId, fetchCurrentAndLists])
+  }, [bookingTiming, fetchCurrentAndLists, profileId, resetBookingInputs, scheduledFor])
 
   const requestCardSetup = useCallback(async () => {
     setCardLoading(true)
@@ -3225,6 +3253,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setError('Choose duration')
       return
     }
+    if (!Number.isFinite(effectivePriceILS) || effectivePriceILS <= 0) {
+      setError('Choose price')
+      return
+    }
     if (!savedCard || !stripeCustomerId) {
       setError('Add a valid payment method before booking')
       return
@@ -3303,6 +3335,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
         scheduledForBeingSent:
           effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor ?? null : null,
         timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        currentCanSubmitInputs: {
+          hasName: !!effectiveDogName,
+          hasLocation: !!bookingLocation,
+          hasDuration: !!effectiveDuration,
+          durationMinutes: effectiveDurationMinutes,
+          priceILS: effectivePriceILS,
+          hasSavedCard: !!savedCard,
+        },
       })
 
       const response = await invokeEdgeFunction<{
@@ -3410,6 +3450,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       const createdJob = job as WalkRequestRow
 
       if (shouldSearchNow) {
+        resetBookingInputs('request_created_asap')
         dismissedExhaustedRequestIdRef.current = null
         setCurrentJobId(createdJob.id)
         setCurrentJob(createdJob)
@@ -3601,17 +3642,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
         setScreenState('searching')
         setScreenPhase('searching')
         setSuccessMessage('Searching for a walker...')
-        _setDuration(null)
       } else {
+        resetBookingInputs('request_created_scheduled')
         dismissedExhaustedRequestIdRef.current = null
-        setBookingTiming('asap')
-        setScheduledFor(null)
         clearSearchAttempt()
         setScreenState('idle')
         setCurrentJob(null)
         setCurrentJobId(null)
         setSuccessMessage('Scheduled walk saved')
-        _setDuration(null)
       }
 
       void fetchCurrentAndLists()
@@ -3665,6 +3703,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     scheduledFor,
     stripeCustomerId,
     saveReusableServiceName,
+    resetBookingInputs,
   ])
 
   return {
@@ -3698,6 +3737,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setScheduledFor,
     scheduledMinInput,
     scheduledSummary,
+    bookingComposerResetKey,
 
     loading,
     error,

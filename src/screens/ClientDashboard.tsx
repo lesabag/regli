@@ -959,12 +959,10 @@ export default function ClientDashboard({
     const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
       ? selectedBookingServiceRef.current
       : resolvedBookingService
-    const effectiveRequestServiceType =
+    const effectiveServiceType =
       mapBookingServiceTypeToProfileServiceType(effectiveBookingService) ??
       requestServiceTypeRef.current ??
       requestServiceType
-    const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
-    const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
     if (!hasSelectedProfileService) {
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
       setBurgerOpen(true)
@@ -974,7 +972,7 @@ export default function ClientDashboard({
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
     const dogWalkerBudgetRequestValue = dogWalkerBudgetValue > 0 ? dogWalkerBudgetValue : null
 
-    if (isBabysitterRequest) {
+    if (effectiveServiceType === 'baby_sitter') {
       if (
         !babysitterServiceDetails.trim() ||
         !flow.location.trim() ||
@@ -984,7 +982,7 @@ export default function ClientDashboard({
       ) {
         return
       }
-    } else if (isDogWalkerRequest) {
+    } else if (effectiveServiceType === 'dog_walker') {
       if (
         !flow.dogName.trim() ||
         !flow.location.trim() ||
@@ -998,10 +996,43 @@ export default function ClientDashboard({
       return
     }
     if (import.meta.env.DEV) {
+      const localBookingBlockedReasons: string[] = []
+      if (!hasSelectedProfileService) localBookingBlockedReasons.push('missing_profile_service')
+      if (!effectiveServiceType) localBookingBlockedReasons.push('missing_request_service_type')
+      if (!(effectiveServiceType === 'baby_sitter' ? babysitterServiceDetails.trim() : flow.dogName.trim())) {
+        localBookingBlockedReasons.push('missing_service_name')
+      }
+      if (!flow.location.trim()) localBookingBlockedReasons.push('missing_location')
+      if (
+        !(
+          effectiveServiceType === 'baby_sitter'
+            ? babysitterDurationMinutes
+            : effectiveServiceType === 'dog_walker'
+              ? dogWalkerDurationMinutes
+              : flow.duration
+        )
+      ) {
+        localBookingBlockedReasons.push('missing_duration')
+      }
+      if (
+        !(
+          effectiveServiceType === 'baby_sitter'
+            ? babysitterFixedBudgetValue > 0
+            : effectiveServiceType === 'dog_walker'
+              ? dogWalkerBudgetValue > 0
+              : flow.adjustedPriceILS > 0
+        )
+      ) {
+        localBookingBlockedReasons.push('missing_price')
+      }
+      if (!flow.savedCard) localBookingBlockedReasons.push('missing_saved_card')
+      if (flow.bookingTiming === 'scheduled' && !flow.scheduledFor) {
+        localBookingBlockedReasons.push('missing_scheduled_for')
+      }
       const pricingPackage = durationTypeFromMinutes(
-        isBabysitterRequest
+        effectiveServiceType === 'baby_sitter'
           ? (babysitterDurationMinutes ?? 0)
-          : isDogWalkerRequest
+          : effectiveServiceType === 'dog_walker'
             ? (dogWalkerDurationMinutes ?? 0)
             : flow.duration === '20min'
               ? 20
@@ -1014,7 +1045,9 @@ export default function ClientDashboard({
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
         pricingPackage,
-        requestServiceType: effectiveRequestServiceType,
+        requestServiceType: effectiveServiceType,
+        canSubmitBooking: localBookingBlockedReasons.length === 0,
+        bookingBlockedReasons: localBookingBlockedReasons,
       })
     }
     markFirstInteractionHandler('client-dashboard:find-walker')
@@ -1022,7 +1055,7 @@ export default function ClientDashboard({
     flow.clearError()
     setMatchingUiState(null)
     markFirstInteractionVisual('client-dashboard:find-walker')
-    if (isBabysitterRequest) {
+    if (effectiveServiceType === 'baby_sitter') {
       const budgetLabel =
         `₪${babysitterFixedBudgetValue}`
       const notes = [
@@ -1035,7 +1068,7 @@ export default function ClientDashboard({
       const pricingDuration = durationTypeFromMinutes(babysitterDurationMinutes ?? 0)
 
       flow.requestWalk({
-        requestServiceType: effectiveRequestServiceType ?? undefined,
+        requestServiceType: effectiveServiceType ?? undefined,
         selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
@@ -1047,10 +1080,10 @@ export default function ClientDashboard({
         bookingTimingOverride: flow.bookingTiming,
         scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
-    } else if (isDogWalkerRequest) {
+    } else if (effectiveServiceType === 'dog_walker') {
       const pricingDuration = durationTypeFromMinutes(dogWalkerDurationMinutes ?? 0)
       flow.requestWalk({
-        requestServiceType: effectiveRequestServiceType ?? undefined,
+        requestServiceType: effectiveServiceType ?? undefined,
         selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
@@ -1058,10 +1091,12 @@ export default function ClientDashboard({
         durationOverride: pricingDuration,
         durationMinutesOverride: dogWalkerDurationMinutes,
         priceOverrideILS: dogWalkerBudgetRequestValue,
+        bookingTimingOverride: flow.bookingTiming,
+        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
     } else {
       flow.requestWalk({
-        requestServiceType: effectiveRequestServiceType ?? undefined,
+        requestServiceType: effectiveServiceType ?? undefined,
         selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
@@ -1936,6 +1971,94 @@ export default function ClientDashboard({
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
+  const effectiveRequestServiceType =
+    requestServiceTypeRef.current ?? requestServiceType
+  const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
+  const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
+  const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : flow.dogName.trim()
+  const hasValidDurationForSelectedService = isBabysitterRequest
+    ? !!babysitterDurationMinutes
+    : isDogWalkerRequest
+      ? !!dogWalkerDurationMinutes
+      : !!flow.duration
+  const currentBookingPriceILS = isBabysitterRequest
+    ? babysitterFixedBudgetValue
+    : isDogWalkerRequest
+      ? dogWalkerBudgetValue
+      : flow.adjustedPriceILS
+  const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
+  const requiresScheduledFor = flow.bookingTiming === 'scheduled'
+  const canSubmitBooking =
+    hasSelectedProfileService &&
+    isSelectedServiceAvailable &&
+    !!bookingSubjectValue &&
+    !!flow.location.trim() &&
+    hasValidDurationForSelectedService &&
+    hasValidPriceForSelectedService &&
+    !!flow.savedCard &&
+    (!requiresScheduledFor || !!flow.scheduledFor)
+  const bookingBlockedReasons = useMemo(() => {
+    const reasons: string[] = []
+    if (!hasSelectedProfileService) reasons.push('missing_profile_service')
+    if (!isSelectedServiceAvailable) reasons.push('selected_service_unavailable')
+    if (!bookingSubjectValue) reasons.push('missing_service_name')
+    if (!flow.location.trim()) reasons.push('missing_location')
+    if (!hasValidDurationForSelectedService) reasons.push('missing_duration')
+    if (!hasValidPriceForSelectedService) reasons.push('missing_price')
+    if (!flow.savedCard) reasons.push('missing_saved_card')
+    if (requiresScheduledFor && !flow.scheduledFor) reasons.push('missing_scheduled_for')
+    return reasons
+  }, [
+    bookingSubjectValue,
+    flow.location,
+    flow.savedCard,
+    flow.scheduledFor,
+    hasSelectedProfileService,
+    hasValidDurationForSelectedService,
+    hasValidPriceForSelectedService,
+    isSelectedServiceAvailable,
+    requiresScheduledFor,
+  ])
+  const lastBookingCanSubmitLogRef = useRef<string>('')
+
+  useEffect(() => {
+    const snapshot = JSON.stringify({
+      canSubmitBooking,
+      bookingBlockedReasons,
+      bookingTiming: flow.bookingTiming,
+      scheduledFor: flow.scheduledFor,
+      requestServiceType: effectiveRequestServiceType,
+    })
+    if (snapshot === lastBookingCanSubmitLogRef.current) return
+    lastBookingCanSubmitLogRef.current = snapshot
+    console.log('[ClientDashboard] booking canSubmit changed', {
+      canSubmitBooking,
+      bookingBlockedReasons,
+      bookingTiming: flow.bookingTiming,
+      scheduledFor: flow.scheduledFor,
+      requestServiceType: effectiveRequestServiceType,
+    })
+  }, [
+    bookingBlockedReasons,
+    canSubmitBooking,
+    effectiveRequestServiceType,
+    flow.bookingTiming,
+    flow.scheduledFor,
+  ])
+
+  useEffect(() => {
+    if (!flow.bookingComposerResetKey) return
+    setBabysitterDurationHours(String(BABYSITTER_DEFAULT_DURATION_HOURS))
+    setBabysitterBudgetFixed(String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
+    setDogWalkerDurationHours(String(DOG_WALKER_DEFAULT_DURATION_HOURS))
+    setDogWalkerBudgetFixed(String(DOG_WALKER_DEFAULT_BUDGET_ILS))
+    setScheduleDraft(clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput()))
+    setMatchingUiState(null)
+    console.log('[ClientDashboard] booking composer reset applied', {
+      bookingComposerResetKey: flow.bookingComposerResetKey,
+      requestServiceType: effectiveRequestServiceType,
+    })
+  }, [effectiveRequestServiceType, flow.bookingComposerResetKey])
   const bookingSubjectLabel = isBabySitterMode
     ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.inputLabel)
@@ -2867,7 +2990,17 @@ export default function ClientDashboard({
             <div style={scheduleSheetFooterStyle}>
               <ActionButton
                 label={isRtl ? 'אישור הזמנה עתידית' : 'Confirm schedule'}
+                disabled={!canSubmitBooking}
                 onClick={() => {
+                  if (!canSubmitBooking) {
+                    console.log('[ClientDashboard] scheduled CTA blocked by shared validation', {
+                      canSubmitBooking,
+                      bookingBlockedReasons,
+                      requestServiceType: effectiveRequestServiceType,
+                      scheduleDraft,
+                    })
+                    return
+                  }
                   const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
                   flow.setBookingTiming('scheduled')
                   flow.setScheduledFor(nextValue)
@@ -3115,21 +3248,7 @@ export default function ClientDashboard({
                   }
                   onClick={handleFindWalker}
                   loading={flow.loading || (flow.cardLoading && !flow.savedCard)}
-                  disabled={
-                    !hasSelectedProfileService ||
-                    !isSelectedServiceAvailable ||
-                    !(isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim()) ||
-                    !flow.location.trim() ||
-                    (
-                      isBabySitterMode
-                        ? babysitterDurationValue <= 0 || babysitterFixedBudgetValue <= 0
-                        : dogWalkerDurationValue <= 0 || dogWalkerBudgetValue <= 0
-                    ) ||
-                    !flow.savedCard ||
-                    (isBabySitterMode
-                      ? !flow.scheduledFor
-                      : flow.bookingTiming === 'scheduled' && !flow.scheduledFor)
-                  }
+                  disabled={!canSubmitBooking}
                 />
                 {!hasSelectedProfileService ? (
                   <div
