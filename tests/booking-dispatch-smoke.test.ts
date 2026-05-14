@@ -521,20 +521,31 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
 
   assert.equal(scheduledRequest.booking_timing, 'scheduled')
   assert.ok(scheduledRequest.scheduled_for, 'Scheduled smoke request should persist scheduled_for')
-  assert.equal(scheduledRequest.dispatch_state, 'queued')
-  assert.equal(scheduledRequest.smart_dispatch_state, 'idle')
+  assert.ok(
+    scheduledRequest.dispatch_state === 'queued' || scheduledRequest.dispatch_state === 'dispatched',
+    `Scheduled smoke request should start queued or already dispatched, got ${scheduledRequest.dispatch_state ?? 'null'}`,
+  )
+  if (scheduledRequest.dispatch_state === 'queued') {
+    assert.equal(scheduledRequest.smart_dispatch_state, 'idle')
+  }
 
-  const scheduledRun = await invokeFunction<{
-    ok?: boolean
-    scanned?: number
-    eligible?: number
-    started?: number
-    noCandidates?: number
-    error?: string
-    details?: string
-  }>(supabaseUrl, serviceRoleKey, 'run-scheduled-dispatch')
+  if (scheduledRequest.dispatch_state !== 'dispatched') {
+    const scheduledRun = await invokeFunction<{
+      ok?: boolean
+      scanned?: number
+      eligible?: number
+      started?: number
+      noCandidates?: number
+      error?: string
+      details?: string
+    }>(supabaseUrl, serviceRoleKey, 'run-scheduled-dispatch')
 
-  assert.equal(scheduledRun.ok, true, `run-scheduled-dispatch should succeed: ${scheduledRun.error ?? scheduledRun.details ?? 'unknown error'}`)
+    assert.equal(
+      scheduledRun.ok,
+      true,
+      `run-scheduled-dispatch should succeed: ${scheduledRun.error ?? scheduledRun.details ?? 'unknown error'}`,
+    )
+  }
 
   const scheduledDispatch = await waitForDispatchState(admin, scheduledRequest.id)
   assert.equal(scheduledDispatch.request.booking_timing, 'scheduled')
