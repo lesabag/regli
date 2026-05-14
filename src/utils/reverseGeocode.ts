@@ -29,6 +29,8 @@ const CACHE_LOG_THROTTLE_MS = 60 * 1000
 const reverseGeocodeCache: ReverseGeocodeCacheEntry[] = []
 const reverseGeocodeInflight = new Map<string, Promise<string>>()
 let lastCacheHitLogAt = 0
+let lastCacheRejectLogAt = 0
+let lastFreshRequestLogAt = 0
 
 function roundCoord(value: number): number {
   return Number(value.toFixed(5))
@@ -55,6 +57,25 @@ function getInflightKey(lat: number, lng: number, language: string): string {
 
 function readCachedAddress(lat: number, lng: number, language: string): string | null {
   const now = Date.now()
+  const nearbyEntry = reverseGeocodeCache.find((entry) =>
+    entry.language === language &&
+    distanceMeters(entry.lat, entry.lng, lat, lng) <= REVERSE_GEOCODE_CACHE_DISTANCE_METERS,
+  )
+
+  if (nearbyEntry && now - nearbyEntry.timestamp > REVERSE_GEOCODE_CACHE_TTL_MS) {
+    if (now - lastCacheRejectLogAt > CACHE_LOG_THROTTLE_MS) {
+      lastCacheRejectLogAt = now
+      console.log('[ReverseGeocodeProvider]', {
+        provider: 'cache',
+        result: 'cache_rejected_stale_age',
+        ageMinutes: Math.round((now - nearbyEntry.timestamp) / 60000),
+        lat: roundCoord(lat),
+        lng: roundCoord(lng),
+      })
+    }
+    return null
+  }
+
   const match = reverseGeocodeCache.find((entry) =>
     entry.language === language &&
     now - entry.timestamp <= REVERSE_GEOCODE_CACHE_TTL_MS &&
@@ -231,6 +252,17 @@ export async function reverseGeocodeAddress(
   const existingInflight = reverseGeocodeInflight.get(inflightKey)
   if (existingInflight) {
     return existingInflight
+  }
+
+  const now = Date.now()
+  if (now - lastFreshRequestLogAt > CACHE_LOG_THROTTLE_MS) {
+    lastFreshRequestLogAt = now
+    console.log('[ReverseGeocodeProvider]', {
+      provider: 'network',
+      result: 'fresh_geocode_requested',
+      lat: roundCoord(lat),
+      lng: roundCoord(lng),
+    })
   }
 
   const request = (async () => {

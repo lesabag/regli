@@ -257,6 +257,7 @@ const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
 const IDLE_HYDRATION_POLL_MS = 45_000
 const ACTIVE_HYDRATION_POLL_MS = 10_000
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
+const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
 
 
 function pad(n: number): string {
@@ -465,6 +466,8 @@ type LastBookingDraft = {
   dogName: string
   location: string
   duration?: '20min' | '40min' | '60min'
+  locationSource?: AddressSource
+  locationUpdatedAt?: number
 }
 
 function bookingDraftStorageKey(profileId: string): string {
@@ -913,9 +916,29 @@ export function useClientFlow(profileId: string, _profileName: string) {
         _setDogName((current) => current || lastName)
       }
       if (lastLocation) {
-        lastAutoLocationRef.current = lastLocation
-        latestResolvedLocationRef.current = lastLocation
-        _setLocation((current) => current || lastLocation)
+        const locationSource = parsed.locationSource === 'manual' || parsed.locationSource === 'gps'
+          ? parsed.locationSource
+          : null
+        const locationUpdatedAt =
+          typeof parsed.locationUpdatedAt === 'number' && Number.isFinite(parsed.locationUpdatedAt)
+            ? parsed.locationUpdatedAt
+            : 0
+        const ageMs = locationUpdatedAt > 0 ? Date.now() - locationUpdatedAt : Number.POSITIVE_INFINITY
+        const canReuseGpsDraft = locationSource === 'gps' && ageMs <= COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS
+        const shouldRestoreLocation = locationSource === 'manual' || canReuseGpsDraft
+
+        if (shouldRestoreLocation) {
+          lastAutoLocationRef.current = locationSource === 'gps' ? lastLocation : ''
+          latestResolvedLocationRef.current = lastLocation
+          _setLocation((current) => current || lastLocation)
+        } else {
+          console.log('[ReverseGeocodeProvider]', {
+            provider: 'draft_bootstrap',
+            result: 'cache_rejected_stale_age',
+            ageMinutes: Number.isFinite(ageMs) ? Math.round(ageMs / 60000) : null,
+            locationSource,
+          })
+        }
       }
     } catch {
       // noop
@@ -1015,6 +1038,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
           if (force) {
             lastAutoLocationRef.current = address
             latestResolvedLocationRef.current = address
+            try {
+              const key = bookingDraftStorageKey(profileId)
+              const currentRaw = window.localStorage.getItem(key)
+              const current = currentRaw ? (JSON.parse(currentRaw) as Partial<LastBookingDraft>) : {}
+              window.localStorage.setItem(
+                key,
+                JSON.stringify({
+                  dogName: typeof current.dogName === 'string' ? current.dogName : '',
+                  location: address,
+                  duration:
+                    current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
+                      ? current.duration
+                      : '20min',
+                  locationSource: 'gps',
+                  locationUpdatedAt: Date.now(),
+                } satisfies LastBookingDraft),
+              )
+            } catch {
+              // noop
+            }
             return address
           }
           const trimmedPrev = prev.trim()
@@ -1027,6 +1070,26 @@ export function useClientFlow(profileId: string, _profileName: string) {
             }
             lastAutoLocationRef.current = address
             latestResolvedLocationRef.current = address
+            try {
+              const key = bookingDraftStorageKey(profileId)
+              const currentRaw = window.localStorage.getItem(key)
+              const current = currentRaw ? (JSON.parse(currentRaw) as Partial<LastBookingDraft>) : {}
+              window.localStorage.setItem(
+                key,
+                JSON.stringify({
+                  dogName: typeof current.dogName === 'string' ? current.dogName : '',
+                  location: address,
+                  duration:
+                    current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
+                      ? current.duration
+                      : '20min',
+                  locationSource: 'gps',
+                  locationUpdatedAt: Date.now(),
+                } satisfies LastBookingDraft),
+              )
+            } catch {
+              // noop
+            }
             return address
           }
           return prev
@@ -1048,7 +1111,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     return () => { cancelled = true }
-  }, [geoDistanceMeters, location])
+  }, [geoDistanceMeters, location, profileId])
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -1243,6 +1306,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
               : current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
                 ? current.duration
                 : '20min',
+          locationSource:
+            patch.locationSource === 'gps' || patch.locationSource === 'manual'
+              ? patch.locationSource
+              : current.locationSource === 'gps' || current.locationSource === 'manual'
+                ? current.locationSource
+                : undefined,
+          locationUpdatedAt:
+            typeof patch.locationUpdatedAt === 'number' && Number.isFinite(patch.locationUpdatedAt)
+              ? patch.locationUpdatedAt
+              : typeof current.locationUpdatedAt === 'number' && Number.isFinite(current.locationUpdatedAt)
+                ? current.locationUpdatedAt
+                : undefined,
         }
         window.localStorage.setItem(key, JSON.stringify(next))
       } catch {
@@ -1280,7 +1355,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setLocationError(null)
       setAddressSourceValue('manual')
       _setLocation(value)
-      persistBookingDraft({ location: value })
+      persistBookingDraft({
+        location: value,
+        locationSource: 'manual',
+        locationUpdatedAt: Date.now(),
+      })
     },
     [persistBookingDraft, setAddressSourceValue],
   )
@@ -3204,7 +3283,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setAvailabilityNotice(null)
       if (bookingLocation !== location) {
         _setLocation(bookingLocation)
-        persistBookingDraft({ location: bookingLocation })
+        persistBookingDraft({
+          location: bookingLocation,
+          locationSource: addressSourceRef.current,
+          locationUpdatedAt: Date.now(),
+        })
       }
 
       console.log('[useClientFlow] create-payment-intent request', {
