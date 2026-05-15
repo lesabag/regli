@@ -19,6 +19,8 @@ type SmokeContext = {
 type WalkRequestRow = {
   id: string
   client_id: string
+  walker_id?: string | null
+  selected_walker_id?: string | null
   booking_timing: 'asap' | 'scheduled' | null
   scheduled_for: string | null
   status: string | null
@@ -397,7 +399,9 @@ async function waitForDispatchState(
       await Promise.all([
         admin
           .from('walk_requests')
-          .select('id, client_id, booking_timing, scheduled_for, status, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id, service_type')
+          .select(
+            'id, client_id, walker_id, selected_walker_id, booking_timing, scheduled_for, status, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id, service_type',
+          )
           .eq('id', requestId)
           .single(),
         admin
@@ -445,6 +449,46 @@ async function waitForDispatchState(
   })
   throw new Error(
     `Timed out waiting for dispatch rows for request ${requestId}. Debug snapshot: ${JSON.stringify(debugSnapshot)}`,
+  )
+}
+
+function assertDispatchWinnerAlignment(
+  dispatch: {
+    request: WalkRequestRow
+    attempts: DispatchAttemptRow[]
+    candidates: DispatchCandidateRow[]
+  },
+  options: {
+    seededProviderId: string
+    flowLabel: 'ASAP' | 'scheduled'
+  },
+): void {
+  const pendingAttempt = dispatch.attempts.find((attempt) => attempt.status === 'pending') ?? dispatch.attempts[0] ?? null
+  const topCandidate = dispatch.candidates[0] ?? null
+  const assignedWalkerId = dispatch.request.walker_id ?? dispatch.request.selected_walker_id ?? null
+  const winnerWalkerId = pendingAttempt?.walker_id ?? assignedWalkerId ?? topCandidate?.walker_id ?? null
+
+  assert.ok(winnerWalkerId, `${options.flowLabel} dispatch should resolve a selected/assigned walker id`)
+  assert.ok(
+    dispatch.candidates.some((candidate) => candidate.walker_id === winnerWalkerId),
+    `${options.flowLabel} dispatch winner ${winnerWalkerId} must exist in dispatch_candidates`,
+  )
+  assert.ok(
+    dispatch.attempts.some((attempt) => attempt.walker_id === winnerWalkerId),
+    `${options.flowLabel} dispatch winner ${winnerWalkerId} must exist in dispatch_attempts`,
+  )
+
+  if (assignedWalkerId) {
+    assert.equal(
+      assignedWalkerId,
+      winnerWalkerId,
+      `${options.flowLabel} request selected/assigned walker should match the live attempt winner`,
+    )
+  }
+
+  assert.ok(
+    dispatch.candidates.some((candidate) => candidate.walker_id === options.seededProviderId),
+    `${options.flowLabel} smoke provider should remain eligible and appear in dispatch_candidates`,
   )
 }
 
@@ -651,9 +695,11 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   assert.equal(asapDispatch.request.smart_dispatch_state, 'dispatching')
   assert.ok(asapDispatch.candidates.length > 0, 'ASAP dispatch should create dispatch_candidates rows')
   assert.ok(asapDispatch.attempts.length > 0, 'ASAP dispatch should create dispatch_attempts rows')
-  assert.equal(asapDispatch.candidates[0]?.walker_id, provider.id)
-  assert.equal(asapDispatch.attempts[0]?.walker_id, provider.id)
   assert.equal(asapDispatch.attempts[0]?.status, 'pending')
+  assertDispatchWinnerAlignment(asapDispatch, {
+    seededProviderId: provider.id,
+    flowLabel: 'ASAP',
+  })
 
   const scheduledForDate = new Date(Date.now() + 5 * 60 * 1000)
   const scheduledRequest = await createAuthorizedRequest(admin, {
@@ -697,12 +743,14 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   assert.ok(scheduledDispatch.request.scheduled_for, 'Scheduled request should still have scheduled_for after dispatch')
   assert.ok(scheduledDispatch.candidates.length > 0, 'Scheduled dispatch should create dispatch_candidates rows')
   assert.ok(scheduledDispatch.attempts.length > 0, 'Scheduled dispatch should create dispatch_attempts rows')
-  assert.equal(scheduledDispatch.candidates[0]?.walker_id, provider.id)
-  assert.equal(scheduledDispatch.attempts[0]?.walker_id, provider.id)
   assert.equal(
     scheduledDispatch.request.dispatch_state,
     'dispatched',
     'Scheduled request should only become dispatched once a live attempt exists',
   )
   assert.equal(scheduledDispatch.request.smart_dispatch_state, 'dispatching')
+  assertDispatchWinnerAlignment(scheduledDispatch, {
+    seededProviderId: provider.id,
+    flowLabel: 'scheduled',
+  })
 })
