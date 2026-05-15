@@ -230,13 +230,16 @@ export default function CompletionCard({
 }
 
 const cardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 22,
-  padding: '28px 24px',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
   width: '100%',
   boxSizing: 'border-box',
   textAlign: 'center',
-  boxShadow: '0 4px 24px rgba(15, 23, 42, 0.06)',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
   animation: 'completionSlideUp 0.4s ease-out',
 }
 
@@ -255,14 +258,14 @@ const titleStyle: React.CSSProperties = {
   margin: '0 0 4px',
   fontSize: 20,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
   letterSpacing: -0.3,
 }
 
 const subtitleStyle: React.CSSProperties = {
   margin: '0 0 20px',
   fontSize: 14,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.86)',
   lineHeight: 1.4,
 }
 
@@ -271,9 +274,9 @@ const earningsStyle: React.CSSProperties = {
   justifyContent: 'space-between',
   alignItems: 'center',
   padding: '14px 18px',
-  background: '#F0FDF4',
+  background: 'transparent',
   borderRadius: 14,
-  border: '1px solid #DCFCE7',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
   marginBottom: 8,
 }
 
@@ -291,20 +294,20 @@ const metaRowStyle: React.CSSProperties = {
   gap: 12,
   padding: '12px 16px',
   borderRadius: 14,
-  border: '1px solid #E2E8F0',
-  background: '#F8FAFC',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
+  background: 'transparent',
 }
 
 const metaLabelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.82)',
 }
 
 const metaValueStyle: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const favoriteButtonStyle: React.CSSProperties = {
@@ -339,16 +342,16 @@ const favoriteIconStyle: React.CSSProperties = {
 const ratingContainerStyle: React.CSSProperties = {
   marginTop: 4,
   padding: '18px 16px 16px',
-  background: '#F8FAFC',
+  background: 'transparent',
   borderRadius: 16,
-  border: '1px solid #F1F5F9',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
 }
 
 const ratingLabelStyle: React.CSSProperties = {
   margin: '0 0 12px',
   fontSize: 15,
   fontWeight: 700,
-  color: '#334155',
+  color: '#E2E8F0',
 }
 
 const starsRowStyle: React.CSSProperties = {
@@ -361,15 +364,15 @@ const starsRowStyle: React.CSSProperties = {
 const textareaStyle: React.CSSProperties = {
   width: '100%',
   marginTop: 14,
-  border: '1.5px solid #E8ECF0',
+  border: '1.5px solid rgba(148, 163, 184, 0.16)',
   borderRadius: 14,
   padding: '12px 14px',
   fontSize: 14,
-  color: '#0F172A',
+  color: '#F8FAFC',
   outline: 'none',
   boxSizing: 'border-box',
   resize: 'none',
-  background: '#FFFFFF',
+  background: 'rgba(15, 23, 42, 0.92)',
   fontFamily: 'inherit',
   lineHeight: 1.5,
   transition: 'border-color 0.15s ease',
@@ -387,23 +390,23 @@ const primaryButtonStyle: React.CSSProperties = {
   padding: '15px 16px',
   borderRadius: 16,
   border: 'none',
-  background: '#0F172A',
+  background: 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)',
   color: '#FFFFFF',
   fontWeight: 700,
   fontSize: 15,
   letterSpacing: -0.2,
   transition: 'opacity 0.15s ease',
   WebkitTapHighlightColor: 'transparent',
-  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.15)',
+  boxShadow: '0 12px 28px rgba(37,99,235,0.18)',
 }
 
 const secondaryButtonStyle: React.CSSProperties = {
   width: '100%',
   padding: '13px 16px',
   borderRadius: 16,
-  border: '1.5px solid #E8ECF0',
-  background: '#FFFFFF',
-  color: '#64748B',
+  border: '1.5px solid rgba(96, 165, 250, 0.16)',
+  background: 'transparent',
+  color: '#60A5FA',
   fontWeight: 600,
   fontSize: 15,
   cursor: 'pointer',
@@ -414,9 +417,9 @@ const secondaryButtonStyle: React.CSSProperties = {
 const thanksContainerStyle: React.CSSProperties = {
   marginTop: 8,
   padding: '14px 16px',
-  background: '#F0FDF4',
+  background: 'transparent',
   borderRadius: 14,
-  border: '1px solid #DCFCE7',
+  border: '1px solid rgba(34, 197, 94, 0.16)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',

@@ -53,38 +53,40 @@ export default function MoreServicesSheet({
 const overlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15,23,42,0.3)',
+  background: 'rgba(2, 6, 23, 0.58)',
   zIndex: 9998,
 }
 
 const sheetStyle: CSSProperties = {
   position: 'fixed',
-  bottom: 0,
-  left: 0,
-  right: 0,
+  bottom: 'max(6px, env(safe-area-inset-bottom, 0px))',
+  left: 'max(8px, env(safe-area-inset-left, 0px))',
+  right: 'max(8px, env(safe-area-inset-right, 0px))',
   zIndex: 9999,
-  background: '#FFFFFF',
-  borderTopLeftRadius: 24,
-  borderTopRightRadius: 24,
-  boxShadow: '0 -8px 32px rgba(15,23,42,0.12)',
-  padding: '8px 20px calc(14px + env(safe-area-inset-bottom, 0px))',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  padding: '12px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
+  gap: 8,
 }
 
 const handleStyle: CSSProperties = {
   width: 42,
   height: 4,
   borderRadius: 999,
-  background: '#CBD5E1',
+  background: 'rgba(148, 163, 184, 0.52)',
   margin: '0 auto 4px',
 }
 
 const titleStyle: CSSProperties = {
   fontSize: 17,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
   paddingBottom: 4,
 }
 
@@ -96,13 +98,13 @@ const listStyle: CSSProperties = {
 
 const itemStyle: CSSProperties = {
   appearance: 'none',
-  border: 'none',
-  background: 'transparent',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
+  background: 'rgba(255,255,255,0.03)',
   display: 'flex',
   alignItems: 'center',
   gap: 14,
-  padding: '12px 4px',
-  borderRadius: 14,
+  padding: '12px 10px',
+  borderRadius: 16,
   cursor: 'pointer',
   fontFamily: 'inherit',
   WebkitTapHighlightColor: 'transparent',
@@ -115,7 +117,7 @@ const itemIconStyle: CSSProperties = {
   height: 36,
   display: 'grid',
   placeItems: 'center',
-  background: '#F1F5F9',
+  background: 'rgba(17, 24, 39, 0.78)',
   borderRadius: 12,
   flexShrink: 0,
 }
@@ -123,5 +125,5 @@ const itemIconStyle: CSSProperties = {
 const itemLabelStyle: CSSProperties = {
   fontSize: 15,
   fontWeight: 700,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }

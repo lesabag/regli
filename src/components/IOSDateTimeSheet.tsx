@@ -204,29 +204,31 @@ export default function IOSDateTimeSheet({
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.22)',
+  background: 'rgba(2, 6, 23, 0.58)',
   zIndex: 2400,
 }
 
 const sheetStyle: React.CSSProperties = {
   position: 'fixed',
-  left: 0,
-  right: 0,
-  bottom: 0,
+  left: 'max(8px, env(safe-area-inset-left, 0px))',
+  right: 'max(8px, env(safe-area-inset-right, 0px))',
+  bottom: 'max(6px, env(safe-area-inset-bottom, 0px))',
   zIndex: 2401,
-  background: '#FFFFFF',
-  borderTopLeftRadius: 24,
-  borderTopRightRadius: 24,
-  boxShadow: '0 -14px 34px rgba(15, 23, 42, 0.10)',
-  padding: '10px 14px calc(12px + env(safe-area-inset-bottom))',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  padding: '12px 16px calc(16px + env(safe-area-inset-bottom))',
 }
 
 const handleStyle: React.CSSProperties = {
   width: 38,
   height: 5,
   borderRadius: 999,
-  background: '#D7DBE3',
-  margin: '0 auto 10px',
+  background: 'rgba(148, 163, 184, 0.52)',
+  margin: '0 auto 12px',
 }
 
 const headerStyle: React.CSSProperties = {
@@ -238,14 +240,14 @@ const titleStyle: React.CSSProperties = {
   fontSize: 14,
   lineHeight: 1.2,
   fontWeight: 700,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const subtitleStyle: React.CSSProperties = {
   marginTop: 2,
   fontSize: 11,
   lineHeight: 1.3,
-  color: '#8B95A7',
+  color: 'rgba(148, 163, 184, 0.88)',
 }
 
 const previewStyle: React.CSSProperties = {
@@ -253,7 +255,7 @@ const previewStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.25,
   fontWeight: 600,
-  color: '#6B7280',
+  color: 'rgba(226, 232, 240, 0.86)',
 }
 
 const formWrapStyle: React.CSSProperties = {
@@ -297,10 +299,10 @@ const footerStyle: React.CSSProperties = {
 
 const secondaryButtonStyle: React.CSSProperties = {
   minHeight: 46,
-  borderRadius: 14,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#334155',
+  borderRadius: 16,
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'rgba(17, 24, 39, 0.78)',
+  color: '#60A5FA',
   fontSize: 14,
   fontWeight: 800,
   cursor: 'pointer',
@@ -308,11 +310,12 @@ const secondaryButtonStyle: React.CSSProperties = {
 
 const primaryButtonStyle: React.CSSProperties = {
   minHeight: 46,
-  borderRadius: 14,
+  borderRadius: 16,
   border: 'none',
-  background: '#08153B',
+  background: 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)',
   color: '#FFFFFF',
   fontSize: 14,
   fontWeight: 800,
   cursor: 'pointer',
+  boxShadow: '0 12px 28px rgba(37,99,235,0.18)',
 }

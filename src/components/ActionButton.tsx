@@ -6,7 +6,7 @@ interface ActionButtonProps {
   onClick?: () => void
   disabled?: boolean
   loading?: boolean
-  variant?: 'primary' | 'secondary' | 'success' | 'danger'
+  variant?: 'primary' | 'secondary' | 'success' | 'danger' | 'accent'
   sticky?: boolean
   touchSafe?: boolean
 }
@@ -69,6 +69,8 @@ export default function ActionButton({
     : showLoadingVisual
     ? variant === 'success'
       ? '#1a9d4a'
+      : variant === 'accent'
+      ? '#2563EB'
       : variant === 'danger'
       ? '#e03e3e'
       : variant === 'secondary'
@@ -76,6 +78,8 @@ export default function ActionButton({
       : '#1E293B'
     : variant === 'success'
     ? '#15803D'
+    : variant === 'accent'
+    ? 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)'
     : variant === 'danger'
     ? '#DC2626'
     : variant === 'secondary'
@@ -85,15 +89,17 @@ export default function ActionButton({
   const color = disabled
     ? '#94A3B8'
     : variant === 'secondary'
-    ? '#0F172A'
+    ? '#60A5FA'
     : '#FFFFFF'
 
-  const border = variant === 'secondary' ? '1.5px solid #E2E8F0' : 'none'
+  const border = variant === 'secondary' ? '1.5px solid rgba(96, 165, 250, 0.16)' : 'none'
 
   const shadow = isDisabled
     ? 'none'
     : variant === 'secondary'
-    ? '0 1px 4px rgba(15, 23, 42, 0.06)'
+    ? 'inset 0 1px 0 rgba(255,255,255,0.03)'
+    : variant === 'accent'
+    ? '0 12px 28px rgba(37,99,235,0.18)'
     : '0 4px 14px rgba(15, 23, 42, 0.15)'
 
   return (
@@ -145,7 +151,7 @@ const stickyWrapperStyle: React.CSSProperties = {
   bottom: 0,
   padding: '12px 0',
   paddingBottom: 'calc(12px + env(safe-area-inset-bottom))',
-  background: 'linear-gradient(transparent, #FFFFFF 20%)',
+  background: 'linear-gradient(transparent, rgba(14,17,22,0.96) 20%)',
 }
 
 const spinnerStyle: React.CSSProperties = {

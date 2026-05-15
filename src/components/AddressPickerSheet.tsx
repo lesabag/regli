@@ -217,21 +217,23 @@ export default function AddressPickerSheet({
 const overlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15,23,42,0.26)',
+  background: 'rgba(2, 6, 23, 0.58)',
   zIndex: 9998,
 }
 
 const sheetStyle: CSSProperties = {
   position: 'fixed',
-  bottom: 0,
-  left: 'env(safe-area-inset-left, 0px)',
-  right: 'env(safe-area-inset-right, 0px)',
+  bottom: 'max(6px, env(safe-area-inset-bottom, 0px))',
+  left: 'max(8px, env(safe-area-inset-left, 0px))',
+  right: 'max(8px, env(safe-area-inset-right, 0px))',
   zIndex: 9999,
-  background: '#FFFFFF',
-  borderTopLeftRadius: 24,
-  borderTopRightRadius: 24,
-  boxShadow: '0 -8px 32px rgba(15,23,42,0.12)',
-  padding: '8px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  padding: '12px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
   display: 'grid',
   gap: 10,
   boxSizing: 'border-box',
@@ -243,8 +245,8 @@ const handleStyle: CSSProperties = {
   width: 42,
   height: 4,
   borderRadius: 999,
-  background: '#CBD5E1',
-  margin: '0 auto 2px',
+  background: 'rgba(148, 163, 184, 0.52)',
+  margin: '0 auto 4px',
 }
 
 const headerStyle: CSSProperties = {
@@ -255,21 +257,21 @@ const headerStyle: CSSProperties = {
 const titleStyle: CSSProperties = {
   fontSize: 18,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const currentLocationBtnStyle: CSSProperties = {
   appearance: 'none',
-  border: '1px solid rgba(59,130,246,0.2)',
-  background: 'rgba(239,246,255,0.5)',
-  borderRadius: 14,
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'rgba(17, 24, 39, 0.78)',
+  borderRadius: 16,
   padding: '10px 12px',
   display: 'flex',
   alignItems: 'center',
   gap: 10,
   fontSize: 14,
   fontWeight: 700,
-  color: '#1D4ED8',
+  color: '#60A5FA',
   cursor: 'pointer',
   textAlign: 'start',
   width: '100%',
@@ -324,7 +326,7 @@ const houseNumberGroupStyle: CSSProperties = {
 const fieldLabelStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 800,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.88)',
   letterSpacing: 0.3,
 }
 
@@ -349,7 +351,7 @@ const confirmBtnStyle: CSSProperties = {
   border: 'none',
   minHeight: 46,
   borderRadius: 16,
-  background: 'linear-gradient(180deg, #2563EB 0%, #1D4ED8 100%)',
+  background: 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)',
   color: '#FFFFFF',
   fontSize: 16,
   fontWeight: 900,

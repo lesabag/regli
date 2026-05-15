@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
-import CompactRatingList from '../components/CompactRatingList'
 import CompletionCard from '../components/CompletionCard'
 import GroupedHistory from '../components/GroupedHistory'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -121,23 +120,6 @@ function parseBabysitterNotes(notes: string | null | undefined): {
   })
 
   return parsed
-}
-
-function formatRelativeDate(value: string | null | undefined): string {
-  if (!value) return 'Recently'
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return 'Recently'
-
-  const diffMs = Date.now() - dt.getTime()
-  const diffMin = Math.round(diffMs / 60000)
-  if (diffMin < 60) return 'Recently'
-  if (diffMin < 24 * 60) return `${Math.floor(diffMin / 60)}h ago`
-  if (diffMin < 7 * 24 * 60) return `${Math.floor(diffMin / (24 * 60))}d ago`
-
-  return dt.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-  })
 }
 
 function formatMoney(value: number | null | undefined): string {
@@ -382,11 +364,6 @@ export default function WalkerDashboard({
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
   const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
   const [earningsPeriod, setEarningsPeriod] = useState<EarningsPeriod>('month')
-  const [compRating, setCompRating] = useState(0)
-  const [compHover, setCompHover] = useState(0)
-  const [compPressed, setCompPressed] = useState(0)
-  const [compReview, setCompReview] = useState('')
-  const [compRatingDone, setCompRatingDone] = useState(false)
   const [reportIssueOpen, setReportIssueOpen] = useState(false)
   const [reportIssueFeedback, setReportIssueFeedback] = useState<string | null>(null)
   const [reportIssueSubmitting, setReportIssueSubmitting] = useState(false)
@@ -741,25 +718,6 @@ export default function WalkerDashboard({
     profileServiceTypes,
   ])
 
-  const prevCompJobId = useRef<string | null>(null)
-  useEffect(() => {
-    const jobId = flow.completionSuccess?.jobId ?? null
-    if (jobId !== prevCompJobId.current) {
-      prevCompJobId.current = jobId
-      setCompRating(0)
-      setCompHover(0)
-      setCompPressed(0)
-      setCompReview('')
-      setCompRatingDone(jobId ? flow.ratedJobIds.has(jobId) : false)
-    }
-  }, [flow.completionSuccess?.jobId, flow.ratedJobIds])
-
-  const handleCompRatingSubmit = useCallback(() => {
-    if (compRating < 1) return
-    flow.submitCompletionRating(compRating, compReview.trim())
-    setCompRatingDone(true)
-  }, [compRating, compReview, flow.submitCompletionRating])
-
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
   const topRequest = flow.openJobs[0] ?? null
@@ -900,38 +858,6 @@ export default function WalkerDashboard({
   const visibleHistoryItems = useMemo(
     () => allHistoryItems.filter((item) => item.hidden_by_walker !== true).slice(0, 7),
     [allHistoryItems],
-  )
-
-  const clientNameById = useMemo(() => {
-    const map = new Map<string, string>()
-    flow.completedJobs.forEach((j) => {
-      if (j.client?.id) {
-        map.set(
-          j.client.id,
-          getCustomerDisplayName(
-            {
-              client: j.client,
-              clientName: j.client.full_name || j.client.email || null,
-              dogName: j.dog_name,
-            },
-            isHebrew,
-          ),
-        )
-      }
-    })
-    return map
-  }, [flow.completedJobs, isHebrew])
-
-  const formattedRatings = useMemo(
-    () =>
-      flow.ratingsReceived.slice(0, 4).map((r) => ({
-        id: r.id,
-        rating: r.rating,
-        review: r.review,
-        authorName: clientNameById.get(r.from_user_id) || (isHebrew ? 'לקוח' : 'Customer'),
-        date: formatRelativeDate(r.created_at),
-      })),
-    [flow.ratingsReceived, clientNameById, isHebrew],
   )
 
   const upcomingFutureItems = useMemo(
@@ -2866,129 +2792,6 @@ export default function WalkerDashboard({
             </div>
           )}
 
-          {flow.screenState === 'completed' && flow.completionSuccess && (
-            <div className="sheet-state-enter" style={completionCardStyle}>
-              <div style={checkStyle}>✓</div>
-              <h3 style={completionTitleStyle}>{getServiceLabels(null).completedTitle}</h3>
-              <p style={completionSubStyle}>
-                {isHebrew ? `השירות של ${completionClientName}` : `${completionClientName}'s service`}
-              </p>
-
-              {flow.completionSuccess.earnings != null && flow.completionSuccess.earnings > 0 && (
-                <div style={earningsRowStyle}>
-                  <span style={earningsLabelStyle}>Earned</span>
-                  <span style={earningsValueStyle}>₪{flow.completionSuccess.earnings.toFixed(0)}</span>
-                </div>
-              )}
-
-              {!!completionMetaRows.length && (
-                <div style={serviceTimerPanelStyle}>
-                  <div style={serviceTimerMetaRowStyle}>
-                    {completionMetaRows.map((row) => (
-                      <span key={`${row.label}:${row.value}`} style={serviceTimerMetaStyle}>
-                        {row.label}: {row.value}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {!compRatingDone && (
-                <div style={inlineRatingContainerStyle}>
-                  <p style={ratingPromptStyle}>
-                    {isHebrew ? `איך היה עם ${completionClientName}?` : `How was ${completionClientName}?`}
-                  </p>
-                  <div style={starsRowStyle}>
-                    {[1, 2, 3, 4, 5].map((star) => {
-                      const isActive = star <= (compHover || compRating)
-                      const isPressed = star === compPressed
-                      return (
-                        <button
-                          key={star}
-                          type="button"
-                          onMouseEnter={() => setCompHover(star)}
-                          onMouseLeave={() => setCompHover(0)}
-                          onMouseDown={() => setCompPressed(star)}
-                          onMouseUp={() => setCompPressed(0)}
-                          onTouchStart={() => {
-                            setCompPressed(star)
-                            setCompHover(star)
-                          }}
-                          onTouchEnd={() => {
-                            setCompPressed(0)
-                            setCompHover(0)
-                          }}
-                          onClick={async () => {
-                            setCompRating(star)
-                            await hapticMedium()
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: 34,
-                            lineHeight: 1,
-                            color: isActive ? '#F59E0B' : '#D1D5DB',
-                            padding: 4,
-                            transition: 'color 0.15s ease, transform 0.15s ease',
-                            transform: isPressed ? 'scale(1.3)' : compHover === star ? 'scale(1.15)' : 'scale(1)',
-                            WebkitTapHighlightColor: 'transparent',
-                          }}
-                        >
-                          ★
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  <div
-                    style={{
-                      overflow: 'hidden',
-                      transition: 'max-height 0.3s ease, opacity 0.3s ease',
-                      maxHeight: compRating > 0 ? 200 : 0,
-                      opacity: compRating > 0 ? 1 : 0,
-                    }}
-                  >
-                    <textarea
-                      value={compReview}
-                      onChange={(e) => setCompReview(e.target.value)}
-                      placeholder="Share your feedback (optional)"
-                      rows={2}
-                      style={compTextareaStyle}
-                    />
-                    <button
-                      onClick={handleCompRatingSubmit}
-                      disabled={flow.completionRatingSubmitting}
-                      style={{
-                        ...submitRatingBtnStyle,
-                        opacity: flow.completionRatingSubmitting ? 0.7 : 1,
-                        cursor: flow.completionRatingSubmitting ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {flow.completionRatingSubmitting ? 'Sending...' : 'Submit rating'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {compRatingDone && (
-                <div style={thanksBannerStyle}>
-                  <span style={thanksTextStyle}>Thanks for your feedback!</span>
-                </div>
-              )}
-
-              {formattedRatings.length > 0 && (
-                <div style={recentRatingsSectionStyle}>
-                  <h4 style={recentRatingsHeadingStyle}>Recent reviews</h4>
-                  <CompactRatingList ratings={formattedRatings} limit={2} onViewAll={() => {}} />
-                </div>
-              )}
-
-              <button onClick={flow.dismissCompletion} style={dismissBtnStyle}>
-                {compRatingDone ? 'Done' : 'Skip & go online'}
-              </button>
-            </div>
-          )}
           </div>
         </div>
       </div>
@@ -3163,12 +2966,23 @@ export default function WalkerDashboard({
       {reportIssueOpen && (
         <div style={completionOverlayStyle}>
           <div style={completionOverlayBackdropStyle} onClick={() => setReportIssueOpen(false)} />
-          <div style={{ ...completionOverlayCardStyle, background: '#fff', borderRadius: 24, padding: 24 }}>
+          <div
+            style={{
+              ...completionOverlayCardStyle,
+              background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+              border: '1px solid rgba(148, 163, 184, 0.12)',
+              borderRadius: 30,
+              padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
+              boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+            }}
+          >
             <div style={{ textAlign: 'center', fontSize: 28, marginBottom: 12 }}>⚠️</div>
-            <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 17, color: '#1E293B', marginBottom: 8 }}>
+            <div style={{ textAlign: 'center', fontWeight: 800, fontSize: 17, color: '#F8FAFC', marginBottom: 8 }}>
               {isHebrew ? 'דיווח בעיה' : 'Report Issue'}
             </div>
-            <div style={{ textAlign: 'center', fontSize: 14, color: '#64748B', lineHeight: 1.5, marginBottom: 20 }}>
+            <div style={{ textAlign: 'center', fontSize: 14, color: 'rgba(203, 213, 225, 0.86)', lineHeight: 1.5, marginBottom: 20 }}>
               {isHebrew
                 ? 'אם אינך יכול להתחיל את השירות, צוות התמיכה ייצור איתך קשר.'
                 : 'If you cannot start the service, our support team will follow up with you.'}
@@ -5068,8 +4882,8 @@ const pendingConfirmationBtnStyle: React.CSSProperties = {
 const serviceTimerPanelStyle: React.CSSProperties = {
   marginTop: 14,
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  background: 'transparent',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
   padding: '14px 16px',
   display: 'grid',
   gap: 8,
@@ -5085,13 +4899,13 @@ const serviceTimerPrimaryRowStyle: React.CSSProperties = {
 const serviceTimerLabelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.82)',
 }
 
 const serviceTimerValueStyle: React.CSSProperties = {
   fontSize: 18,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
   fontVariantNumeric: 'tabular-nums',
 }
 
@@ -5104,15 +4918,7 @@ const serviceTimerMetaRowStyle: React.CSSProperties = {
 const serviceTimerMetaStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: '#475569',
-}
-
-const completionCardStyle: React.CSSProperties = {
-  padding: '20px',
-  borderRadius: 28,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
+  color: 'rgba(203, 213, 225, 0.84)',
 }
 
 const checkStyle: React.CSSProperties = {
@@ -5133,104 +4939,14 @@ const completionTitleStyle: React.CSSProperties = {
   textAlign: 'center',
   fontSize: 22,
   fontWeight: 800,
+  color: '#F8FAFC',
 }
 
 const completionSubStyle: React.CSSProperties = {
   margin: 0,
   textAlign: 'center',
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.86)',
   fontWeight: 700,
-}
-
-const earningsRowStyle: React.CSSProperties = {
-  marginTop: 16,
-  padding: '14px 16px',
-  borderRadius: 18,
-  background: '#F8FAFC',
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-}
-
-const earningsLabelStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: '#64748B',
-  fontWeight: 700,
-}
-
-const earningsValueStyle: React.CSSProperties = {
-  fontSize: 20,
-  color: '#0F172A',
-  fontWeight: 900,
-}
-
-const inlineRatingContainerStyle: React.CSSProperties = {
-  marginTop: 18,
-}
-
-const ratingPromptStyle: React.CSSProperties = {
-  margin: 0,
-  textAlign: 'center',
-  fontSize: 14,
-  fontWeight: 700,
-  color: '#475569',
-}
-
-const starsRowStyle: React.CSSProperties = {
-  marginTop: 10,
-  display: 'flex',
-  justifyContent: 'center',
-  gap: 2,
-}
-
-const compTextareaStyle: React.CSSProperties = {
-  width: '100%',
-  marginTop: 10,
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
-  padding: '12px 14px',
-  fontSize: 14,
-  outline: 'none',
-  resize: 'none',
-  boxSizing: 'border-box',
-}
-
-const submitRatingBtnStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 46,
-  borderRadius: 16,
-  border: 'none',
-  background: '#08153B',
-  color: '#FFFFFF',
-  fontSize: 14,
-  fontWeight: 800,
-  cursor: 'pointer',
-  marginTop: 10,
-}
-
-const thanksBannerStyle: React.CSSProperties = {
-  marginTop: 16,
-  padding: '12px 14px',
-  borderRadius: 16,
-  background: '#ECFDF5',
-  textAlign: 'center',
-}
-
-const thanksTextStyle: React.CSSProperties = {
-  color: '#166534',
-  fontWeight: 800,
-  fontSize: 14,
-}
-
-const recentRatingsSectionStyle: React.CSSProperties = {
-  marginTop: 18,
-}
-
-const recentRatingsHeadingStyle: React.CSSProperties = {
-  margin: '0 0 10px',
-  fontSize: 15,
-  fontWeight: 800,
-  color: '#0F172A',
 }
 
 const reportIssueBtnStyle: React.CSSProperties = {
@@ -5260,9 +4976,9 @@ const dismissBtnStyle: React.CSSProperties = {
   width: '100%',
   minHeight: 46,
   borderRadius: 16,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#334155',
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'transparent',
+  color: '#60A5FA',
   fontSize: 14,
   fontWeight: 800,
   cursor: 'pointer',
@@ -5473,12 +5189,12 @@ const completionOverlayStyle: React.CSSProperties = {
 const completionOverlayBackdropStyle: React.CSSProperties = {
   position: 'absolute',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.26)',
+  background: 'rgba(2, 6, 23, 0.58)',
 }
 
 const completionOverlayCardStyle: React.CSSProperties = {
   position: 'relative',
-  width: 'min(420px, 100%)',
+  width: 'min(100%, 520px)',
   maxWidth: '100%',
   boxSizing: 'border-box',
 }

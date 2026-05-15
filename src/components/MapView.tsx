@@ -1,7 +1,6 @@
 import {
   MapContainer,
   TileLayer,
-  CircleMarker,
   Circle,
   Tooltip,
   Polyline,
@@ -325,9 +324,107 @@ function injectMarkerStyles() {
       overflow: visible !important;
     }
 
+    .searching-map-mode {
+      background: #0b1220;
+    }
+
+    .searching-map-mode .leaflet-tile {
+      filter: brightness(0.64) saturate(0.82) contrast(0.94);
+      transition: filter 180ms ease;
+    }
+
+    .search-radar-wrap {
+      position: relative;
+      width: 132px;
+      height: 132px;
+      pointer-events: none;
+    }
+
+    .search-radar-core-glow {
+      position: absolute;
+      inset: 38px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(59,130,246,0.22) 0%, rgba(59,130,246,0.10) 52%, rgba(59,130,246,0) 78%);
+      filter: blur(1px);
+    }
+
+    .search-radar-orbit,
+    .search-radar-ring {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      border: 1px solid rgba(96,165,250,0.20);
+      box-sizing: border-box;
+      transform-origin: center;
+    }
+
+    .search-radar-orbit.orbit-2 {
+      inset: 16px;
+      border-color: rgba(96,165,250,0.18);
+    }
+
+    .search-radar-orbit.orbit-3 {
+      inset: 32px;
+      border-color: rgba(16,185,129,0.16);
+    }
+
+    .search-radar-ring.ring-1 {
+      animation: searchRadarPulse 2.9s ease-out infinite;
+    }
+
+    .search-radar-ring.ring-2 {
+      animation: searchRadarPulse 2.9s ease-out infinite 0.95s;
+    }
+
+    .search-radar-ring.ring-3 {
+      animation: searchRadarPulse 2.9s ease-out infinite 1.9s;
+    }
+
+    .search-radar-sweep {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: conic-gradient(
+        from 0deg,
+        rgba(59,130,246,0) 0deg,
+        rgba(59,130,246,0.00) 280deg,
+        rgba(96,165,250,0.08) 314deg,
+        rgba(96,165,250,0.26) 336deg,
+        rgba(16,185,129,0.14) 350deg,
+        rgba(59,130,246,0) 360deg
+      );
+      mask: radial-gradient(circle, transparent 0 33px, #000 34px);
+      -webkit-mask: radial-gradient(circle, transparent 0 33px, #000 34px);
+      animation: searchRadarSweepRotate 5.4s linear infinite;
+      opacity: 0.9;
+    }
+
     .nearby-walker-halo {
       animation: nearbyWalkerPulse 1.8s ease-out infinite;
       transform-origin: center;
+    }
+
+    @keyframes searchRadarPulse {
+      0% {
+        transform: scale(0.72);
+        opacity: 0.32;
+      }
+      55% {
+        opacity: 0.18;
+      }
+      100% {
+        transform: scale(1.14);
+        opacity: 0;
+      }
+    }
+
+    @keyframes searchRadarSweepRotate {
+      0% {
+        transform: rotate(0deg);
+      }
+      100% {
+        transform: rotate(360deg);
+      }
     }
 
     @keyframes nearbyWalkerPulse {
@@ -564,6 +661,24 @@ const nearbyWalkerIcon = L.divIcon({
   iconAnchor: [NB_OUTER / 2, NB_OUTER / 2],
 })
 
+const searchRadarIcon = L.divIcon({
+  html: `
+    <div class="search-radar-wrap" aria-hidden="true">
+      <div class="search-radar-core-glow"></div>
+      <div class="search-radar-sweep"></div>
+      <div class="search-radar-orbit orbit-1"></div>
+      <div class="search-radar-orbit orbit-2"></div>
+      <div class="search-radar-orbit orbit-3"></div>
+      <div class="search-radar-ring ring-1"></div>
+      <div class="search-radar-ring ring-2"></div>
+      <div class="search-radar-ring ring-3"></div>
+    </div>
+  `,
+  className: '',
+  iconSize: [132, 132],
+  iconAnchor: [66, 66],
+})
+
 function NearbyWalkerArrow({ center, bearing }: { center: [number, number]; bearing: number }) {
   const icon = useMemo(() => {
     const html = `
@@ -644,6 +759,10 @@ export default function MapView({
   const walkerMarkerKey = walkerLocation
     ? `walker-${walkerLocation[0]}-${walkerLocation[1]}-${walkerBearing ?? 'none'}-${gpsQuality}-${isArrived ? 'arrived' : 'moving'}`
     : 'walker-none'
+  const isSearchingMapMode = isSearching && !walkerLocation
+  const tileUrl = isSearchingMapMode
+    ? 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
+    : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
 
   return (
     <div style={mapShellStyle}>
@@ -652,9 +771,10 @@ export default function MapView({
         zoom={15}
         zoomControl={false}
         style={mapContainerStyle}
+        className={isSearchingMapMode ? 'searching-map-mode' : undefined}
       >
         <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          url={tileUrl}
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
           maxZoom={20}
           subdomains="abcd"
@@ -678,45 +798,13 @@ export default function MapView({
 
         <RouteLine routePolyline={routePolyline} />
 
-        {isSearching && !walkerLocation && (
-          <>
-            <CircleMarker
-              center={userLocation}
-              radius={25}
-              className="search-radar-ring-1"
-              pathOptions={{
-                color: '#FFCD00',
-                fillColor: '#FFCD00',
-                fillOpacity: 0,
-                weight: 2,
-                opacity: 0,
-              }}
-            />
-            <CircleMarker
-              center={userLocation}
-              radius={45}
-              className="search-radar-ring-2"
-              pathOptions={{
-                color: '#FFCD00',
-                fillColor: '#FFCD00',
-                fillOpacity: 0,
-                weight: 1.5,
-                opacity: 0,
-              }}
-            />
-            <CircleMarker
-              center={userLocation}
-              radius={65}
-              className="search-radar-ring-3"
-              pathOptions={{
-                color: '#FFCD00',
-                fillColor: '#FFCD00',
-                fillOpacity: 0,
-                weight: 1,
-                opacity: 0,
-              }}
-            />
-          </>
+        {isSearchingMapMode && (
+          <Marker
+            position={userLocation}
+            icon={searchRadarIcon}
+            interactive={false}
+            zIndexOffset={620}
+          />
         )}
 
         {filteredNearbyWalkers.map((w) => (

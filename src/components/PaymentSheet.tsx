@@ -13,8 +13,9 @@ export default function PaymentSheet({ clientSecret, priceLabel, onSuccess, onCa
   return (
     <div style={overlayStyle} onClick={onCancel}>
       <div style={sheetStyle} onClick={(e) => e.stopPropagation()}>
-        <div style={{ padding: '24px 28px', paddingBottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
-          <h2 style={{ margin: '0 0 18px', fontSize: 20, fontWeight: 700 }}>Confirm order</h2>
+        <div style={contentWrapStyle}>
+          <div style={handleStyle} />
+          <h2 style={titleStyle}>Confirm order</h2>
           <Elements stripe={stripePromise} options={{ clientSecret }}>
             <CheckoutForm priceLabel={priceLabel} onSuccess={onSuccess} onCancel={onCancel} />
           </Elements>
@@ -97,10 +98,10 @@ function CheckoutForm({
         marginTop: 18,
         position: 'sticky',
         bottom: 0,
-        background: '#FFFFFF',
+        background: 'linear-gradient(180deg, rgba(14,17,22,0.96) 0%, rgba(20,24,31,0.98) 100%)',
         paddingTop: 16,
         paddingBottom: 8,
-        borderTop: '1px solid #F1F5F9',
+        borderTop: '1px solid rgba(148, 163, 184, 0.12)',
         zIndex: 1,
       }}>
         <button
@@ -134,7 +135,7 @@ function CheckoutForm({
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.5)',
+  background: 'rgba(2, 6, 23, 0.58)',
   zIndex: 1000,
   display: 'flex',
   flexDirection: 'column',
@@ -142,33 +143,55 @@ const overlayStyle: React.CSSProperties = {
 }
 
 const sheetStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: '20px 20px 0 0',
-  width: '100%',
-  maxWidth: 480,
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  width: 'min(520px, calc(100% - 16px))',
   maxHeight: '85vh',
-  margin: '0 auto',
-  boxShadow: '0 -8px 40px rgba(15, 23, 42, 0.2)',
+  margin: '0 auto max(6px, env(safe-area-inset-bottom, 0px))',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
   overflowY: 'auto',
   WebkitOverflowScrolling: 'touch',
 }
 
+const contentWrapStyle: React.CSSProperties = {
+  padding: '12px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+}
+
+const handleStyle: React.CSSProperties = {
+  width: 38,
+  height: 5,
+  borderRadius: 999,
+  background: 'rgba(148, 163, 184, 0.52)',
+  margin: '0 auto 12px',
+}
+
+const titleStyle: React.CSSProperties = {
+  margin: '0 0 18px',
+  fontSize: 20,
+  fontWeight: 800,
+  color: '#F8FAFC',
+}
+
 const primaryButtonStyle: React.CSSProperties = {
   border: 'none',
-  borderRadius: 12,
+  borderRadius: 16,
   padding: '12px 20px',
-  background: '#0F172A',
+  background: 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)',
   color: '#FFFFFF',
-  fontWeight: 700,
+  fontWeight: 800,
   fontSize: 14,
+  boxShadow: '0 12px 28px rgba(37,99,235,0.18)',
 }
 
 const cancelButtonStyle: React.CSSProperties = {
-  border: '1px solid #E2E8F0',
-  borderRadius: 12,
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  borderRadius: 16,
   padding: '12px 20px',
-  background: '#FFFFFF',
-  color: '#64748B',
-  fontWeight: 600,
+  background: 'rgba(17, 24, 39, 0.78)',
+  color: '#60A5FA',
+  fontWeight: 700,
   fontSize: 14,
 }

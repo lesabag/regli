@@ -3053,9 +3053,10 @@ export default function ClientDashboard({
           >
             <div style={dragHandleBarStyle} />
           </div>
-        ) : (
+        ) : isTrackingState ? (
           <div style={{ ...sheetTopPadStyle, height: 8 }} />
-        )}
+        ) : null
+        }
 
         <div ref={scrollRef} style={currentSheetScrollStyle}>
           {shouldRenderIdleSheet && (
@@ -3147,7 +3148,7 @@ export default function ClientDashboard({
           )}
 
           {shouldRenderSearchingSheet && (
-            <div style={sheetContentStyle}>
+            <div style={searchingSheetContentStyle}>
               <SearchingSheet
                 searchStartedAt={flow.searchStartTime}
                 elapsedSeconds={flow.elapsedSeconds}
@@ -4206,6 +4207,9 @@ function TrackingCard({
   const isArrivalPending = phase === 'arrived_pending_confirmation'
   const isArrivalConfirmed = phase === 'arrival_confirmed'
   const isOnTheWay = !isServiceActive && !isArrivalPending && !isArrivalConfirmed
+  const resolvedTrackingCardStyle = isArrivalPending
+    ? { ...trackingCardStyle, ...trackingArrivedCardCompactStyle }
+    : trackingCardStyle
   const statusToneStyle = isServiceActive
     ? trackingTopBadgeActiveStyle
     : isArrivalPending
@@ -4240,7 +4244,7 @@ function TrackingCard({
         : t('tracking.headingToYou', { walkerName })
 
   return (
-    <div style={trackingCardStyle}>
+    <div style={resolvedTrackingCardStyle}>
       <div style={{ ...trackingTopBadgeStyle, ...statusToneStyle }}>{topBadge}</div>
       <div style={trackingTitleStyle}>{title}</div>
       {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
@@ -4282,14 +4286,19 @@ function TrackingCard({
       )}
 
       {isArrivalPending && onConfirmArrival && (
-        <div style={{ marginTop: 16 }}>
-          <ActionButton
-            label={confirmingArrival ? t('tracking.confirmingArrival') : t('tracking.confirmArrival')}
+        <div style={trackingArrivalActionWrapStyle}>
+          <button
+            type="button"
             onClick={onConfirmArrival}
-            loading={!!confirmingArrival}
             disabled={!!confirmingArrival}
-            touchSafe
-          />
+            aria-busy={!!confirmingArrival}
+            style={{
+              ...trackingArrivalActionButtonStyle,
+              ...(confirmingArrival ? trackingArrivalActionButtonBusyStyle : null),
+            }}
+          >
+            {confirmingArrival ? t('tracking.confirmingArrival') : t('tracking.confirmArrival')}
+          </button>
         </div>
       )}
     </div>
@@ -4576,6 +4585,14 @@ const searchingSheetStyle: React.CSSProperties = {
   top: 'auto',
   height: 'auto',
   maxHeight: 'calc(100dvh - 92px)',
+  background: 'transparent',
+  boxShadow: 'none',
+  borderTopLeftRadius: 0,
+  borderTopRightRadius: 0,
+  border: 'none',
+  overflow: 'visible',
+  pointerEvents: 'none',
+  zIndex: 3,
 }
 
 const trackingSheetStyle: React.CSSProperties = {
@@ -4583,6 +4600,14 @@ const trackingSheetStyle: React.CSSProperties = {
   top: 'auto',
   height: 'auto',
   maxHeight: 'calc(100dvh - 92px)',
+  background: 'transparent',
+  boxShadow: 'none',
+  borderTopLeftRadius: 0,
+  borderTopRightRadius: 0,
+  border: 'none',
+  overflow: 'visible',
+  pointerEvents: 'none',
+  zIndex: 3,
 }
 
 const sheetTopPadStyle: React.CSSProperties = {
@@ -4613,14 +4638,18 @@ const dragHandleBarStyle: React.CSSProperties = {
 }
 
 const searchingSheetScrollStyle: React.CSSProperties = {
-  flex: '0 1 auto',
+  flex: '0 0 auto',
   minHeight: 0,
   overflowY: 'visible',
   overflowX: 'hidden',
-  padding: '0 14px 8px',
+  paddingTop: 0,
+  paddingRight: 8,
+  paddingBottom: 0,
+  paddingLeft: 8,
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
+  pointerEvents: 'none',
 }
 
 const trackingSheetScrollStyle: React.CSSProperties = {
@@ -4657,6 +4686,14 @@ const sheetContentStyle: React.CSSProperties = {
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
+}
+
+const searchingSheetContentStyle: React.CSSProperties = {
+  ...sheetContentStyle,
+  display: 'flex',
+  justifyContent: 'center',
+  pointerEvents: 'auto',
+  paddingBottom: 'max(4px, calc(env(safe-area-inset-bottom, 0px) - 8px))',
 }
 
 const idleSheetContentStyle: React.CSSProperties = {
@@ -5442,25 +5479,28 @@ const completionOverlayStyle: React.CSSProperties = {
 const completionOverlayBackdropStyle: React.CSSProperties = {
   position: 'absolute',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.26)',
+  background: 'rgba(2, 6, 23, 0.58)',
 }
 
 const completionOverlayCardStyle: React.CSSProperties = {
   position: 'relative',
-  width: 'min(420px, 100%)',
+  width: 'min(100%, 520px)',
   maxWidth: '100%',
   boxSizing: 'border-box',
 }
 
 const pendingConfirmCardStyle: React.CSSProperties = {
-  background: '#FFFFFF',
-  borderRadius: 24,
-  padding: '28px 24px 24px',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  borderRadius: 30,
+  padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   gap: 12,
-  boxShadow: '0 16px 48px rgba(15, 23, 42, 0.18)',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
   textAlign: 'center',
 }
 
@@ -5472,13 +5512,13 @@ const pendingConfirmIconStyle: React.CSSProperties = {
 const pendingConfirmTitleStyle: React.CSSProperties = {
   fontSize: 20,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const pendingConfirmSubtitleStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 600,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.86)',
   lineHeight: 1.4,
 }
 
@@ -5506,27 +5546,32 @@ const pendingConfirmBtnStyle: React.CSSProperties = {
   fontWeight: 900,
   cursor: 'pointer',
   marginTop: 4,
+  boxShadow: '0 12px 28px rgba(21,128,61,0.20)',
 }
 
 const pendingRejectBtnStyle: React.CSSProperties = {
   appearance: 'none',
-  border: '1.5px solid #E2E8F0',
+  border: '1.5px solid rgba(96, 165, 250, 0.16)',
   width: '100%',
   minHeight: 46,
   borderRadius: 16,
-  background: '#FFFFFF',
-  color: '#64748B',
+  background: 'rgba(17, 24, 39, 0.78)',
+  color: '#60A5FA',
   fontSize: 15,
-  fontWeight: 700,
+  fontWeight: 800,
   cursor: 'pointer',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
 }
 
 const tipCardStyle: React.CSSProperties = {
   position: 'relative',
-  borderRadius: 24,
-  background: '#FFFFFF',
-  boxShadow: '0 24px 70px rgba(15, 23, 42, 0.20)',
-  padding: 22,
+  borderRadius: 30,
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
   display: 'grid',
   gap: 12,
   textAlign: 'center',
@@ -5549,14 +5594,14 @@ const tipTitleStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 20,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
   lineHeight: 1.18,
 }
 
 const tipSubtitleStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 13,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.86)',
   lineHeight: 1.4,
 }
 
@@ -5569,9 +5614,9 @@ const tipPresetRowStyle: React.CSSProperties = {
 const tipPresetButtonStyle: React.CSSProperties = {
   height: 46,
   borderRadius: 16,
-  border: '1px solid #FDE68A',
-  background: '#FFFBEB',
-  color: '#92400E',
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'rgba(17, 24, 39, 0.78)',
+  color: '#60A5FA',
   fontSize: 16,
   fontWeight: 900,
   cursor: 'pointer',
@@ -5581,7 +5626,7 @@ const tipPresetButtonStyle: React.CSSProperties = {
 const tipCustomToggleStyle: React.CSSProperties = {
   border: 'none',
   background: 'transparent',
-  color: '#2563EB',
+  color: '#60A5FA',
   fontSize: 13,
   fontWeight: 800,
   cursor: 'pointer',
@@ -5597,10 +5642,12 @@ const tipCustomRowStyle: React.CSSProperties = {
 const tipCustomInputStyle: React.CSSProperties = {
   height: 44,
   borderRadius: 14,
-  border: '1px solid #E2E8F0',
+  border: '1px solid rgba(148, 163, 184, 0.16)',
   padding: '0 12px',
   fontSize: 15,
   fontWeight: 800,
+  color: '#F8FAFC',
+  background: 'rgba(15, 23, 42, 0.92)',
   outline: 'none',
   boxSizing: 'border-box',
 }
@@ -5609,21 +5656,22 @@ const tipCustomSubmitStyle: React.CSSProperties = {
   height: 44,
   borderRadius: 14,
   border: 'none',
-  background: '#0F172A',
+  background: 'linear-gradient(180deg, #38BDF8 0%, #2563EB 100%)',
   color: '#FFFFFF',
   padding: '0 16px',
   fontSize: 14,
   fontWeight: 900,
   cursor: 'pointer',
   fontFamily: 'inherit',
+  boxShadow: '0 12px 28px rgba(37,99,235,0.18)',
 }
 
 const tipSkipButtonStyle: React.CSSProperties = {
   height: 44,
   borderRadius: 14,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#64748B',
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'rgba(17, 24, 39, 0.78)',
+  color: '#60A5FA',
   fontSize: 14,
   fontWeight: 800,
   cursor: 'pointer',
@@ -5633,15 +5681,23 @@ const tipSkipButtonStyle: React.CSSProperties = {
 const trackingCardStyle: React.CSSProperties = {
   width: '100%',
   maxWidth: '100%',
-  borderRadius: 22,
-  border: '1px solid #E2E8F0',
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  padding: 16,
+  borderRadius: 30,
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
+  padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
   display: 'grid',
-  gap: 12,
+  gap: 10,
   boxSizing: 'border-box',
   overflow: 'hidden',
   pointerEvents: 'auto',
+  boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+}
+
+const trackingArrivedCardCompactStyle: React.CSSProperties = {
+  padding: '13px 14px calc(13px + env(safe-area-inset-bottom, 0px))',
+  gap: 9,
 }
 
 const trackingTopBadgeStyle: React.CSSProperties = {
@@ -5654,38 +5710,38 @@ const trackingTopBadgeStyle: React.CSSProperties = {
 }
 
 const trackingTopBadgeTravelStyle: React.CSSProperties = {
-  background: 'rgba(37, 99, 235, 0.10)',
-  color: '#1D4ED8',
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#93C5FD',
 }
 
 const trackingTopBadgeArrivedStyle: React.CSSProperties = {
-  background: 'rgba(217, 119, 6, 0.12)',
-  color: '#B45309',
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#93C5FD',
 }
 
 const trackingTopBadgeReadyStyle: React.CSSProperties = {
-  background: 'rgba(14, 165, 233, 0.10)',
-  color: '#0369A1',
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#93C5FD',
 }
 
 const trackingTopBadgeActiveStyle: React.CSSProperties = {
-  background: 'rgba(22, 163, 74, 0.12)',
-  color: '#15803D',
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#93C5FD',
 }
 
 const trackingTitleStyle: React.CSSProperties = {
-  fontSize: 24,
+  fontSize: 20,
   fontWeight: 900,
-  color: '#0F172A',
-  lineHeight: 1.05,
+  color: '#F8FAFC',
+  lineHeight: 1.08,
   minWidth: 0,
   overflowWrap: 'anywhere',
 }
 
 const trackingSubtitleStyle: React.CSSProperties = {
-  fontSize: 14,
-  color: '#475569',
-  lineHeight: 1.45,
+  fontSize: 13,
+  color: 'rgba(203, 213, 225, 0.84)',
+  lineHeight: 1.38,
   minWidth: 0,
   overflowWrap: 'anywhere',
 }
@@ -5693,15 +5749,15 @@ const trackingSubtitleStyle: React.CSSProperties = {
 const trackingStatsGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gap: 10,
+  gap: 8,
   minWidth: 0,
 }
 
 const trackingStatCardStyle: React.CSSProperties = {
   minWidth: 0,
   borderRadius: 16,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
+  background: 'transparent',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
   padding: '12px 10px',
   display: 'grid',
   gap: 6,
@@ -5710,15 +5766,14 @@ const trackingStatCardStyle: React.CSSProperties = {
 }
 
 const trackingEtaStatCardStyle: React.CSSProperties = {
-  background: '#EFF6FF',
-  borderColor: '#BFDBFE',
-  boxShadow: '0 6px 18px rgba(37, 99, 235, 0.08)',
+  background: 'transparent',
+  borderColor: 'rgba(96, 165, 250, 0.14)',
 }
 
 const trackingStatLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.82)',
   textTransform: 'uppercase',
   letterSpacing: 0.6,
 }
@@ -5726,7 +5781,7 @@ const trackingStatLabelStyle: React.CSSProperties = {
 const trackingStatValueStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
   textAlign: 'center',
   minWidth: 0,
   maxWidth: '100%',
@@ -5735,11 +5790,11 @@ const trackingStatValueStyle: React.CSSProperties = {
 }
 
 const trackingTimerPanelStyle: React.CSSProperties = {
-  marginTop: 14,
+  marginTop: 12,
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
-  padding: '14px 16px',
+  background: 'transparent',
+  border: '1px solid rgba(148, 163, 184, 0.10)',
+  padding: '13px 14px',
   display: 'grid',
   gap: 8,
 }
@@ -5754,13 +5809,13 @@ const trackingTimerPrimaryRowStyle: React.CSSProperties = {
 const trackingTimerLabelStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.82)',
 }
 
 const trackingTimerValueStyle: React.CSSProperties = {
   fontSize: 18,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
   fontVariantNumeric: 'tabular-nums',
 }
 
@@ -5773,7 +5828,30 @@ const trackingTimerMetaRowStyle: React.CSSProperties = {
 const trackingTimerMetaStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: '#475569',
+  color: 'rgba(203, 213, 225, 0.84)',
+}
+
+const trackingArrivalActionWrapStyle: React.CSSProperties = {
+  marginTop: 10,
+}
+
+const trackingArrivalActionButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  width: '100%',
+  minHeight: 46,
+  borderRadius: 16,
+  border: '1px solid rgba(96, 165, 250, 0.16)',
+  background: 'transparent',
+  color: '#60A5FA',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const trackingArrivalActionButtonBusyStyle: React.CSSProperties = {
+  opacity: 0.68,
+  cursor: 'wait',
 }
 
 const menuOverlayStyle: React.CSSProperties = {
