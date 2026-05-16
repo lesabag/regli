@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatShortAddress } from '../utils/addressFormat'
+import { formatDogCountLabel, isDogServiceType } from '../utils/dogCount'
 import { formatDurationFromMinutes } from '../utils/serviceTiming'
 
 type Role = 'client' | 'walker'
@@ -12,6 +13,10 @@ export type HistoryItem = {
   status?: string | null
   dog_name?: string | null
   dogName?: string | null
+  dog_count?: number | null
+  dogCount?: number | null
+  service_type?: string | null
+  serviceType?: string | null
   address?: string | null
   location?: string | null
   created_at?: string | null
@@ -332,12 +337,14 @@ function SwipeHistoryRow({
 
     onDetails()
   }, [onDetails])
+  const { i18n } = useTranslation()
 
   const status = formatStatus(item.status)
   const title = getTitle(item)
   const itemId = getItemId(item)
   const dateLabel = getDisplayDate(item)
   const durationLabel = getDuration(item)
+  const dogCountLabel = getDogCountMetaLabel(item, i18n.resolvedLanguage === 'he')
   const priceLabel = getPrice(item)
   const tipLabel = getTipLabel(item)
   const counterpartLabel = getCounterpart(item, role)
@@ -429,6 +436,8 @@ function SwipeHistoryRow({
                   <span>{dateLabel}</span>
                   {durationLabel ? <Dot /> : null}
                   {durationLabel ? <span>{durationLabel}</span> : null}
+                  {dogCountLabel ? <Dot /> : null}
+                  {dogCountLabel ? <span>{dogCountLabel}</span> : null}
                   {priceLabel ? <Dot /> : null}
                   {priceLabel ? <span>{priceLabel}</span> : null}
                   {tipLabel ? <Dot /> : null}
@@ -683,6 +692,18 @@ function getPrice(item: HistoryItem): string {
   if (raw == null || !Number.isFinite(raw) || raw <= 0) return ''
 
   return `₪${raw}`
+}
+
+function getDogCountMetaLabel(item: HistoryItem, isHebrew: boolean): string {
+  const serviceType = sanitizeString(item.service_type) ?? sanitizeString(item.serviceType)
+  if (!isDogServiceType(serviceType)) return ''
+  const raw =
+    typeof item.dog_count === 'number'
+      ? item.dog_count
+      : typeof item.dogCount === 'number'
+        ? item.dogCount
+        : 1
+  return formatDogCountLabel(raw, { isHebrew })
 }
 
 function getTipLabel(item: HistoryItem): string {

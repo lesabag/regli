@@ -193,6 +193,7 @@ serve(async (req: Request) => {
       scheduledFor?: string
       priceAgorot?: number
       durationMinutes?: number
+      dogCount?: number
     }
 
     try {
@@ -219,7 +220,10 @@ serve(async (req: Request) => {
       scheduledFor,
       priceAgorot: rawPriceAgorot,
       durationMinutes: rawDurationMinutes,
+      dogCount: rawDogCount,
     } = body
+
+    const dogCount = rawDogCount === 2 ? 2 : 1
 
     if (!serviceType || !SERVICE_PRICES[serviceType]) {
       return new Response(
@@ -460,6 +464,7 @@ serve(async (req: Request) => {
       walkerEarningsILS: walkerAmount / 100,
       durationSource: clientDurationMinutes != null ? 'client_override' : 'service_type_default',
       durationMinutes,
+      dogCount,
     })
 
     if (!customerId || !paymentMethodId) {
@@ -700,6 +705,7 @@ serve(async (req: Request) => {
         selected_walker_id: walkerId || null,
         service_type: persistedRequestServiceType,
         dog_name: dogName.trim(),
+        dog_count: dogCount,
         location: location.trim(),
         notes: notes?.trim() || null,
         status: 'awaiting_payment',
@@ -736,6 +742,7 @@ serve(async (req: Request) => {
       walkerAmountILS: walkerAmount / 100,
       source: clientPriceAgorot != null ? 'client_price' : 'legacy_service_prices',
       durationMinutes,
+      dogCount,
       requestServiceTypeReceived: requestServiceType ?? null,
       receivedScheduledFor: scheduledFor ?? null,
       profileServiceType: clientProfile.service_type ?? null,

@@ -7,6 +7,7 @@ import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
+import { normalizeDogCount } from '../utils/dogCount'
 import {
   fetchProviderAvailabilityRows,
   groupProviderAvailabilityRows,
@@ -131,6 +132,7 @@ type WalkRequestRow = {
   status: 'awaiting_payment' | 'open' | 'accepted' | 'completed' | 'cancelled' | string
   service_type?: string | null
   dog_name: string | null
+  dog_count?: number | null
   location: string | null
   address?: string | null
   notes?: string | null
@@ -224,6 +226,7 @@ type RequestWalkOptions = {
   durationOverride?: DurationType | null
   durationMinutesOverride?: number | null
   priceOverrideILS?: number | null
+  dogCountOverride?: number | null
   bookingTimingOverride?: 'asap' | 'scheduled'
   scheduledForOverride?: string | null
 }
@@ -248,7 +251,7 @@ type QueryResult<T> = {
 }
 
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
+  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
@@ -3340,6 +3343,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     const effectiveNotes = requestOptions.notesOverride ?? null
     const effectiveDurationMinutes =
       requestOptions.durationMinutesOverride ?? (effectiveDuration ? durationToMinutes(effectiveDuration) : null)
+    const effectiveDogCount = normalizeDogCount(requestOptions.dogCountOverride)
     const effectivePriceILS =
       requestOptions.priceOverrideILS ?? adjustedPriceILS
     const effectiveRequestServiceType = requestOptions.requestServiceType
@@ -3422,6 +3426,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         hasDuration: !!effectiveDuration,
         hasSavedCard: !!savedCard,
         priceILS: effectivePriceILS,
+        dogCount: effectiveDogCount,
       })
       setLoading(true)
       setError(null)
@@ -3455,6 +3460,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           hasDuration: !!effectiveDuration,
           durationMinutes: effectiveDurationMinutes,
           priceILS: effectivePriceILS,
+          dogCount: effectiveDogCount,
           hasSavedCard: !!savedCard,
         },
       })
@@ -3478,6 +3484,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
           priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
           durationMinutes: effectiveDurationMinutes ?? undefined,
+          dogCount: effectiveDogCount,
         },
       })
 
@@ -3528,6 +3535,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         platformFeeILS,
         walkerEarningsILS,
         durationMinutes: effectiveDurationMinutes,
+        dogCount: effectiveDogCount,
       })
       const statusPatch: Record<string, unknown> = {
         status: 'open',
@@ -3535,6 +3543,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         smart_dispatch_state: 'idle',
         smart_dispatch_last_error: null,
         duration_minutes: effectiveDurationMinutes,
+        dog_count: effectiveDogCount,
         price: effectivePriceILS,
         platform_fee: platformFeeILS,
         walker_earnings: walkerEarningsILS,

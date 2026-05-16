@@ -1,3 +1,5 @@
+import { isDogServiceType, normalizeDogCount } from '../utils/dogCount'
+
 /**
  * Dynamic Pricing Engine V1
  *
@@ -71,6 +73,25 @@ export interface PricingResult {
   reasons: SurgeReason[]
   adjustedPriceILS: number
   basePriceILS: number
+}
+
+export const SECOND_DOG_FEE_ILS = 20
+
+export function getDogCountPriceAdjustmentILS(params: {
+  serviceType: string | null | undefined
+  dogCount: unknown
+}): number {
+  return isDogServiceType(params.serviceType) && normalizeDogCount(params.dogCount) === 2
+    ? SECOND_DOG_FEE_ILS
+    : 0
+}
+
+export function applyDogCountPricing(basePriceILS: number, params: {
+  serviceType: string | null | undefined
+  dogCount: unknown
+}): number {
+  if (!Number.isFinite(basePriceILS) || basePriceILS <= 0) return 0
+  return basePriceILS + getDogCountPriceAdjustmentILS(params)
 }
 
 /* ── Core engine ───────────────────────────────────────────────── */

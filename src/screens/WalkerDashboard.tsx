@@ -11,6 +11,7 @@ import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { usePushNotifications } from '../hooks/usePushNotifications'
 import { supabase } from '../services/supabaseClient'
 import { formatShortAddress } from '../utils/addressFormat'
+import { formatDogCountLabel, isDogServiceType } from '../utils/dogCount'
 import { getServiceLabels } from '../utils/serviceLifecycle'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import {
@@ -742,12 +743,23 @@ export default function WalkerDashboard({
     : '—'
 
   const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
+  const requestDogCountLabel = formatDogCountLabel(topRequest?.dog_count ?? 1, { isHebrew })
   const isBabysitterRequest = topRequest?.service_type === 'baby_sitter'
   const babysitterRequestNotes = useMemo(
     () => parseBabysitterNotes(topRequest?.notes),
     [topRequest?.notes],
   )
   const topOffer = flow.activeOffers.find((offer) => offer.request_id === topRequest?.id) ?? null
+
+  useEffect(() => {
+    if (!topRequest) return
+    console.debug('[WalkerDashboard] displayed dog count', {
+      request_id: topRequest.id,
+      topRequestDogCount: topRequest.dog_count ?? null,
+      topOfferDogCount: topOffer?.dog_count ?? null,
+      label: requestDogCountLabel,
+    })
+  }, [requestDogCountLabel, topOffer?.dog_count, topRequest])
 
   useEffect(() => {
     const runningService = !!activeJob?.service_started_at && !activeJob?.service_completed_at
@@ -800,6 +812,12 @@ export default function WalkerDashboard({
 
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
+    if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
+      rows.push({
+        label: isHebrew ? 'Dogs' : 'Dogs',
+        value: formatDogCountLabel(completionJobDetails.dog_count ?? 1, { isHebrew }),
+      })
+    }
     if (completionDurationSummary.plannedLabel) {
       rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
     }
@@ -807,7 +825,12 @@ export default function WalkerDashboard({
       rows.push({ label: 'Actual', value: completionDurationSummary.actualLabel })
     }
     return rows
-  }, [completionDurationSummary.actualLabel, completionDurationSummary.plannedLabel])
+  }, [
+    completionDurationSummary.actualLabel,
+    completionDurationSummary.plannedLabel,
+    completionJobDetails,
+    isHebrew,
+  ])
 
   const allHistoryItems = useMemo<HistoryItem[]>(() => {
     const ratingByJobId = new Map<string, { rating: number; review: string | null }>()
@@ -845,6 +868,8 @@ export default function WalkerDashboard({
           rating: ratingInfo?.rating ?? null,
           review: ratingInfo?.review ?? null,
           price: j.walker_earnings ?? null,
+          dog_count: j.dog_count ?? 1,
+          service_type: j.service_type ?? null,
           duration_minutes: j.duration_minutes ?? null,
           tip_amount: j.tip_amount ?? null,
           status: j.status,
@@ -874,6 +899,8 @@ export default function WalkerDashboard({
           isHebrew,
         ),
         address: formatShortAddress(job.address || job.location || ''),
+        dogCount: job.dog_count ?? 1,
+        service_type: job.service_type ?? null,
         scheduledFor: job.scheduled_for,
         startsInMinutes: flow.startsInMinutes(job.scheduled_for),
         durationLabel: durationFromMinutes(job.duration_minutes),
@@ -1012,6 +1039,7 @@ export default function WalkerDashboard({
               })
             : '',
           serviceLabel: labels.itemLabel,
+          dogCountLabel: formatDogCountLabel(job.dog_count ?? 1, { isHebrew }),
           durationLabel: durationFromMinutes(job.duration_minutes),
           customerName,
           totalPriceLabel: formatMoney(job.price),
@@ -2610,6 +2638,7 @@ export default function WalkerDashboard({
                   },
                   isHebrew,
                 )}
+                {isDogServiceType(onTheWayJob.service_type) ? ` · ${formatDogCountLabel(onTheWayJob.dog_count ?? 1, { isHebrew })}` : ''}
               </p>
 
               {onTheWayJob.location && (
@@ -2702,6 +2731,7 @@ export default function WalkerDashboard({
                   },
                   isHebrew,
                 )}
+                {isDogServiceType(activeJob.service_type) ? ` · ${formatDogCountLabel(activeJob.dog_count ?? 1, { isHebrew })}` : ''}
               </p>
 
               {activeJob.location && (
@@ -2852,7 +2882,9 @@ export default function WalkerDashboard({
                     {isBabysitterRequest ? (isHebrew ? 'משך מבוקש' : 'Requested duration') : t('booking.durationQuestion')}
                   </span>
                   <span style={incomingMetaValueStyle}>
-                    {isBabysitterRequest ? babysitterRequestNotes.duration || requestDuration : requestDuration}
+                    {isBabysitterRequest
+                      ? babysitterRequestNotes.duration || requestDuration
+                      : `${requestDuration}${isDogServiceType(topRequest.service_type) ? ` · ${requestDogCountLabel}` : ''}`}
                   </span>
                 </div>
                 <div style={incomingMetaCardStyle}>

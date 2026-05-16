@@ -5,7 +5,6 @@ import MapView from '../components/MapView'
 import ActionButton from '../components/ActionButton'
 import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
-import CardSetupForm from '../components/CardSetupForm'
 import ProfileAvatar from '../components/ProfileAvatar'
 import GroupedHistory from '../components/GroupedHistory'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -21,10 +20,12 @@ import {
   SERVICE_I18N_KEYS,
   isServiceAvailable as checkServiceAvailable,
 } from '../lib/serviceTypes'
+import { applyDogCountPricing } from '../lib/pricing'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
+import { formatDogCountLabel, isDogServiceType, normalizeDogCount, type DogCount } from '../utils/dogCount'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
@@ -252,6 +253,7 @@ export default function ClientDashboard({
   const [dogWalkerBudgetFixed, setDogWalkerBudgetFixed] = useState(
     String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
+  const [dogCount, setDogCount] = useState<DogCount>(1)
   const [showFirstBookingWow, setShowFirstBookingWow] = useState(false)
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
@@ -342,6 +344,16 @@ export default function ClientDashboard({
   useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
+
+  useEffect(() => {
+    if (!isDogServiceType(requestServiceType ?? resolvedBookingService)) {
+      setDogCount(1)
+    }
+  }, [requestServiceType, resolvedBookingService])
+
+  useEffect(() => {
+    setDogCount(1)
+  }, [flow.bookingComposerResetKey])
 
   useEffect(() => {
     if (availableBookingServices.length === 0) return
@@ -970,7 +982,14 @@ export default function ClientDashboard({
       return
     }
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
-    const dogWalkerBudgetRequestValue = dogWalkerBudgetValue > 0 ? dogWalkerBudgetValue : null
+    const effectiveDogCount = normalizeDogCount(dogCount)
+    const dogWalkerBudgetRequestValue =
+      dogWalkerBudgetValue > 0
+        ? applyDogCountPricing(dogWalkerBudgetValue, {
+            serviceType: effectiveServiceType,
+            dogCount: effectiveDogCount,
+          })
+        : null
 
     if (effectiveServiceType === 'baby_sitter') {
       if (
@@ -1091,6 +1110,7 @@ export default function ClientDashboard({
         durationOverride: pricingDuration,
         durationMinutesOverride: dogWalkerDurationMinutes,
         priceOverrideILS: dogWalkerBudgetRequestValue,
+        dogCountOverride: effectiveDogCount,
         bookingTimingOverride: flow.bookingTiming,
         scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
@@ -1107,6 +1127,7 @@ export default function ClientDashboard({
     dogWalkerBudgetValue,
     dogWalkerDurationMinutes,
     dogWalkerDurationValue,
+    dogCount,
     babysitterBudgetFixed,
     babysitterServiceDetails,
     babysitterDurationValue,
@@ -1224,6 +1245,7 @@ export default function ClientDashboard({
       flow.upcomingJobs.map((j) => ({
         id: j.id,
         dogName: j.dog_name || t('booking.walkFallback'),
+        dog_count: j.dog_count ?? 1,
         location: formatShortAddress(j.address || j.location),
         scheduledFor: j.scheduled_for,
         startsInMin: flow.startsInMinutes(j.scheduled_for),
@@ -1364,6 +1386,20 @@ export default function ClientDashboard({
                 ? item.state
                 : 'completed',
           dog_name: dogName,
+          dog_count:
+            typeof item.dog_count === 'number'
+              ? item.dog_count
+              : typeof item.dogCount === 'number'
+                ? item.dogCount
+                : 1,
+          service_type:
+            typeof item.service_type === 'string'
+              ? item.service_type
+              : typeof item.serviceType === 'string'
+                ? item.serviceType
+                : typeof item.request_service_type === 'string'
+                  ? item.request_service_type
+                  : null,
           address: formatShortAddress(location),
           created_at: createdAt,
           completed_at: createdAt,
@@ -1688,6 +1724,12 @@ export default function ClientDashboard({
         value: localizeMinuteUnitLabel(completionDurationSummary.plannedLabel) || completionDurationSummary.plannedLabel,
       })
     }
+    if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
+      rows.push({
+        label: isRtl ? 'Dogs' : 'Dogs',
+        value: formatDogCountLabel(completionJobDetails.dog_count ?? 1, { isHebrew: isRtl }),
+      })
+    }
     if (completionDurationSummary.actualLabel) {
       rows.push({
         label: t('tracking.actual'),
@@ -1698,10 +1740,13 @@ export default function ClientDashboard({
   }, [
     completionDurationSummary.actualLabel,
     completionDurationSummary.plannedLabel,
+    completionJobDetails?.dog_count,
     completionJobDetails?.payment_status,
     completionJobDetails?.price,
+    completionJobDetails?.service_type,
     flow.savedCard,
     i18n.resolvedLanguage,
+    isRtl,
     t,
   ])
   const activeJobHasProviderIssue = hasProviderIssue(flow.activeJob?.notes)
@@ -1975,6 +2020,8 @@ export default function ClientDashboard({
     requestServiceTypeRef.current ?? requestServiceType
   const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
   const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
+  const shouldShowDogCountControl = isDogServiceType(effectiveRequestServiceType ?? resolvedBookingService)
+  const normalizedDogCount = shouldShowDogCountControl ? normalizeDogCount(dogCount) : 1
   const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : flow.dogName.trim()
   const hasValidDurationForSelectedService = isBabysitterRequest
     ? !!babysitterDurationMinutes
@@ -1984,7 +2031,10 @@ export default function ClientDashboard({
   const currentBookingPriceILS = isBabysitterRequest
     ? babysitterFixedBudgetValue
     : isDogWalkerRequest
-      ? dogWalkerBudgetValue
+      ? applyDogCountPricing(dogWalkerBudgetValue, {
+          serviceType: effectiveRequestServiceType,
+          dogCount: normalizedDogCount,
+        })
       : flow.adjustedPriceILS
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
   const requiresScheduledFor = flow.bookingTiming === 'scheduled'
@@ -2084,21 +2134,17 @@ export default function ClientDashboard({
   const babysitterBudgetSummary = useMemo(() => {
     return `₪${babysitterFixedBudgetValue}`
   }, [babysitterFixedBudgetValue])
-  const dogWalkerBudgetSummary = useMemo(() => `₪${dogWalkerBudgetValue}`, [dogWalkerBudgetValue])
+  const dogWalkerBudgetSummary = useMemo(
+    () =>
+      `₪${applyDogCountPricing(dogWalkerBudgetValue, {
+        serviceType: effectiveRequestServiceType,
+        dogCount: normalizedDogCount,
+      })}`,
+    [dogWalkerBudgetValue, effectiveRequestServiceType, normalizedDogCount],
+  )
 
   const dogSelectorBlock = (
     <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterServiceFieldWrapStyle : null) }}>
-      <div
-        style={{
-          ...(isBabySitterMode ? babysitterAddressLabelStyle : dogWalkerAddressLabelStyle),
-          opacity: 0,
-          pointerEvents: 'none',
-          userSelect: 'none',
-        }}
-        aria-hidden="true"
-      >
-        {isRtl ? 'שם' : 'Name'}
-      </div>
       <button
         type="button"
         onClick={() => {
@@ -2146,9 +2192,6 @@ export default function ClientDashboard({
 
   const pickupSelectorBlock = (
     <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterAddressFieldWrapStyle : dogWalkerAddressFieldWrapStyle) }}>
-      <div style={isBabySitterMode ? babysitterAddressLabelStyle : dogWalkerAddressLabelStyle}>
-        {isRtl ? 'כתובת' : 'Address'}
-      </div>
       <div
         style={{
           ...pickupSelectorShellStyle,
@@ -2183,6 +2226,31 @@ export default function ClientDashboard({
       </div>
     </div>
   )
+
+  const dogCountSelectorBlock = shouldShowDogCountControl ? (
+    <div style={dogCountInlineRowStyle}>
+      <span style={dogCountInlineLabelStyle}>{isRtl ? 'מספר כלבים' : 'Number of dogs'}</span>
+      <div style={dogCountSegmentedStyle}>
+        {[1, 2].map((value) => {
+          const selected = normalizedDogCount === value
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setDogCount(value as DogCount)}
+              style={{
+                ...dogCountChipStyle,
+                ...(selected ? dogCountChipActiveStyle : null),
+              }}
+              aria-pressed={selected}
+            >
+              {value}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  ) : null
 
   const durationPickerBlock = (
     <div style={{ ...compactFieldStyle, ...dogWalkerPlannerFieldWrapStyle }}>
@@ -2347,6 +2415,65 @@ export default function ClientDashboard({
         </div>
       </button>
     ) : null
+
+  const compactPaymentCardContent = compactSavedCardSummary ?? (
+    <button
+      type="button"
+      data-control="payment-row"
+      onClick={() => {
+        if (flow.cardLoading) return
+        markFirstInteractionHandler('client-dashboard:open-payment-row')
+        if (flow.cardError && !flow.savedCard) {
+          flow.retryLoadCard?.()
+        } else if (flow.setupClientSecret) {
+          flow.cancelCardSetup()
+        } else if (flow.savedCard) {
+          flow.changeCard()
+        } else {
+          setPaymentSheetOpen(true)
+          if (!flow.setupClientSecret) {
+            flow.requestCardSetup()
+          }
+        }
+        markFirstInteractionVisual('client-dashboard:open-payment-row')
+      }}
+      style={compactSavedCardRowStyle}
+      disabled={flow.cardLoading}
+    >
+      <div style={compactSavedCardTopRowStyle}>
+        <div style={compactPriceEndStyle}>
+          {compactDisplayPrice && (
+            <span style={compactPriceValueStyle}>
+              {typeof compactDisplayPrice.price === 'number' ? `₪${compactDisplayPrice.price}` : compactDisplayPrice.price}
+            </span>
+          )}
+        </div>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </div>
+      <div style={compactSavedCardMainStyle}>
+        <CreditCard size={14} color="#3B82F6" style={{ flexShrink: 0 }} />
+        <span style={compactSavedCardBrandStyle}>
+          {flow.cardLoading
+            ? isRtl
+              ? 'טוען כרטיס...'
+              : 'Loading card...'
+            : flow.cardError && !flow.savedCard
+              ? isRtl
+                ? 'נסה שוב'
+                : 'Retry'
+              : flow.setupClientSecret
+                ? isRtl
+                  ? 'הוסף כרטיס'
+                  : 'Add card'
+                : isRtl
+                  ? 'הוסף כרטיס'
+                  : 'Add card'}
+        </span>
+      </div>
+    </button>
+  )
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
@@ -3098,6 +3225,7 @@ export default function ClientDashboard({
                 ) : (
                 <>
                 <div style={compactFormGridStyle}>
+                  {dogCountSelectorBlock}
                   <div style={subjectAddressRowStyle}>
                     <div style={subjectAddressPrimaryCellStyle}>
                       {dogSelectorBlock}
@@ -3126,7 +3254,7 @@ export default function ClientDashboard({
                     </button>
                   )}
 
-                  {isSelectedServiceAvailable && !isSheetCollapsed && compactSavedCardSummary ? (
+                  {isSelectedServiceAvailable && !isSheetCollapsed ? (
                     <div style={compactControlsRowStyle}>
                       <div style={compactControlsMainStyle}>
                         {isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock}
@@ -3143,43 +3271,13 @@ export default function ClientDashboard({
                             ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
                           }}
                         >
-                          {compactSavedCardSummary}
+                          {compactPaymentCardContent}
                         </div>
                       </div>
                     </div>
                   ) : (
                     <>
                       {isSelectedServiceAvailable && (isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock)}
-
-                      {!isSheetCollapsed && isSelectedServiceAvailable && (
-                        <div style={compactFieldStyle}>
-                          {isPaymentGuided && (
-                            <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
-                          )}
-                          <div
-                            style={{
-                              ...compactPaymentWrapStyle,
-                              ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : compactPaymentWrapDogWalkerStyle),
-                              ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
-                              ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                            }}
-                          >
-                            {compactSavedCardSummary ?? (
-                              <CardSetupForm
-                                savedCard={flow.savedCard}
-                                setupClientSecret={flow.setupClientSecret}
-                                loadingCard={flow.cardLoading}
-                                loadError={flow.cardError}
-                                onRequestSetup={flow.requestCardSetup}
-                                onChangeCard={flow.changeCard}
-                                onSetupComplete={flow.onCardSetupComplete}
-                                onCancelSetup={flow.cancelCardSetup}
-                                onRetry={flow.retryLoadCard}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      )}
                     </>
                   )}
                 </div>
@@ -4770,6 +4868,48 @@ const compactFormGridStyle: React.CSSProperties = {
   gap: 8,
 }
 
+const dogCountInlineRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  minHeight: 32,
+}
+
+const dogCountInlineLabelStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  color: '#64748B',
+  whiteSpace: 'nowrap',
+}
+
+const dogCountSegmentedStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const dogCountChipStyle: React.CSSProperties = {
+  minWidth: 36,
+  height: 30,
+  borderRadius: 999,
+  border: '1px solid rgba(148, 163, 184, 0.18)',
+  background: 'rgba(255,255,255,0.9)',
+  color: '#475569',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.76)',
+}
+
+const dogCountChipActiveStyle: React.CSSProperties = {
+  borderColor: 'rgba(15, 23, 42, 0.06)',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  boxShadow: '0 10px 18px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255,255,255,0.08)',
+}
+
 const subjectAddressRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 0.82fr) minmax(0, 1.38fr)',
@@ -4955,13 +5095,6 @@ const pickupSelectorValueCompactStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 800,
   lineHeight: 'normal',
-}
-
-const dogWalkerAddressLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: '#64748B',
-  lineHeight: 1.2,
 }
 
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
@@ -5443,13 +5576,6 @@ const babysitterBudgetSummaryRowStyle: React.CSSProperties = {
   flexWrap: 'nowrap',
 }
 
-const babysitterAddressLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: '#64748B',
-  lineHeight: 1.2,
-}
-
 const babysitterBudgetValueDisplayStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -5482,14 +5608,6 @@ const babysitterBudgetScaleLabelStyle: React.CSSProperties = {
   fontWeight: 700,
   color: '#94A3B8',
   lineHeight: 1,
-}
-
-const compactPaymentWrapBabysitterStyle: React.CSSProperties = {
-  marginTop: 8,
-}
-
-const compactPaymentWrapDogWalkerStyle: React.CSSProperties = {
-  marginTop: 8,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {

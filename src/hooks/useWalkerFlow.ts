@@ -51,6 +51,7 @@ interface WalkRequestRow {
   status: 'open' | 'accepted' | 'completed' | 'cancelled'
   service_type?: string | null
   dog_name: string | null
+  dog_count?: number | null
   location: string | null
   address: string | null
   notes: string | null
@@ -95,6 +96,7 @@ interface DispatchOfferRow {
   client_id: string | null
   selected_walker_id: string | null
   dog_name: string | null
+  dog_count?: number | null
   location: string | null
   address: string | null
   notes: string | null
@@ -979,7 +981,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setError(null)
 
     const selectFields =
-      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
+      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
 
     const now = new Date().toISOString()
     let acceptedJobsFromAttempts: WalkRequestRow[] = []
@@ -1001,6 +1003,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     let offers = ((offersData as DispatchOfferRow[] | null) ?? []).filter(
       (offer) => !declinedIds.has(offer.request_id),
     )
+
+    if (offers.length > 0) {
+      console.debug('[useWalkerFlow] raw active_dispatch_offers dog_count', offers.map((offer) => ({
+        request_id: offer.request_id,
+        offer_id: offer.id,
+        dog_count: offer.dog_count ?? null,
+      })))
+    }
 
     const offerRequestIds = [...new Set(offers.map((offer) => offer.request_id))]
     if (offerRequestIds.length > 0) {
@@ -1029,6 +1039,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             client_id: request.client_id ?? offer.client_id ?? null,
             selected_walker_id: request.selected_walker_id ?? offer.selected_walker_id ?? null,
             dog_name: request.dog_name ?? offer.dog_name ?? null,
+            dog_count: request.dog_count ?? offer.dog_count ?? null,
             location: request.location ?? offer.location ?? null,
             address: request.address ?? offer.address ?? null,
             notes: request.notes ?? offer.notes ?? null,
@@ -1152,10 +1163,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               request_status: request?.status ?? 'open',
               dispatch_state: request?.dispatch_state ?? 'dispatched',
               client_id: request?.client_id ?? null,
-              selected_walker_id: request?.selected_walker_id ?? null,
-              dog_name: request?.dog_name ?? null,
-              location: request?.location ?? null,
-              address: request?.address ?? null,
+            selected_walker_id: request?.selected_walker_id ?? null,
+            dog_name: request?.dog_name ?? null,
+            dog_count: request?.dog_count ?? null,
+            location: request?.location ?? null,
+            address: request?.address ?? null,
               notes: request?.notes ?? null,
               request_created_at: request?.created_at ?? attempt.created_at,
               price: request?.price ?? null,
@@ -1193,6 +1205,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             selected_walker_id: request?.selected_walker_id ?? profileId,
             status: 'accepted' as const,
             dog_name: request?.dog_name ?? null,
+            dog_count: request?.dog_count ?? null,
             location: request?.location ?? null,
             address: request?.address ?? null,
             notes: request?.notes ?? null,
@@ -1229,6 +1242,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       selected_walker_id: offer.selected_walker_id,
       status: 'open' as const,
       dog_name: offer.dog_name,
+      dog_count: offer.dog_count ?? null,
       location: offer.location,
       address: offer.address,
       notes: offer.notes,
@@ -1365,6 +1379,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setActiveOffers(mergedOffers)
 
     const newOpen = buildOpenJobs(mergedOffers)
+    if (mergedOffers.length > 0) {
+      console.debug('[useWalkerFlow] mapped incoming request dog_count', mergedOffers.map((offer) => ({
+        request_id: offer.request_id,
+        dog_count: offer.dog_count ?? null,
+      })))
+      console.debug('[useWalkerFlow] openJobs dog_count', newOpen.map((job) => ({
+        request_id: job.id,
+        dog_count: job.dog_count ?? null,
+      })))
+    }
     const newOfferIds = new Set(newOpen.map((j) => j.id))
     const myJobIds = new Set(newMine.map((j) => j.id))
     const prev = prevOfferIdsRef.current
