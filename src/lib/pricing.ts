@@ -75,15 +75,20 @@ export interface PricingResult {
   basePriceILS: number
 }
 
-export const SECOND_DOG_FEE_ILS = 20
-
 export function getDogCountPriceAdjustmentILS(params: {
   serviceType: string | null | undefined
+  basePriceILS: number
   dogCount: unknown
 }): number {
-  return isDogServiceType(params.serviceType) && normalizeDogCount(params.dogCount) === 2
-    ? SECOND_DOG_FEE_ILS
-    : 0
+  if (!isDogServiceType(params.serviceType) || normalizeDogCount(params.dogCount) !== 2) {
+    return 0
+  }
+
+  if (!Number.isFinite(params.basePriceILS) || params.basePriceILS <= 0) {
+    return 0
+  }
+
+  return Math.round(params.basePriceILS * 0.5)
 }
 
 export function applyDogCountPricing(basePriceILS: number, params: {
@@ -91,7 +96,10 @@ export function applyDogCountPricing(basePriceILS: number, params: {
   dogCount: unknown
 }): number {
   if (!Number.isFinite(basePriceILS) || basePriceILS <= 0) return 0
-  return basePriceILS + getDogCountPriceAdjustmentILS(params)
+  return basePriceILS + getDogCountPriceAdjustmentILS({
+    ...params,
+    basePriceILS,
+  })
 }
 
 /* ── Core engine ───────────────────────────────────────────────── */
