@@ -2088,6 +2088,17 @@ export default function ClientDashboard({
 
   const dogSelectorBlock = (
     <div style={{ ...compactFieldStyle, ...(isBabySitterMode ? babysitterServiceFieldWrapStyle : null) }}>
+      <div
+        style={{
+          ...(isBabySitterMode ? babysitterAddressLabelStyle : dogWalkerAddressLabelStyle),
+          opacity: 0,
+          pointerEvents: 'none',
+          userSelect: 'none',
+        }}
+        aria-hidden="true"
+      >
+        {isRtl ? 'שם' : 'Name'}
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -2311,26 +2322,28 @@ export default function ClientDashboard({
         }}
         style={compactSavedCardRowStyle}
       >
-        <div style={compactSavedCardMainStyle}>
-          <CreditCard size={16} color="#3B82F6" style={{ flexShrink: 0 }} />
-          <span style={compactSavedCardBrandStyle}>
-            {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
-          </span>
-        </div>
-        <div style={compactPriceEndStyle}>
-              {compactDisplayPrice && (
-            <>
-              <span style={compactPriceValueStyle}>
-                {typeof compactDisplayPrice.price === 'number' ? `₪${compactDisplayPrice.price}` : compactDisplayPrice.price}
-              </span>
-              {typeof compactDisplayPrice.original === 'number' && (
-                <span style={compactPriceOriginalStyle}>₪{compactDisplayPrice.original}</span>
-              )}
-            </>
-          )}
+        <div style={compactSavedCardTopRowStyle}>
+          <div style={compactPriceEndStyle}>
+            {compactDisplayPrice && (
+              <>
+                <span style={compactPriceValueStyle}>
+                  {typeof compactDisplayPrice.price === 'number' ? `₪${compactDisplayPrice.price}` : compactDisplayPrice.price}
+                </span>
+                {typeof compactDisplayPrice.original === 'number' && (
+                  <span style={compactPriceOriginalStyle}>₪{compactDisplayPrice.original}</span>
+                )}
+              </>
+            )}
+          </div>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
             <polyline points="9 18 15 12 9 6" />
           </svg>
+        </div>
+        <div style={compactSavedCardMainStyle}>
+          <CreditCard size={14} color="#3B82F6" style={{ flexShrink: 0 }} />
+          <span style={compactSavedCardBrandStyle}>
+            {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
+          </span>
         </div>
       </button>
     ) : null
@@ -3085,7 +3098,14 @@ export default function ClientDashboard({
                 ) : (
                 <>
                 <div style={compactFormGridStyle}>
-                  {dogSelectorBlock}
+                  <div style={subjectAddressRowStyle}>
+                    <div style={subjectAddressPrimaryCellStyle}>
+                      {dogSelectorBlock}
+                    </div>
+                    <div style={subjectAddressSecondaryCellStyle}>
+                      {pickupSelectorBlock}
+                    </div>
+                  </div>
 
                   {!isSheetCollapsed && preferredWalkers.length > 0 && (
                     <button
@@ -3106,38 +3126,61 @@ export default function ClientDashboard({
                     </button>
                   )}
 
-                  {pickupSelectorBlock}
-
-                  {isSelectedServiceAvailable && (isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock)}
-
-                  {!isSheetCollapsed && isSelectedServiceAvailable && (
-                      <div style={compactFieldStyle}>
+                  {isSelectedServiceAvailable && !isSheetCollapsed && compactSavedCardSummary ? (
+                    <div style={compactControlsRowStyle}>
+                      <div style={compactControlsMainStyle}>
+                        {isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock}
+                      </div>
+                      <div style={compactControlsPaymentStyle}>
                         {isPaymentGuided && (
                           <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
                         )}
                         <div
                           style={{
                             ...compactPaymentWrapStyle,
-                            ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : compactPaymentWrapDogWalkerStyle),
+                            ...compactPaymentWrapCondensedStyle,
                             ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
                             ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
                           }}
                         >
-                          {compactSavedCardSummary ?? (
-                            <CardSetupForm
-                              savedCard={flow.savedCard}
-                              setupClientSecret={flow.setupClientSecret}
-                              loadingCard={flow.cardLoading}
-                              loadError={flow.cardError}
-                              onRequestSetup={flow.requestCardSetup}
-                              onChangeCard={flow.changeCard}
-                              onSetupComplete={flow.onCardSetupComplete}
-                              onCancelSetup={flow.cancelCardSetup}
-                              onRetry={flow.retryLoadCard}
-                            />
-                          )}
+                          {compactSavedCardSummary}
                         </div>
                       </div>
+                    </div>
+                  ) : (
+                    <>
+                      {isSelectedServiceAvailable && (isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock)}
+
+                      {!isSheetCollapsed && isSelectedServiceAvailable && (
+                        <div style={compactFieldStyle}>
+                          {isPaymentGuided && (
+                            <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
+                          )}
+                          <div
+                            style={{
+                              ...compactPaymentWrapStyle,
+                              ...(isBabySitterMode ? compactPaymentWrapBabysitterStyle : compactPaymentWrapDogWalkerStyle),
+                              ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                              ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                            }}
+                          >
+                            {compactSavedCardSummary ?? (
+                              <CardSetupForm
+                                savedCard={flow.savedCard}
+                                setupClientSecret={flow.setupClientSecret}
+                                loadingCard={flow.cardLoading}
+                                loadError={flow.cardError}
+                                onRequestSetup={flow.requestCardSetup}
+                                onChangeCard={flow.changeCard}
+                                onSetupComplete={flow.onCardSetupComplete}
+                                onCancelSetup={flow.cancelCardSetup}
+                                onRetry={flow.retryLoadCard}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -3235,22 +3278,31 @@ export default function ClientDashboard({
               }}
             >
               <div style={stickyMainActionStyle}>
-                <ActionButton
-                  label={
-                    flow.loading
-                      ? flow.bookingTiming === 'scheduled'
-                        ? t('booking.scheduling')
-                        : t('booking.ordering')
-                      : flow.cardLoading && !flow.savedCard
-                        ? t('booking.loadingPayment')
-                        : !flow.savedCard
-                          ? t('booking.addCard')
-                          : t('booking.orderNow')
-                  }
+                <button
+                  type="button"
                   onClick={handleFindWalker}
-                  loading={flow.loading || (flow.cardLoading && !flow.savedCard)}
-                  disabled={!canSubmitBooking}
-                />
+                  disabled={!canSubmitBooking || flow.loading || (flow.cardLoading && !flow.savedCard)}
+                  style={{
+                    ...bookingPrimaryButtonStyle,
+                    ...(!canSubmitBooking ? bookingPrimaryButtonDisabledStyle : null),
+                    ...(flow.loading || (flow.cardLoading && !flow.savedCard) ? bookingPrimaryButtonLoadingStyle : null),
+                  }}
+                >
+                  {flow.loading || (flow.cardLoading && !flow.savedCard) ? (
+                    <>
+                      <span style={bookingPrimarySpinnerStyle} />
+                      {flow.loading
+                        ? flow.bookingTiming === 'scheduled'
+                          ? t('booking.scheduling')
+                          : t('booking.ordering')
+                        : t('booking.loadingPayment')}
+                    </>
+                  ) : !flow.savedCard ? (
+                    t('booking.addCard')
+                  ) : (
+                    t('booking.orderNow')
+                  )}
+                </button>
                 {!hasSelectedProfileService ? (
                   <div
                     style={{
@@ -4562,16 +4614,19 @@ const sheetStyle: React.CSSProperties = {
   right: 0,
   bottom: 0,
   top: 'calc(36dvh - 18px)',
-  borderTopLeftRadius: 28,
-  borderTopRightRadius: 28,
-  background: '#FFFFFF',
-  boxShadow: '0 -10px 30px rgba(15, 23, 42, 0.10)',
+  borderTopLeftRadius: 32,
+  borderTopRightRadius: 32,
+  background: 'rgba(255,255,255,0.82)',
+  boxShadow: '0 -16px 42px rgba(15, 23, 42, 0.12)',
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
   zIndex: 1,
   boxSizing: 'border-box',
   willChange: 'transform',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
+  borderTop: '1px solid rgba(255,255,255,0.72)',
 }
 
 const idleSheetStyle: React.CSSProperties = {
@@ -4613,14 +4668,14 @@ const trackingSheetStyle: React.CSSProperties = {
 const sheetTopPadStyle: React.CSSProperties = {
   height: 12,
   flexShrink: 0,
-  borderTopLeftRadius: 28,
-  borderTopRightRadius: 28,
-  background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,1) 100%)',
+  borderTopLeftRadius: 32,
+  borderTopRightRadius: 32,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.84) 0%, rgba(255,255,255,0.72) 100%)',
 }
 
 const dragHandleZoneStyle: React.CSSProperties = {
   flexShrink: 0,
-  padding: '18px 0 10px',
+  padding: '16px 0 8px',
   display: 'flex',
   justifyContent: 'center',
   cursor: 'grab',
@@ -4631,10 +4686,10 @@ const dragHandleZoneStyle: React.CSSProperties = {
 }
 
 const dragHandleBarStyle: React.CSSProperties = {
-  width: 36,
-  height: 4,
+  width: 42,
+  height: 5,
   borderRadius: 999,
-  background: '#CBD5E1',
+  background: 'rgba(148, 163, 184, 0.42)',
 }
 
 const searchingSheetScrollStyle: React.CSSProperties = {
@@ -4672,9 +4727,9 @@ const idleSheetScrollStyle: React.CSSProperties = {
   minHeight: 0,
   overflowX: 'hidden',
   paddingTop: 0,
-  paddingRight: 14,
-  paddingBottom: 2,
-  paddingLeft: 14,
+  paddingRight: 16,
+  paddingBottom: 6,
+  paddingLeft: 16,
   WebkitOverflowScrolling: 'touch',
   width: '100%',
   maxWidth: '100%',
@@ -4697,19 +4752,37 @@ const searchingSheetContentStyle: React.CSSProperties = {
 }
 
 const idleSheetContentStyle: React.CSSProperties = {
-  paddingBottom: 1,
+  paddingBottom: 4,
 }
 
 
 const bookingCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 8,
+  borderRadius: 28,
+  padding: '4px 4px 2px',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.44) 0%, rgba(248,250,252,0.24) 100%)',
 }
 
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 8,
+}
+
+const subjectAddressRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 0.82fr) minmax(0, 1.38fr)',
+  gap: 8,
+  alignItems: 'start',
+}
+
+const subjectAddressPrimaryCellStyle: React.CSSProperties = {
+  minWidth: 0,
+}
+
+const subjectAddressSecondaryCellStyle: React.CSSProperties = {
+  minWidth: 0,
 }
 
 
@@ -4731,11 +4804,11 @@ const comingSoonTextStyle: React.CSSProperties = {
 const preferredWalkerIndicatorStyle: React.CSSProperties = {
   justifySelf: 'flex-start',
   maxWidth: '100%',
-  border: '1px solid #FDE68A',
-  background: '#FFFBEB',
-  color: '#92400E',
+  border: '1px solid rgba(96, 165, 250, 0.18)',
+  background: 'rgba(248, 250, 252, 0.9)',
+  color: '#1E3A8A',
   borderRadius: 999,
-  padding: '5px 9px',
+  padding: '5px 10px',
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
@@ -4757,7 +4830,7 @@ const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
 
 const compactFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 2,
+  gap: 3,
 }
 
 const babysitterServiceFieldWrapStyle: React.CSSProperties = {
@@ -4765,31 +4838,50 @@ const babysitterServiceFieldWrapStyle: React.CSSProperties = {
 }
 
 const babysitterAddressFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 8,
+  marginBottom: 4,
 }
 
 const dogWalkerAddressFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 8,
+  marginBottom: 4,
 }
 
 const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 4,
+  marginBottom: 0,
 }
 
 const dogWalkerPlannerFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 4,
+  marginBottom: 0,
+}
+
+const compactControlsRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.18fr) minmax(124px, 0.72fr)',
+  alignItems: 'start',
+  gap: 8,
+  marginBottom: 14,
+}
+
+const compactControlsMainStyle: React.CSSProperties = {
+  minWidth: 0,
+}
+
+const compactControlsPaymentStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 3,
+  alignContent: 'start',
 }
 
 const guidedFieldButtonStyle: React.CSSProperties = {
-  borderRadius: 18,
+  borderRadius: 16,
   transformOrigin: 'center top',
   willChange: 'transform, box-shadow, opacity',
 }
 
 const guidedFieldShellStyle: React.CSSProperties = {
-  border: '1px solid #60A5FA',
-  boxShadow: '0 0 0 4px rgba(96, 165, 250, 0.18)',
-  background: '#F8FBFF',
+  border: '1px solid rgba(96, 165, 250, 0.55)',
+  boxShadow: '0 0 0 4px rgba(96, 165, 250, 0.12)',
+  background: 'rgba(248, 251, 255, 0.98)',
 }
 
 const guidedFieldHelperStyle: React.CSSProperties = {
@@ -4807,29 +4899,29 @@ const guidedFieldHintAboveStyle: React.CSSProperties = {
 }
 
 const compactFieldLabelMutedStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  fontWeight: 800,
-  letterSpacing: 0.4,
-  textTransform: 'uppercase',
-  color: '#94A3B8',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.1,
+  color: '#64748B',
 }
 
 const pickupSelectorShellStyle: React.CSSProperties = {
   minHeight: 52,
-  borderRadius: 15,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
+  borderRadius: 19,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.86)',
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 9,
   width: '100%',
   boxSizing: 'border-box',
   padding: '0 12px',
   cursor: 'pointer',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
 }
 
 const pickupSelectorShellCompactStyle: React.CSSProperties = {
-  minHeight: 44,
+  minHeight: 46,
   padding: '0 11px',
 }
 
@@ -4838,16 +4930,21 @@ const pickupSelectorInlineIconStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   flexShrink: 0,
-  fontSize: 16,
+  width: 24,
+  height: 24,
+  borderRadius: 9,
+  background: 'rgba(59,130,246,0.10)',
+  color: '#2563EB',
+  fontSize: 12,
   lineHeight: 1,
 }
 
 const pickupSelectorValueStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 16,
+  fontSize: 13,
   color: '#0F172A',
-  fontWeight: 700,
+  fontWeight: 800,
   lineHeight: 'normal',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -4855,8 +4952,8 @@ const pickupSelectorValueStyle: React.CSSProperties = {
 }
 
 const pickupSelectorValueCompactStyle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 700,
+  fontSize: 13,
+  fontWeight: 800,
   lineHeight: 'normal',
 }
 
@@ -4870,7 +4967,7 @@ const dogWalkerAddressLabelStyle: React.CSSProperties = {
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 16,
+  fontSize: 13,
   color: '#94A3B8',
   fontWeight: 600,
   lineHeight: 'normal',
@@ -4882,37 +4979,38 @@ const pickupSelectorPlaceholderStyle: React.CSSProperties = {
 
 
 const dogInputShellStyle: React.CSSProperties = {
-  height: 45,
-  borderRadius: 15,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
+  minHeight: 52,
+  borderRadius: 19,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.86)',
   display: 'flex',
   alignItems: 'center',
   overflow: 'hidden',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
 }
 
 const dogInputShellCompactStyle: React.CSSProperties = {
-  height: 43,
+  minHeight: 46,
 }
 
 const dogThumbStyle: React.CSSProperties = {
-  width: 38,
-  height: 38,
+  width: 30,
+  height: 30,
   borderRadius: 12,
-  marginLeft: 4,
-  marginRight: 2,
-  background: 'linear-gradient(180deg, #FEF3C7 0%, #FDE68A 100%)',
+  marginLeft: 9,
+  marginRight: 4,
+  background: 'linear-gradient(180deg, rgba(59,130,246,0.12) 0%, rgba(96,165,250,0.18) 100%)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: 18,
+  fontSize: 15,
   flexShrink: 0,
 }
 
 const dogThumbCompactStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  fontSize: 16,
+  width: 28,
+  height: 28,
+  fontSize: 14,
 }
 
 const dogInputButtonStyle: React.CSSProperties = {
@@ -4932,16 +5030,16 @@ const dogInputButtonContentStyle: React.CSSProperties = {
 }
 
 const dogInputValueTextStyle: React.CSSProperties = {
-  fontSize: 16,
+  fontSize: 13.5,
   color: '#0F172A',
-  fontWeight: 700,
+  fontWeight: 800,
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
 }
 
 const dogInputPlaceholderTextStyle: React.CSSProperties = {
-  fontSize: 16,
+  fontSize: 13.5,
   color: '#94A3B8',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -4951,7 +5049,7 @@ const dogInputPlaceholderTextStyle: React.CSSProperties = {
 const dogInputChevronStyle: React.CSSProperties = {
   paddingRight: 12,
   color: '#94A3B8',
-  fontSize: 24,
+  fontSize: 20,
   lineHeight: 1,
   flexShrink: 0,
 }
@@ -5119,13 +5217,22 @@ const guidedFieldAnimationStyle: React.CSSProperties = {
 const compactPaymentWrapStyle: React.CSSProperties = {
   marginTop: 0,
   marginBottom: -1,
-  border: '2px solid transparent',
-  borderRadius: 24,
-  padding: 2,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  borderRadius: 16,
+  padding: '12px 12px',
   boxSizing: 'border-box',
   transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
   transformOrigin: 'center top',
   willChange: 'transform, box-shadow, opacity',
+  background: 'rgba(255,255,255,0.82)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.72)',
+}
+
+const compactPaymentWrapCondensedStyle: React.CSSProperties = {
+  height: '100%',
+  minHeight: 80,
+  padding: '8px 7px',
+  alignSelf: 'stretch',
 }
 
 const compactSavedCardRowStyle: React.CSSProperties = {
@@ -5134,26 +5241,30 @@ const compactSavedCardRowStyle: React.CSSProperties = {
   background: 'transparent',
   padding: 0,
   width: '100%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
+  display: 'grid',
   gap: 8,
   cursor: 'pointer',
   fontFamily: 'inherit',
 }
 
+const compactSavedCardTopRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 6,
+}
+
 const compactSavedCardMainStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 6,
   minWidth: 0,
-  flex: 1,
 }
 
 
 
 const compactSavedCardBrandStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 11.5,
   fontWeight: 800,
   color: '#0F172A',
   whiteSpace: 'nowrap',
@@ -5164,12 +5275,12 @@ const compactSavedCardBrandStyle: React.CSSProperties = {
 const compactPriceEndStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 2,
   flexShrink: 0,
 }
 
 const compactPriceValueStyle: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: 11.5,
   fontWeight: 900,
   color: '#0F172A',
 }
@@ -5184,33 +5295,35 @@ const compactPriceOriginalStyle: React.CSSProperties = {
 const babysitterPlannerCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
-  padding: '7px 9px 5px',
-  borderRadius: 16,
-  border: '1px solid rgba(226, 232, 240, 0.9)',
-  background: 'rgba(255,255,255,0.36)',
+  padding: '10px 10px 7px',
+  borderRadius: 18,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.82)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.72)',
 }
 
 const dogWalkerPlannerCardStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
-  padding: '7px 9px 5px',
-  borderRadius: 16,
-  border: '1px solid rgba(226, 232, 240, 0.9)',
-  background: 'rgba(255,255,255,0.36)',
+  padding: '10px 10px 7px',
+  borderRadius: 18,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.82)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.72)',
 }
 
 const dogWalkerPlannerTopRowStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(104px, 116px) minmax(0, 1fr)',
-  columnGap: 18,
+  gridTemplateColumns: 'minmax(88px, 94px) minmax(0, 1fr)',
+  columnGap: 12,
   rowGap: 0,
   alignItems: 'start',
 }
 
 const dogWalkerPlannerLabelStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 10.5,
   fontWeight: 700,
-  color: '#475569',
+  color: '#64748B',
   lineHeight: 1.2,
   minHeight: 14,
   display: 'inline-flex',
@@ -5220,14 +5333,14 @@ const dogWalkerPlannerLabelStyle: React.CSSProperties = {
 
 const dogWalkerFieldGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
   minWidth: 0,
   alignContent: 'start',
 }
 
 const dogWalkerPriceGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
   minWidth: 0,
   alignContent: 'start',
 }
@@ -5236,38 +5349,38 @@ const dogWalkerPriceValueRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 6,
-  minHeight: 18,
+  gap: 4,
+  minHeight: 16,
   minWidth: 0,
   flexWrap: 'nowrap',
 }
 
 const babysitterPlannerTopRowStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(104px, 116px) minmax(0, 1fr)',
-  columnGap: 18,
+  gridTemplateColumns: 'minmax(88px, 94px) minmax(0, 1fr)',
+  columnGap: 12,
   rowGap: 0,
   alignItems: 'start',
 }
 
 const babysitterFieldGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
   minWidth: 0,
   alignContent: 'start',
 }
 
 const babysitterBudgetGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
   minWidth: 0,
   alignContent: 'start',
 }
 
 const babysitterFieldLabelStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 10.5,
   fontWeight: 700,
-  color: '#475569',
+  color: '#64748B',
   lineHeight: 1.2,
   minHeight: 14,
   display: 'inline-flex',
@@ -5278,9 +5391,9 @@ const babysitterDurationStepperStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1fr) 24px',
   alignItems: 'stretch',
-  borderRadius: 12,
-  border: '1px solid rgba(203, 213, 225, 0.95)',
-  background: '#FFF',
+  borderRadius: 13,
+  border: '1px solid rgba(203, 213, 225, 0.88)',
+  background: 'rgba(255,255,255,0.94)',
   minHeight: 34,
   overflow: 'hidden',
 }
@@ -5290,8 +5403,8 @@ const babysitterDurationValueStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   padding: '0 10px',
-  fontSize: 12,
-  fontWeight: 700,
+  fontSize: 12.5,
+  fontWeight: 800,
   color: '#0F172A',
 }
 
@@ -5303,7 +5416,7 @@ const babysitterDurationStepperButtonsStyle: React.CSSProperties = {
 
 const babysitterStepButtonStyle: React.CSSProperties = {
   border: 'none',
-  background: '#F8FAFC',
+  background: 'rgba(248,250,252,0.94)',
   color: '#475569',
   padding: 0,
   margin: 0,
@@ -5315,17 +5428,17 @@ const babysitterStepButtonStyle: React.CSSProperties = {
 
 const babysitterBudgetSliderWrapStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
-  paddingTop: 5,
-  paddingBottom: 4,
+  gap: 3,
+  paddingTop: 3,
+  paddingBottom: 2,
 }
 
 const babysitterBudgetSummaryRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 4,
   justifyContent: 'center',
-  minHeight: 18,
+  minHeight: 16,
   minWidth: 0,
   flexWrap: 'nowrap',
 }
@@ -5342,7 +5455,7 @@ const babysitterBudgetValueDisplayStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   color: '#0F172A',
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 900,
   whiteSpace: 'nowrap',
 }
@@ -5351,7 +5464,9 @@ const babysitterBudgetSliderStyle: React.CSSProperties = {
   width: '100%',
   margin: 0,
   accentColor: '#0F172A',
-  height: 22,
+  height: 24,
+  cursor: 'pointer',
+  touchAction: 'pan-x',
 }
 
 const babysitterBudgetScaleRowStyle: React.CSSProperties = {
@@ -5378,24 +5493,26 @@ const compactPaymentWrapDogWalkerStyle: React.CSSProperties = {
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
-  paddingTop: 10,
+  paddingTop: 8,
 }
 
 const stickyCtaWrapDogWalkerStyle: React.CSSProperties = {
-  paddingTop: 10,
+  paddingTop: 8,
 }
 
 const paymentGuidedFieldShellStyle: React.CSSProperties = {
-  border: '2px solid #3B82F6',
-  background: 'rgba(59,130,246,0.06)',
-  boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
+  border: '1px solid rgba(59,130,246,0.55)',
+  background: 'rgba(239,246,255,0.9)',
+  boxShadow: '0 0 0 3px rgba(59,130,246,0.10)',
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
-  padding: '2px 14px env(safe-area-inset-bottom, 0px)',
-  borderTop: '1px solid rgba(226, 232, 240, 0.9)',
-  background: '#FFFFFF',
+  padding: '0 16px calc(4px + env(safe-area-inset-bottom, 0px))',
+  borderTop: '1px solid rgba(255,255,255,0.72)',
+  background: 'rgba(255,255,255,0.82)',
   flexShrink: 0,
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
 }
 
 const guidedCtaHelperStyle: React.CSSProperties = {
@@ -5419,30 +5536,73 @@ const stickyActionRowStyle: React.CSSProperties = {
 }
 
 const stickyCalendarButtonStyle: React.CSSProperties = {
-  width: 56,
-  minWidth: 56,
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
+  width: 58,
+  minWidth: 58,
+  borderRadius: 20,
+  border: '1px solid rgba(148, 163, 184, 0.18)',
+  background: 'rgba(248,250,252,0.92)',
   color: '#0F172A',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
-  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.08)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255,255,255,0.72)',
   WebkitTapHighlightColor: 'transparent',
 }
 
 const stickyCalendarButtonActiveStyle: React.CSSProperties = {
-  borderColor: '#BFDBFE',
-  background: '#EFF6FF',
+  borderColor: 'rgba(96, 165, 250, 0.34)',
+  background: 'rgba(239,246,255,0.96)',
   color: '#1D4ED8',
 }
 
 const stickyCalendarButtonDisabledStyle: React.CSSProperties = {
-  opacity: 0.42,
+  opacity: 0.48,
   cursor: 'not-allowed',
   boxShadow: 'none',
+}
+
+const bookingPrimaryButtonStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 58,
+  borderRadius: 20,
+  border: '1px solid rgba(15, 23, 42, 0.04)',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  fontSize: 16,
+  fontWeight: 800,
+  letterSpacing: -0.2,
+  cursor: 'pointer',
+  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255,255,255,0.10)',
+  fontFamily: 'inherit',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  transition: 'opacity 140ms ease, transform 140ms ease, box-shadow 140ms ease',
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const bookingPrimaryButtonDisabledStyle: React.CSSProperties = {
+  background: 'linear-gradient(180deg, #CBD5E1 0%, #E2E8F0 100%)',
+  color: '#64748B',
+  boxShadow: 'none',
+  cursor: 'not-allowed',
+}
+
+const bookingPrimaryButtonLoadingStyle: React.CSSProperties = {
+  opacity: 0.92,
+}
+
+const bookingPrimarySpinnerStyle: React.CSSProperties = {
+  display: 'inline-block',
+  width: 16,
+  height: 16,
+  border: '2px solid rgba(255,255,255,0.28)',
+  borderTopColor: '#FFFFFF',
+  borderRadius: '50%',
+  animation: 'completionSpin 0.6s linear infinite',
+  flexShrink: 0,
 }
 
 const stickyCalendarDotStyle: React.CSSProperties = {

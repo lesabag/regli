@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
+import { PawPrint } from 'lucide-react'
 import {
   PRIMARY_SERVICES,
   MORE_SERVICES,
@@ -30,6 +31,12 @@ export default function ServiceSelectorPanel({
     ? MORE_SERVICES.filter((svc) => services.includes(svc))
     : MORE_SERVICES
   const isMoreSelected = (visibleMoreServices as readonly ServiceType[]).includes(selected)
+  const renderServiceIcon = (service: ServiceType) => {
+    if (service === 'dog_walking') {
+      return <PawPrint size={16} strokeWidth={2.2} color="#FACC15" />
+    }
+    return SERVICE_ICONS[service]
+  }
 
   return (
     <div style={wrapStyle}>
@@ -42,10 +49,13 @@ export default function ServiceSelectorPanel({
               key={svc}
               type="button"
               onClick={() => onSelect(svc)}
-              style={itemStyle}
+              style={{
+                ...itemStyle,
+                ...(isActive ? itemActiveStyle : null),
+              }}
             >
-              <div style={{ ...circleStyle, ...(isActive ? circleActiveStyle : null) }}>
-                <span style={iconStyle}>{SERVICE_ICONS[svc]}</span>
+              <div style={{ ...iconWrapStyle, ...(isActive ? iconWrapActiveStyle : null) }}>
+                <span style={iconStyle}>{renderServiceIcon(svc)}</span>
               </div>
               <span style={isActive ? labelActiveStyle : labelStyle}>
                 {t(SERVICE_I18N_KEYS[svc].label)}
@@ -59,10 +69,13 @@ export default function ServiceSelectorPanel({
             key={selected}
             type="button"
             onClick={onMorePress}
-            style={itemStyle}
+            style={{
+              ...itemStyle,
+              ...itemActiveStyle,
+            }}
           >
-            <div style={{ ...circleStyle, ...circleActiveStyle }}>
-              <span style={iconStyle}>{SERVICE_ICONS[selected]}</span>
+            <div style={{ ...iconWrapStyle, ...iconWrapActiveStyle }}>
+              <span style={iconStyle}>{renderServiceIcon(selected)}</span>
             </div>
             <span style={labelActiveStyle}>
               {t(SERVICE_I18N_KEYS[selected].label)}
@@ -76,7 +89,7 @@ export default function ServiceSelectorPanel({
             onClick={onMorePress}
             style={itemStyle}
           >
-            <div style={circleStyle}>
+            <div style={iconWrapStyle}>
               <span style={moreIconStyle}>⋯</span>
             </div>
             <span style={labelStyle}>{t('services.more')}</span>
@@ -94,87 +107,100 @@ const wrapStyle: CSSProperties = {
 }
 
 const titleStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
+  fontSize: 11,
+  fontWeight: 700,
   color: '#64748B',
-  letterSpacing: 0.2,
+  letterSpacing: 0.1,
 }
 
 const rowStyle: CSSProperties = {
   display: 'flex',
-  gap: 12,
+  gap: 10,
   overflowX: 'auto',
   WebkitOverflowScrolling: 'touch',
   scrollbarWidth: 'none',
-  padding: '2px 0',
+  padding: '1px 1px 2px',
 }
 
 const itemStyle: CSSProperties = {
   appearance: 'none',
-  border: 'none',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
   outline: 'none',
-  background: 'transparent',
+  background: 'rgba(255,255,255,0.92)',
   display: 'flex',
-  flexDirection: 'column',
+  flexDirection: 'row',
   alignItems: 'center',
-  gap: 4,
-  padding: 0,
+  justifyContent: 'center',
+  gap: 8,
+  height: 44,
+  padding: '0 15px',
   cursor: 'pointer',
   fontFamily: 'inherit',
   WebkitTapHighlightColor: 'transparent',
   touchAction: 'manipulation',
-  minWidth: 56,
+  minWidth: 132,
   flexShrink: 0,
+  borderRadius: 999,
+  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255,255,255,0.82)',
 }
 
-const circleStyle: CSSProperties = {
-  width: 48,
-  height: 48,
-  borderRadius: 16,
-  background: '#F1F5F9',
+const itemActiveStyle: CSSProperties = {
+  borderColor: 'rgba(15, 23, 42, 0.08)',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  boxShadow: '0 10px 22px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255,255,255,0.08)',
+}
+
+const iconWrapStyle: CSSProperties = {
+  width: 24,
+  height: 24,
+  borderRadius: 999,
+  background: 'transparent',
   display: 'grid',
   placeItems: 'center',
-  border: '2px solid transparent',
+  border: 'none',
   boxSizing: 'border-box',
-  transition: 'border-color 150ms ease, background 150ms ease',
+  transition: 'background 150ms ease, box-shadow 150ms ease',
 }
 
-const circleActiveStyle: CSSProperties = {
-  border: '2px solid #3B82F6',
-  background: '#EFF6FF',
+const iconWrapActiveStyle: CSSProperties = {
+  background: 'rgba(255,255,255,0.12)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
 }
 
 const iconStyle: CSSProperties = {
-  fontSize: 20,
+  fontSize: 16,
   lineHeight: 1,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const moreIconStyle: CSSProperties = {
-  fontSize: 22,
+  fontSize: 18,
   lineHeight: 1,
   color: '#64748B',
   fontWeight: 700,
 }
 
 const labelStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 600,
-  color: '#94A3B8',
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#64748B',
   lineHeight: 1.2,
-  textAlign: 'center',
-  maxWidth: 64,
+  textAlign: 'left',
+  maxWidth: 'none',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 }
 
 const labelActiveStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: 13,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
   lineHeight: 1.2,
-  textAlign: 'center',
-  maxWidth: 64,
+  textAlign: 'left',
+  maxWidth: 'none',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
