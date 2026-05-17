@@ -187,6 +187,94 @@ interface UpcomingBookingItem {
   findingProviderAt: string | null
 }
 
+type RepeatType = 'one_time' | 'weekly'
+type RecurringStatus = 'active' | 'paused' | 'cancelled'
+type ScheduleMode = 'later' | 'repeat'
+type TimePickerTarget = 'repeat' | 'edit'
+type Meridiem = 'AM' | 'PM'
+
+interface RecurringBookingRow {
+  id: string
+  client_id: string
+  provider_id: string | null
+  service_type: string
+  dog_name: string | null
+  dog_count: number | null
+  location: string
+  address: string | null
+  notes: string | null
+  duration_minutes: number
+  price_per_visit: number | string
+  repeat_type: RepeatType
+  repeat_days: number[] | null
+  repeat_starts_on: string
+  repeat_ends_on: string | null
+  start_time: string
+  recurring_status: RecurringStatus
+  created_at: string
+  updated_at: string
+}
+
+interface RecurringBookingItem {
+  id: string
+  serviceLabel: string
+  title: string
+  weekdaysLabel: string
+  timeLabel: string
+  durationLabel: string
+  pricePerVisit: number | null
+  nextOccurrenceLabel: string | null
+  nextOccurrenceAt: Date | null
+  status: RecurringStatus
+  repeatDays: number[]
+  startsOn: string
+  startTime: string
+}
+
+const REPEAT_WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const
+
+function normalizeTime24(value: string | null | undefined): string {
+  const match = String(value ?? '').match(/^(\d{2}):(\d{2})/)
+  if (!match) return '18:00'
+  return `${match[1]}:${match[2]}`
+}
+
+function time24ToPickerParts(value: string | null | undefined): {
+  hour12: string
+  minute: string
+  meridiem: Meridiem
+} {
+  const normalized = normalizeTime24(value)
+  const [hourRaw, minuteRaw] = normalized.split(':')
+  const hour24 = Number(hourRaw)
+  const meridiem: Meridiem = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12Number = hour24 % 12 === 0 ? 12 : hour24 % 12
+  return {
+    hour12: String(hour12Number),
+    minute: minuteRaw,
+    meridiem,
+  }
+}
+
+function pickerPartsToTime24(hour12: string, minute: string, meridiem: Meridiem): string {
+  const normalizedHour = Math.min(12, Math.max(1, Number(hour12) || 12))
+  const normalizedMinute = Math.min(59, Math.max(0, Number(minute) || 0))
+  let hour24 = normalizedHour % 12
+  if (meridiem === 'PM') hour24 += 12
+  return `${pad(hour24)}:${pad(normalizedMinute)}`
+}
+
+function formatRecurringDisplayTime(value: string | null | undefined, language: string): string {
+  const normalized = normalizeTime24(value)
+  const [hourRaw, minuteRaw] = normalized.split(':')
+  const date = new Date(2024, 0, 1, Number(hourRaw), Number(minuteRaw), 0, 0)
+  return date.toLocaleTimeString(language === 'he' ? 'he-IL' : 'en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
 function buildDateWheelOptions(
   minValue: string,
   language: string,
@@ -214,6 +302,65 @@ function buildDateWheelOptions(
 
     return { value, label }
   })
+}
+
+function normalizeRepeatDays(days: number[] | null | undefined): number[] {
+  return Array.from(
+    new Set(
+      (days ?? [])
+        .filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6),
+    ),
+  ).sort((a, b) => REPEAT_WEEKDAY_ORDER.indexOf(a as (typeof REPEAT_WEEKDAY_ORDER)[number]) - REPEAT_WEEKDAY_ORDER.indexOf(b as (typeof REPEAT_WEEKDAY_ORDER)[number]))
+}
+
+function dateAndTimeToLocalDate(dateValue: string | null | undefined, timeValue: string | null | undefined): Date | null {
+  if (!dateValue || !timeValue) return null
+  const normalizedTime = timeValue.slice(0, 5)
+  return parseLocalDateTime(`${dateValue}T${normalizedTime}`)
+}
+
+function formatRepeatDaysLabel(days: number[], language: string): string {
+  const normalized = normalizeRepeatDays(days)
+  if (normalized.length === 0) return ''
+  return normalized
+    .map((day) =>
+      new Intl.DateTimeFormat(language === 'he' ? 'he-IL' : 'en-US', { weekday: 'short' }).format(
+        new Date(Date.UTC(2024, 0, 7 + day)),
+      ),
+    )
+    .join(' · ')
+}
+
+function getNextRecurringOccurrence(
+  repeatDays: number[],
+  startsOn: string,
+  startTime: string,
+  endsOn?: string | null,
+): Date | null {
+  const normalizedDays = normalizeRepeatDays(repeatDays)
+  const startDate = dateAndTimeToLocalDate(startsOn, startTime)
+  if (!startDate || normalizedDays.length === 0) return null
+  const endDate = endsOn ? dateAndTimeToLocalDate(endsOn, startTime) : null
+  const now = new Date()
+  const searchStart = new Date(
+    Math.max(
+      now.getTime(),
+      new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), 0, 0, 0, 0).getTime(),
+    ),
+  )
+
+  for (let offset = 0; offset < 21; offset += 1) {
+    const candidate = new Date(searchStart)
+    candidate.setDate(searchStart.getDate() + offset)
+    candidate.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0)
+    if (candidate < startDate) continue
+    if (endDate && candidate > endDate) return null
+    if (!normalizedDays.includes(candidate.getDay())) continue
+    if (candidate < now) continue
+    return candidate
+  }
+
+  return null
 }
 
 export default function ClientDashboard({
@@ -254,6 +401,22 @@ export default function ClientDashboard({
     String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
   const [dogCount, setDogCount] = useState<DogCount>(1)
+  const [repeatType, setRepeatType] = useState<RepeatType>('one_time')
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('later')
+  const [repeatDays, setRepeatDays] = useState<number[]>([])
+  const [repeatStartTime, setRepeatStartTime] = useState(() => splitScheduledDraft(getNowPlus15LocalInput()).time)
+  const [recurringBookings, setRecurringBookings] = useState<RecurringBookingRow[]>([])
+  const [recurringLoading, setRecurringLoading] = useState(false)
+  const [, setRecurringSaving] = useState(false)
+  const [recurringError, setRecurringError] = useState<string | null>(null)
+  const [recurringSuccess, setRecurringSuccess] = useState<string | null>(null)
+  const [editingRecurringBooking, setEditingRecurringBooking] = useState<RecurringBookingItem | null>(null)
+  const [recurringEditDays, setRecurringEditDays] = useState<number[]>([])
+  const [recurringEditTime, setRecurringEditTime] = useState('18:00')
+  const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
+  const [timePickerHour12, setTimePickerHour12] = useState('6')
+  const [timePickerMinute, setTimePickerMinute] = useState('00')
+  const [timePickerMeridiem, setTimePickerMeridiem] = useState<Meridiem>('PM')
   const [showFirstBookingWow, setShowFirstBookingWow] = useState(false)
   const [resumeFirstBookingWowAfterCardSetup, setResumeFirstBookingWowAfterCardSetup] = useState(false)
   const [guidedBookingField, setGuidedBookingField] = useState<'dogName' | 'duration' | 'payment' | null>(null)
@@ -830,7 +993,9 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!showSchedulePage) return
-    setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
+    const nextDraft = clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput())
+    setScheduleDraft(nextDraft)
+    setRepeatStartTime(splitScheduledDraft(nextDraft).time)
   }, [flow.scheduledFor, showSchedulePage])
 
   const playArrivalBeep = useCallback(() => {
@@ -965,6 +1130,171 @@ export default function ClientDashboard({
   }
   const handleBabysitterFixedBudgetChange = (nextValue: number) => {
     setBabysitterBudgetFixed(String(clampNumber(nextValue, BABYSITTER_BUDGET_MIN_ILS, BABYSITTER_BUDGET_MAX_ILS)))
+  }
+
+  function openRecurringTimePicker(initialTime: string, target: TimePickerTarget) {
+    const parts = time24ToPickerParts(initialTime)
+    setTimePickerHour12(parts.hour12)
+    setTimePickerMinute(parts.minute)
+    setTimePickerMeridiem(parts.meridiem)
+    setTimePickerTarget(target)
+  }
+
+  function handleRecurringTimePickerDone() {
+    const nextTime = pickerPartsToTime24(timePickerHour12, timePickerMinute, timePickerMeridiem)
+    if (timePickerTarget === 'repeat') {
+      setRepeatStartTime(nextTime)
+      updateScheduledDraftFromWheel(
+        repeatScheduleParts.date,
+        nextTime.slice(0, 2),
+        nextTime.slice(3, 5),
+      )
+    } else if (timePickerTarget === 'edit') {
+      setRecurringEditTime(nextTime)
+    }
+    setTimePickerTarget(null)
+  }
+
+  function toggleRepeatDay(day: number) {
+    setRepeatDays((current) => {
+      const normalized = normalizeRepeatDays(current)
+      return normalized.includes(day)
+        ? normalizeRepeatDays(normalized.filter((value) => value !== day))
+        : normalizeRepeatDays([...normalized, day])
+    })
+  }
+
+  async function handleRecurringStatusUpdate(id: string, status: RecurringStatus) {
+    setRecurringSaving(true)
+    setRecurringError(null)
+    const { error } = await supabase
+      .from('recurring_bookings')
+      .update({ recurring_status: status })
+      .eq('id', id)
+      .eq('client_id', profile.id)
+
+    if (error) {
+      setRecurringSaving(false)
+      setRecurringError(error.message)
+      return
+    }
+
+    await loadRecurringBookings()
+    setRecurringSaving(false)
+    setRecurringSuccess(
+      status === 'paused'
+        ? t('recurring.pausedSeries')
+        : status === 'active'
+          ? t('recurring.resumedSeries')
+          : t('recurring.cancelledSeries'),
+    )
+    if (editingRecurringBooking?.id === id && status === 'cancelled') {
+      setEditingRecurringBooking(null)
+    }
+  }
+
+  async function handleSaveRecurringEdit() {
+    if (!editingRecurringBooking) return
+    const nextDays = normalizeRepeatDays(recurringEditDays)
+    if (nextDays.length === 0) {
+      setRecurringError(t('recurring.selectAtLeastOneDay'))
+      return
+    }
+
+    setRecurringSaving(true)
+    setRecurringError(null)
+    const { error } = await supabase
+      .from('recurring_bookings')
+      .update({ repeat_days: nextDays, start_time: recurringEditTime })
+      .eq('id', editingRecurringBooking.id)
+      .eq('client_id', profile.id)
+
+    if (error) {
+      setRecurringSaving(false)
+      setRecurringError(error.message)
+      return
+    }
+
+    await loadRecurringBookings()
+    setRecurringSaving(false)
+    setRecurringSuccess(t('recurring.updatedSeries'))
+    setEditingRecurringBooking(null)
+  }
+
+  async function handleCreateRecurringBooking() {
+    if (!canSubmitRecurringBooking) return
+
+    const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
+      ? selectedBookingServiceRef.current
+      : resolvedBookingService
+    const effectiveServiceType =
+      mapBookingServiceTypeToProfileServiceType(effectiveBookingService) ??
+      requestServiceTypeRef.current ??
+      requestServiceType
+
+    if (!effectiveServiceType) {
+      setRecurringError(t('recurring.missingServiceType'))
+      return
+    }
+
+    const durationMinutes = isBabysitterRequest
+      ? babysitterDurationMinutes
+      : isDogWalkerRequest
+        ? dogWalkerDurationMinutes
+        : flow.duration ? Math.round((flow.duration === '20min' ? 20 : flow.duration === '40min' ? 40 : 60)) : null
+
+    if (!durationMinutes) {
+      setRecurringError(t('recurring.missingDuration'))
+      return
+    }
+
+    const nextDogCount = shouldShowDogCountControl ? normalizedDogCount : 1
+    const notes = flow.currentJob?.notes ?? null
+    const dogNameValue = bookingSubjectValue
+    const recurringStartDraft = clampScheduledDraft(
+      mergeScheduledDraft(repeatScheduleParts.date, repeatStartTime),
+      scheduleMinValue,
+    )
+    const recurringStartParts = splitScheduledDraft(recurringStartDraft)
+
+    setRecurringSaving(true)
+    setRecurringError(null)
+    setRecurringSuccess(null)
+
+    const payload = {
+      client_id: profile.id,
+      provider_id: null,
+      service_type: effectiveServiceType,
+      dog_name: dogNameValue || null,
+      dog_count: nextDogCount,
+      location: flow.location.trim(),
+      address: flow.location.trim(),
+      notes,
+      duration_minutes: durationMinutes,
+      price_per_visit: currentBookingPriceILS,
+      repeat_type: 'weekly' as const,
+      repeat_days: effectiveRepeatDays,
+      repeat_starts_on: recurringStartParts.date,
+      repeat_ends_on: null,
+      start_time: repeatStartTime,
+      recurring_status: 'active' as const,
+    }
+
+    const { error } = await supabase.from('recurring_bookings').insert(payload)
+    if (error) {
+      setRecurringSaving(false)
+      setRecurringError(error.message)
+      return
+    }
+
+    await loadRecurringBookings()
+    setRecurringSaving(false)
+    setRecurringSuccess(t('recurring.createdSeries'))
+    setRepeatDays([])
+    setRepeatType('one_time')
+    setShowSchedulePage(false)
+    setMenuPage('futureOrders')
+    setBurgerOpen(true)
   }
 
   const handleFindWalker = useCallback(() => {
@@ -1253,6 +1583,78 @@ export default function ClientDashboard({
         findingProviderAt: getScheduledDispatchWindowLabel(j.scheduled_for),
       })),
     [flow.upcomingJobs, flow.startsInMinutes, t],
+  )
+
+  const loadRecurringBookings = useCallback(async () => {
+    setRecurringLoading(true)
+    setRecurringError(null)
+    const { data, error } = await supabase
+      .from('recurring_bookings')
+      .select('*')
+      .eq('client_id', profile.id)
+      .neq('recurring_status', 'cancelled')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('[ClientDashboard] recurring bookings unavailable:', error.message)
+      setRecurringError(error.message)
+      setRecurringBookings([])
+      setRecurringLoading(false)
+      return
+    }
+
+    setRecurringBookings(((data as RecurringBookingRow[] | null) ?? []).map((row) => ({
+      ...row,
+      repeat_days: normalizeRepeatDays(row.repeat_days),
+    })))
+    setRecurringLoading(false)
+  }, [profile.id])
+
+  useEffect(() => {
+    void loadRecurringBookings()
+  }, [loadRecurringBookings])
+
+  const recurringItems = useMemo<RecurringBookingItem[]>(
+    () =>
+      recurringBookings.map((row) => {
+        const repeatDays = normalizeRepeatDays(row.repeat_days)
+        const nextOccurrenceAt = getNextRecurringOccurrence(
+          repeatDays,
+          row.repeat_starts_on,
+          row.start_time,
+          row.repeat_ends_on,
+        )
+        const language = i18n.resolvedLanguage || 'en'
+        const serviceLabel = t(`services.${SERVICE_I18N_KEYS[mapProfileServiceTypeToBookingServiceType(row.service_type as ProfileServiceType) ?? 'dog_walking']}` as never, {
+          defaultValue: row.service_type,
+        })
+        const titleParts = [serviceLabel]
+        if (isDogServiceType(row.service_type)) {
+          titleParts.push(formatDogCountLabel(row.dog_count ?? 1, { isHebrew: language === 'he' }))
+        }
+        return {
+          id: row.id,
+          serviceLabel,
+          title: titleParts.join(' · '),
+          weekdaysLabel: formatRepeatDaysLabel(repeatDays, language),
+          timeLabel: formatRecurringDisplayTime(row.start_time, language),
+          durationLabel: formatDurationFromMinutes(row.duration_minutes) ?? `${row.duration_minutes} min`,
+          pricePerVisit: Number(row.price_per_visit),
+          nextOccurrenceLabel: nextOccurrenceAt
+            ? nextOccurrenceAt.toLocaleDateString(language === 'he' ? 'he-IL' : 'en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              })
+            : null,
+          nextOccurrenceAt,
+          status: row.recurring_status,
+          repeatDays,
+          startsOn: row.repeat_starts_on,
+          startTime: row.start_time,
+        }
+      }),
+    [i18n.resolvedLanguage, recurringBookings, t],
   )
 
   const anyFlow = flow as typeof flow & {
@@ -1809,10 +2211,11 @@ export default function ClientDashboard({
   const openScheduleSheet = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-schedule')
     setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
+    setScheduleMode(repeatType === 'weekly' ? 'repeat' : 'later')
     setShowSchedulePage(true)
     markFirstInteractionVisual('client-dashboard:open-schedule')
     void hapticLight()
-  }, [flow.scheduledFor])
+  }, [flow.scheduledFor, repeatType])
 
   const openAddressPicker = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-address-picker')
@@ -1860,11 +2263,6 @@ export default function ClientDashboard({
     setMenuPage('settings')
   }, [])
 
-  const openFutureOrdersMenu = useCallback(() => {
-    setBurgerOpen(true)
-    setMenuPage('futureOrders')
-  }, [])
-
   const currentMapStyle: React.CSSProperties = isTrackingState
     ? trackingMapContainerStyle
     : isSearching
@@ -1873,18 +2271,6 @@ export default function ClientDashboard({
 
   const scheduleMinValue = getNowPlus15LocalInput()
   const scheduleDraftParts = splitScheduledDraft(clampScheduledDraft(scheduleDraft, scheduleMinValue))
-  const todayDateValue = splitScheduledDraft(scheduleMinValue).date
-  const tomorrowDateValue = (() => {
-    const todayDate = parseLocalDateTime(scheduleMinValue) ?? new Date()
-    const nextDate = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate() + 1)
-    return `${nextDate.getFullYear()}-${pad(nextDate.getMonth() + 1)}-${pad(nextDate.getDate())}`
-  })()
-  const scheduleDatePreset: 'today' | 'tomorrow' | 'custom' =
-    scheduleDraftParts.date === todayDateValue
-      ? 'today'
-      : scheduleDraftParts.date === tomorrowDateValue
-        ? 'tomorrow'
-        : 'custom'
   const dateWheelOptions = useMemo(
     () => buildDateWheelOptions(scheduleMinValue, i18n.resolvedLanguage || 'en', t),
     [i18n.resolvedLanguage, scheduleMinValue, t],
@@ -1905,6 +2291,14 @@ export default function ClientDashboard({
       })),
     [],
   )
+  const timePickerHourOptions = useMemo<WheelOption[]>(
+    () =>
+      Array.from({ length: 12 }, (_, index) => {
+        const value = String(index + 1)
+        return { value, label: value }
+      }),
+    [],
+  )
 
   const updateScheduledDraftFromWheel = useCallback(
     (nextDate: string, nextHour: string, nextMinute: string) => {
@@ -1913,28 +2307,6 @@ export default function ClientDashboard({
       )
     },
     [scheduleMinValue],
-  )
-  const handleSchedulePresetSelect = useCallback((preset: 'today' | 'tomorrow') => {
-    const nextDate =
-      preset === 'today'
-        ? todayDateValue
-        : tomorrowDateValue
-
-    updateScheduledDraftFromWheel(
-      nextDate,
-      scheduleDraftParts.time.slice(0, 2),
-      scheduleDraftParts.time.slice(3, 5),
-    )
-  }, [
-    scheduleDraftParts.date,
-    scheduleDraftParts.time,
-    todayDateValue,
-    tomorrowDateValue,
-    updateScheduledDraftFromWheel,
-  ])
-  const scheduleDispatchRelativeLabel = useMemo(
-    () => getScheduledRelativeLabel(scheduleDraft),
-    [scheduleDraft],
   )
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
@@ -2038,6 +2410,15 @@ export default function ClientDashboard({
       : flow.adjustedPriceILS
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
   const requiresScheduledFor = flow.bookingTiming === 'scheduled'
+  const repeatScheduleSource = clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput())
+  const repeatScheduleParts = splitScheduledDraft(repeatScheduleSource)
+  const effectiveRepeatDays = repeatType === 'weekly'
+    ? normalizeRepeatDays(
+        repeatDays.length > 0
+          ? repeatDays
+          : [parseLocalDateTime(repeatScheduleSource)?.getDay() ?? new Date().getDay()],
+      )
+    : []
   const canSubmitBooking =
     hasSelectedProfileService &&
     isSelectedServiceAvailable &&
@@ -2047,6 +2428,17 @@ export default function ClientDashboard({
     hasValidPriceForSelectedService &&
     !!flow.savedCard &&
     (!requiresScheduledFor || !!flow.scheduledFor)
+  const canSubmitRecurringBooking =
+    hasSelectedProfileService &&
+    isSelectedServiceAvailable &&
+    !!bookingSubjectValue &&
+    !!flow.location.trim() &&
+    hasValidDurationForSelectedService &&
+    hasValidPriceForSelectedService &&
+    !!flow.savedCard &&
+    !!repeatScheduleParts.date &&
+    !!repeatScheduleParts.time &&
+    effectiveRepeatDays.length > 0
   const bookingBlockedReasons = useMemo(() => {
     const reasons: string[] = []
     if (!hasSelectedProfileService) reasons.push('missing_profile_service')
@@ -2057,9 +2449,11 @@ export default function ClientDashboard({
     if (!hasValidPriceForSelectedService) reasons.push('missing_price')
     if (!flow.savedCard) reasons.push('missing_saved_card')
     if (requiresScheduledFor && !flow.scheduledFor) reasons.push('missing_scheduled_for')
+    if (repeatType === 'weekly' && effectiveRepeatDays.length === 0) reasons.push('missing_repeat_days')
     return reasons
   }, [
     bookingSubjectValue,
+    effectiveRepeatDays.length,
     flow.location,
     flow.savedCard,
     flow.scheduledFor,
@@ -2068,6 +2462,7 @@ export default function ClientDashboard({
     hasValidPriceForSelectedService,
     isSelectedServiceAvailable,
     requiresScheduledFor,
+    repeatType,
   ])
   const lastBookingCanSubmitLogRef = useRef<string>('')
 
@@ -2102,7 +2497,9 @@ export default function ClientDashboard({
     setBabysitterBudgetFixed(String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
     setDogWalkerDurationHours(String(DOG_WALKER_DEFAULT_DURATION_HOURS))
     setDogWalkerBudgetFixed(String(DOG_WALKER_DEFAULT_BUDGET_ILS))
-    setScheduleDraft(clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput()))
+    const nextDraft = clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput())
+    setScheduleDraft(nextDraft)
+    setRepeatStartTime(splitScheduledDraft(nextDraft).time)
     setMatchingUiState(null)
     console.log('[ClientDashboard] booking composer reset applied', {
       bookingComposerResetKey: flow.bookingComposerResetKey,
@@ -2239,6 +2636,49 @@ export default function ClientDashboard({
       </div>
     </div>
   ) : null
+
+  const repeatSelectorBlock = (
+    <div style={repeatSectionStyle}>
+      <div style={repeatHeaderRowStyle}>
+        <span style={repeatLabelStyle}>{isRtl ? 'הזמנה חוזרת' : 'Repeat booking'}</span>
+        <span style={repeatSummaryStyle}>{isRtl ? 'כל שבוע' : 'Every week'}</span>
+      </div>
+      <div style={repeatExpandedStyle}>
+        <div style={repeatWeekdayRowStyle}>
+          {REPEAT_WEEKDAY_ORDER.map((day) => {
+            const selected = effectiveRepeatDays.includes(day)
+            const label = new Intl.DateTimeFormat(isRtl ? 'he-IL' : 'en-US', { weekday: 'short' }).format(
+              new Date(Date.UTC(2024, 0, 7 + day)),
+            )
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() => toggleRepeatDay(day)}
+                style={{
+                  ...repeatDayChipStyle,
+                  ...(selected ? repeatDayChipActiveStyle : null),
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+        <div style={repeatTimeRowStyle}>
+          <span style={repeatTimeLabelStyle}>{isRtl ? 'שעה' : 'Time'}</span>
+                <button
+                  type="button"
+                  onClick={() => openRecurringTimePicker(repeatStartTime, 'repeat')}
+                  style={repeatTimeInputStyle}
+                >
+                  <span>{formatRecurringDisplayTime(repeatStartTime, isRtl ? 'he' : 'en')}</span>
+                  <span style={repeatTimeChevronStyle}>›</span>
+                </button>
+        </div>
+      </div>
+    </div>
+  )
 
   const durationPickerBlock = (
     <div style={{ ...compactFieldStyle, ...dogWalkerPlannerFieldWrapStyle }}>
@@ -2907,11 +3347,31 @@ export default function ClientDashboard({
                   title={t('menu.futureOrders')}
                   subtitle={t('menu.futureOrdersSubtitle')}
                 >
-                  <BurgerUpcomingList
-                    items={upcomingScheduledItems}
-                    onCancel={flow.cancelScheduledJob}
-                    limit={null}
-                  />
+                  <div style={futureOrdersSectionsStyle}>
+                    <div>
+                      <div style={futureOrdersSectionLabelStyle}>{t('recurring.upcoming')}</div>
+                      <BurgerUpcomingList
+                        items={upcomingScheduledItems}
+                        onCancel={flow.cancelScheduledJob}
+                        limit={null}
+                      />
+                    </div>
+                    <div>
+                      <div style={futureOrdersSectionLabelStyle}>{t('recurring.recurring')}</div>
+                      <BurgerRecurringList
+                        items={recurringItems}
+                        loading={recurringLoading}
+                        onEdit={(item) => {
+                          setRecurringEditDays(item.repeatDays)
+                          setRecurringEditTime(normalizeTime24(item.startTime))
+                          setEditingRecurringBooking(item)
+                        }}
+                        onPause={(id) => void handleRecurringStatusUpdate(id, 'paused')}
+                        onResume={(id) => void handleRecurringStatusUpdate(id, 'active')}
+                        onCancel={(id) => void handleRecurringStatusUpdate(id, 'cancelled')}
+                      />
+                    </div>
+                  </div>
                 </BurgerSection>
               ) : (
                 <>
@@ -2985,7 +3445,7 @@ export default function ClientDashboard({
                   {isRtl ? 'קביעת זמן לשירות' : 'Schedule Order'}
                 </div>
                 <div style={scheduleSheetSubtitleStyle}>
-                  {isRtl ? 'בחרו תאריך ושעה שמתאימים לכם.' : 'Choose the best day and time for your order.'}
+                  {isRtl ? 'בחרו מתי לבצע את ההזמנה.' : 'Choose when this booking should happen.'}
                 </div>
               </div>
               <button
@@ -3003,106 +3463,114 @@ export default function ClientDashboard({
                 <div style={schedulePresetRowStyle}>
                   <button
                     type="button"
-                    onClick={() => handleSchedulePresetSelect('today')}
+                    onClick={() => {
+                      setScheduleMode('later')
+                      setRepeatType('one_time')
+                    }}
                     style={{
                       ...schedulePresetButtonStyle,
-                      ...(scheduleDatePreset === 'today' ? schedulePresetButtonActiveStyle : null),
+                      ...(scheduleMode === 'later' ? schedulePresetButtonActiveStyle : null),
                     }}
                   >
-                    {t('common.today')}
+                    {isRtl ? 'אחר כך' : 'Later'}
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleSchedulePresetSelect('tomorrow')}
+                    onClick={() => {
+                      setScheduleMode('repeat')
+                      setRepeatType('weekly')
+                    }}
                     style={{
                       ...schedulePresetButtonStyle,
-                      ...(scheduleDatePreset === 'tomorrow' ? schedulePresetButtonActiveStyle : null),
+                      ...(scheduleMode === 'repeat' ? schedulePresetButtonActiveStyle : null),
                     }}
                   >
-                    {t('common.tomorrow')}
+                    {isRtl ? 'חוזר' : 'Repeat'}
                   </button>
                 </div>
 
-                <div style={schedulePickerCardStyle}>
-                  <div style={scheduleWheelHeaderRowStyle}>
-                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
-                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
-                    <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
-                  </div>
-                  <div style={scheduleWheelWrapStyle}>
-                    <div style={scheduleWheelHighlightStyle} />
-                    <div style={scheduleWheelColumnsStyle}>
-                      <WheelPickerColumn
-                        options={dateWheelOptions}
-                        value={scheduleDraftParts.date}
-                        onChange={(nextDate) =>
-                          updateScheduledDraftFromWheel(
-                            nextDate,
-                            scheduleDraftParts.time.slice(0, 2),
-                            scheduleDraftParts.time.slice(3, 5),
-                          )
-                        }
-                        isWide
-                      />
-                      <WheelPickerColumn
-                        options={hourWheelOptions}
-                        value={scheduleDraftParts.time.slice(0, 2)}
-                        onChange={(nextHour) =>
-                          updateScheduledDraftFromWheel(
-                            scheduleDraftParts.date,
-                            nextHour,
-                            scheduleDraftParts.time.slice(3, 5),
-                          )
-                        }
-                      />
-                      <WheelPickerColumn
-                        options={minuteWheelOptions}
-                        value={scheduleDraftParts.time.slice(3, 5)}
-                        onChange={(nextMinute) =>
-                          updateScheduledDraftFromWheel(
-                            scheduleDraftParts.date,
-                            scheduleDraftParts.time.slice(0, 2),
-                            nextMinute,
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div style={scheduleDispatchNoticeStyle}>
-                  <div style={scheduleInfoRowStyle}>
-                    <span style={scheduleInfoIconStyle} aria-hidden="true">⏰</span>
-                    <div style={scheduleInfoCopyStyle}>
-                      <div style={scheduleInfoTitleStyle}>
-                        {isRtl
-                          ? 'החיפוש יתחיל אוטומטית 15 דקות לפני הזמן שבחרת.'
-                          : 'The search will start automatically 15 minutes before the selected time.'}
+                {scheduleMode === 'later' && (
+                  <div style={scheduleModeBodyStyle}>
+                    <div style={schedulePickerCardStyle}>
+                      <div style={scheduleWheelHeaderRowStyle}>
+                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
+                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
+                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
                       </div>
-                      {scheduleDispatchRelativeLabel && (
-                        <div style={scheduleInfoSubtitleStyle}>{scheduleDispatchRelativeLabel}</div>
-                      )}
+                      <div style={scheduleWheelWrapStyle}>
+                        <div style={scheduleWheelHighlightStyle} />
+                        <div style={scheduleWheelColumnsStyle}>
+                          <WheelPickerColumn
+                            options={dateWheelOptions}
+                            value={scheduleDraftParts.date}
+                            onChange={(nextDate) =>
+                              updateScheduledDraftFromWheel(
+                                nextDate,
+                                scheduleDraftParts.time.slice(0, 2),
+                                scheduleDraftParts.time.slice(3, 5),
+                              )
+                            }
+                            isWide
+                          />
+                          <WheelPickerColumn
+                            options={hourWheelOptions}
+                            value={scheduleDraftParts.time.slice(0, 2)}
+                            onChange={(nextHour) =>
+                              updateScheduledDraftFromWheel(
+                                scheduleDraftParts.date,
+                                nextHour,
+                                scheduleDraftParts.time.slice(3, 5),
+                              )
+                            }
+                          />
+                          <WheelPickerColumn
+                            options={minuteWheelOptions}
+                            value={scheduleDraftParts.time.slice(3, 5)}
+                            onChange={(nextMinute) =>
+                              updateScheduledDraftFromWheel(
+                                scheduleDraftParts.date,
+                                scheduleDraftParts.time.slice(0, 2),
+                                nextMinute,
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
-                <div style={scheduleSummaryCardStyle}>
-                  <div style={scheduleSummaryPrimaryStyle}>
-                    {isRtl
-                      ? `נקבע ל: ${formatScheduledSummaryDate(scheduleDraft)} בשעה ${formatScheduledTime(scheduleDraft)}`
-                      : `Scheduled for: ${formatScheduledSummaryDate(scheduleDraft)} at ${formatScheduledTime(scheduleDraft)}`}
+                {scheduleMode === 'repeat' && (
+                  <div style={scheduleModeBodyStyle}>
+                    {repeatSelectorBlock}
                   </div>
+                )}
+
+                <div style={scheduleInlineCaptionStyle}>
+                  {isRtl ? 'החיפוש מתחיל 15 דקות לפני' : 'Search starts 15 min before'}
                 </div>
               </div>
             </div>
 
             <div style={scheduleSheetFooterStyle}>
               <ActionButton
-                label={isRtl ? 'אישור הזמנה עתידית' : 'Confirm schedule'}
-                disabled={!canSubmitBooking}
+                label={
+                  scheduleMode === 'repeat'
+                    ? t('recurring.createWeeklyBooking')
+                    : (isRtl ? 'תזמון הזמנה' : 'Schedule order')
+                }
+                disabled={
+                  scheduleMode === 'repeat'
+                    ? !canSubmitRecurringBooking
+                    : !canSubmitBooking
+                }
                 onClick={() => {
-                  if (!canSubmitBooking) {
-                    console.log('[ClientDashboard] scheduled CTA blocked by shared validation', {
+                  const canSubmitCurrentMode = scheduleMode === 'repeat' ? canSubmitRecurringBooking : canSubmitBooking
+                  if (!canSubmitCurrentMode) {
+                    console.log('[ClientDashboard] schedule CTA blocked by validation', {
+                      scheduleMode,
+                      canSubmitCurrentMode,
+                      canSubmitRecurringBooking,
                       canSubmitBooking,
                       bookingBlockedReasons,
                       requestServiceType: effectiveRequestServiceType,
@@ -3110,14 +3578,169 @@ export default function ClientDashboard({
                     })
                     return
                   }
+                  if (scheduleMode === 'repeat') {
+                    setRepeatType('weekly')
+                    void handleCreateRecurringBooking()
+                    return
+                  }
                   const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
-                  flow.setBookingTiming('scheduled')
                   flow.setScheduledFor(nextValue)
                   setScheduleDraft(nextValue)
+                  setRepeatType('one_time')
+                  flow.setBookingTiming('scheduled')
                   setShowSchedulePage(false)
                   void hapticSuccess()
                 }}
               />
+              {scheduleMode === 'repeat' && recurringError && <div style={recurringInlineErrorStyle}>{recurringError}</div>}
+              {scheduleMode === 'repeat' && recurringSuccess && <div style={recurringInlineSuccessStyle}>{recurringSuccess}</div>}
+            </div>
+          </div>
+        </>
+      )}
+
+      {editingRecurringBooking && (
+        <>
+          <div style={menuOverlayStyle} onClick={() => setEditingRecurringBooking(null)} />
+          <div style={recurringEditSheetStyle}>
+            <div style={scheduleSheetHandleStyle} />
+            <div style={scheduleSheetHeaderStyle}>
+              <div style={scheduleSheetHeaderCopyStyle}>
+                <div style={scheduleSheetTitleStyle}>{t('recurring.editSchedule')}</div>
+                <div style={scheduleSheetSubtitleStyle}>{editingRecurringBooking.title}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRecurringBooking(null)}
+                style={scheduleSheetCloseButtonStyle}
+                aria-label={t('common.close')}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={recurringEditContentStyle}>
+              <div style={repeatWeekdayRowStyle}>
+                {REPEAT_WEEKDAY_ORDER.map((day) => {
+                  const selected = recurringEditDays.includes(day)
+                  const label = new Intl.DateTimeFormat(isRtl ? 'he-IL' : 'en-US', { weekday: 'short' }).format(
+                    new Date(Date.UTC(2024, 0, 7 + day)),
+                  )
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() =>
+                        setRecurringEditDays((current) =>
+                          current.includes(day)
+                            ? normalizeRepeatDays(current.filter((value) => value !== day))
+                            : normalizeRepeatDays([...current, day]),
+                        )
+                      }
+                      style={{
+                        ...repeatDayChipStyle,
+                        ...(selected ? repeatDayChipActiveStyle : null),
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              <div style={repeatTimeRowStyle}>
+                <span style={repeatTimeLabelStyle}>{isRtl ? 'שעה' : 'Time'}</span>
+                <button
+                  type="button"
+                  onClick={() => openRecurringTimePicker(recurringEditTime, 'edit')}
+                  style={repeatTimeInputStyle}
+                >
+                  <span>{formatRecurringDisplayTime(recurringEditTime, isRtl ? 'he' : 'en')}</span>
+                  <span style={repeatTimeChevronStyle}>›</span>
+                </button>
+              </div>
+              <div style={recurringActionStackStyle}>
+                <button type="button" onClick={() => void handleSaveRecurringEdit()} style={recurringPrimaryActionStyle}>
+                  {t('recurring.saveChanges')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRecurringStatusUpdate(editingRecurringBooking.id, editingRecurringBooking.status === 'active' ? 'paused' : 'active')}
+                  style={recurringSecondaryWideActionStyle}
+                >
+                  {editingRecurringBooking.status === 'active' ? t('recurring.pause') : t('recurring.resume')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRecurringStatusUpdate(editingRecurringBooking.id, 'cancelled')}
+                  style={recurringDangerWideActionStyle}
+                >
+                  {t('recurring.cancelSeries')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {timePickerTarget && (
+        <>
+          <div style={timePickerOverlayStyle} onClick={() => setTimePickerTarget(null)} />
+          <div style={timePickerModalStyle}>
+            <div style={timePickerHeaderStyle}>
+              <div style={timePickerTitleStyle}>{isRtl ? 'בחירת שעה' : 'Select time'}</div>
+              <div style={timePickerSubtitleStyle}>
+                {timePickerTarget === 'edit'
+                  ? (isRtl ? 'עדכון שעת ההזמנה החוזרת' : 'Update recurring booking time')
+                  : (isRtl ? 'בחרו שעה להזמנה החוזרת' : 'Choose a time for this recurring booking')}
+              </div>
+            </div>
+              <div style={timePickerWheelShellStyle}>
+                <div style={timePickerWheelHighlightStyle} />
+                <div style={timePickerWheelColumnsStyle}>
+                  <WheelPickerColumn
+                    options={timePickerHourOptions}
+                  value={timePickerHour12}
+                  onChange={setTimePickerHour12}
+                />
+                  <WheelPickerColumn
+                    options={minuteWheelOptions}
+                    value={timePickerMinute}
+                    onChange={setTimePickerMinute}
+                  />
+                </div>
+              </div>
+            <div style={timePickerMeridiemRowStyle}>
+              {(['AM', 'PM'] as const).map((value) => {
+                const selected = timePickerMeridiem === value
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setTimePickerMeridiem(value)}
+                    style={{
+                      ...timePickerMeridiemButtonStyle,
+                      ...(selected ? timePickerMeridiemButtonActiveStyle : null),
+                    }}
+                  >
+                    {value}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={timePickerActionsStyle}>
+              <button
+                type="button"
+                onClick={() => setTimePickerTarget(null)}
+                style={timePickerSecondaryButtonStyle}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleRecurringTimePickerDone}
+                style={timePickerPrimaryButtonStyle}
+              >
+                {isRtl ? 'סיום' : 'Done'}
+              </button>
             </div>
           </div>
         </>
@@ -3436,9 +4059,9 @@ export default function ClientDashboard({
               <button
                 type="button"
                 data-control="calendar-button"
-                disabled={!hasFutureOrders && !canSubmitBooking}
+                disabled={!canSubmitBooking}
                 onClick={() => {
-                  if (!hasFutureOrders && !canSubmitBooking) {
+                  if (!canSubmitBooking) {
                     console.log('[ClientDashboard] schedule entry CTA blocked by shared validation', {
                       canSubmitBooking,
                       bookingBlockedReasons,
@@ -3448,19 +4071,15 @@ export default function ClientDashboard({
                     return
                   }
                   markFirstInteractionHandler('client-dashboard:calendar-button')
-                  if (hasFutureOrders) {
-                    openFutureOrdersMenu()
-                  } else {
-                    openScheduleSheet()
-                  }
+                  openScheduleSheet()
                 }}
                 style={{
                   ...stickyCalendarButtonStyle,
-                  ...(flow.bookingTiming === 'scheduled' || hasFutureOrders ? stickyCalendarButtonActiveStyle : null),
-                  ...(!hasFutureOrders && !canSubmitBooking ? stickyCalendarButtonDisabledStyle : null),
+                  ...(flow.bookingTiming === 'scheduled' || hasFutureOrders || showSchedulePage ? stickyCalendarButtonActiveStyle : null),
+                  ...(!canSubmitBooking ? stickyCalendarButtonDisabledStyle : null),
                   position: 'relative' as const,
                 }}
-                aria-label={hasFutureOrders ? t('menu.openFutureOrders') : t('booking.schedule')}
+                aria-label={t('booking.schedule')}
               >
                 <svg
                   width="20"
@@ -4292,6 +4911,88 @@ function BurgerUpcomingList({
   )
 }
 
+function BurgerRecurringList({
+  items,
+  loading,
+  onEdit,
+  onPause,
+  onResume,
+  onCancel,
+}: {
+  items: RecurringBookingItem[]
+  loading: boolean
+  onEdit: (item: RecurringBookingItem) => void
+  onPause: (id: string) => void
+  onResume: (id: string) => void
+  onCancel: (id: string) => void
+}) {
+  const { t } = useTranslation()
+  const isRtl = i18n.resolvedLanguage === 'he'
+  if (loading) {
+    return <div style={burgerEmptyStateStyle}>{t('recurring.loading')}</div>
+  }
+  if (items.length === 0) {
+    return <div style={burgerEmptyStateStyle}>{t('recurring.noRecurring')}</div>
+  }
+
+  return (
+    <div style={burgerListStyle}>
+      {items.map((item) => (
+        <div key={item.id} style={recurringListCardStyle}>
+          <div style={burgerListCardHeaderStyle}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={recurringCardTitleStyle}>{item.title}</div>
+              <div style={recurringCardSubtitleStyle}>{item.weekdaysLabel}</div>
+            </div>
+            <div style={recurringStatusBadgeStyle(item.status)}>{t(`recurring.status.${item.status}` as never)}</div>
+          </div>
+          <div style={recurringCardMetaGridStyle}>
+            <div style={recurringCardMetaItemStyle}>
+              <div style={recurringCardMetaLabelStyle}>{isRtl ? 'שעה' : 'Time'}</div>
+              <div style={recurringCardMetaValueStyle}>{item.timeLabel}</div>
+            </div>
+            <div style={recurringCardMetaItemStyle}>
+              <div style={recurringCardMetaLabelStyle}>{isRtl ? 'משך' : 'Duration'}</div>
+              <div style={recurringCardMetaValueStyle}>{item.durationLabel}</div>
+            </div>
+            {item.pricePerVisit != null && (
+              <div style={recurringCardMetaItemStyle}>
+                <div style={recurringCardMetaLabelStyle}>{isRtl ? 'מחיר' : 'Price'}</div>
+                <div style={recurringCardMetaValueStyle}>{t('recurring.pricePerVisit', { price: item.pricePerVisit })}</div>
+              </div>
+            )}
+            <div style={recurringCardMetaItemStyle}>
+              <div style={recurringCardMetaLabelStyle}>{isRtl ? 'הביקור הבא' : 'Next visit'}</div>
+              <div style={recurringCardMetaValueStyle}>
+              {item.nextOccurrenceLabel
+                ? t('recurring.nextOccurrence', { date: item.nextOccurrenceLabel })
+                : t('recurring.noNextOccurrence')}
+              </div>
+            </div>
+          </div>
+          <div style={recurringActionRowStyle}>
+            <button type="button" onClick={() => onEdit(item)} style={recurringSecondaryActionStyle}>
+              {t('recurring.edit')}
+            </button>
+            {item.status === 'active' ? (
+              <button type="button" onClick={() => onPause(item.id)} style={recurringSecondaryActionStyle}>
+                {t('recurring.pause')}
+              </button>
+            ) : (
+              <button type="button" onClick={() => onResume(item.id)} style={recurringSecondaryActionStyle}>
+                {t('recurring.resume')}
+              </button>
+            )}
+            <button type="button" onClick={() => onCancel(item.id)} style={recurringDangerActionStyle}>
+              {t('recurring.cancelSeries')}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function TrackingCard({
   walkerName,
   phase,
@@ -4477,47 +5178,6 @@ function formatScheduledTime(value: string | null | undefined): string {
     minute: '2-digit',
     hour12: false,
   })
-}
-
-function formatScheduledSummaryDate(value: string | null | undefined): string {
-  const dt = parseDateTimeFlexible(value)
-  if (!dt) return i18n.t('menu.scheduledWalk')
-  return dt.toLocaleDateString([], {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  })
-}
-
-function getScheduledRelativeLabel(value: string | null | undefined): string | null {
-  const dt = parseLocalDateTime(value) ?? parseDateTimeFlexible(value)
-  if (!dt) return null
-
-  const diffMs = dt.getTime() - Date.now()
-  if (diffMs <= 0) return null
-
-  const totalMinutes = Math.round(diffMs / 60000)
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  const isHebrew = i18n.resolvedLanguage === 'he'
-
-  if (isHebrew) {
-    if (hours > 0 && minutes > 0) {
-      return `(בעוד ${hours} שעות ו-${minutes} דקות)`
-    }
-    if (hours > 0) {
-      return hours === 1 ? '(בעוד שעה)' : `(בעוד ${hours} שעות)`
-    }
-    return minutes === 1 ? '(בעוד דקה)' : `(בעוד ${minutes} דקות)`
-  }
-
-  if (hours > 0 && minutes > 0) {
-    return `(In ${hours} hour${hours === 1 ? '' : 's'} and ${minutes} minute${minutes === 1 ? '' : 's'})`
-  }
-  if (hours > 0) {
-    return `(In ${hours} hour${hours === 1 ? '' : 's'})`
-  }
-  return `(In ${minutes} minute${minutes === 1 ? '' : 's'})`
 }
 
 function getScheduledDispatchWindowLabel(value: string | null | undefined): string | null {
@@ -4835,6 +5495,401 @@ const bookingCardStyle: React.CSSProperties = {
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
   gap: 7,
+}
+
+const repeatSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  padding: '1px 0',
+}
+
+const repeatHeaderRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+const repeatLabelStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 800,
+  color: '#475569',
+}
+
+const repeatSummaryStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 600,
+  color: '#64748B',
+  whiteSpace: 'nowrap',
+}
+
+const repeatExpandedStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
+const repeatWeekdayRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 5,
+  flexWrap: 'wrap',
+}
+
+const repeatDayChipStyle: React.CSSProperties = {
+  minWidth: 36,
+  height: 30,
+  borderRadius: 999,
+  border: '1px solid rgba(203, 213, 225, 0.9)',
+  background: 'rgba(255,255,255,0.92)',
+  color: '#475569',
+  fontSize: 11,
+  fontWeight: 700,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const repeatDayChipActiveStyle: React.CSSProperties = {
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  borderColor: 'rgba(15, 23, 42, 0.08)',
+  color: '#FFFFFF',
+}
+
+const repeatTimeRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  minHeight: 36,
+}
+
+const repeatTimeLabelStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 800,
+  color: '#475569',
+}
+
+const repeatTimeInputStyle: React.CSSProperties = {
+  minHeight: 36,
+  minWidth: 112,
+  borderRadius: 12,
+  border: '1px solid rgba(203, 213, 225, 0.9)',
+  background: 'rgba(255,255,255,0.96)',
+  color: '#0F172A',
+  fontSize: 14,
+  fontWeight: 800,
+  padding: '0 10px',
+  fontFamily: 'inherit',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  cursor: 'pointer',
+}
+
+const repeatTimeChevronStyle: React.CSSProperties = {
+  fontSize: 16,
+  lineHeight: 1,
+  color: '#94A3B8',
+}
+
+const recurringInlineErrorStyle: React.CSSProperties = {
+  marginTop: 8,
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#B91C1C',
+}
+
+const recurringInlineSuccessStyle: React.CSSProperties = {
+  marginTop: 8,
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#166534',
+}
+
+const futureOrdersSectionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 18,
+}
+
+const futureOrdersSectionLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#64748B',
+  marginBottom: 8,
+}
+
+const recurringActionRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  marginTop: 10,
+}
+
+const recurringSecondaryActionStyle: React.CSSProperties = {
+  border: '1px solid rgba(148, 163, 184, 0.18)',
+  background: 'rgba(248,250,252,0.92)',
+  color: '#1D4ED8',
+  borderRadius: 999,
+  padding: '8px 12px',
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: 'pointer',
+}
+
+const recurringDangerActionStyle: React.CSSProperties = {
+  ...recurringSecondaryActionStyle,
+  color: '#B91C1C',
+}
+
+const recurringPrimaryActionStyle: React.CSSProperties = {
+  height: 46,
+  borderRadius: 16,
+  border: 'none',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const recurringSecondaryWideActionStyle: React.CSSProperties = {
+  height: 44,
+  borderRadius: 16,
+  border: '1px solid rgba(148, 163, 184, 0.18)',
+  background: 'rgba(248,250,252,0.92)',
+  color: '#1D4ED8',
+  fontSize: 14,
+  fontWeight: 700,
+  cursor: 'pointer',
+}
+
+const recurringDangerWideActionStyle: React.CSSProperties = {
+  ...recurringSecondaryWideActionStyle,
+  color: '#B91C1C',
+}
+
+const recurringActionStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const recurringEditSheetStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 40002,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
+  borderTopLeftRadius: 30,
+  borderTopRightRadius: 30,
+  boxShadow: '0 -20px 50px rgba(15, 23, 42, 0.16)',
+  display: 'flex',
+  flexDirection: 'column',
+  boxSizing: 'border-box',
+  padding: '10px 10px calc(16px + env(safe-area-inset-bottom))',
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
+  animation: 'regliScheduleSheetRise 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+}
+
+const recurringEditContentStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  padding: '0 0 4px',
+}
+
+const recurringStatusBadgeStyle = (status: RecurringStatus): React.CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 28,
+  padding: '0 10px',
+  borderRadius: 999,
+  fontSize: 11.5,
+  fontWeight: 800,
+  color: status === 'active' ? '#166534' : status === 'paused' ? '#92400E' : '#64748B',
+  background: status === 'active' ? 'rgba(34,197,94,0.12)' : status === 'paused' ? 'rgba(245,158,11,0.12)' : 'rgba(148,163,184,0.16)',
+})
+
+const recurringListCardStyle: React.CSSProperties = {
+  borderRadius: 24,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #F8FAFC 100%)',
+  padding: '14px 14px 12px',
+  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.06)',
+}
+
+const recurringCardTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+  letterSpacing: '-0.01em',
+}
+
+const recurringCardSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#64748B',
+  lineHeight: 1.35,
+  marginTop: 3,
+}
+
+const recurringCardMetaGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 12,
+}
+
+const recurringCardMetaItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: 12,
+  paddingBottom: 6,
+  borderBottom: '1px solid rgba(226, 232, 240, 0.78)',
+}
+
+const recurringCardMetaLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: '#94A3B8',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+}
+
+const recurringCardMetaValueStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#0F172A',
+  textAlign: 'right',
+}
+
+const timePickerOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 40030,
+  background: 'rgba(15, 23, 42, 0.34)',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+}
+
+const timePickerModalStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: '50%',
+  top: '50%',
+  transform: 'translate(-50%, -50%)',
+  width: 'min(92vw, 360px)',
+  zIndex: 40031,
+  borderRadius: 28,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
+  boxShadow: '0 28px 60px rgba(15, 23, 42, 0.22)',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  padding: '18px 16px 16px',
+  display: 'grid',
+  gap: 14,
+}
+
+const timePickerHeaderStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  textAlign: 'center',
+}
+
+const timePickerTitleStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const timePickerSubtitleStyle: React.CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.4,
+  color: '#64748B',
+}
+
+const timePickerWheelShellStyle: React.CSSProperties = {
+  position: 'relative',
+  borderRadius: 22,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
+  padding: 10,
+}
+
+const timePickerWheelColumnsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 8,
+  height: 156,
+}
+
+const timePickerWheelHighlightStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 10,
+  right: 10,
+  top: '50%',
+  height: 28,
+  transform: 'translateY(-50%)',
+  borderRadius: 14,
+  background: 'rgba(248, 250, 252, 0.98)',
+  border: '1px solid rgba(203, 213, 225, 0.92)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.94), 0 6px 16px rgba(148, 163, 184, 0.10)',
+  pointerEvents: 'none',
+}
+
+const timePickerActionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+}
+
+const timePickerMeridiemRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 4,
+  minHeight: 54,
+  padding: 4,
+  borderRadius: 18,
+  border: '1px solid rgba(203, 213, 225, 0.92)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.94) 100%)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9)',
+}
+
+const timePickerMeridiemButtonStyle: React.CSSProperties = {
+  height: 46,
+  borderRadius: 14,
+  border: 'none',
+  background: 'transparent',
+  color: '#0F172A',
+  fontSize: 13,
+  fontWeight: 800,
+  cursor: 'pointer',
+  boxShadow: 'none',
+}
+
+const timePickerMeridiemButtonActiveStyle: React.CSSProperties = {
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  boxShadow: '0 8px 18px rgba(15, 23, 42, 0.12)',
+}
+
+const timePickerSecondaryButtonStyle: React.CSSProperties = {
+  height: 46,
+  borderRadius: 16,
+  border: '1px solid rgba(203, 213, 225, 0.92)',
+  background: 'rgba(248,250,252,0.92)',
+  color: '#475569',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const timePickerPrimaryButtonStyle: React.CSSProperties = {
+  height: 46,
+  borderRadius: 16,
+  border: 'none',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 800,
+  cursor: 'pointer',
 }
 
 const dogCountInlineRowStyle: React.CSSProperties = {
@@ -6487,23 +7542,23 @@ const scheduleSheetStyle: React.CSSProperties = {
   bottom: 0,
   zIndex: 40002,
   background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
-  borderTopLeftRadius: 30,
-  borderTopRightRadius: 30,
+  borderTopLeftRadius: 32,
+  borderTopRightRadius: 32,
   boxShadow: '0 -20px 50px rgba(15, 23, 42, 0.16)',
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  padding: '10px 16px calc(16px + env(safe-area-inset-bottom))',
+  padding: '18px 16px calc(14px + env(safe-area-inset-bottom))',
   backdropFilter: 'blur(18px)',
   WebkitBackdropFilter: 'blur(18px)',
 }
 
 const scheduleSheetHandleStyle: React.CSSProperties = {
-  width: 44,
+  width: 42,
   height: 5,
   borderRadius: 999,
   background: 'rgba(148, 163, 184, 0.45)',
-  margin: '0 auto 12px',
+  margin: '0 auto 14px',
   flexShrink: 0,
 }
 
@@ -6511,20 +7566,20 @@ const scheduleSheetHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   justifyContent: 'space-between',
-  gap: 12,
-  marginBottom: 12,
+  gap: 10,
+  marginBottom: 8,
 }
 
 const scheduleSheetHeaderCopyStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
   display: 'grid',
-  gap: 4,
+  gap: 2,
   textAlign: 'center',
 }
 
 const scheduleSheetTitleStyle: React.CSSProperties = {
-  fontSize: 21,
+  fontSize: 18,
   lineHeight: 1.2,
   fontWeight: 900,
   color: '#0F172A',
@@ -6532,19 +7587,19 @@ const scheduleSheetTitleStyle: React.CSSProperties = {
 }
 
 const scheduleSheetSubtitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.35,
   color: '#64748B',
 }
 
 const scheduleSheetCloseButtonStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 12,
+  width: 32,
+  height: 32,
+  borderRadius: 11,
   border: '1px solid rgba(203, 213, 225, 0.9)',
   background: 'rgba(255,255,255,0.9)',
   color: '#0F172A',
-  fontSize: 17,
+  fontSize: 15,
   fontWeight: 800,
   cursor: 'pointer',
   flexShrink: 0,
@@ -6555,8 +7610,9 @@ const scheduleSheetCloseButtonStyle: React.CSSProperties = {
 const scheduleSheetScrollStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
-  maxHeight: 'min(72vh, 560px)',
+  gap: 10,
+  maxHeight: 'min(80vh, 660px)',
+  minHeight: 220,
   overflowY: 'auto',
   scrollbarWidth: 'none',
   msOverflowStyle: 'none',
@@ -6565,27 +7621,33 @@ const scheduleSheetScrollStyle: React.CSSProperties = {
 
 const schedulePageContentStyle: React.CSSProperties = {
   width: '100%',
-  maxWidth: 388,
+  maxWidth: 'none',
   margin: '0 auto',
   display: 'flex',
   flexDirection: 'column',
   gap: 14,
 }
 
+const scheduleModeBodyStyle: React.CSSProperties = {
+  minHeight: 154,
+  display: 'flex',
+  alignItems: 'stretch',
+}
+
 const schedulePresetRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 8,
+  gap: 6,
 }
 
 const schedulePresetButtonStyle: React.CSSProperties = {
-  borderRadius: 16,
+  borderRadius: 14,
   border: '1px solid rgba(203, 213, 225, 0.95)',
   background: 'rgba(248, 250, 252, 0.96)',
   color: '#0F172A',
-  minHeight: 44,
-  padding: '10px 12px',
-  fontSize: 13,
+  minHeight: 42,
+  padding: '8px 10px',
+  fontSize: 12,
   fontWeight: 800,
   cursor: 'pointer',
   display: 'flex',
@@ -6596,31 +7658,31 @@ const schedulePresetButtonStyle: React.CSSProperties = {
 }
 
 const schedulePresetButtonActiveStyle: React.CSSProperties = {
-  background: 'linear-gradient(180deg, #12B3A6 0%, #0F8E85 100%)',
-  borderColor: '#0F8E85',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  borderColor: '#0F172A',
   color: '#FFFFFF',
-  boxShadow: '0 10px 22px rgba(15, 142, 133, 0.24)',
+  boxShadow: '0 8px 18px rgba(15, 23, 42, 0.12)',
 }
 
 const schedulePickerCardStyle: React.CSSProperties = {
-  borderRadius: 24,
+  borderRadius: 22,
   border: '1px solid rgba(226, 232, 240, 0.95)',
   background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  padding: 14,
-  boxShadow: '0 18px 38px rgba(15, 23, 42, 0.08)',
+  padding: 10,
+  boxShadow: '0 10px 20px rgba(15, 23, 42, 0.05)',
 }
 
-const WHEEL_ROW_HEIGHT = 44
+const WHEEL_ROW_HEIGHT = 28
 
 const scheduleWheelHeaderRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 10,
-  marginBottom: 10,
+  gap: 8,
+  marginBottom: 6,
 }
 
 const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   lineHeight: 1.2,
   fontWeight: 800,
   color: '#64748B',
@@ -6629,13 +7691,13 @@ const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
 
 const scheduleWheelWrapStyle: React.CSSProperties = {
   position: 'relative',
-  height: 204,
+  height: 108,
 }
 
 const scheduleWheelColumnsStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 10,
+  gap: 8,
   height: '100%',
 }
 
@@ -6646,78 +7708,23 @@ const scheduleWheelHighlightStyle: React.CSSProperties = {
   top: '50%',
   height: WHEEL_ROW_HEIGHT,
   transform: 'translateY(-50%)',
-  borderRadius: 16,
+  borderRadius: 12,
   background: 'rgba(248, 250, 252, 0.98)',
   border: '1px solid rgba(203, 213, 225, 0.92)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.92), 0 6px 18px rgba(148, 163, 184, 0.12)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.92), 0 4px 10px rgba(148, 163, 184, 0.08)',
   pointerEvents: 'none',
 }
 
-const scheduleDispatchNoticeStyle: React.CSSProperties = {
-  borderRadius: 18,
-  background: 'linear-gradient(180deg, #F3F7FB 0%, #EDF4FB 100%)',
-  border: '1px solid rgba(191, 219, 254, 0.95)',
-  padding: '12px 14px',
-  boxShadow: '0 10px 24px rgba(59, 130, 246, 0.08)',
-}
-
-const scheduleInfoRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 10,
-}
-
-const scheduleInfoIconStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 999,
-  background: 'rgba(59, 130, 246, 0.12)',
-  color: '#2563EB',
-  display: 'grid',
-  placeItems: 'center',
-  flexShrink: 0,
-  fontSize: 15,
-}
-
-const scheduleInfoCopyStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 2,
-  minWidth: 0,
-}
-
-const scheduleInfoTitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
-  fontWeight: 800,
-  color: '#1E3A8A',
-}
-
-const scheduleInfoSubtitleStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.4,
+const scheduleInlineCaptionStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  lineHeight: 1.2,
+  fontWeight: 600,
   color: '#64748B',
-}
-
-const scheduleSummaryCardStyle: React.CSSProperties = {
-  borderRadius: 20,
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #F8FAFC 100%)',
-  border: '1px solid rgba(226, 232, 240, 0.95)',
-  padding: '14px 16px',
-  display: 'grid',
-  gap: 6,
   textAlign: 'center',
-  boxShadow: '0 14px 30px rgba(15, 23, 42, 0.06)',
-}
-
-const scheduleSummaryPrimaryStyle: React.CSSProperties = {
-  fontSize: 16,
-  lineHeight: 1.45,
-  fontWeight: 900,
-  color: '#0F172A',
 }
 
 const scheduleSheetFooterStyle: React.CSSProperties = {
-  paddingTop: 4,
+  paddingTop: 2,
 }
 
 const wheelPickerColumnStyle: React.CSSProperties = {
@@ -6745,7 +7752,7 @@ const wheelPickerOptionStyle: React.CSSProperties = {
   border: 'none',
   background: 'transparent',
   padding: '0 8px',
-  fontSize: 17,
+  fontSize: 14,
   lineHeight: 1,
   cursor: 'pointer',
   fontFamily: 'inherit',
