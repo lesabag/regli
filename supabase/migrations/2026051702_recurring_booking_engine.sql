@@ -54,7 +54,7 @@ where jobname = 'generate-recurring-bookings';
 
 select cron.schedule(
   'generate-recurring-bookings',
-  '0 * * * *',
+  '0 2 * * *',
   $$
   select extensions.http_post(
     url := current_setting('app.settings.supabase_url') || '/functions/v1/generate-recurring-bookings',
