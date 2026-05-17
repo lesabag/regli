@@ -13,6 +13,9 @@ verify_jwt = false
 [functions.run-scheduled-dispatch]
 verify_jwt = false
 
+[functions.generate-recurring-bookings]
+verify_jwt = false
+
 [functions.get-connect-status]
 verify_jwt = false
 

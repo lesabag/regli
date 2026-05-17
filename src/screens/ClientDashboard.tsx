@@ -413,6 +413,7 @@ export default function ClientDashboard({
   const [editingRecurringBooking, setEditingRecurringBooking] = useState<RecurringBookingItem | null>(null)
   const [recurringEditDays, setRecurringEditDays] = useState<number[]>([])
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
+  const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
   const [timePickerMinute, setTimePickerMinute] = useState('00')
@@ -2439,6 +2440,72 @@ export default function ClientDashboard({
     !!repeatScheduleParts.date &&
     !!repeatScheduleParts.time &&
     effectiveRepeatDays.length > 0
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function checkOverlap() {
+      if (!showSchedulePage || !profile.id) {
+        if (!cancelled) setScheduleOverlapWarning(null)
+        return
+      }
+
+      let occurrenceIso: string | null = null
+
+      if (scheduleMode === 'later') {
+        const parsed = parseLocalDateTime(clampScheduledDraft(scheduleDraft, scheduleMinValue))
+        occurrenceIso = parsed ? parsed.toISOString() : null
+      } else {
+        const nextOccurrence = getNextRecurringOccurrence(
+          effectiveRepeatDays,
+          repeatScheduleParts.date,
+          repeatStartTime,
+        )
+        occurrenceIso = nextOccurrence ? nextOccurrence.toISOString() : null
+      }
+
+      if (!occurrenceIso) {
+        if (!cancelled) setScheduleOverlapWarning(null)
+        return
+      }
+
+      const { data, error } = await supabase.rpc('find_client_booking_overlaps', {
+        p_client_id: profile.id,
+        p_scheduled_for: occurrenceIso,
+        p_window_minutes: 60,
+      })
+
+      if (cancelled) return
+
+      if (error) {
+        console.warn('[ClientDashboard] overlap warning query failed', error)
+        setScheduleOverlapWarning(null)
+        return
+      }
+
+      setScheduleOverlapWarning(
+        Array.isArray(data) && data.length > 0
+          ? (isRtl ? 'כבר קיימת אצלך הזמנה סביב השעה הזאת' : 'You already have a booking around this time')
+          : null,
+      )
+    }
+
+    void checkOverlap()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    effectiveRepeatDays,
+    isRtl,
+    profile.id,
+    repeatScheduleParts.date,
+    repeatStartTime,
+    scheduleDraft,
+    scheduleMinValue,
+    scheduleMode,
+    showSchedulePage,
+  ])
   const bookingBlockedReasons = useMemo(() => {
     const reasons: string[] = []
     if (!hasSelectedProfileService) reasons.push('missing_profile_service')
@@ -3549,6 +3616,9 @@ export default function ClientDashboard({
                 <div style={scheduleInlineCaptionStyle}>
                   {isRtl ? 'החיפוש מתחיל 15 דקות לפני' : 'Search starts 15 min before'}
                 </div>
+                {scheduleOverlapWarning && (
+                  <div style={scheduleInlineWarningStyle}>{scheduleOverlapWarning}</div>
+                )}
               </div>
             </div>
 
@@ -7720,6 +7790,14 @@ const scheduleInlineCaptionStyle: React.CSSProperties = {
   lineHeight: 1.2,
   fontWeight: 600,
   color: '#64748B',
+  textAlign: 'center',
+}
+
+const scheduleInlineWarningStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.3,
+  fontWeight: 700,
+  color: '#B45309',
   textAlign: 'center',
 }
 
