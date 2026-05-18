@@ -45,6 +45,7 @@ type AvailabilityFormRow = {
 }
 
 type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
+type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'capabilities' | 'preferredCustomers'
 
 const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
 const DEFAULT_AVAILABILITY_START = '09:00'
@@ -336,12 +337,11 @@ export default function WalkerDashboard({
   const availabilityAutoEnableLabel = isHebrew ? 'הפעל יום זה כדי לקבוע שעות.' : 'Turn this day on to set hours.'
   const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
   const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות' : 'Manage availability'
+  const todayAvailabilityPricingLabel = t('providerPricing.title')
   const unavailableTodayLabel = isHebrew ? 'לא זמין היום' : 'Unavailable today'
-  const greetingSubtitle = isHebrew ? 'כיף לראות אותך!' : 'Good to see you!'
-  const performanceTitle = isHebrew ? 'ביצועים' : 'Performance'
+  const headerRatingValue = flow.avgRating != null ? flow.avgRating.toFixed(1) : null
   const walletTitle = isHebrew ? 'ארנק' : 'Wallet'
   const reviewsLabel = isHebrew ? 'ביקורות' : 'Reviews'
-  const completedLabel = isHebrew ? 'הושלמו' : 'Completed'
   const onlineLabel = isHebrew ? 'מחובר' : 'Online'
   const readyForOrdersTitle = isHebrew ? 'מוכן להזמנות' : 'Ready for orders'
   const nearbyRequestsBody = isHebrew ? 'בקשות קרובות יופיעו כאן.' : 'Nearby requests will appear here.'
@@ -385,7 +385,14 @@ export default function WalkerDashboard({
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
   const availabilityRowsRef = useRef(availabilityRows)
   const [expandedAvailabilityKey, setExpandedAvailabilityKey] = useState<string | null>(null)
-  const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
+  const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<SettingsSectionKey, boolean>>({
+    language: false,
+    serviceType: false,
+    availability: false,
+    pricing: false,
+    capabilities: false,
+    preferredCustomers: false,
+  })
   const [capSaving, setCapSaving] = useState(false)
   const [capSavedAt, setCapSavedAt] = useState(0)
   const [capError, setCapError] = useState<string | null>(null)
@@ -915,21 +922,8 @@ export default function WalkerDashboard({
 
   const incomingTitle = i18n.resolvedLanguage === 'he' ? 'הזמנה חדשה' : 'New order arrived'
   const idleHeroTitle = flow.isOnline ? (isHebrew ? 'מצב מחובר' : 'Connected') : (isHebrew ? 'לא מחובר' : 'Offline')
-  const idleWaitingTitle = flow.isOnline
-    ? isHebrew
-      ? 'מחכה להזמנות…'
-      : 'Waiting for new orders…'
-    : isHebrew
-      ? 'מוכן להתחברות'
-      : 'Ready to go online'
-  const idleWaitingBody = flow.isOnline
-    ? isHebrew
-      ? 'בקשות קרובות יופיעו כאן.'
-      : 'Nearby requests will appear here.'
-    : isHebrew
-      ? 'הפעל את מצב המחובר כדי לקבל הזמנות חדשות בזמן אמת.'
-      : 'Turn on your connected mode to receive new orders in real time.'
   const completedJobsCount = flow.completedJobs.filter((job) => job.status === 'completed').length
+  const completedTasksSettingsLabel = isHebrew ? `${completedJobsCount} משימות הושלמו` : `${completedJobsCount} completed tasks`
   const todayDayOfWeek = new Date().getDay()
   const todayAvailabilityRows = useMemo(
     () =>
@@ -1337,10 +1331,19 @@ export default function WalkerDashboard({
     await flow.toggleOnline()
   }, [flow, hasSelectedProfileService, serviceSelectionRequiredLabel])
 
-  const handleManageAvailability = useCallback(() => {
+  const openSettingsSection = useCallback((section: SettingsSectionKey) => {
     setBurgerOpen(true)
     setMenuPage('settings')
+    setSettingsSectionsOpen((current) => ({ ...current, [section]: true }))
   }, [])
+
+  const toggleSettingsSection = useCallback((section: SettingsSectionKey) => {
+    setSettingsSectionsOpen((current) => ({ ...current, [section]: !current[section] }))
+  }, [])
+
+  const handleManageAvailability = useCallback(() => {
+    openSettingsSection('availability')
+  }, [openSettingsSection])
 
   const handleStripeSetup = useCallback(async (rememberAutoOnline = false) => {
     if (isCheckingPayout) return
@@ -1548,34 +1551,24 @@ export default function WalkerDashboard({
 
         {renderTodayAvailabilityCard()}
 
-        <div style={waitingCardStyle}>
-          <div style={waitingCardCopyStyle}>
-            <div style={waitingCardTitleStyle}>{idleWaitingTitle}</div>
-            <div style={waitingCardBodyStyle}>{idleWaitingBody}</div>
+        <button
+          type="button"
+          onClick={() => openSettingsSection('pricing')}
+          style={todayAvailabilityPricingCardStyle}
+        >
+          <div style={todayAvailabilityPricingCardTextStyle}>
+            <div style={todayAvailabilityTitleStyle}>{todayAvailabilityPricingLabel}</div>
+            <div style={todayAvailabilityPricingSubtitleStyle}>
+              {isHebrew
+                ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
+                : 'Manage pricing ranges and service preferences for each booking type.'}
+            </div>
           </div>
-          <div style={waitingCardVisualWrapStyle}>
-            <RadarVisual />
-          </div>
-        </div>
+          <span style={todayAvailabilityManageChevronStyle}>›</span>
+        </button>
       </div>
 
-      <div style={dashboardSectionStyle}>
-        <div style={dashboardSectionTitleStyle}>{performanceTitle}</div>
-        <div style={performanceGridStyle}>
-          <div style={performanceMetricCardStyle}>
-            <div style={{ ...performanceMetricIconStyle, background: 'rgba(245, 158, 11, 0.12)', color: '#D97706' }}>★</div>
-            <div style={performanceMetricValueStyle}>{flow.avgRating != null ? flow.avgRating.toFixed(1) : '—'}</div>
-            <div style={performanceMetricMetaStyle}>{reviewsLabel}</div>
-          </div>
-          <div style={performanceMetricCardStyle}>
-            <div style={{ ...performanceMetricIconStyle, background: 'rgba(59, 130, 246, 0.12)', color: '#2563EB' }}>✓</div>
-            <div style={performanceMetricValueStyle}>{completedJobsCount}</div>
-            <div style={performanceMetricMetaStyle}>{completedLabel}</div>
-          </div>
-        </div>
-      </div>
-
-      <div style={dashboardSectionStyle}>
+      <div style={{ ...dashboardSectionStyle, ...walletSectionStyle }}>
         <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
         <div style={walletDashboardGridStyle}>
           <div style={walletDashboardMetricCardStyle}>
@@ -1625,7 +1618,6 @@ export default function WalkerDashboard({
       </div>
     </div>
   ), [
-    completedJobsCount,
     flow.avgRating,
     flow.connectLoading,
     flow.wallet.availableBalance,
@@ -1633,8 +1625,6 @@ export default function WalkerDashboard({
     handleOnlineToggle,
     handleStripeSetup,
     idleHeroTitle,
-    idleWaitingBody,
-    idleWaitingTitle,
     isCheckingPayout,
     isHebrew,
     nearbyRequestsBody,
@@ -1644,10 +1634,10 @@ export default function WalkerDashboard({
     readyForOrdersTitle,
     renderTodayAvailabilityCard,
     reviewsLabel,
-    completedLabel,
-    performanceTitle,
+    openSettingsSection,
     walletPayoutReady,
     walletTitle,
+    todayAvailabilityPricingLabel,
   ])
 
   return (
@@ -1720,7 +1710,11 @@ export default function WalkerDashboard({
                 />
                 <div style={headerIdentityStyle}>
                   <h2 style={greetingStyle}>{greetingLabel}</h2>
-                  <div style={headerSubtitleStyle}>{greetingSubtitle}</div>
+                  {headerRatingValue ? (
+                    <div style={headerRatingStyle}>
+                      <span style={headerRatingStarStyle}>★</span> {headerRatingValue}
+                    </div>
+                  ) : null}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -2070,11 +2064,7 @@ export default function WalkerDashboard({
                         </div>
                         <div style={settingsProfileMetaStyle}>
                           <div style={settingsProfileTitleStyle}>{walkerName}</div>
-                          {flow.avgRating !== null && (
-                            <div style={profileRatingStyle}>
-                              <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} reviews
-                            </div>
-                          )}
+                          <div style={profileRatingStyle}>{completedTasksSettingsLabel}</div>
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
@@ -2088,7 +2078,12 @@ export default function WalkerDashboard({
                       </div>
                     </BurgerSection>
 
-                    <BurgerSection title={t('common.language')} subtitle={t('menu.settings')}>
+                    <SettingsCollapsibleSection
+                      title={t('common.language')}
+                      subtitle={t('menu.settings')}
+                      open={settingsSectionsOpen.language}
+                      onToggle={() => toggleSettingsSection('language')}
+                    >
                       <div style={languageSelectorRowStyle}>
                         <button
                           type="button"
@@ -2115,9 +2110,14 @@ export default function WalkerDashboard({
                           עברית
                         </button>
                       </div>
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
-                    <BurgerSection title={serviceTypeSectionTitle} subtitle={serviceTypeSectionSubtitle}>
+                    <SettingsCollapsibleSection
+                      title={serviceTypeSectionTitle}
+                      subtitle={serviceTypeSectionSubtitle}
+                      open={settingsSectionsOpen.serviceType}
+                      onToggle={() => toggleSettingsSection('serviceType')}
+                    >
                       <div style={serviceTypeSelectorRowStyle}>
                         {profileServiceOptions.map((option) => {
                           const selected = profileServiceTypes.includes(option.value)
@@ -2148,9 +2148,14 @@ export default function WalkerDashboard({
                       ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                       ) : null}
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
-                    <BurgerSection title={availabilitySectionTitle} subtitle={availabilitySectionSubtitle}>
+                    <SettingsCollapsibleSection
+                      title={availabilitySectionTitle}
+                      subtitle={availabilitySectionSubtitle}
+                      open={settingsSectionsOpen.availability}
+                      onToggle={() => toggleSettingsSection('availability')}
+                    >
                       <div style={availabilityIntroStyle}>{availabilityUnsetLabel}</div>
                       <div style={availabilityTimezonePillStyle}>{availabilityTimezoneLabel}</div>
 
@@ -2308,31 +2313,26 @@ export default function WalkerDashboard({
                       ) : !availabilitySaving && availabilitySavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
                       ) : null}
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
-                    <BurgerSection
+                    <SettingsCollapsibleSection
                       title={t('providerPricing.title')}
                       subtitle={t('providerPricing.subtitle')}
+                      open={settingsSectionsOpen.pricing}
+                      onToggle={() => toggleSettingsSection('pricing')}
                     >
                       <ProviderPricingPreferences
                         providerId={profile.id}
                         serviceTypes={profileServiceTypes}
                       />
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
-                    <BurgerSection
+                    <SettingsCollapsibleSection
                       title={isHebrew ? 'יכולות שירות' : 'Service capabilities'}
                       subtitle={isHebrew ? 'הגדר את ההעדפות והניסיון שלך.' : 'Define your preferences and experience.'}
+                      open={settingsSectionsOpen.capabilities}
+                      onToggle={() => toggleSettingsSection('capabilities')}
                     >
-                      {!capabilitiesOpen ? (
-                        <button
-                          type="button"
-                          onClick={() => setCapabilitiesOpen(true)}
-                          style={capToggleButtonStyle}
-                        >
-                          {isHebrew ? 'ערוך יכולות' : 'Edit capabilities'}
-                        </button>
-                      ) : (
                         <div style={capEditorStyle}>
                           {profileServiceTypes.includes('dog_walker') && (
                             <div style={capSectionStyle}>
@@ -2496,12 +2496,13 @@ export default function WalkerDashboard({
                             </div>
                           )}
                         </div>
-                      )}
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
-                    <BurgerSection
+                    <SettingsCollapsibleSection
                       title={preferredCustomersLabel}
                       subtitle={preferredCustomersSubtitle}
+                      open={settingsSectionsOpen.preferredCustomers}
+                      onToggle={() => toggleSettingsSection('preferredCustomers')}
                     >
                       {preferredCustomers.length === 0 ? (
                         <div style={emptyMenuCardStyle}>{noPreferredCustomersLabel}</div>
@@ -2515,7 +2516,7 @@ export default function WalkerDashboard({
                           ))}
                         </div>
                       )}
-                    </BurgerSection>
+                    </SettingsCollapsibleSection>
 
                     <div style={menuFooterActionWrapStyle}>
                       <MenuNavRow
@@ -2584,7 +2585,7 @@ export default function WalkerDashboard({
                       <MenuNavRow icon="₪" label={isHebrew ? 'רווחים' : 'Earnings'} onClick={() => setMenuPage('earnings')} />
                       <MenuNavRow icon="🕘" label={t('menu.tripHistory')} onClick={() => setMenuPage('history')} />
                       <MenuNavRow icon="📅" label={t('menu.futureOrders')} onClick={() => setMenuPage('futureOrders')} />
-                      <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => setMenuPage('settings')} />
+                      <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => openSettingsSection('preferredCustomers')} />
                     </div>
 
                     <BurgerSection title={t('menu.latestTrips')} subtitle={t('menu.walkHistorySubtitle')}>
@@ -3086,6 +3087,33 @@ function BurgerSection({
   )
 }
 
+function SettingsCollapsibleSection({
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section style={burgerSectionStyle}>
+      <button type="button" onClick={onToggle} style={settingsCollapseButtonStyle} aria-expanded={open}>
+        <div style={settingsCollapseButtonTextStyle}>
+          <div style={burgerSectionTitleStyle}>{title}</div>
+          {subtitle ? <div style={burgerSectionSubtitleStyle}>{subtitle}</div> : null}
+        </div>
+        <span style={settingsCollapseIconStyle}>{open ? '−' : '+'}</span>
+      </button>
+      {open ? children : null}
+    </section>
+  )
+}
+
 function MenuNavRow({
   icon,
   label,
@@ -3136,93 +3164,6 @@ function EarningsMetric({
       <span style={earningsMetricLabelStyle}>{label}</span>
       <strong style={earningsMetricValueStyle}>{value}</strong>
     </button>
-  )
-}
-
-function RadarVisual() {
-  return (
-    <div style={waitingCardVisualStyle} aria-hidden="true">
-      <svg viewBox="0 0 320 150" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
-        <defs>
-          <radialGradient id="walkerRadarGlow" cx="50%" cy="50%" r="62%">
-            <stop offset="0%" stopColor="rgba(91,124,250,0.18)" />
-            <stop offset="45%" stopColor="rgba(91,124,250,0.08)" />
-            <stop offset="100%" stopColor="rgba(91,124,250,0)" />
-          </radialGradient>
-          <linearGradient id="walkerRadarSweep" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(91,124,250,0.28)" />
-            <stop offset="55%" stopColor="rgba(91,124,250,0.08)" />
-            <stop offset="100%" stopColor="rgba(91,124,250,0)" />
-          </linearGradient>
-        </defs>
-
-        <rect x="0" y="0" width="320" height="150" rx="22" fill="transparent" />
-        <circle cx="160" cy="75" r="64" fill="url(#walkerRadarGlow)" />
-        <circle cx="160" cy="75" r="58" fill="none" stroke="rgba(91,124,250,0.18)" strokeWidth="1.5" />
-        <circle cx="160" cy="75" r="42" fill="none" stroke="rgba(91,124,250,0.16)" strokeWidth="1.5" />
-        <circle cx="160" cy="75" r="26" fill="none" stroke="rgba(91,124,250,0.16)" strokeWidth="1.5" />
-        <line x1="36" y1="75" x2="284" y2="75" stroke="rgba(148,163,184,0.16)" strokeWidth="1" />
-        <line x1="160" y1="16" x2="160" y2="134" stroke="rgba(148,163,184,0.16)" strokeWidth="1" />
-
-        <path d="M160 75 L160 17 A58 58 0 0 1 218 75 Z" fill="url(#walkerRadarSweep)" opacity="0.92">
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 160 75"
-            to="360 160 75"
-            dur="5.6s"
-            repeatCount="indefinite"
-          />
-        </path>
-
-        <circle cx="160" cy="75" r="6" fill="#5B7CFA">
-          <animate
-            attributeName="r"
-            values="5.5;7.5;5.5"
-            dur="1.9s"
-            repeatCount="indefinite"
-          />
-          <animate
-            attributeName="opacity"
-            values="0.95;1;0.95"
-            dur="1.9s"
-            repeatCount="indefinite"
-          />
-        </circle>
-
-        <circle cx="160" cy="75" r="10" fill="none" stroke="rgba(91,124,250,0.28)" strokeWidth="2">
-          <animate
-            attributeName="r"
-            values="10;36"
-            dur="2.2s"
-            repeatCount="indefinite"
-          />
-          <animate
-            attributeName="opacity"
-            values="0.6;0"
-            dur="2.2s"
-            repeatCount="indefinite"
-          />
-        </circle>
-
-        <circle cx="160" cy="75" r="10" fill="none" stroke="rgba(91,124,250,0.18)" strokeWidth="1.5">
-          <animate
-            attributeName="r"
-            values="10;50"
-            dur="2.2s"
-            begin="1.1s"
-            repeatCount="indefinite"
-          />
-          <animate
-            attributeName="opacity"
-            values="0.45;0"
-            dur="2.2s"
-            begin="1.1s"
-            repeatCount="indefinite"
-          />
-        </circle>
-      </svg>
-    </div>
   )
 }
 
@@ -3279,11 +3220,15 @@ const greetingStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const headerSubtitleStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.35,
-  color: '#64748B',
-  fontWeight: 600,
+const headerRatingStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.3,
+  color: '#475569',
+  fontWeight: 700,
+}
+
+const headerRatingStarStyle: React.CSSProperties = {
+  color: '#D4A017',
 }
 
 const headerTopRowStyle: React.CSSProperties = {
@@ -3525,6 +3470,42 @@ const burgerSectionStyle: React.CSSProperties = {
 const burgerSectionHeaderStyle: React.CSSProperties = {
   display: 'grid',
   gap: 4,
+}
+
+const settingsCollapseButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  width: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 14,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  textAlign: 'start',
+}
+
+const settingsCollapseButtonTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 4,
+  flex: 1,
+}
+
+const settingsCollapseIconStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  display: 'grid',
+  placeItems: 'center',
+  fontSize: 18,
+  fontWeight: 800,
+  flexShrink: 0,
+  lineHeight: 1,
 }
 
 const burgerSectionTitleStyle: React.CSSProperties = {
@@ -3879,18 +3860,21 @@ const settingsPhotoButtonStyle: React.CSSProperties = {
 const languageSelectorRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 10,
+  gap: 8,
+  justifyContent: 'start',
+  maxWidth: 152,
 }
 
 const languageButtonStyle: React.CSSProperties = {
   appearance: 'none',
-  minHeight: 48,
-  borderRadius: 16,
+  minHeight: 32,
+  borderRadius: 12,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#334155',
-  fontSize: 15,
+  fontSize: 12,
   fontWeight: 800,
+  padding: '0 10px',
   cursor: 'pointer',
 }
 
@@ -4343,12 +4327,16 @@ const contentStyle: React.CSSProperties = {
   display: 'grid',
   gap: 12,
   boxSizing: 'border-box',
+  width: '100%',
+  maxWidth: 560,
+  margin: '0 auto',
 }
 
 const homeDashboardTopStackStyle: React.CSSProperties = {
   display: 'grid',
   gap: 14,
   marginBottom: 4,
+  justifyItems: 'center',
 }
 
 const toastErrorStyle: React.CSSProperties = {
@@ -4388,6 +4376,7 @@ const toastDismissStyle: React.CSSProperties = {
 const homeStatusCardStyle: React.CSSProperties = {
   position: 'relative',
   overflow: 'hidden',
+  width: '100%',
   padding: '15px 18px',
   borderRadius: 28,
   background:
@@ -4489,6 +4478,7 @@ const homeStatusBodyStyle: React.CSSProperties = {
 }
 
 const todayAvailabilityCardStyle: React.CSSProperties = {
+  width: '100%',
   borderRadius: 24,
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
   border: '1px solid #E7EDF4',
@@ -4527,6 +4517,34 @@ const todayAvailabilityManageButtonStyle: React.CSSProperties = {
 const todayAvailabilityManageChevronStyle: React.CSSProperties = {
   fontSize: 16,
   lineHeight: 1,
+}
+
+const todayAvailabilityPricingCardStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  width: '100%',
+  borderRadius: 24,
+  background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
+  border: '1px solid #E7EDF4',
+  boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
+  padding: '14px 16px',
+  textAlign: 'start',
+  cursor: 'pointer',
+}
+
+const todayAvailabilityPricingCardTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 4,
+}
+
+const todayAvailabilityPricingSubtitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#64748B',
+  fontWeight: 600,
 }
 
 const todayAvailabilityListStyle: React.CSSProperties = {
@@ -4591,104 +4609,20 @@ const todayAvailabilityUnavailableStyle: React.CSSProperties = {
   color: '#94A3B8',
 }
 
-const waitingCardStyle: React.CSSProperties = {
-  position: 'relative',
-  overflow: 'hidden',
-  borderRadius: 24,
-  background:
-    'radial-gradient(circle at 80% 40%, rgba(91,124,250,0.12) 0%, rgba(91,124,250,0.03) 28%, rgba(255,255,255,0) 54%), linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-  border: '1px solid #E4EBF3',
-  boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
-  padding: '12px 14px',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 10,
-}
-
-const waitingCardCopyStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  minWidth: 0,
-}
-
-const waitingCardTitleStyle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const waitingCardBodyStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.45,
-  color: '#64748B',
-}
-
-const waitingCardVisualWrapStyle: React.CSSProperties = {
-  width: 92,
-  minWidth: 92,
-  opacity: 0.96,
-}
-
-const waitingCardVisualStyle: React.CSSProperties = {
-  position: 'relative',
-  height: 72,
-  borderRadius: 16,
-  background:
-    'radial-gradient(circle at center, rgba(91,124,250,0.12) 0%, rgba(91,124,250,0.04) 28%, rgba(255,255,255,0) 29%), linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(248,250,252,0.98) 100%)',
-  border: '1px solid rgba(226,232,240,0.9)',
-  display: 'grid',
-  placeItems: 'center',
-}
-
 const dashboardSectionStyle: React.CSSProperties = {
   display: 'grid',
   gap: 8,
+  width: '100%',
 }
 
 const dashboardSectionTitleStyle: React.CSSProperties = {
-  fontSize: 17,
+  fontSize: 15,
   fontWeight: 800,
   color: '#0F172A',
 }
 
-const performanceGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 8,
-}
-
-const performanceMetricCardStyle: React.CSSProperties = {
-  padding: '11px 12px 10px',
-  borderRadius: 20,
-  background: '#FFFFFF',
-  border: '1px solid #E7EDF4',
-  boxShadow: '0 8px 16px rgba(15,23,42,0.035)',
-  display: 'grid',
-  gap: 6,
-}
-
-const performanceMetricIconStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 10,
-  display: 'grid',
-  placeItems: 'center',
-  fontSize: 14,
-  lineHeight: 1,
-}
-
-const performanceMetricValueStyle: React.CSSProperties = {
-  fontSize: 20,
-  fontWeight: 900,
-  color: '#0F172A',
-}
-
-const performanceMetricMetaStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: '#64748B',
-  lineHeight: 1.3,
+const walletSectionStyle: React.CSSProperties = {
+  marginTop: 10,
 }
 
 const walletDashboardGridStyle: React.CSSProperties = {
@@ -4705,6 +4639,7 @@ const walletDashboardMetricCardStyle: React.CSSProperties = {
   boxShadow: '0 8px 16px rgba(15,23,42,0.035)',
   display: 'grid',
   gap: 5,
+  minHeight: 72,
 }
 
 const walletDashboardMetricLabelStyle: React.CSSProperties = {
@@ -5240,20 +5175,6 @@ const completionOverlayCardStyle: React.CSSProperties = {
   width: 'min(100%, 520px)',
   maxWidth: '100%',
   boxSizing: 'border-box',
-}
-
-const capToggleButtonStyle: React.CSSProperties = {
-  appearance: 'none',
-  border: '1px solid rgba(145, 164, 196, 0.24)',
-  background: '#FFFFFF',
-  color: '#23314F',
-  borderRadius: 14,
-  minHeight: 46,
-  padding: '0 16px',
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: 'pointer',
-  width: '100%',
 }
 
 const capEditorStyle: React.CSSProperties = {
