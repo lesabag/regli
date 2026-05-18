@@ -75,6 +75,116 @@ export interface PricingResult {
   basePriceILS: number
 }
 
+export type BudgetAcceptanceLikelihood = 'low' | 'medium' | 'high'
+
+export interface BudgetGuidance {
+  likelihood: BudgetAcceptanceLikelihood
+  recommendedMin: number
+  recommendedGood: number
+  suggestedLow: number
+  suggestedHigh: number
+  fallback: boolean
+}
+
+type PricingBand = {
+  minutes: number
+  min: number
+  good: number
+}
+
+const SERVICE_GUIDANCE_TABLE: Record<string, PricingBand[]> = {
+  dog_walker: [
+    { minutes: 30, min: 30, good: 40 },
+    { minutes: 60, min: 55, good: 75 },
+  ],
+  baby_sitter: [
+    { minutes: 30, min: 40, good: 55 },
+    { minutes: 60, min: 70, good: 95 },
+  ],
+  technician: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
+  cleaning: [
+    { minutes: 60, min: 70, good: 100 },
+    { minutes: 120, min: 130, good: 180 },
+  ],
+  cleaner: [
+    { minutes: 60, min: 70, good: 100 },
+    { minutes: 120, min: 130, good: 180 },
+  ],
+}
+
+function normalizeGuidanceServiceType(value: string | null | undefined): string | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') return 'dog_walker'
+  if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') return 'baby_sitter'
+  if (normalized === 'cleaner' || normalized === 'cleaning') return 'cleaning'
+  return normalized
+}
+
+function pickClosestBand(bands: PricingBand[], durationMinutes: number): PricingBand {
+  return bands.reduce((closest, band) => {
+    const closestDelta = Math.abs(closest.minutes - durationMinutes)
+    const nextDelta = Math.abs(band.minutes - durationMinutes)
+    return nextDelta < closestDelta ? band : closest
+  })
+}
+
+function getAdditionalDogGuidanceIncrement(durationMinutes: number): { min: number; good: number } {
+  if (durationMinutes <= 30) return { min: 10, good: 15 }
+  if (durationMinutes <= 60) return { min: 15, good: 20 }
+  return { min: 20, good: 30 }
+}
+
+function getRecommendedBand(params: {
+  serviceType: string | null | undefined
+  durationMinutes: number | null | undefined
+  dogCount?: unknown
+}): {
+  recommendedMin: number
+  recommendedGood: number
+  fallback: boolean
+} {
+  const durationMinutes = Number(params.durationMinutes)
+  const normalizedServiceType = normalizeGuidanceServiceType(params.serviceType)
+  const normalizedDogCount = normalizeDogCount(params.dogCount)
+
+  if (!normalizedServiceType || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return {
+      recommendedMin: 50,
+      recommendedGood: 50,
+      fallback: true,
+    }
+  }
+
+  const bands = SERVICE_GUIDANCE_TABLE[normalizedServiceType]
+  if (!bands || bands.length === 0) {
+    return {
+      recommendedMin: 50,
+      recommendedGood: 50,
+      fallback: true,
+    }
+  }
+
+  const band = pickClosestBand(bands, durationMinutes)
+  let recommendedMin = band.min
+  let recommendedGood = band.good
+
+  if (normalizedServiceType === 'dog_walker' && normalizedDogCount === 2) {
+    const increment = getAdditionalDogGuidanceIncrement(durationMinutes)
+    recommendedMin += increment.min
+    recommendedGood += increment.good
+  }
+
+  return {
+    recommendedMin,
+    recommendedGood,
+    fallback: false,
+  }
+}
+
 export function getDogCountPriceAdjustmentILS(params: {
   serviceType: string | null | undefined
   basePriceILS: number
@@ -100,6 +210,47 @@ export function applyDogCountPricing(basePriceILS: number, params: {
     ...params,
     basePriceILS,
   })
+}
+
+export function getBudgetGuidance(params: {
+  serviceType: string | null | undefined
+  durationMinutes: number | null | undefined
+  selectedPriceILS: number | null | undefined
+  dogCount?: unknown
+}): BudgetGuidance {
+  const selectedPriceILS = Number(params.selectedPriceILS)
+  const { recommendedMin, recommendedGood, fallback } = getRecommendedBand(params)
+
+  const roundedSelectedPrice =
+    Number.isFinite(selectedPriceILS) && selectedPriceILS > 0
+      ? Math.round(selectedPriceILS)
+      : 0
+
+  const likelihood: BudgetAcceptanceLikelihood = fallback
+    ? 'medium'
+    : roundedSelectedPrice < recommendedMin
+      ? 'low'
+      : roundedSelectedPrice < recommendedGood
+        ? 'medium'
+        : 'high'
+
+  return {
+    likelihood,
+    recommendedMin,
+    recommendedGood,
+    suggestedLow: recommendedMin,
+    suggestedHigh: recommendedGood,
+    fallback,
+  }
+}
+
+export function getInitialSuggestedBudgetILS(params: {
+  serviceType: string | null | undefined
+  durationMinutes: number | null | undefined
+  dogCount?: unknown
+}): number {
+  const { recommendedMin } = getRecommendedBand(params)
+  return recommendedMin
 }
 
 /* ── Core engine ───────────────────────────────────────────────── */

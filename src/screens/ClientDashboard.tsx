@@ -20,7 +20,7 @@ import {
   SERVICE_I18N_KEYS,
   isServiceAvailable as checkServiceAvailable,
 } from '../lib/serviceTypes'
-import { applyDogCountPricing } from '../lib/pricing'
+import { applyDogCountPricing, getBudgetGuidance, getInitialSuggestedBudgetILS } from '../lib/pricing'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
@@ -135,7 +135,10 @@ const BABYSITTER_DEFAULT_DURATION_HOURS = 0.5
 const BABYSITTER_BUDGET_MIN_ILS = 0
 const BABYSITTER_BUDGET_MAX_ILS = 500
 const BABYSITTER_BUDGET_STEP_ILS = 5
-const BABYSITTER_DEFAULT_FIXED_BUDGET_ILS = 0
+const BABYSITTER_DEFAULT_FIXED_BUDGET_ILS = getInitialSuggestedBudgetILS({
+  serviceType: 'baby_sitter',
+  durationMinutes: BABYSITTER_DEFAULT_DURATION_HOURS * 60,
+})
 const DOG_WALKER_DURATION_MIN = 0
 const DOG_WALKER_DURATION_MAX = 24
 const DOG_WALKER_DURATION_STEP = 0.5
@@ -143,7 +146,11 @@ const DOG_WALKER_DEFAULT_DURATION_HOURS = 0.5
 const DOG_WALKER_BUDGET_MIN_ILS = 0
 const DOG_WALKER_BUDGET_MAX_ILS = 500
 const DOG_WALKER_BUDGET_STEP_ILS = 5
-const DOG_WALKER_DEFAULT_BUDGET_ILS = 0
+const DOG_WALKER_DEFAULT_BUDGET_ILS = getInitialSuggestedBudgetILS({
+  serviceType: 'dog_walker',
+  durationMinutes: DOG_WALKER_DEFAULT_DURATION_HOURS * 60,
+  dogCount: 1,
+})
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -2409,6 +2416,82 @@ export default function ClientDashboard({
           dogCount: normalizedDogCount,
         })
       : flow.adjustedPriceILS
+  const currentBookingDurationMinutes = isBabysitterRequest
+    ? babysitterDurationMinutes
+    : isDogWalkerRequest
+      ? dogWalkerDurationMinutes
+      : flow.duration
+        ? Math.round((flow.duration === '20min' ? 20 : flow.duration === '40min' ? 40 : 60))
+        : null
+  const budgetGuidance = useMemo(
+    () =>
+      getBudgetGuidance({
+        serviceType: effectiveRequestServiceType ?? resolvedBookingService,
+        durationMinutes: currentBookingDurationMinutes,
+        selectedPriceILS: currentBookingPriceILS,
+        dogCount: normalizedDogCount,
+      }),
+    [
+      currentBookingDurationMinutes,
+      currentBookingPriceILS,
+      effectiveRequestServiceType,
+      normalizedDogCount,
+      resolvedBookingService,
+    ],
+  )
+  const budgetGuidanceDebugSnapshotRef = useRef<string>('')
+  const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
+  const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
+  const budgetGuidanceText = shouldShowBudgetRetryHint
+    ? t('booking.budgetRetryHint')
+    : budgetGuidance.likelihood === 'low'
+      ? t('booking.budgetGuidance', {
+          min: budgetGuidance.suggestedLow,
+          max: budgetGuidance.suggestedHigh,
+        })
+      : !budgetGuidance.fallback
+        ? t('booking.budgetTypicalRange', {
+            min: budgetGuidance.suggestedLow,
+            max: budgetGuidance.suggestedHigh,
+          })
+        : null
+
+  useEffect(() => {
+    const debugSnapshot = JSON.stringify({
+      service_type: effectiveRequestServiceType ?? resolvedBookingService,
+      duration_minutes: currentBookingDurationMinutes,
+      dogCount: normalizedDogCount,
+      selectedBudget: currentBookingPriceILS,
+      recommendedMin: budgetGuidance.recommendedMin,
+      recommendedGood: budgetGuidance.recommendedGood,
+      likelihood: budgetGuidance.likelihood,
+      fallbackUsed: budgetGuidance.fallback,
+    })
+
+    if (debugSnapshot === budgetGuidanceDebugSnapshotRef.current) return
+    budgetGuidanceDebugSnapshotRef.current = debugSnapshot
+
+    console.debug('[ClientDashboard] budget guidance', {
+      service_type: effectiveRequestServiceType ?? resolvedBookingService,
+      duration_minutes: currentBookingDurationMinutes,
+      dogCount: normalizedDogCount,
+      selectedBudget: currentBookingPriceILS,
+      recommendedMin: budgetGuidance.recommendedMin,
+      recommendedGood: budgetGuidance.recommendedGood,
+      likelihood: budgetGuidance.likelihood,
+      fallbackUsed: budgetGuidance.fallback,
+    })
+  }, [
+    budgetGuidance.fallback,
+    budgetGuidance.likelihood,
+    budgetGuidance.recommendedGood,
+    budgetGuidance.recommendedMin,
+    currentBookingDurationMinutes,
+    currentBookingPriceILS,
+    effectiveRequestServiceType,
+    normalizedDogCount,
+    resolvedBookingService,
+  ])
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
   const requiresScheduledFor = flow.bookingTiming === 'scheduled'
   const repeatScheduleSource = clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput())
@@ -2869,6 +2952,21 @@ export default function ClientDashboard({
           <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
         </div>
       </div>
+      <div style={budgetGuidanceRowStyle}>
+        <span
+          style={{
+            ...budgetGuidanceChipStyle,
+            ...(budgetGuidance.likelihood === 'high'
+              ? budgetGuidanceChipHighStyle
+              : budgetGuidance.likelihood === 'medium'
+                ? budgetGuidanceChipMediumStyle
+                : budgetGuidanceChipLowStyle),
+          }}
+        >
+          {budgetLikelihoodLabel}
+        </span>
+        {budgetGuidanceText && <span style={budgetGuidanceTextStyle}>{budgetGuidanceText}</span>}
+      </div>
     </div>
   ) : (
     <div style={unifiedPriceSliderBlockStyle}>
@@ -2890,6 +2988,21 @@ export default function ClientDashboard({
           <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
           <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
         </div>
+      </div>
+      <div style={budgetGuidanceRowStyle}>
+        <span
+          style={{
+            ...budgetGuidanceChipStyle,
+            ...(budgetGuidance.likelihood === 'high'
+              ? budgetGuidanceChipHighStyle
+              : budgetGuidance.likelihood === 'medium'
+                ? budgetGuidanceChipMediumStyle
+                : budgetGuidanceChipLowStyle),
+          }}
+        >
+          {budgetLikelihoodLabel}
+        </span>
+        {budgetGuidanceText && <span style={budgetGuidanceTextStyle}>{budgetGuidanceText}</span>}
       </div>
     </div>
   )
@@ -6663,6 +6776,55 @@ const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
   fontWeight: 700,
   color: '#94A3B8',
   lineHeight: 1,
+}
+
+const budgetGuidanceRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+  flexWrap: 'wrap',
+  marginTop: 1,
+}
+
+const budgetGuidanceChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 20,
+  padding: '0 8px',
+  borderRadius: 999,
+  fontSize: 10.5,
+  fontWeight: 800,
+  lineHeight: 1,
+  border: '1px solid transparent',
+  whiteSpace: 'nowrap',
+}
+
+const budgetGuidanceChipLowStyle: React.CSSProperties = {
+  background: 'rgba(254, 243, 199, 0.82)',
+  borderColor: 'rgba(245, 158, 11, 0.22)',
+  color: '#B45309',
+}
+
+const budgetGuidanceChipMediumStyle: React.CSSProperties = {
+  background: 'rgba(219, 234, 254, 0.78)',
+  borderColor: 'rgba(59, 130, 246, 0.18)',
+  color: '#1D4ED8',
+}
+
+const budgetGuidanceChipHighStyle: React.CSSProperties = {
+  background: 'rgba(220, 252, 231, 0.78)',
+  borderColor: 'rgba(16, 185, 129, 0.18)',
+  color: '#047857',
+}
+
+const budgetGuidanceTextStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  lineHeight: 1.35,
+  fontWeight: 600,
+  color: '#64748B',
+  minWidth: 0,
+  flex: 1,
 }
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
