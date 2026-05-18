@@ -1,4 +1,4 @@
-import { isDogServiceType, normalizeDogCount } from '../utils/dogCount'
+import { isDogServiceType, normalizeDogCount } from '../utils/dogCount.ts'
 
 /**
  * Dynamic Pricing Engine V1
