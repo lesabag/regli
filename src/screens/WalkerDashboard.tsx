@@ -5,6 +5,7 @@ import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompletionCard from '../components/CompletionCard'
 import GroupedHistory from '../components/GroupedHistory'
+import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
 import type { HistoryItem } from '../components/GroupedHistory'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
@@ -2307,6 +2308,16 @@ export default function WalkerDashboard({
                       ) : !availabilitySaving && availabilitySavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
                       ) : null}
+                    </BurgerSection>
+
+                    <BurgerSection
+                      title={t('providerPricing.title')}
+                      subtitle={t('providerPricing.subtitle')}
+                    >
+                      <ProviderPricingPreferences
+                        providerId={profile.id}
+                        serviceTypes={profileServiceTypes}
+                      />
                     </BurgerSection>
 
                     <BurgerSection
