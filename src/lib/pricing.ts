@@ -84,6 +84,20 @@ export interface BudgetGuidance {
   suggestedLow: number
   suggestedHigh: number
   fallback: boolean
+  providerRowsCount: number
+  aggregatedMinHourly: number | null
+  aggregatedPreferredHourly: number | null
+}
+
+export interface ProviderPricingPreferenceInput {
+  service_type: string | null | undefined
+  pricing_model: 'time_based' | 'visit_based' | 'hybrid' | string | null | undefined
+  booking_type: 'asap' | 'scheduled' | string | null | undefined
+  is_enabled: boolean | null | undefined
+  hourly_rate_min: number | string | null | undefined
+  hourly_rate_preferred: number | string | null | undefined
+  accepts_multi_item?: boolean | null | undefined
+  max_item_count?: number | string | null | undefined
 }
 
 type PricingBand = {
@@ -136,6 +150,27 @@ function getAdditionalDogGuidanceIncrement(durationMinutes: number): { min: numb
   if (durationMinutes <= 30) return { min: 10, good: 15 }
   if (durationMinutes <= 60) return { min: 15, good: 20 }
   return { min: 20, good: 30 }
+}
+
+function normalizeRequestedItemCount(value: unknown): number {
+  return Number.isInteger(value) && Number(value) >= 1 ? Number(value) : 1
+}
+
+function getDogWalkerMultiItemMultiplier(serviceType: string | null | undefined, dogCount: unknown): number {
+  const normalizedServiceType = normalizeGuidanceServiceType(serviceType)
+  const requestedCount = normalizeRequestedItemCount(dogCount)
+  if (normalizedServiceType !== 'dog_walker' || requestedCount <= 1) return 1
+  return 1 + (requestedCount - 1) * 0.5
+}
+
+function toFiniteNumber(value: number | string | null | undefined): number | null {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : NaN
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function getRecommendedBand(params: {
@@ -241,6 +276,97 @@ export function getBudgetGuidance(params: {
     suggestedLow: recommendedMin,
     suggestedHigh: recommendedGood,
     fallback,
+    providerRowsCount: 0,
+    aggregatedMinHourly: null,
+    aggregatedPreferredHourly: null,
+  }
+}
+
+export function getBudgetGuidanceFromProviderPreferences(params: {
+  serviceType: string | null | undefined
+  bookingType: 'asap' | 'scheduled'
+  durationMinutes: number | null | undefined
+  selectedPriceILS: number | null | undefined
+  dogCount?: unknown
+  preferences: ProviderPricingPreferenceInput[]
+}): BudgetGuidance | null {
+  const durationMinutes = Number(params.durationMinutes)
+  const selectedPriceILS = Number(params.selectedPriceILS)
+  const normalizedServiceType = normalizeGuidanceServiceType(params.serviceType)
+  const requestedItemCount = normalizeRequestedItemCount(params.dogCount)
+  const multiItemMultiplier = getDogWalkerMultiItemMultiplier(params.serviceType, params.dogCount)
+
+  if (!normalizedServiceType || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return null
+  }
+
+  const relevant = params.preferences.filter((row) => {
+    if (!row || row.is_enabled !== true) return false
+    if (normalizeGuidanceServiceType(row.service_type) !== normalizedServiceType) return false
+    if ((row.booking_type ?? '').toString().toLowerCase() !== params.bookingType) return false
+    if ((row.pricing_model ?? '').toString().toLowerCase() !== 'time_based') return false
+
+    if (requestedItemCount > 1) {
+      if (row.accepts_multi_item !== true) return false
+      const maxItemCount = toFiniteNumber(row.max_item_count)
+      if (maxItemCount != null && maxItemCount < requestedItemCount) return false
+    }
+
+    return true
+  })
+
+  if (relevant.length === 0) return null
+
+  const minimumRates = relevant
+    .map((row) => {
+      const baseRate = toFiniteNumber(row.hourly_rate_min)
+      return baseRate != null && baseRate >= 0 ? baseRate * multiItemMultiplier : null
+    })
+    .filter((value): value is number => value != null && value >= 0)
+  const preferredRates = relevant
+    .map((row) => {
+      const baseRate = toFiniteNumber(row.hourly_rate_preferred)
+      return baseRate != null && baseRate >= 0 ? baseRate * multiItemMultiplier : null
+    })
+    .filter((value): value is number => value != null && value >= 0)
+
+  if (minimumRates.length === 0 && preferredRates.length === 0) return null
+
+  const averageMinRate =
+    minimumRates.length > 0
+      ? minimumRates.reduce((sum, value) => sum + value, 0) / minimumRates.length
+      : preferredRates.reduce((sum, value) => sum + value, 0) / preferredRates.length
+
+  const averagePreferredRate =
+    preferredRates.length > 0
+      ? preferredRates.reduce((sum, value) => sum + value, 0) / preferredRates.length
+      : averageMinRate
+
+  const hours = durationMinutes / 60
+  const recommendedMin = Math.max(1, Math.round(averageMinRate * hours))
+  const recommendedGood = Math.max(recommendedMin, Math.round(averagePreferredRate * hours))
+  const effectiveHourlyRate =
+    Number.isFinite(selectedPriceILS) && selectedPriceILS > 0
+      ? selectedPriceILS / hours
+      : 0
+
+  const likelihood: BudgetAcceptanceLikelihood =
+    effectiveHourlyRate < averageMinRate
+      ? 'low'
+      : effectiveHourlyRate < averagePreferredRate
+        ? 'medium'
+        : 'high'
+
+  return {
+    likelihood,
+    recommendedMin,
+    recommendedGood,
+    suggestedLow: recommendedMin,
+    suggestedHigh: recommendedGood,
+    fallback: false,
+    providerRowsCount: relevant.length,
+    aggregatedMinHourly: Math.round(averageMinRate * 100) / 100,
+    aggregatedPreferredHourly: Math.round(averagePreferredRate * 100) / 100,
   }
 }
 

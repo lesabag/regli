@@ -20,7 +20,13 @@ import {
   SERVICE_I18N_KEYS,
   isServiceAvailable as checkServiceAvailable,
 } from '../lib/serviceTypes'
-import { applyDogCountPricing, getBudgetGuidance, getInitialSuggestedBudgetILS } from '../lib/pricing'
+import {
+  applyDogCountPricing,
+  getBudgetGuidance,
+  getBudgetGuidanceFromProviderPreferences,
+  getInitialSuggestedBudgetILS,
+  type ProviderPricingPreferenceInput,
+} from '../lib/pricing'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
@@ -421,6 +427,7 @@ export default function ClientDashboard({
   const [recurringEditDays, setRecurringEditDays] = useState<number[]>([])
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
   const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
+  const [providerPricingPreferences, setProviderPricingPreferences] = useState<ProviderPricingPreferenceInput[]>([])
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
   const [timePickerMinute, setTimePickerMinute] = useState('00')
@@ -2400,6 +2407,7 @@ export default function ClientDashboard({
     requestServiceTypeRef.current ?? requestServiceType
   const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
   const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
+  const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
   const shouldShowDogCountControl = isDogServiceType(effectiveRequestServiceType ?? resolvedBookingService)
   const normalizedDogCount = shouldShowDogCountControl ? normalizeDogCount(dogCount) : 1
   const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : flow.dogName.trim()
@@ -2416,6 +2424,11 @@ export default function ClientDashboard({
           dogCount: normalizedDogCount,
         })
       : flow.adjustedPriceILS
+  const currentBudgetForGuidanceILS = isBabysitterRequest
+    ? babysitterFixedBudgetValue
+    : isDogWalkerRequest
+      ? dogWalkerBudgetValue
+      : flow.adjustedPriceILS
   const currentBookingDurationMinutes = isBabysitterRequest
     ? babysitterDurationMinutes
     : isDogWalkerRequest
@@ -2423,22 +2436,76 @@ export default function ClientDashboard({
       : flow.duration
         ? Math.round((flow.duration === '20min' ? 20 : flow.duration === '40min' ? 40 : 60))
         : null
-  const budgetGuidance = useMemo(
-    () =>
-      getBudgetGuidance({
-        serviceType: effectiveRequestServiceType ?? resolvedBookingService,
-        durationMinutes: currentBookingDurationMinutes,
-        selectedPriceILS: currentBookingPriceILS,
-        dogCount: normalizedDogCount,
-      }),
-    [
-      currentBookingDurationMinutes,
-      currentBookingPriceILS,
-      effectiveRequestServiceType,
-      normalizedDogCount,
-      resolvedBookingService,
-    ],
-  )
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProviderPricingPreferences() {
+      const serviceType = effectiveRequestServiceType ?? null
+      if (!serviceType) {
+        if (!cancelled) setProviderPricingPreferences([])
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('provider_service_preferences')
+        .select('service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+        .eq('service_type', serviceType)
+        .eq('booking_type', bookingTypeForGuidance)
+        .eq('is_enabled', true)
+        .eq('pricing_model', 'time_based')
+
+      if (cancelled) return
+
+      if (error) {
+        console.warn('[ClientDashboard] provider pricing preferences unavailable:', error.message)
+        setProviderPricingPreferences([])
+        return
+      }
+
+      const nextRows = (data as ProviderPricingPreferenceInput[] | null) ?? []
+      console.debug('[ClientDashboard] provider pricing preferences fetched', {
+        service_type: serviceType,
+        booking_type: bookingTypeForGuidance,
+        dog_count: normalizedDogCount,
+        fetchedRowsCount: nextRows.length,
+      })
+      setProviderPricingPreferences(nextRows)
+    }
+
+    void loadProviderPricingPreferences()
+
+    return () => {
+      cancelled = true
+    }
+  }, [bookingTypeForGuidance, effectiveRequestServiceType])
+
+  const budgetGuidance = useMemo(() => {
+    const marketGuidance = getBudgetGuidanceFromProviderPreferences({
+      serviceType: effectiveRequestServiceType ?? resolvedBookingService,
+      bookingType: bookingTypeForGuidance,
+      durationMinutes: currentBookingDurationMinutes,
+      selectedPriceILS: currentBudgetForGuidanceILS,
+      dogCount: normalizedDogCount,
+      preferences: providerPricingPreferences,
+    })
+
+    if (marketGuidance) return marketGuidance
+
+    return getBudgetGuidance({
+      serviceType: effectiveRequestServiceType ?? resolvedBookingService,
+      durationMinutes: currentBookingDurationMinutes,
+      selectedPriceILS: currentBudgetForGuidanceILS,
+      dogCount: normalizedDogCount,
+    })
+  }, [
+    bookingTypeForGuidance,
+    currentBookingDurationMinutes,
+    currentBudgetForGuidanceILS,
+    effectiveRequestServiceType,
+    normalizedDogCount,
+    providerPricingPreferences,
+    resolvedBookingService,
+  ])
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
   const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
   const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
@@ -2459,9 +2526,13 @@ export default function ClientDashboard({
   useEffect(() => {
     const debugSnapshot = JSON.stringify({
       service_type: effectiveRequestServiceType ?? resolvedBookingService,
+      booking_type: bookingTypeForGuidance,
       duration_minutes: currentBookingDurationMinutes,
       dogCount: normalizedDogCount,
-      selectedBudget: currentBookingPriceILS,
+      fetchedProviderRowsCount: providerPricingPreferences.length,
+      selectedBudget: currentBudgetForGuidanceILS,
+      aggregatedMinimumHourly: budgetGuidance.aggregatedMinHourly,
+      aggregatedPreferredHourly: budgetGuidance.aggregatedPreferredHourly,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
       likelihood: budgetGuidance.likelihood,
@@ -2473,23 +2544,33 @@ export default function ClientDashboard({
 
     console.debug('[ClientDashboard] budget guidance', {
       service_type: effectiveRequestServiceType ?? resolvedBookingService,
+      booking_type: bookingTypeForGuidance,
       duration_minutes: currentBookingDurationMinutes,
       dogCount: normalizedDogCount,
-      selectedBudget: currentBookingPriceILS,
+      fetchedProviderRowsCount: providerPricingPreferences.length,
+      selectedBudget: currentBudgetForGuidanceILS,
+      aggregatedMinimumHourly: budgetGuidance.aggregatedMinHourly,
+      aggregatedPreferredHourly: budgetGuidance.aggregatedPreferredHourly,
+      calculatedRecommendedMinBudget: budgetGuidance.recommendedMin,
+      calculatedRecommendedPreferredBudget: budgetGuidance.recommendedGood,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
       likelihood: budgetGuidance.likelihood,
       fallbackUsed: budgetGuidance.fallback,
     })
   }, [
+    bookingTypeForGuidance,
+    budgetGuidance.aggregatedMinHourly,
+    budgetGuidance.aggregatedPreferredHourly,
     budgetGuidance.fallback,
     budgetGuidance.likelihood,
     budgetGuidance.recommendedGood,
     budgetGuidance.recommendedMin,
     currentBookingDurationMinutes,
-    currentBookingPriceILS,
+    currentBudgetForGuidanceILS,
     effectiveRequestServiceType,
     normalizedDogCount,
+    providerPricingPreferences.length,
     resolvedBookingService,
   ])
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
