@@ -998,8 +998,6 @@ export default function WalkerDashboard({
 
   const incomingTitle = i18n.resolvedLanguage === 'he' ? 'הזמנה חדשה' : 'New order arrived'
   const idleHeroTitle = flow.isOnline ? (isHebrew ? 'מצב מחובר' : 'Connected') : (isHebrew ? 'לא מחובר' : 'Offline')
-  const completedJobsCount = flow.completedJobs.filter((job) => job.status === 'completed').length
-  const completedTasksSettingsLabel = isHebrew ? `${completedJobsCount} משימות הושלמו` : `${completedJobsCount} completed tasks`
   const todayDayOfWeek = new Date().getDay()
   const todayAvailabilityRows = useMemo(
     () =>
@@ -2116,44 +2114,6 @@ export default function WalkerDashboard({
                   </BurgerSection>
                 ) : menuPage === 'settings' ? (
                   <>
-                    <BurgerSection title={walkerName} subtitle={profile.email || t('common.provider')}>
-                      <div style={settingsProfileRowStyle}>
-                        <div style={{ position: 'relative' }}>
-                          <ProfileAvatar
-                            url={photo.avatarUrl}
-                            name={walkerName}
-                            size={52}
-                            borderRadius={18}
-                            onClick={() => fileInputRef.current?.click()}
-                          />
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            style={{ display: 'none' }}
-                            onChange={(e) => {
-                              const file = e.target.files?.[0]
-                              if (file) photo.uploadAvatar(file)
-                              e.target.value = ''
-                            }}
-                          />
-                        </div>
-                        <div style={settingsProfileMetaStyle}>
-                          <div style={settingsProfileTitleStyle}>{walkerName}</div>
-                          <div style={profileRatingStyle}>{completedTasksSettingsLabel}</div>
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            style={settingsPhotoButtonStyle}
-                          >
-                            Change photo
-                          </button>
-                          {photo.uploading && <div style={uploadStatusStyle}>Uploading photo...</div>}
-                          {photo.error && <div style={uploadErrorStyle}>{photo.error}</div>}
-                        </div>
-                      </div>
-                    </BurgerSection>
-
                     <SettingsCollapsibleSection
                       title={t('common.language')}
                       subtitle={t('menu.settings')}
@@ -3941,37 +3901,6 @@ const uploadStatusStyle: React.CSSProperties = {
 const uploadErrorStyle: React.CSSProperties = {
   fontSize: 12,
   color: '#DC2626',
-}
-
-const settingsProfileRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-}
-
-const settingsProfileMetaStyle: React.CSSProperties = {
-  flex: 1,
-  display: 'grid',
-  gap: 6,
-}
-
-const settingsProfileTitleStyle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const settingsPhotoButtonStyle: React.CSSProperties = {
-  appearance: 'none',
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#334155',
-  borderRadius: 999,
-  padding: '8px 12px',
-  fontSize: 12,
-  fontWeight: 800,
-  cursor: 'pointer',
-  justifySelf: 'start',
 }
 
 const languageSelectorRowStyle: React.CSSProperties = {

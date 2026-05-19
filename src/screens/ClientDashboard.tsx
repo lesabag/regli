@@ -143,6 +143,13 @@ function capitalize(value: string): string {
 type AppRole = 'client' | 'walker' | 'admin'
 type SheetSnap = 'collapsed' | 'default'
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
+type ClientSettingsSectionKey =
+  | 'language'
+  | 'serviceType'
+  | 'preferredProviders'
+  | 'serviceDetails'
+  | 'dogDetails'
+  | 'childrenDetails'
 type WheelOption = {
   value: string
   label: string
@@ -474,6 +481,14 @@ export default function ClientDashboard({
   const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
   const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
   const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
+  const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<ClientSettingsSectionKey, boolean>>({
+    language: false,
+    serviceType: false,
+    preferredProviders: false,
+    serviceDetails: false,
+    dogDetails: false,
+    childrenDetails: false,
+  })
   const [clientAttrPetName, setClientAttrPetName] = useState('')
   const [clientAttrDogSize, setClientAttrDogSize] = useState('')
   const [clientAttrEnergy, setClientAttrEnergy] = useState('')
@@ -487,6 +502,7 @@ export default function ClientDashboard({
   const clientAttrOrigRef = useRef({ petName: '', dogSize: '', energy: '', numKids: 0, childAges: [''], specialNotes: '' })
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
   const appViewportHeightRef = useRef(appViewportHeight)
+  const clientSettingsPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
   const suppressDogNameOpenUntilRef = useRef(0)
@@ -523,6 +539,9 @@ export default function ClientDashboard({
     ? 'יש לבחור לפחות שירות אחד בהגדרות לפני הזמנה.'
     : 'Please choose at least one service in Settings before booking.'
   const openSettingsLabel = isRtl ? 'פתח הגדרות' : 'Open Settings'
+  const toggleSettingsSection = useCallback((key: ClientSettingsSectionKey) => {
+    setSettingsSectionsOpen((prev) => ({ ...prev, [key]: !prev[key] }))
+  }, [])
   const availableProfileServiceTypes = profileServiceTypes.length > 0
     ? profileServiceTypes
     : normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
@@ -3429,6 +3448,17 @@ export default function ClientDashboard({
             </div>
 
             <div style={menuScrollAreaStyle}>
+              <input
+                ref={clientSettingsPhotoInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) photo.uploadAvatar(file)
+                  e.target.value = ''
+                }}
+              />
               {menuPage === 'history' ? (
                 <BurgerSection title={t('menu.tripHistory')} subtitle={t('menu.allHistorySubtitle')}>
                   <GroupedHistory
@@ -3458,22 +3488,23 @@ export default function ClientDashboard({
                 </BurgerSection>
               ) : menuPage === 'settings' ? (
                 <>
-                  <section style={burgerSectionStyle}>
-                    <div style={burgerSectionHeaderStyle}>
-                      <div style={burgerSectionTitleStyle}>{t('common.language')}</div>
-                    </div>
-                    <div style={languageSelectorRowStyle}>
+                  <SettingsCollapsibleSection
+                    title={t('common.language')}
+                    open={settingsSectionsOpen.language}
+                    onToggle={() => toggleSettingsSection('language')}
+                  >
+                    <div style={clientSettingsLanguageSelectorRowStyle}>
                       <button
                         type="button"
                         onClick={() => {
                           void i18n.changeLanguage('he')
                         }}
                         style={{
-                          ...languageButtonStyle,
-                          ...(i18n.resolvedLanguage === 'he' ? languageButtonActiveStyle : null),
+                          ...clientSettingsLanguageButtonStyle,
+                          ...(i18n.resolvedLanguage === 'he' ? clientSettingsLanguageButtonActiveStyle : null),
                         }}
                       >
-                        🇮🇱 עברית
+                        עברית
                       </button>
                       <button
                         type="button"
@@ -3481,21 +3512,22 @@ export default function ClientDashboard({
                           void i18n.changeLanguage('en')
                         }}
                         style={{
-                          ...languageButtonStyle,
-                          ...(i18n.resolvedLanguage === 'en' ? languageButtonActiveStyle : null),
+                          ...clientSettingsLanguageButtonStyle,
+                          ...(i18n.resolvedLanguage === 'en' ? clientSettingsLanguageButtonActiveStyle : null),
                         }}
                       >
-                        🇺🇸 EN
+                        EN
                       </button>
                     </div>
-                  </section>
+                  </SettingsCollapsibleSection>
 
-                  <section style={burgerSectionStyle}>
-                    <div style={burgerSectionHeaderStyle}>
-                      <div style={burgerSectionTitleStyle}>{serviceTypeSectionTitle}</div>
-                      <div style={burgerSectionSubtitleStyle}>{serviceTypeSectionSubtitle}</div>
-                    </div>
-                    <div style={serviceTypeSelectorRowStyle}>
+                  <SettingsCollapsibleSection
+                    title={serviceTypeSectionTitle}
+                    subtitle={serviceTypeSectionSubtitle}
+                    open={settingsSectionsOpen.serviceType}
+                    onToggle={() => toggleSettingsSection('serviceType')}
+                  >
+                    <div style={clientSettingsServiceTypeSelectorRowStyle}>
                       {profileServiceOptions.map((option) => {
                         const selected = profileServiceTypes.includes(option.value)
                         return (
@@ -3507,14 +3539,13 @@ export default function ClientDashboard({
                             }}
                             disabled={serviceTypeSaving}
                             style={{
-                              ...serviceTypeButtonStyle,
-                              ...(selected ? serviceTypeButtonActiveStyle : null),
+                              ...clientSettingsServiceTypeButtonStyle,
+                              ...(selected ? clientSettingsServiceTypeButtonActiveStyle : null),
                               opacity: serviceTypeSaving && !selected ? 0.72 : 1,
                             }}
                           >
-                            <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
-                            <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
-                            <span style={serviceTypeButtonDescriptionStyle}>{option.description}</span>
+                            <span style={clientSettingsServiceTypeButtonIconStyle}>{option.icon}</span>
+                            <span style={clientSettingsServiceTypeButtonLabelStyle}>{option.label}</span>
                             {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
                           </button>
                         )
@@ -3525,167 +3556,189 @@ export default function ClientDashboard({
                     ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                       <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                     ) : null}
-                  </section>
+                  </SettingsCollapsibleSection>
 
-                  <BurgerSection
+                  <SettingsCollapsibleSection
                     id="client-favorites-section"
                     title={t('menu.preferredWalkers')}
                     subtitle={t('menu.preferredWalkersSubtitle')}
+                    open={settingsSectionsOpen.preferredProviders}
+                    onToggle={() => toggleSettingsSection('preferredProviders')}
                   >
                     <FavoriteWalkerMenuList
                       favorites={flow.favoriteWalkers}
                       fallbackNames={flow.walkerNameById}
                       onToggleFavorite={flow.toggleFavoriteWalker}
                     />
-                  </BurgerSection>
+                  </SettingsCollapsibleSection>
 
                   {clientAttrLoaded && (profileServiceTypes.includes('dog_walker') || profileServiceTypes.includes('baby_sitter')) && (
-                    <section style={burgerSectionStyle}>
-                      <div style={burgerSectionHeaderStyle}>
-                        <div style={burgerSectionTitleStyle}>
-                          {isRtl ? 'פרטי השירות שלי' : 'My service details'}
-                        </div>
-                        <div style={burgerSectionSubtitleStyle}>
-                          {isRtl ? 'ככל שנדע יותר, נתאים לך טוב יותר.' : 'The more we know, the better we match.'}
-                        </div>
-                      </div>
-
+                    <SettingsCollapsibleSection
+                      title={isRtl ? 'פרטי השירות שלי' : 'My service details'}
+                      subtitle={isRtl ? 'ככל שנדע יותר, נתאים לך טוב יותר.' : 'The more we know, the better we match.'}
+                      open={settingsSectionsOpen.serviceDetails}
+                      onToggle={() => toggleSettingsSection('serviceDetails')}
+                    >
                       <div style={clientAttrEditorStyle}>
                         {profileServiceTypes.includes('dog_walker') && (
                           <div style={clientAttrSectionStyle}>
-                            <div style={clientAttrSectionLabelStyle}>
-                              {isRtl ? 'פרטי הכלב' : 'Dog details'}
-                            </div>
-
-                            <div style={clientAttrFieldStyle}>
-                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'שם' : 'Name'}</div>
-                              <input
-                                type="text"
-                                value={clientAttrPetName}
-                                onChange={(e) => setClientAttrPetName(e.target.value)}
-                                placeholder={isRtl ? 'לדוגמה: רקסי' : 'e.g. Rex'}
-                                style={clientAttrInputStyle}
-                              />
-                            </div>
-
-                            <div style={clientAttrFieldStyle}>
-                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גודל' : 'Size'}</div>
-                              <div style={clientAttrChipRowStyle}>
-                                {([
-                                  { value: 'S' as const, label: isRtl ? 'קטן' : 'S', desc: '<10kg' },
-                                  { value: 'M' as const, label: isRtl ? 'בינוני' : 'M', desc: '10–25kg' },
-                                  { value: 'L' as const, label: isRtl ? 'גדול' : 'L', desc: '25–40kg' },
-                                  { value: 'XL' as const, label: isRtl ? 'ענק' : 'XL', desc: '40kg+' },
-                                ]).map((opt) => {
-                                  const sel = clientAttrDogSize === opt.value
-                                  return (
-                                    <button
-                                      key={opt.value}
-                                      type="button"
-                                      onClick={() => setClientAttrDogSize(sel ? '' : opt.value)}
-                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  )
-                                })}
+                            <button
+                              type="button"
+                              onClick={() => toggleSettingsSection('dogDetails')}
+                              style={settingsCollapseButtonStyle}
+                              aria-expanded={settingsSectionsOpen.dogDetails}
+                            >
+                              <div style={settingsCollapseButtonTextStyle}>
+                                <div style={burgerSectionTitleStyle}>{isRtl ? 'פרטי הכלב' : 'Dog details'}</div>
                               </div>
-                            </div>
+                              <span style={settingsCollapseIconStyle}>{settingsSectionsOpen.dogDetails ? '−' : '+'}</span>
+                            </button>
 
-                            <div style={clientAttrFieldStyle}>
-                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'רמת אנרגיה' : 'Energy level'}</div>
-                              <div style={clientAttrChipRowStyle}>
-                                {(['low', 'medium', 'high'] as const).map((level) => {
-                                  const sel = clientAttrEnergy === level
-                                  const label = level === 'low' ? (isRtl ? 'נמוכה' : 'Low')
-                                    : level === 'medium' ? (isRtl ? 'בינונית' : 'Medium')
-                                    : (isRtl ? 'גבוהה' : 'High')
-                                  return (
-                                    <button
-                                      key={level}
-                                      type="button"
-                                      onClick={() => setClientAttrEnergy(sel ? '' : level)}
-                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                    >
-                                      {label}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            </div>
+                            {settingsSectionsOpen.dogDetails ? (
+                              <>
+                                <div style={clientAttrFieldStyle}>
+                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'שם' : 'Name'}</div>
+                                  <input
+                                    type="text"
+                                    value={clientAttrPetName}
+                                    onChange={(e) => setClientAttrPetName(e.target.value)}
+                                    placeholder={isRtl ? 'לדוגמה: רקסי' : 'e.g. Rex'}
+                                    style={clientAttrInputStyle}
+                                  />
+                                </div>
+
+                                <div style={clientAttrFieldStyle}>
+                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גודל' : 'Size'}</div>
+                                  <div style={clientAttrChipRowStyle}>
+                                    {([
+                                      { value: 'S' as const, label: isRtl ? 'קטן' : 'S' },
+                                      { value: 'M' as const, label: isRtl ? 'בינוני' : 'M' },
+                                      { value: 'L' as const, label: isRtl ? 'גדול' : 'L' },
+                                      { value: 'XL' as const, label: isRtl ? 'ענק' : 'XL' },
+                                    ]).map((opt) => {
+                                      const sel = clientAttrDogSize === opt.value
+                                      return (
+                                        <button
+                                          key={opt.value}
+                                          type="button"
+                                          onClick={() => setClientAttrDogSize(sel ? '' : opt.value)}
+                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+
+                                <div style={clientAttrFieldStyle}>
+                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'רמת אנרגיה' : 'Energy level'}</div>
+                                  <div style={clientAttrChipRowStyle}>
+                                    {(['low', 'medium', 'high'] as const).map((level) => {
+                                      const sel = clientAttrEnergy === level
+                                      const label = level === 'low' ? (isRtl ? 'נמוכה' : 'Low')
+                                        : level === 'medium' ? (isRtl ? 'בינונית' : 'Medium')
+                                        : (isRtl ? 'גבוהה' : 'High')
+                                      return (
+                                        <button
+                                          key={level}
+                                          type="button"
+                                          onClick={() => setClientAttrEnergy(sel ? '' : level)}
+                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                        >
+                                          {label}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              </>
+                            ) : null}
                           </div>
                         )}
 
                         {profileServiceTypes.includes('baby_sitter') && (
                           <div style={clientAttrSectionStyle}>
-                            <div style={clientAttrSectionLabelStyle}>
-                              {isRtl ? 'פרטי הילדים' : 'Children details'}
-                            </div>
-
-                            <div style={clientAttrFieldStyle}>
-                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'מספר ילדים' : 'Number of kids'}</div>
-                              <div style={clientAttrChipRowStyle}>
-                                {[1, 2, 3, 4, 5].map((n) => {
-                                  const sel = clientAttrNumKids === n
-                                  return (
-                                    <button
-                                      key={n}
-                                      type="button"
-                                      onClick={() => {
-                                        setClientAttrNumKids(sel ? 0 : n)
-                                        if (!sel && clientAttrChildAges.length < n) {
-                                          setClientAttrChildAges((prev) => {
-                                            const next = [...prev]
-                                            while (next.length < n) next.push('')
-                                            return next
-                                          })
-                                        }
-                                      }}
-                                      style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                    >
-                                      {n}
-                                    </button>
-                                  )
-                                })}
+                            <button
+                              type="button"
+                              onClick={() => toggleSettingsSection('childrenDetails')}
+                              style={settingsCollapseButtonStyle}
+                              aria-expanded={settingsSectionsOpen.childrenDetails}
+                            >
+                              <div style={settingsCollapseButtonTextStyle}>
+                                <div style={burgerSectionTitleStyle}>{isRtl ? 'פרטי הילדים' : 'Children details'}</div>
                               </div>
-                            </div>
+                              <span style={settingsCollapseIconStyle}>{settingsSectionsOpen.childrenDetails ? '−' : '+'}</span>
+                            </button>
 
-                            {clientAttrNumKids > 0 && (
-                              <div style={clientAttrFieldStyle}>
-                                <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גיל כל ילד' : 'Age of each child'}</div>
-                                <div style={clientAttrAgesRowStyle}>
-                                  {clientAttrChildAges.slice(0, clientAttrNumKids).map((age, idx) => (
-                                    <input
-                                      key={idx}
-                                      type="number"
-                                      min="0"
-                                      max="18"
-                                      value={age}
-                                      onChange={(e) => {
-                                        setClientAttrChildAges((prev) => {
-                                          const next = [...prev]
-                                          next[idx] = e.target.value
-                                          return next
-                                        })
-                                      }}
-                                      placeholder={`${idx + 1}`}
-                                      style={clientAttrAgeInputStyle}
-                                    />
-                                  ))}
+                            {settingsSectionsOpen.childrenDetails ? (
+                              <>
+                                <div style={clientAttrFieldStyle}>
+                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'מספר ילדים' : 'Number of kids'}</div>
+                                  <div style={clientAttrChipRowStyle}>
+                                    {[1, 2, 3, 4, 5].map((n) => {
+                                      const sel = clientAttrNumKids === n
+                                      return (
+                                        <button
+                                          key={n}
+                                          type="button"
+                                          onClick={() => {
+                                            setClientAttrNumKids(sel ? 0 : n)
+                                            if (!sel && clientAttrChildAges.length < n) {
+                                              setClientAttrChildAges((prev) => {
+                                                const next = [...prev]
+                                                while (next.length < n) next.push('')
+                                                return next
+                                              })
+                                            }
+                                          }}
+                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
+                                        >
+                                          {n}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
 
-                            <div style={clientAttrFieldStyle}>
-                              <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הערות מיוחדות' : 'Special notes'}</div>
-                              <textarea
-                                value={clientAttrSpecialNotes}
-                                onChange={(e) => setClientAttrSpecialNotes(e.target.value)}
-                                placeholder={isRtl ? 'לדוגמה: אלרגיה לבוטנים' : 'e.g. Peanut allergy'}
-                                rows={2}
-                                style={clientAttrTextareaStyle}
-                              />
-                            </div>
+                                {clientAttrNumKids > 0 && (
+                                  <div style={clientAttrFieldStyle}>
+                                    <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גיל כל ילד' : 'Age of each child'}</div>
+                                    <div style={clientAttrAgesRowStyle}>
+                                      {clientAttrChildAges.slice(0, clientAttrNumKids).map((age, idx) => (
+                                        <input
+                                          key={idx}
+                                          type="number"
+                                          min="0"
+                                          max="18"
+                                          value={age}
+                                          onChange={(e) => {
+                                            setClientAttrChildAges((prev) => {
+                                              const next = [...prev]
+                                              next[idx] = e.target.value
+                                              return next
+                                            })
+                                          }}
+                                          placeholder={`${idx + 1}`}
+                                          style={clientAttrAgeInputStyle}
+                                        />
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div style={clientAttrFieldStyle}>
+                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הערות מיוחדות' : 'Special notes'}</div>
+                                  <textarea
+                                    value={clientAttrSpecialNotes}
+                                    onChange={(e) => setClientAttrSpecialNotes(e.target.value)}
+                                    placeholder={isRtl ? 'לדוגמה: אלרגיה לבוטנים' : 'e.g. Peanut allergy'}
+                                    rows={2}
+                                    style={clientAttrTextareaStyle}
+                                  />
+                                </div>
+                              </>
+                            ) : null}
                           </div>
                         )}
 
@@ -3710,7 +3763,7 @@ export default function ClientDashboard({
                           </div>
                         )}
                       </div>
-                    </section>
+                    </SettingsCollapsibleSection>
                   )}
 
                   <div style={menuFooterActionWrapStyle}>
@@ -3761,7 +3814,13 @@ export default function ClientDashboard({
                 <>
                   <div style={menuProfileButtonStyle}>
                     <div style={{ position: 'relative', flexShrink: 0 }}>
-                      <ProfileAvatar url={photo.avatarUrl} name={clientName} size={48} borderRadius={16} />
+                      <ProfileAvatar
+                        url={photo.avatarUrl}
+                        name={clientName}
+                        size={48}
+                        borderRadius={16}
+                        onClick={() => clientSettingsPhotoInputRef.current?.click()}
+                      />
                     </div>
                     <div style={menuProfileTextStyle}>
                       <div style={profileNameStyle}>{clientName}</div>
@@ -3771,6 +3830,15 @@ export default function ClientDashboard({
                           <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {t('menu.reviewScore')}
                         </div>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => clientSettingsPhotoInputRef.current?.click()}
+                        style={menuProfilePhotoButtonStyle}
+                      >
+                        {t('common.changePhoto')}
+                      </button>
+                      {photo.uploading && <div style={uploadStatusStyle}>{isRtl ? 'מעלה תמונה...' : 'Uploading photo...'}</div>}
+                      {photo.error && <div style={uploadErrorStyle}>{photo.error}</div>}
                     </div>
                   </div>
 
@@ -4973,6 +5041,35 @@ function BurgerSection({
       </div>
       {subtitle && <div style={burgerSectionSubtitleStyle}>{subtitle}</div>}
       <div style={{ marginTop: 10 }}>{children}</div>
+    </section>
+  )
+}
+
+function SettingsCollapsibleSection({
+  id,
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: {
+  id?: string
+  title: string
+  subtitle?: string
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <section id={id} style={burgerSectionStyle}>
+      <button type="button" onClick={onToggle} style={settingsCollapseButtonStyle} aria-expanded={open}>
+        <div style={settingsCollapseButtonTextStyle}>
+          <div style={burgerSectionTitleStyle}>{title}</div>
+          {subtitle ? <div style={burgerSectionSubtitleStyle}>{subtitle}</div> : null}
+        </div>
+        <span style={settingsCollapseIconStyle}>{open ? '−' : '+'}</span>
+      </button>
+      {open ? <div style={settingsSectionBodyStyle}>{children}</div> : null}
     </section>
   )
 }
@@ -7862,6 +7959,30 @@ const menuProfileTextStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+const menuProfilePhotoButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  marginTop: 8,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  borderRadius: 999,
+  padding: '6px 10px',
+  fontSize: 11,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const uploadStatusStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#64748B',
+}
+
+const uploadErrorStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#DC2626',
+}
+
 const menuRowListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
@@ -7928,75 +8049,113 @@ const burgerSectionStyle: React.CSSProperties = {
   paddingBottom: 14,
 }
 
-const languageSelectorRowStyle: React.CSSProperties = {
+const settingsCollapseButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  width: '100%',
   display: 'flex',
-  gap: 8,
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 14,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  textAlign: 'start',
+}
+
+const settingsCollapseButtonTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 4,
+  flex: 1,
+}
+
+const settingsCollapseIconStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  color: '#334155',
+  display: 'grid',
+  placeItems: 'center',
+  fontSize: 18,
+  fontWeight: 800,
+  flexShrink: 0,
+  lineHeight: 1,
+}
+
+const settingsSectionBodyStyle: React.CSSProperties = {
   marginTop: 10,
 }
 
-const languageButtonStyle: React.CSSProperties = {
-  minWidth: 92,
-  height: 36,
-  borderRadius: 12,
+const clientSettingsLanguageSelectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+  maxWidth: 116,
+}
+
+const clientSettingsLanguageButtonStyle: React.CSSProperties = {
+  minWidth: 54,
+  height: 28,
+  borderRadius: 10,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#0F172A',
-  fontSize: 13,
+  fontSize: 11,
   fontWeight: 800,
   cursor: 'pointer',
   fontFamily: 'inherit',
+  padding: '0 8px',
 }
 
-const languageButtonActiveStyle: React.CSSProperties = {
+const clientSettingsLanguageButtonActiveStyle: React.CSSProperties = {
   borderColor: '#5B7CFA',
   background: '#EEF4FF',
   color: '#3152C8',
 }
 
-const serviceTypeSelectorRowStyle: React.CSSProperties = {
+const clientSettingsServiceTypeSelectorRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 10,
-  marginTop: 10,
+  gap: 8,
 }
 
-const serviceTypeButtonStyle: React.CSSProperties = {
-  minHeight: 116,
-  borderRadius: 18,
+const clientSettingsServiceTypeButtonStyle: React.CSSProperties = {
+  minHeight: 42,
+  borderRadius: 12,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#0F172A',
-  display: 'grid',
-  justifyItems: 'start',
-  alignContent: 'start',
-  gap: 6,
-  padding: '14px 12px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+  gap: 8,
+  padding: '8px 10px',
   textAlign: 'left',
   cursor: 'pointer',
   fontFamily: 'inherit',
 }
 
-const serviceTypeButtonActiveStyle: React.CSSProperties = {
+const clientSettingsServiceTypeButtonActiveStyle: React.CSSProperties = {
   borderColor: '#5B7CFA',
   background: '#EEF4FF',
-  boxShadow: '0 10px 24px rgba(91, 124, 250, 0.16)',
+  boxShadow: '0 6px 16px rgba(91, 124, 250, 0.12)',
 }
 
-const serviceTypeButtonIconStyle: React.CSSProperties = {
-  fontSize: 22,
+const clientSettingsServiceTypeButtonIconStyle: React.CSSProperties = {
+  fontSize: 16,
   lineHeight: 1,
+  flexShrink: 0,
 }
 
-const serviceTypeButtonLabelStyle: React.CSSProperties = {
-  fontSize: 14,
+const clientSettingsServiceTypeButtonLabelStyle: React.CSSProperties = {
+  fontSize: 12,
   fontWeight: 800,
   color: '#0F172A',
-}
-
-const serviceTypeButtonDescriptionStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.45,
-  color: '#64748B',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const serviceTypeButtonMetaStyle: React.CSSProperties = {
@@ -8032,13 +8191,6 @@ const clientAttrSectionStyle: React.CSSProperties = {
   background: '#F8FAFC',
   borderRadius: 16,
   border: '1px solid #E2E8F0',
-}
-
-const clientAttrSectionLabelStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 800,
-  color: '#0F172A',
-  letterSpacing: 0.2,
 }
 
 const clientAttrFieldStyle: React.CSSProperties = {
