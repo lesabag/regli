@@ -8,6 +8,7 @@ import {
   type RankedCandidate,
 } from '../_shared/dispatch.ts'
 import { rankDispatchCandidatesByFinalScore, computeAttributeScore } from '../_shared/dispatchRanking.ts'
+import { evaluatePricingEligibility, type ProviderPricingPreferenceRow } from '../_shared/pricingEligibility.ts'
 
 type StartDispatchBody = {
   requestId?: string
@@ -24,6 +25,7 @@ function getScheduledDispatchLeadMinutes(): number {
 
 const SCHEDULED_DISPATCH_LEAD_MINUTES = getScheduledDispatchLeadMinutes()
 const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
+const BUDGET_BELOW_MINIMUM_ERROR_PREFIX = 'budget_below_provider_minimum'
 
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -182,6 +184,13 @@ function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
   }
 }
 
+function buildBudgetBelowMinimumError(params: {
+  recommendedMinBudget: number | null
+  recommendedPreferredBudget: number | null
+}): string {
+  return `${BUDGET_BELOW_MINIMUM_ERROR_PREFIX}:${params.recommendedMinBudget ?? ''}:${params.recommendedPreferredBudget ?? ''}`
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -235,7 +244,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, payment_status, stripe_payment_intent_id, service_type')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, duration_minutes, price')
       .eq('id', requestId)
       .single()
 
@@ -404,6 +413,7 @@ serve(async (req) => {
     let matchingServiceWalkerIds: Set<string> | null = null
     let providerServiceAttrsById = new Map<string, Record<string, unknown>>()
     let clientServiceAttributes: Record<string, unknown> | null = null
+    let providerPricingPreferenceRows: ProviderPricingPreferenceRow[] = []
 
     if (candidateWalkerIds.length > 0) {
       const [
@@ -411,6 +421,7 @@ serve(async (req) => {
         { data: favoriteCustomersRows, error: favoriteCustomersError },
         { data: favoriteWalkersRows, error: favoriteWalkersError },
         { data: clientProfileRow },
+        { data: providerPricingRows, error: providerPricingError },
       ] = await Promise.all([
         supabase
           .from('profiles')
@@ -433,9 +444,25 @@ serve(async (req) => {
               .eq('id', clientId)
               .maybeSingle()
           : Promise.resolve({ data: null, error: null }),
+        supabase
+          .from('provider_service_preferences')
+          .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+          .in('provider_id', candidateWalkerIds)
+          .eq('is_enabled', true)
+          .eq('pricing_model', 'time_based'),
       ])
 
       clientServiceAttributes = (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
+      providerPricingPreferenceRows = (providerPricingRows as ProviderPricingPreferenceRow[] | null) ?? []
+
+      if (providerPricingError) {
+        console.error('[start-dispatch] failed loading provider pricing preferences', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: providerPricingError.message,
+        })
+        providerPricingPreferenceRows = []
+      }
 
       if (walkerProfilesError) {
         console.error('[start-dispatch] failed loading candidate service types', {
@@ -602,13 +629,57 @@ serve(async (req) => {
       providersFoundCount: affinityRankedCandidates.length,
     })
 
-    if (affinityRankedCandidates.length === 0) {
-      const exhaustedMessage = 'No matching providers for service_type'
+    const pricingEligibility = evaluatePricingEligibility({
+      candidateWalkerIds: affinityRankedCandidates.map((candidate) => candidate.walkerId),
+      preferences: providerPricingPreferenceRows,
+      serviceType: requestRow.service_type,
+      bookingType: requestRow.booking_timing === 'scheduled' ? 'scheduled' : 'asap',
+      budgetILS: typeof requestRow.price === 'number' ? requestRow.price : null,
+      durationMinutes: typeof requestRow.duration_minutes === 'number' ? requestRow.duration_minutes : null,
+      dogCount: typeof requestRow.dog_count === 'number' ? requestRow.dog_count : 1,
+    })
+
+    const eligibleWalkerIdSet = new Set(pricingEligibility.eligibleWalkerIds)
+    const pricingFilteredCandidates = affinityRankedCandidates.filter((candidate) =>
+      eligibleWalkerIdSet.has(candidate.walkerId)
+    )
+
+    console.log('[start-dispatch] pricing eligibility filter', {
+      version: START_DISPATCH_VERSION,
+      requestId,
+      service_type: requestRow.service_type ?? null,
+      booking_type: requestRow.booking_timing === 'scheduled' ? 'scheduled' : 'asap',
+      budget: requestRow.price ?? null,
+      duration_minutes: requestRow.duration_minutes ?? null,
+      dog_count: requestRow.dog_count ?? 1,
+      candidate_count_before_pricing_filter: affinityRankedCandidates.length,
+      candidate_count_after_pricing_filter: pricingFilteredCandidates.length,
+      filtered_by_price_count: pricingEligibility.filteredByPriceWalkerIds.length,
+      filtered_by_multi_item_count: pricingEligibility.filteredByMultiItemWalkerIds.length,
+      effective_hourly_rate: pricingEligibility.effectiveHourlyRate,
+      aggregated_min_hourly: pricingEligibility.aggregatedMinHourly,
+      aggregated_preferred_hourly: pricingEligibility.aggregatedPreferredHourly,
+      recommended_min_budget: pricingEligibility.recommendedMinBudget,
+      recommended_preferred_budget: pricingEligibility.recommendedPreferredBudget,
+      provider_pricing_rows_count: pricingEligibility.relevantPreferenceRowsCount,
+    })
+
+    if (pricingFilteredCandidates.length === 0) {
+      const exhaustedMessage =
+        affinityRankedCandidates.length > 0 && pricingEligibility.filteredByPriceWalkerIds.length > 0
+          ? buildBudgetBelowMinimumError({
+              recommendedMinBudget: pricingEligibility.recommendedMinBudget,
+              recommendedPreferredBudget: pricingEligibility.recommendedPreferredBudget,
+            })
+          : 'No matching providers for service_type'
       console.warn('[start-dispatch] no candidates match request service type', {
         version: START_DISPATCH_VERSION,
         requestId,
         requestServiceType: requestRow.service_type,
         normalizedProviderServiceType: requestProviderServiceType,
+        candidateCountBeforePricingFilter: affinityRankedCandidates.length,
+        filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,
+        filteredByMultiItemCount: pricingEligibility.filteredByMultiItemWalkerIds.length,
         finalRequestState: {
           dispatch_state: 'queued',
           smart_dispatch_state: 'exhausted',
@@ -654,6 +725,10 @@ serve(async (req) => {
           error: exhaustedMessage,
           requestServiceType: requestRow.service_type,
           candidateCount: 0,
+          filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,
+          filteredByMultiItemCount: pricingEligibility.filteredByMultiItemWalkerIds.length,
+          recommendedMinBudget: pricingEligibility.recommendedMinBudget,
+          recommendedPreferredBudget: pricingEligibility.recommendedPreferredBudget,
           requestState: {
             dispatch_state: 'queued',
             smart_dispatch_state: 'exhausted',
@@ -665,7 +740,7 @@ serve(async (req) => {
     }
 
     const affinityRankedCandidateOrder = rankDispatchCandidatesByFinalScore(
-      affinityRankedCandidates.map((candidate) => ({
+      pricingFilteredCandidates.map((candidate) => ({
         walkerId: candidate.walkerId,
         baseScore: getBaseScore(candidate),
         affinityProviderSaved: candidate.meta?.affinity_provider_saved === true,
@@ -678,7 +753,7 @@ serve(async (req) => {
     )
 
     const affinityRankedCandidatesByWalkerId = new Map(
-      affinityRankedCandidates.map((candidate) => [candidate.walkerId, candidate]),
+      pricingFilteredCandidates.map((candidate) => [candidate.walkerId, candidate]),
     )
 
     const rerankedCandidates = affinityRankedCandidateOrder

@@ -78,6 +78,20 @@ function parseLocalDateTime(value: string | null | undefined): Date | null {
   return Number.isNaN(dt.getTime()) ? null : dt
 }
 
+function parseBudgetBelowMinimumError(
+  value: string | null | undefined,
+): { min: number; max: number } | null {
+  if (typeof value !== 'string' || !value.startsWith('budget_below_provider_minimum:')) return null
+  const [, minRaw = '', maxRaw = ''] = value.split(':')
+  const min = Number(minRaw)
+  const max = Number(maxRaw)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null
+  return {
+    min: Math.round(min),
+    max: Math.round(max),
+  }
+}
+
 function getNowPlus15LocalInput(): string {
   return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
 }
@@ -137,7 +151,7 @@ type WheelOption = {
 const BABYSITTER_DURATION_MIN = 0
 const BABYSITTER_DURATION_MAX = 24
 const BABYSITTER_DURATION_STEP = 0.5
-const BABYSITTER_DEFAULT_DURATION_HOURS = 0.5
+const BABYSITTER_DEFAULT_DURATION_HOURS = 1
 const BABYSITTER_BUDGET_MIN_ILS = 0
 const BABYSITTER_BUDGET_MAX_ILS = 500
 const BABYSITTER_BUDGET_STEP_ILS = 5
@@ -148,7 +162,7 @@ const BABYSITTER_DEFAULT_FIXED_BUDGET_ILS = getInitialSuggestedBudgetILS({
 const DOG_WALKER_DURATION_MIN = 0
 const DOG_WALKER_DURATION_MAX = 24
 const DOG_WALKER_DURATION_STEP = 0.5
-const DOG_WALKER_DEFAULT_DURATION_HOURS = 0.5
+const DOG_WALKER_DEFAULT_DURATION_HOURS = 1
 const DOG_WALKER_BUDGET_MIN_ILS = 0
 const DOG_WALKER_BUDGET_MAX_ILS = 500
 const DOG_WALKER_BUDGET_STEP_ILS = 5
@@ -1971,16 +1985,6 @@ export default function ClientDashboard({
   const isPaymentGuided = guidedBookingField === 'payment'
   const shouldShowGuidanceCtaHelper = guidedBookingField !== null && !flow.loading && !flow.cardLoading
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
-  const matchingEmptyTitle = isDispatchExhausted
-    ? t('booking.noProvidersAvailable')
-    : shouldShowNoProvidersEmptyState
-      ? t('booking.noProvidersAvailable')
-      : flow.availabilityNotice?.title || t('booking.noProvidersAvailable')
-  const matchingEmptySubtitle = isDispatchExhausted
-    ? t('booking.providersBusyRetryLater')
-    : shouldShowNoProvidersEmptyState
-      ? t('booking.tryAgainSoon')
-      : flow.error || t('booking.tryAgainSoon')
 
   useEffect(() => {
     setGuidedBookingField((current) => (current === nextGuidedBookingField ? current : nextGuidedBookingField))
@@ -2509,8 +2513,17 @@ export default function ClientDashboard({
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
   const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
   const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
+  const budgetBelowMinimumHint =
+    parseBudgetBelowMinimumError(flow.currentJob?.smart_dispatch_last_error) ??
+    parseBudgetBelowMinimumError(flow.activeJob?.smart_dispatch_last_error)
+  const isBudgetMinimumExhausted = !!budgetBelowMinimumHint
   const budgetGuidanceText = shouldShowBudgetRetryHint
-    ? t('booking.budgetRetryHint')
+    ? budgetBelowMinimumHint
+      ? t('booking.budgetMinimumRetryHint', {
+          min: budgetBelowMinimumHint.min,
+          max: budgetBelowMinimumHint.max,
+        })
+      : t('booking.budgetRetryHint')
     : budgetGuidance.likelihood === 'low'
       ? t('booking.budgetGuidance', {
           min: budgetGuidance.suggestedLow,
@@ -2522,6 +2535,23 @@ export default function ClientDashboard({
             max: budgetGuidance.suggestedHigh,
           })
         : null
+  const matchingEmptyTitle = isDispatchExhausted
+    ? isBudgetMinimumExhausted
+      ? t('booking.budgetMinimumEmptyTitle')
+      : t('booking.noProvidersAvailable')
+    : shouldShowNoProvidersEmptyState
+      ? t('booking.noProvidersAvailable')
+      : flow.availabilityNotice?.title || t('booking.noProvidersAvailable')
+  const matchingEmptySubtitle = isDispatchExhausted
+    ? isBudgetMinimumExhausted && budgetBelowMinimumHint
+      ? t('booking.budgetMinimumEmptySubtitle', {
+          min: budgetBelowMinimumHint.min,
+          max: budgetBelowMinimumHint.max,
+        })
+      : t('booking.providersBusyRetryLater')
+    : shouldShowNoProvidersEmptyState
+      ? t('booking.tryAgainSoon')
+      : flow.error || t('booking.tryAgainSoon')
 
   useEffect(() => {
     const debugSnapshot = JSON.stringify({
@@ -4155,12 +4185,15 @@ export default function ClientDashboard({
                 serviceType={flow.currentJob?.service_type}
                 emptyTitle={matchingEmptyTitle}
                 emptySubtitle={matchingEmptySubtitle}
+                emptyPrimaryLabel={isBudgetMinimumExhausted ? t('booking.raiseBudget') : undefined}
+                emptySecondaryLabel={isBudgetMinimumExhausted ? t('booking.scheduleForLater') : undefined}
                 onCancel={
                   isDispatchExhausted || shouldShowNoProvidersEmptyState
                     ? handleMatchingTryAgain
                     : flow.cancelSearch
                 }
                 onTryAgain={handleMatchingTryAgain}
+                onSecondaryAction={isBudgetMinimumExhausted ? openScheduleSheet : undefined}
               />
             </div>
           )}

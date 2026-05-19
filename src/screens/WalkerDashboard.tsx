@@ -2137,7 +2137,6 @@ export default function WalkerDashboard({
                             >
                               <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
                               <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
-                              <span style={serviceTypeButtonDescriptionStyle}>{option.description}</span>
                               {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
                             </button>
                           )
@@ -3887,52 +3886,49 @@ const languageButtonActiveStyle: React.CSSProperties = {
 const serviceTypeSelectorRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 10,
+  gap: 8,
 }
 
 const serviceTypeButtonStyle: React.CSSProperties = {
   appearance: 'none',
-  minHeight: 116,
-  borderRadius: 18,
+  minHeight: 54,
+  borderRadius: 14,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   color: '#334155',
-  padding: '14px 12px',
-  display: 'grid',
-  justifyItems: 'start',
-  alignContent: 'start',
-  gap: 6,
-  textAlign: 'left',
+  padding: '8px 10px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  textAlign: 'center',
   cursor: 'pointer',
 }
 
 const serviceTypeButtonActiveStyle: React.CSSProperties = {
   borderColor: '#0F172A',
   background: '#F8FAFC',
-  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.08)',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.08)',
 }
 
 const serviceTypeButtonIconStyle: React.CSSProperties = {
-  fontSize: 22,
+  fontSize: 17,
   lineHeight: 1,
+  flexShrink: 0,
 }
 
 const serviceTypeButtonLabelStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 12.5,
   fontWeight: 800,
   color: '#0F172A',
-}
-
-const serviceTypeButtonDescriptionStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.45,
-  color: '#64748B',
+  whiteSpace: 'nowrap',
 }
 
 const serviceTypeButtonMetaStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 10,
   fontWeight: 700,
   color: '#0F172A',
+  marginInlineStart: 2,
 }
 
 const serviceTypeStatusSuccessStyle: React.CSSProperties = {

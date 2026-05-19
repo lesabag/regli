@@ -16,8 +16,11 @@ interface SearchingSheetProps {
   serviceType?: string | null
   emptyTitle?: string
   emptySubtitle?: string
+  emptyPrimaryLabel?: string
+  emptySecondaryLabel?: string
   onCancel: () => void
   onTryAgain?: () => void
+  onSecondaryAction?: () => void
 }
 
 type MatchingVisual = {
@@ -115,8 +118,11 @@ export default function SearchingSheet({
   serviceType,
   emptyTitle,
   emptySubtitle,
+  emptyPrimaryLabel,
+  emptySecondaryLabel,
   onCancel,
   onTryAgain,
+  onSecondaryAction,
 }: SearchingSheetProps) {
   const { i18n } = useTranslation()
   const isRtl = i18n.resolvedLanguage === 'he'
@@ -132,6 +138,8 @@ export default function SearchingSheet({
   const durationText = isRtl ? 'Duration' : 'Duration'
   const priceText = isRtl ? 'Price' : 'Price'
   const tryAgainLabel = isRtl ? 'נסה שוב' : 'Try again'
+  const emptyResolvedPrimaryLabel = emptyPrimaryLabel || tryAgainLabel
+  const emptyResolvedSecondaryLabel = emptySecondaryLabel || null
   const emptyResolvedTitle =
     emptyTitle || (isRtl ? 'הספקים הקרובים תפוסים כרגע' : 'Nearby providers are currently busy')
   const emptyResolvedSubtitle =
@@ -175,8 +183,13 @@ export default function SearchingSheet({
           </div>
           <button type="button" onClick={onTryAgain ?? onCancel} style={primaryButtonStyle}>
             <span style={primaryButtonIconStyle}>↻</span>
-            {tryAgainLabel}
+            {emptyResolvedPrimaryLabel}
           </button>
+          {emptyResolvedSecondaryLabel && onSecondaryAction ? (
+            <button type="button" onClick={onSecondaryAction} style={secondaryButtonStyle}>
+              {emptyResolvedSecondaryLabel}
+            </button>
+          ) : null}
         </div>
       </div>
     )
@@ -808,6 +821,24 @@ const primaryButtonStyle: CSSProperties = {
   justifyContent: 'center',
   gap: 8,
   width: '100%',
+}
+
+const secondaryButtonStyle: CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  minHeight: 44,
+  borderRadius: 15,
+  background: 'rgba(255,255,255,0.03)',
+  color: '#E2E8F0',
+  fontSize: 13.5,
+  fontWeight: 800,
+  padding: '0 16px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '100%',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
 }
 
 const primaryButtonIconStyle: CSSProperties = {
