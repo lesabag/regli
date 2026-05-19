@@ -219,6 +219,11 @@ type RecurringStatus = 'active' | 'paused' | 'cancelled'
 type ScheduleMode = 'later' | 'repeat'
 type TimePickerTarget = 'repeat' | 'edit'
 type Meridiem = 'AM' | 'PM'
+type ProviderHeroMeta = {
+  avatarUrl: string | null
+  rating: number | null
+  completedCount: number
+}
 
 interface RecurringBookingRow {
   id: string
@@ -442,6 +447,11 @@ export default function ClientDashboard({
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
   const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
   const [providerPricingPreferences, setProviderPricingPreferences] = useState<ProviderPricingPreferenceInput[]>([])
+  const [providerHeroMeta, setProviderHeroMeta] = useState<ProviderHeroMeta>({
+    avatarUrl: null,
+    rating: null,
+    completedCount: 0,
+  })
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
   const [timePickerMinute, setTimePickerMinute] = useState('00')
@@ -2064,6 +2074,81 @@ export default function ClientDashboard({
 
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
+  const activeProviderId = flow.activeJob?.walker_id ?? null
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProviderHeroMeta() {
+      if (!activeProviderId) {
+        if (!cancelled) {
+          setProviderHeroMeta({
+            avatarUrl: null,
+            rating: null,
+            completedCount: 0,
+          })
+        }
+        return
+      }
+
+      try {
+        const [profileResult, ratingsResult, completedResult] = await Promise.all([
+          supabase
+            .from('profiles')
+            .select('avatar_url')
+            .eq('id', activeProviderId)
+            .maybeSingle(),
+          supabase
+            .from('ratings')
+            .select('rating')
+            .eq('to_user_id', activeProviderId),
+          supabase
+            .from('walk_requests')
+            .select('id', { count: 'exact', head: true })
+            .eq('walker_id', activeProviderId)
+            .eq('status', 'completed'),
+        ])
+
+        if (cancelled) return
+
+        const ratingRows = (ratingsResult.data as Array<{ rating: number | null }> | null) ?? []
+        const validRatings = ratingRows
+          .map((row) => row.rating)
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+        const averageRating =
+          validRatings.length > 0
+            ? Math.round((validRatings.reduce((sum, value) => sum + value, 0) / validRatings.length) * 10) / 10
+            : null
+
+        setProviderHeroMeta({
+          avatarUrl:
+            profileResult.error == null && profileResult.data && 'avatar_url' in profileResult.data
+              ? (profileResult.data.avatar_url as string | null) ?? null
+              : null,
+          rating: averageRating,
+          completedCount: completedResult.count ?? 0,
+        })
+      } catch (error) {
+        console.warn('[ClientDashboard] failed to load provider hero meta', {
+          providerId: activeProviderId,
+          error,
+        })
+        if (!cancelled) {
+          setProviderHeroMeta({
+            avatarUrl: null,
+            rating: null,
+            completedCount: 0,
+          })
+        }
+      }
+    }
+
+    void loadProviderHeroMeta()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProviderId])
 
   const flexibleRequestDurationMinutes =
     requestServiceType === 'baby_sitter'
@@ -4223,6 +4308,9 @@ export default function ClientDashboard({
                       ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
                       : t('common.provider')
                   }
+                  walkerAvatarUrl={providerHeroMeta.avatarUrl}
+                  walkerRating={providerHeroMeta.rating}
+                  completedCount={providerHeroMeta.completedCount}
                   phase={
                     flow.screenPhase === 'in_progress' ||
                     flow.screenPhase === 'arrival_confirmed' ||
@@ -5292,6 +5380,9 @@ function BurgerRecurringList({
 
 function TrackingCard({
   walkerName,
+  walkerAvatarUrl,
+  walkerRating,
+  completedCount,
   phase,
   isArrived,
   etaMinutes,
@@ -5306,6 +5397,9 @@ function TrackingCard({
   actualLabel,
 }: {
   walkerName: string
+  walkerAvatarUrl: string | null
+  walkerRating: number | null
+  completedCount: number
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
@@ -5359,10 +5453,49 @@ function TrackingCard({
       : isArrivalConfirmed
         ? t('tracking.readySubtitle')
         : t('tracking.headingToYou', { walkerName })
+  const completedTasksLabel = i18n.resolvedLanguage === 'he' ? 'משימות הושלמו' : 'completed tasks'
+  const serviceStartedLabel = i18n.resolvedLanguage === 'he' ? 'השירות התחיל' : 'Service started'
+  const serviceActiveHint = i18n.resolvedLanguage === 'he' ? 'השירות שלך פעיל עכשיו' : 'Your service is now active'
+  const ratingValue = walkerRating != null ? walkerRating.toFixed(1) : '—'
+  const etaHeroValue = formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)
 
   return (
     <div style={resolvedTrackingCardStyle}>
       <div style={{ ...trackingTopBadgeStyle, ...statusToneStyle }}>{topBadge}</div>
+      <div style={trackingHeroRowStyle}>
+        <div style={trackingHeroLeadStyle}>
+          <div style={trackingHeroAvatarWrapStyle}>
+            <ProfileAvatar
+              url={walkerAvatarUrl}
+              name={walkerName}
+              size={72}
+              borderRadius={999}
+            />
+            <span style={trackingHeroOnlineDotStyle} aria-hidden="true" />
+          </div>
+          <div style={trackingHeroCopyStyle}>
+            <div style={trackingHeroNameStyle}>{walkerName}</div>
+            <div style={trackingHeroMetaStyle}>
+              <span style={trackingHeroStarStyle}>★</span>
+              <span>{ratingValue}</span>
+              <span style={trackingHeroDotStyle}>•</span>
+              <span>
+                {completedCount} {completedTasksLabel}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={trackingHeroEtaBadgeStyle}>
+          <div style={trackingHeroEtaLabelStyle}>{t('tracking.eta')}</div>
+          <div style={trackingHeroEtaValueStyle}>{etaHeroValue}</div>
+        </div>
+      </div>
+      {isServiceActive ? (
+        <div style={trackingServiceStartedRowStyle}>
+          <span style={trackingServiceStartedPillStyle}>{serviceStartedLabel}</span>
+          <span style={trackingServiceStartedHintStyle}>{serviceActiveHint}</span>
+        </div>
+      ) : null}
       <div style={trackingTitleStyle}>{title}</div>
       {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
 
@@ -7342,6 +7475,133 @@ const trackingTopBadgeReadyStyle: React.CSSProperties = {
 const trackingTopBadgeActiveStyle: React.CSSProperties = {
   background: 'rgba(59, 130, 246, 0.14)',
   color: '#93C5FD',
+}
+
+const trackingHeroRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  alignItems: 'center',
+  gap: 12,
+}
+
+const trackingHeroLeadStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minWidth: 0,
+}
+
+const trackingHeroAvatarWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  flexShrink: 0,
+  filter: 'drop-shadow(0 10px 18px rgba(2, 6, 23, 0.18))',
+}
+
+const trackingHeroOnlineDotStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: 2,
+  bottom: 2,
+  width: 13,
+  height: 13,
+  borderRadius: '50%',
+  background: '#22C55E',
+  border: '2px solid rgba(15, 23, 42, 0.92)',
+  boxSizing: 'border-box',
+}
+
+const trackingHeroCopyStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 5,
+  minWidth: 0,
+}
+
+const trackingHeroNameStyle: React.CSSProperties = {
+  fontSize: 23,
+  fontWeight: 900,
+  color: '#F8FAFC',
+  lineHeight: 1.02,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const trackingHeroMetaStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+  fontSize: 12.5,
+  fontWeight: 700,
+  color: 'rgba(203, 213, 225, 0.88)',
+  flexWrap: 'wrap',
+}
+
+const trackingHeroStarStyle: React.CSSProperties = {
+  color: '#FBBF24',
+  fontSize: 14,
+  lineHeight: 1,
+}
+
+const trackingHeroDotStyle: React.CSSProperties = {
+  color: 'rgba(148, 163, 184, 0.64)',
+}
+
+const trackingHeroEtaBadgeStyle: React.CSSProperties = {
+  minWidth: 88,
+  minHeight: 88,
+  padding: '10px 12px',
+  borderRadius: 26,
+  border: '1px solid rgba(125, 211, 252, 0.28)',
+  background: 'linear-gradient(180deg, rgba(224,242,254,0.16) 0%, rgba(186,230,253,0.10) 100%)',
+  display: 'grid',
+  gap: 3,
+  justifyItems: 'center',
+  textAlign: 'center',
+  alignContent: 'center',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+}
+
+const trackingHeroEtaLabelStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 800,
+  color: 'rgba(186, 230, 253, 0.88)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+}
+
+const trackingHeroEtaValueStyle: React.CSSProperties = {
+  fontSize: 20,
+  fontWeight: 900,
+  color: '#F8FAFC',
+  lineHeight: 1.02,
+  fontVariantNumeric: 'tabular-nums',
+}
+
+const trackingServiceStartedRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const trackingServiceStartedPillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 28,
+  padding: '0 10px',
+  borderRadius: 999,
+  background: 'rgba(34, 197, 94, 0.14)',
+  border: '1px solid rgba(74, 222, 128, 0.16)',
+  color: '#86EFAC',
+  fontSize: 11.5,
+  fontWeight: 800,
+}
+
+const trackingServiceStartedHintStyle: React.CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: 'rgba(203, 213, 225, 0.82)',
 }
 
 const trackingTitleStyle: React.CSSProperties = {
