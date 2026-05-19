@@ -3508,6 +3508,15 @@ export function useClientFlow(profileId: string, _profileName: string) {
         response.data.paymentStatus !== 'succeeded' &&
         response.data.paymentStatus !== 'paid'
       ) {
+        console.warn('[useClientFlow] start-dispatch blocked by payment status', {
+          requestId: response.data.jobId ?? null,
+          booking_timing: effectiveBookingTiming,
+          payment_status: response.data.paymentStatus ?? null,
+          dispatch_state: null,
+          smart_dispatch_state: null,
+          startDispatchInvokeCalled: false,
+          reason: 'payment_not_ready_for_dispatch',
+        })
         throw new Error('Payment was not authorized. Please update your card and try again.')
       }
 
@@ -3750,6 +3759,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         console.log('[useClientFlow] start-dispatch invoke', {
           requestId: createdJob.id,
+          booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
+          payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+          dispatch_state: createdJob.dispatch_state ?? null,
+          smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
+          startDispatchInvokeCalled: true,
           requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
           onlineWalkerCount: allOnlineWalkers.length,
           matchingWalkerCount: matchingWalkers.length,
@@ -3758,21 +3772,24 @@ export function useClientFlow(profileId: string, _profileName: string) {
         })
 
         if (ranked.length === 0) {
-          console.warn('[useClientFlow] start-dispatch nonfatal no-candidates', {
+          console.warn('[useClientFlow] start-dispatch zero-ranked fast exhaust path', {
             profileId,
             requestId: createdJob.id,
+            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
+            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            dispatch_state: createdJob.dispatch_state ?? null,
+            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
+            startDispatchInvokeCalled: true,
             requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
             onlineWalkerCount: allOnlineWalkers.length,
             matchingWalkerCount: matchingWalkers.length,
             availableWalkerCount: availableWalkers.length,
           })
-          console.log('[useClientFlow] optimistic searching hold retained', {
-            profileId,
-            requestId: createdJob.id,
-            reason: 'no_ranked_candidates_provided',
-          })
-        } else {
-          const dispatchResult = await startDispatch({
+        }
+
+        let dispatchResult: Awaited<ReturnType<typeof startDispatch>>
+        try {
+          dispatchResult = await startDispatch({
             requestId: createdJob.id,
             rankedCandidates: ranked,
             resetExisting: true,
@@ -3780,16 +3797,41 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
           console.log('[useClientFlow] start-dispatch response', {
             requestId: createdJob.id,
+            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
+            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            dispatch_state: createdJob.dispatch_state ?? null,
+            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
+            startDispatchInvokeCalled: true,
             dispatchResult,
           })
+        } catch (dispatchError) {
+          console.error('[useClientFlow] start-dispatch error', {
+            requestId: createdJob.id,
+            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
+            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            dispatch_state: createdJob.dispatch_state ?? null,
+            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
+            startDispatchInvokeCalled: true,
+            error: dispatchError instanceof Error ? dispatchError.message : dispatchError,
+          })
+          throw dispatchError
+        }
 
-          if (!dispatchResult.ok) {
-            throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
-          }
+        if (!dispatchResult.ok) {
+          throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
         }
 
         setSuccessMessage('Searching for a walker...')
       } else {
+        console.log('[useClientFlow] start-dispatch not invoked', {
+          requestId: createdJob.id,
+          booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
+          payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+          dispatch_state: createdJob.dispatch_state ?? null,
+          smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
+          startDispatchInvokeCalled: false,
+          reason: 'booking_timing_not_asap',
+        })
         resetBookingInputs('request_created_scheduled')
         dismissedExhaustedRequestIdRef.current = null
         clearOptimisticSearching('request_created_scheduled')

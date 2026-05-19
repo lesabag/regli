@@ -32,6 +32,7 @@ const resources = {
         language: 'Language',
         cancel: 'Cancel',
         save: 'Save',
+        saved: 'Saved',
         close: 'Close',
         back: 'Back',
         date: 'Date',
@@ -191,6 +192,15 @@ const resources = {
           nonNegative: 'Please enter valid non-negative values.',
           maxItemCount: 'Max item count must be at least 1.',
         },
+      },
+      providerProfile: {
+        aboutMe: 'About me',
+        aboutMeSubtitle: 'A short introduction clients can see after you accept.',
+        aboutMePlaceholder:
+          'Tell clients a little about yourself, your experience, or what makes your service great.',
+        bioSaved: 'About me saved.',
+        bioSaveError: 'Could not save your bio.',
+        bioHint: '{{count}} / 240',
       },
       tracking: {
         eta: 'ETA',
@@ -353,6 +363,7 @@ const resources = {
         language: 'שפה',
         cancel: 'ביטול',
         save: 'שמירה',
+        saved: 'נשמר',
         close: 'סגירה',
         back: 'חזרה',
         date: 'תאריך',
@@ -516,6 +527,15 @@ const resources = {
           nonNegative: 'יש להזין ערכים תקינים שאינם שליליים.',
           maxItemCount: 'מספר הפריטים המקסימלי חייב להיות לפחות 1.',
         },
+      },
+      providerProfile: {
+        aboutMe: 'עליי בקצרה',
+        aboutMeSubtitle: 'היכרות קצרה שלקוחות יראו אחרי קבלת ההזמנה.',
+        aboutMePlaceholder:
+          'ספר ללקוחות בקצרה על עצמך, הניסיון שלך או מה מיוחד בשירות שלך.',
+        bioSaved: 'הטקסט נשמר.',
+        bioSaveError: 'לא הצלחנו לשמור את הטקסט.',
+        bioHint: '{{count}} / 240',
       },
       tracking: {
         eta: 'זמן הגעה',

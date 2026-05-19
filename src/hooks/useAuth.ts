@@ -13,6 +13,7 @@ interface Profile {
   email: string | null
   full_name: string | null
   role: ProfileRole
+  short_bio?: string | null
   primary_service?: string | null
   location_address?: string | null
   service_type?: ProfileServiceType | null

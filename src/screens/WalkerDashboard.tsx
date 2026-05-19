@@ -45,7 +45,8 @@ type AvailabilityFormRow = {
 }
 
 type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
-type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'capabilities' | 'preferredCustomers'
+type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'about' | 'capabilities' | 'preferredCustomers'
+const PROVIDER_BIO_MAX_CHARS = 80
 
 const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
 const DEFAULT_AVAILABILITY_START = '09:00'
@@ -57,6 +58,7 @@ interface WalkerDashboardProps {
     email: string | null
     full_name: string | null
     role: AppRole
+    short_bio?: string | null
     service_type?: string | null
     service_types?: string[] | null
     service_attributes?: ServiceAttributes | null
@@ -276,6 +278,14 @@ function getCustomerDisplayName(
   return isHebrew ? 'לקוח' : 'Customer'
 }
 
+function countCodePoints(value: string): number {
+  return Array.from(value).length
+}
+
+function trimToCodePoints(value: string, maxChars: number): string {
+  return Array.from(value).slice(0, maxChars).join('')
+}
+
 export default function WalkerDashboard({
   profile,
   onSignOut,
@@ -383,6 +393,10 @@ export default function WalkerDashboard({
   const [availabilitySaving, setAvailabilitySaving] = useState(false)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
+  const [providerBio, setProviderBio] = useState(profile.short_bio ?? '')
+  const [providerBioSaving, setProviderBioSaving] = useState(false)
+  const [providerBioSavedAt, setProviderBioSavedAt] = useState(0)
+  const [providerBioError, setProviderBioError] = useState<string | null>(null)
   const availabilityRowsRef = useRef(availabilityRows)
   const [expandedAvailabilityKey, setExpandedAvailabilityKey] = useState<string | null>(null)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<SettingsSectionKey, boolean>>({
@@ -390,6 +404,7 @@ export default function WalkerDashboard({
     serviceType: false,
     availability: false,
     pricing: false,
+    about: false,
     capabilities: false,
     preferredCustomers: false,
   })
@@ -428,6 +443,7 @@ export default function WalkerDashboard({
     const sa = profile.service_attributes?.baby_sitter
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
+  const providerBioCharCount = useMemo(() => countCodePoints(providerBio), [providerBio])
   const capDirty = useMemo(() => {
     const sa = profile.service_attributes ?? {}
     const dogSa = sa.dog_walker ?? {}
@@ -476,6 +492,10 @@ export default function WalkerDashboard({
   useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
+
+  useEffect(() => {
+    setProviderBio(profile.short_bio ?? '')
+  }, [profile.short_bio])
 
   useEffect(() => {
     availabilityRowsRef.current = availabilityRows
@@ -726,6 +746,62 @@ export default function WalkerDashboard({
     profile.id,
     profileServiceTypes,
   ])
+
+  const handleSaveProviderBio = useCallback(async () => {
+    if (providerBioSaving) return
+    setProviderBioSaving(true)
+    setProviderBioError(null)
+    setProviderBioSavedAt(0)
+
+    const nextBio = trimToCodePoints(providerBio.trim(), PROVIDER_BIO_MAX_CHARS)
+    console.debug('[WalkerDashboard] saving short_bio', {
+      user_id: profile.id,
+      short_bio: nextBio,
+      char_count: countCodePoints(nextBio),
+    })
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({
+        short_bio: nextBio || null,
+      })
+      .eq('id', profile.id)
+      .select('id, short_bio')
+      .maybeSingle()
+
+    console.debug('[WalkerDashboard] short_bio update result', {
+      user_id: profile.id,
+      short_bio: nextBio,
+      result: data,
+      error,
+    })
+
+    if (error) {
+      console.warn('[WalkerDashboard] failed to save short_bio:', {
+        user_id: profile.id,
+        short_bio: nextBio,
+        error,
+      })
+      setProviderBioError(error.message || t('providerProfile.bioSaveError'))
+      setProviderBioSaving(false)
+      return
+    }
+
+    if (!data?.id) {
+      console.warn('[WalkerDashboard] short_bio update returned no row', {
+        user_id: profile.id,
+        short_bio: nextBio,
+        result: data,
+      })
+      setProviderBioError(t('providerProfile.bioSaveError'))
+      setProviderBioSaving(false)
+      return
+    }
+
+    setProviderBio((data.short_bio as string | null) ?? '')
+    setProviderBioSaving(false)
+    setProviderBioSavedAt(Date.now())
+  }, [profile.id, providerBio, providerBioSaving, t])
 
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
@@ -2324,6 +2400,48 @@ export default function WalkerDashboard({
                         providerId={profile.id}
                         serviceTypes={profileServiceTypes}
                       />
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
+                      title={t('providerProfile.aboutMe')}
+                      subtitle={t('providerProfile.aboutMeSubtitle')}
+                      open={settingsSectionsOpen.about}
+                      onToggle={() => toggleSettingsSection('about')}
+                    >
+                      <div style={providerBioSectionStyle}>
+                        <textarea
+                          value={providerBio}
+                          onChange={(event) => {
+                            setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
+                            setProviderBioSavedAt(0)
+                            setProviderBioError(null)
+                          }}
+                          placeholder={t('providerProfile.aboutMePlaceholder')}
+                          style={providerBioTextareaStyle}
+                          rows={4}
+                        />
+                        <div style={providerBioFooterStyle}>
+                          <div style={providerBioCounterStyle}>
+                            {t('providerProfile.bioHint', { count: providerBioCharCount })}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveProviderBio()}
+                            disabled={providerBioSaving}
+                            style={{
+                              ...providerBioSaveButtonStyle,
+                              ...(providerBioSaving ? providerBioSaveButtonDisabledStyle : null),
+                            }}
+                          >
+                            {providerBioSaving ? t('providerPricing.saving') : t('common.save')}
+                          </button>
+                        </div>
+                        {providerBioError ? (
+                          <div style={serviceTypeStatusErrorStyle}>{providerBioError}</div>
+                        ) : providerBioSavedAt > 0 ? (
+                          <div style={serviceTypeStatusSuccessStyle}>{t('providerProfile.bioSaved')}</div>
+                        ) : null}
+                      </div>
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
@@ -3943,6 +4061,60 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: '#DC2626',
+}
+
+const providerBioSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const providerBioTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 112,
+  borderRadius: 16,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: 'rgba(255,255,255,0.96)',
+  padding: '12px 14px',
+  fontSize: 13.5,
+  lineHeight: 1.5,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  resize: 'vertical',
+  outline: 'none',
+  fontFamily: 'inherit',
+}
+
+const providerBioFooterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+}
+
+const providerBioCounterStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  color: '#64748B',
+}
+
+const providerBioSaveButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  minHeight: 34,
+  borderRadius: 12,
+  border: '1px solid rgba(15, 23, 42, 0.10)',
+  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
+  color: '#FFFFFF',
+  padding: '0 12px',
+  fontSize: 12.5,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  flexShrink: 0,
+}
+
+const providerBioSaveButtonDisabledStyle: React.CSSProperties = {
+  opacity: 0.7,
+  cursor: 'default',
 }
 
 const availabilityIntroStyle: React.CSSProperties = {

@@ -45,15 +45,12 @@ export async function startDispatch({
     throw new Error('requestId is required')
   }
 
-  if (normalizedCandidates.length === 0) {
-    throw new Error('No ranked candidates provided')
-  }
-
   console.log('[startDispatch] request:', {
     requestId: normalizedRequestId,
     timeoutSeconds,
     resetExisting,
     rankedCandidates: normalizedCandidates,
+    rankedCandidateCount: normalizedCandidates.length,
   })
 
   const response = await invokeEdgeFunction<StartDispatchResponse>('start-dispatch', {

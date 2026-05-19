@@ -211,6 +211,7 @@ serve(async (req) => {
       version: START_DISPATCH_VERSION,
       requestId,
       timeoutSeconds,
+      candidates_before_filters: rankedCandidates.length,
       rankedCandidateCount: rankedCandidates.length,
       rankedCandidateScores: rankedCandidates.slice(0, 10).map((candidate, index) =>
         buildCandidateScoreLog(candidate, index + 1)
@@ -223,21 +224,6 @@ serve(async (req) => {
         version: START_DISPATCH_VERSION,
       })
       return jsonResponse(400, { ok: false, error: 'requestId is required' }, corsHeaders)
-    }
-
-    if (rankedCandidates.length === 0) {
-      console.error('[start-dispatch] no ranked candidates', {
-        version: START_DISPATCH_VERSION,
-        requestId,
-      })
-      return jsonResponse(
-        400,
-        {
-          ok: false,
-          error: 'rankedCandidates is required and must contain at least one valid candidate',
-        },
-        corsHeaders,
-      )
     }
 
     const supabase = createAdminClient()
@@ -266,6 +252,75 @@ serve(async (req) => {
         status: requestRow.status,
       })
       return jsonResponse(409, { ok: false, error: 'request is not open' }, corsHeaders)
+    }
+
+    if (rankedCandidates.length === 0) {
+      const exhaustedMessage = 'No matching providers for service_type'
+      console.warn('[start-dispatch] no eligible providers at dispatch start', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        service_type: requestRow.service_type ?? null,
+        booking_type: requestRow.booking_timing === 'scheduled' ? 'scheduled' : 'asap',
+        budget: requestRow.price ?? null,
+        duration_minutes: requestRow.duration_minutes ?? null,
+        dog_count: requestRow.dog_count ?? 1,
+        candidates_before_filters: rankedCandidates.length,
+        candidates_after_availability_filter: 0,
+        candidates_after_pricing_filter: 0,
+        eligible_candidates_count: 0,
+        no_candidates_at_start: true,
+        pricing_filtered_count: 0,
+        availability_filtered_count: null,
+        exhausted_reason: 'no_candidates_at_start',
+      })
+
+      const { error: exhaustedUpdateError } = await supabase
+        .from('walk_requests')
+        .update({
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'exhausted',
+          smart_dispatch_last_error: exhaustedMessage,
+          smart_dispatch_expires_at: null,
+        })
+        .eq('id', requestId)
+        .eq('status', 'open')
+        .is('walker_id', null)
+
+      if (exhaustedUpdateError) {
+        console.error('[start-dispatch] failed to mark request exhausted with zero ranked candidates', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: exhaustedUpdateError.message,
+        })
+        return jsonResponse(
+          500,
+          {
+            ok: false,
+            error: 'failed to mark request exhausted',
+            details: exhaustedUpdateError.message,
+            requestId,
+          },
+          corsHeaders,
+        )
+      }
+
+      return jsonResponse(
+        200,
+        {
+          ok: true,
+          exhausted: true,
+          error: exhaustedMessage,
+          exhausted_reason: 'no_candidates_at_start',
+          noCandidatesAtStart: true,
+          candidateCount: 0,
+          requestState: {
+            dispatch_state: 'queued',
+            smart_dispatch_state: 'exhausted',
+            smart_dispatch_last_error: exhaustedMessage,
+          },
+        },
+        corsHeaders,
+      )
     }
 
     const hasDispatchReadyPaymentStatus =
@@ -625,6 +680,8 @@ serve(async (req) => {
       action: 'matching_started',
       requestServiceType: requestRow.service_type ?? null,
       normalizedProviderServiceType: requestProviderServiceType,
+      candidates_before_filters: rankedCandidates.length,
+      candidates_after_availability_filter: affinityRankedCandidates.length,
       candidateCountBeforeServiceTypeFilter: rankedCandidates.length,
       providersFoundCount: affinityRankedCandidates.length,
     })
@@ -652,10 +709,19 @@ serve(async (req) => {
       budget: requestRow.price ?? null,
       duration_minutes: requestRow.duration_minutes ?? null,
       dog_count: requestRow.dog_count ?? 1,
+      candidates_before_filters: rankedCandidates.length,
+      candidates_after_availability_filter: affinityRankedCandidates.length,
+      candidates_after_pricing_filter: pricingFilteredCandidates.length,
+      eligible_candidates_count: pricingFilteredCandidates.length,
+      no_candidates_at_start: pricingFilteredCandidates.length === 0,
       candidate_count_before_pricing_filter: affinityRankedCandidates.length,
       candidate_count_after_pricing_filter: pricingFilteredCandidates.length,
       filtered_by_price_count: pricingEligibility.filteredByPriceWalkerIds.length,
       filtered_by_multi_item_count: pricingEligibility.filteredByMultiItemWalkerIds.length,
+      availability_filtered_count:
+        rankedCandidates.length >= affinityRankedCandidates.length
+          ? rankedCandidates.length - affinityRankedCandidates.length
+          : null,
       effective_hourly_rate: pricingEligibility.effectiveHourlyRate,
       aggregated_min_hourly: pricingEligibility.aggregatedMinHourly,
       aggregated_preferred_hourly: pricingEligibility.aggregatedPreferredHourly,
@@ -677,9 +743,19 @@ serve(async (req) => {
         requestId,
         requestServiceType: requestRow.service_type,
         normalizedProviderServiceType: requestProviderServiceType,
+        candidates_before_filters: rankedCandidates.length,
+        candidates_after_availability_filter: affinityRankedCandidates.length,
+        candidates_after_pricing_filter: 0,
+        eligible_candidates_count: 0,
+        no_candidates_at_start: true,
         candidateCountBeforePricingFilter: affinityRankedCandidates.length,
         filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,
         filteredByMultiItemCount: pricingEligibility.filteredByMultiItemWalkerIds.length,
+        availabilityFilteredCount:
+          rankedCandidates.length >= affinityRankedCandidates.length
+            ? rankedCandidates.length - affinityRankedCandidates.length
+            : null,
+        exhausted_reason: 'no_candidates_at_start',
         finalRequestState: {
           dispatch_state: 'queued',
           smart_dispatch_state: 'exhausted',
@@ -723,6 +799,7 @@ serve(async (req) => {
           ok: true,
           exhausted: true,
           error: exhaustedMessage,
+          exhausted_reason: 'no_candidates_at_start',
           requestServiceType: requestRow.service_type,
           candidateCount: 0,
           filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,

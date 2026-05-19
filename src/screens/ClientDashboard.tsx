@@ -223,6 +223,7 @@ type ProviderHeroMeta = {
   avatarUrl: string | null
   rating: number | null
   completedCount: number
+  shortBio: string | null
 }
 
 interface RecurringBookingRow {
@@ -451,6 +452,7 @@ export default function ClientDashboard({
     avatarUrl: null,
     rating: null,
     completedCount: 0,
+    shortBio: null,
   })
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
@@ -2086,6 +2088,7 @@ export default function ClientDashboard({
             avatarUrl: null,
             rating: null,
             completedCount: 0,
+            shortBio: null,
           })
         }
         return
@@ -2095,7 +2098,7 @@ export default function ClientDashboard({
         const [profileResult, ratingsResult, completedResult] = await Promise.all([
           supabase
             .from('profiles')
-            .select('avatar_url')
+            .select('avatar_url, short_bio')
             .eq('id', activeProviderId)
             .maybeSingle(),
           supabase
@@ -2127,6 +2130,10 @@ export default function ClientDashboard({
               : null,
           rating: averageRating,
           completedCount: completedResult.count ?? 0,
+          shortBio:
+            profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
+              ? (profileResult.data.short_bio as string | null) ?? null
+              : null,
         })
       } catch (error) {
         console.warn('[ClientDashboard] failed to load provider hero meta', {
@@ -2138,6 +2145,7 @@ export default function ClientDashboard({
             avatarUrl: null,
             rating: null,
             completedCount: 0,
+            shortBio: null,
           })
         }
       }
@@ -4311,6 +4319,7 @@ export default function ClientDashboard({
                   walkerAvatarUrl={providerHeroMeta.avatarUrl}
                   walkerRating={providerHeroMeta.rating}
                   completedCount={providerHeroMeta.completedCount}
+                  walkerBio={providerHeroMeta.shortBio}
                   phase={
                     flow.screenPhase === 'in_progress' ||
                     flow.screenPhase === 'arrival_confirmed' ||
@@ -5383,6 +5392,7 @@ function TrackingCard({
   walkerAvatarUrl,
   walkerRating,
   completedCount,
+  walkerBio,
   phase,
   isArrived,
   etaMinutes,
@@ -5400,6 +5410,7 @@ function TrackingCard({
   walkerAvatarUrl: string | null
   walkerRating: number | null
   completedCount: number
+  walkerBio: string | null
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
@@ -5494,6 +5505,11 @@ function TrackingCard({
         <div style={trackingServiceStartedRowStyle}>
           <span style={trackingServiceStartedPillStyle}>{serviceStartedLabel}</span>
           <span style={trackingServiceStartedHintStyle}>{serviceActiveHint}</span>
+        </div>
+      ) : null}
+      {walkerBio?.trim() ? (
+        <div style={trackingBioCardStyle}>
+          <div style={trackingBioTextStyle}>{walkerBio.trim()}</div>
         </div>
       ) : null}
       <div style={trackingTitleStyle}>{title}</div>
@@ -7602,6 +7618,20 @@ const trackingServiceStartedHintStyle: React.CSSProperties = {
   fontSize: 12.5,
   fontWeight: 600,
   color: 'rgba(203, 213, 225, 0.82)',
+}
+
+const trackingBioCardStyle: React.CSSProperties = {
+  borderRadius: 18,
+  border: '1px solid rgba(148, 163, 184, 0.10)',
+  background: 'rgba(255,255,255,0.04)',
+  padding: '12px 14px',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+}
+
+const trackingBioTextStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: 'rgba(226, 232, 240, 0.90)',
 }
 
 const trackingTitleStyle: React.CSSProperties = {
