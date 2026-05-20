@@ -59,6 +59,7 @@ interface WalkerDashboardProps {
     full_name: string | null
     role: AppRole
     short_bio?: string | null
+    whatsapp_number?: string | null
     service_type?: string | null
     service_types?: string[] | null
     service_attributes?: ServiceAttributes | null
@@ -394,6 +395,7 @@ export default function WalkerDashboard({
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
   const [providerBio, setProviderBio] = useState(profile.short_bio ?? '')
+  const [providerWhatsAppNumber, setProviderWhatsAppNumber] = useState(profile.whatsapp_number ?? '')
   const [providerBioSaving, setProviderBioSaving] = useState(false)
   const [providerBioSavedAt, setProviderBioSavedAt] = useState(0)
   const [providerBioError, setProviderBioError] = useState<string | null>(null)
@@ -496,6 +498,10 @@ export default function WalkerDashboard({
   useEffect(() => {
     setProviderBio(profile.short_bio ?? '')
   }, [profile.short_bio])
+
+  useEffect(() => {
+    setProviderWhatsAppNumber(profile.whatsapp_number ?? '')
+  }, [profile.whatsapp_number])
 
   useEffect(() => {
     availabilityRowsRef.current = availabilityRows
@@ -754,9 +760,11 @@ export default function WalkerDashboard({
     setProviderBioSavedAt(0)
 
     const nextBio = trimToCodePoints(providerBio.trim(), PROVIDER_BIO_MAX_CHARS)
+    const nextWhatsAppNumber = providerWhatsAppNumber.trim()
     console.debug('[WalkerDashboard] saving short_bio', {
       user_id: profile.id,
       short_bio: nextBio,
+      whatsapp_number: nextWhatsAppNumber || null,
       char_count: countCodePoints(nextBio),
     })
 
@@ -764,14 +772,16 @@ export default function WalkerDashboard({
       .from('profiles')
       .update({
         short_bio: nextBio || null,
+        whatsapp_number: nextWhatsAppNumber || null,
       })
       .eq('id', profile.id)
-      .select('id, short_bio')
+      .select('id, short_bio, whatsapp_number')
       .maybeSingle()
 
     console.debug('[WalkerDashboard] short_bio update result', {
       user_id: profile.id,
       short_bio: nextBio,
+      whatsapp_number: nextWhatsAppNumber || null,
       result: data,
       error,
     })
@@ -780,6 +790,7 @@ export default function WalkerDashboard({
       console.warn('[WalkerDashboard] failed to save short_bio:', {
         user_id: profile.id,
         short_bio: nextBio,
+        whatsapp_number: nextWhatsAppNumber || null,
         error,
       })
       setProviderBioError(error.message || t('providerProfile.bioSaveError'))
@@ -791,6 +802,7 @@ export default function WalkerDashboard({
       console.warn('[WalkerDashboard] short_bio update returned no row', {
         user_id: profile.id,
         short_bio: nextBio,
+        whatsapp_number: nextWhatsAppNumber || null,
         result: data,
       })
       setProviderBioError(t('providerProfile.bioSaveError'))
@@ -799,9 +811,10 @@ export default function WalkerDashboard({
     }
 
     setProviderBio((data.short_bio as string | null) ?? '')
+    setProviderWhatsAppNumber((data.whatsapp_number as string | null) ?? '')
     setProviderBioSaving(false)
     setProviderBioSavedAt(Date.now())
-  }, [profile.id, providerBio, providerBioSaving, t])
+  }, [profile.id, providerBio, providerBioSaving, providerWhatsAppNumber, t])
 
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
@@ -2369,6 +2382,22 @@ export default function WalkerDashboard({
                       onToggle={() => toggleSettingsSection('about')}
                     >
                       <div style={providerBioSectionStyle}>
+                        <div style={providerBioFieldStyle}>
+                          <div style={providerBioFieldLabelStyle}>{t('providerProfile.whatsappNumber')}</div>
+                          <input
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
+                            value={providerWhatsAppNumber}
+                            onChange={(event) => {
+                              setProviderWhatsAppNumber(event.target.value)
+                              setProviderBioSavedAt(0)
+                              setProviderBioError(null)
+                            }}
+                            placeholder={t('providerProfile.whatsappNumberPlaceholder')}
+                            style={providerBioInputStyle}
+                          />
+                        </div>
                         <textarea
                           value={providerBio}
                           onChange={(event) => {
@@ -3995,6 +4024,32 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
 const providerBioSectionStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
+}
+
+const providerBioFieldStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const providerBioFieldLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#64748B',
+}
+
+const providerBioInputStyle: React.CSSProperties = {
+  width: '100%',
+  minHeight: 42,
+  borderRadius: 14,
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  background: 'rgba(255,255,255,0.96)',
+  padding: '0 14px',
+  fontSize: 13.5,
+  lineHeight: 1.4,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  outline: 'none',
+  fontFamily: 'inherit',
 }
 
 const providerBioTextareaStyle: React.CSSProperties = {

@@ -14,6 +14,7 @@ interface Profile {
   full_name: string | null
   role: ProfileRole
   short_bio?: string | null
+  whatsapp_number?: string | null
   primary_service?: string | null
   location_address?: string | null
   service_type?: ProfileServiceType | null

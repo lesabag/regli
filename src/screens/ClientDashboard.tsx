@@ -231,6 +231,8 @@ type ProviderHeroMeta = {
   rating: number | null
   completedCount: number
   shortBio: string | null
+  whatsappNumber: string | null
+  whatsappNumberRaw: string | null
 }
 
 interface RecurringBookingRow {
@@ -313,6 +315,22 @@ function formatRecurringDisplayTime(value: string | null | undefined, language: 
     minute: '2-digit',
     hour12: true,
   })
+}
+
+function normalizePhoneForLink(value: string | null | undefined): string | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const normalized = raw.replace(/[^\d+]/g, '')
+  if (!normalized) return null
+  if (normalized.startsWith('+')) return normalized
+  if (normalized.startsWith('00')) return `+${normalized.slice(2)}`
+  return normalized
+}
+
+function normalizePhoneForWhatsApp(value: string | null | undefined): string | null {
+  const normalized = normalizePhoneForLink(value)
+  if (!normalized) return null
+  return normalized.replace(/[^\d]/g, '')
 }
 
 function buildDateWheelOptions(
@@ -460,6 +478,8 @@ export default function ClientDashboard({
     rating: null,
     completedCount: 0,
     shortBio: null,
+    whatsappNumber: null,
+    whatsappNumberRaw: null,
   })
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
@@ -2096,28 +2116,56 @@ export default function ClientDashboard({
   const trackingGpsQuality: GpsQuality =
     flow.gpsQuality === 'last_known' ? 'delayed' : flow.gpsQuality
   const activeProviderId = flow.activeJob?.walker_id ?? null
+  const activeProviderWhatsAppPhone = useMemo(
+    () => normalizePhoneForWhatsApp(providerHeroMeta.whatsappNumber),
+    [providerHeroMeta.whatsappNumber],
+  )
+  const activeProviderName =
+    (flow.activeJob?.walker_id ? flow.walkerNameById.get(flow.activeJob.walker_id) : null) || t('common.provider')
+
+  useEffect(() => {
+    if (!activeProviderId) return
+    console.debug('[ClientDashboard] provider communication meta', {
+      providerId: activeProviderId,
+      providerPhoneRaw: providerHeroMeta.whatsappNumberRaw,
+      normalizedProviderPhone: activeProviderWhatsAppPhone,
+      provider_phone_available: !!activeProviderWhatsAppPhone,
+    })
+  }, [activeProviderId, activeProviderWhatsAppPhone, providerHeroMeta.whatsappNumberRaw])
+
+  const handleWhatsAppProvider = useCallback(() => {
+    console.debug('[ClientDashboard] whatsapp_clicked', {
+      provider_phone_available: !!activeProviderWhatsAppPhone,
+      providerId: activeProviderId,
+    })
+    if (!activeProviderWhatsAppPhone || typeof window === 'undefined') return
+    const message = `Hi ${activeProviderName}, regarding the current Regli booking 😊`
+    window.location.href = `https://wa.me/${activeProviderWhatsAppPhone}?text=${encodeURIComponent(message)}`
+  }, [activeProviderId, activeProviderName, activeProviderWhatsAppPhone])
 
   useEffect(() => {
     let cancelled = false
 
     async function loadProviderHeroMeta() {
-      if (!activeProviderId) {
-        if (!cancelled) {
-          setProviderHeroMeta({
-            avatarUrl: null,
-            rating: null,
-            completedCount: 0,
-            shortBio: null,
-          })
+        if (!activeProviderId) {
+          if (!cancelled) {
+            setProviderHeroMeta({
+              avatarUrl: null,
+              rating: null,
+              completedCount: 0,
+              shortBio: null,
+              whatsappNumber: null,
+              whatsappNumberRaw: null,
+            })
+          }
+          return
         }
-        return
-      }
 
       try {
         const [profileResult, ratingsResult, completedResult] = await Promise.all([
           supabase
             .from('profiles')
-            .select('avatar_url, short_bio')
+            .select('*')
             .eq('id', activeProviderId)
             .maybeSingle(),
           supabase
@@ -2142,6 +2190,19 @@ export default function ClientDashboard({
             ? Math.round((validRatings.reduce((sum, value) => sum + value, 0) / validRatings.length) * 10) / 10
             : null
 
+        const providerWhatsAppRaw =
+          profileResult.error == null && profileResult.data
+            ? (('whatsapp_number' in profileResult.data
+                ? (profileResult.data.whatsapp_number as string | null)
+                : 'phone' in profileResult.data
+                  ? (profileResult.data.phone as string | null)
+                : 'phone_number' in profileResult.data
+                  ? (profileResult.data.phone_number as string | null)
+                  : 'mobile' in profileResult.data
+                    ? (profileResult.data.mobile as string | null)
+                    : null) ?? null)
+            : null
+
         setProviderHeroMeta({
           avatarUrl:
             profileResult.error == null && profileResult.data && 'avatar_url' in profileResult.data
@@ -2153,6 +2214,8 @@ export default function ClientDashboard({
             profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
               ? (profileResult.data.short_bio as string | null) ?? null
               : null,
+          whatsappNumber: providerWhatsAppRaw,
+          whatsappNumberRaw: providerWhatsAppRaw,
         })
       } catch (error) {
         console.warn('[ClientDashboard] failed to load provider hero meta', {
@@ -2165,6 +2228,8 @@ export default function ClientDashboard({
             rating: null,
             completedCount: 0,
             shortBio: null,
+            whatsappNumber: null,
+            whatsappNumberRaw: null,
           })
         }
       }
@@ -4388,6 +4453,7 @@ export default function ClientDashboard({
                   walkerRating={providerHeroMeta.rating}
                   completedCount={providerHeroMeta.completedCount}
                   walkerBio={providerHeroMeta.shortBio}
+                  whatsappAvailable={!!activeProviderWhatsAppPhone}
                   phase={
                     flow.screenPhase === 'in_progress' ||
                     flow.screenPhase === 'arrival_confirmed' ||
@@ -4401,6 +4467,7 @@ export default function ClientDashboard({
                   distanceMeters={flow.distanceMeters}
                   gpsQuality={trackingGpsQuality}
                   activeTitle={t('tracking.walkInProgress')}
+                  onWhatsApp={handleWhatsAppProvider}
                   onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                   confirmingArrival={flow.arrivalConfirming}
                   elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
@@ -5490,6 +5557,7 @@ function TrackingCard({
   walkerRating,
   completedCount,
   walkerBio,
+  whatsappAvailable,
   phase,
   isArrived,
   etaMinutes,
@@ -5497,6 +5565,7 @@ function TrackingCard({
   distanceMeters,
   gpsQuality,
   activeTitle,
+  onWhatsApp,
   onConfirmArrival,
   confirmingArrival,
   elapsedLabel,
@@ -5508,6 +5577,7 @@ function TrackingCard({
   walkerRating: number | null
   completedCount: number
   walkerBio: string | null
+  whatsappAvailable: boolean
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
@@ -5515,6 +5585,7 @@ function TrackingCard({
   distanceMeters: number | null
   gpsQuality: GpsQuality
   activeTitle: string
+  onWhatsApp?: () => void
   onConfirmArrival?: () => void
   confirmingArrival?: boolean
   elapsedLabel: string | null
@@ -5608,6 +5679,22 @@ function TrackingCard({
         <div style={trackingBioCardStyle}>
           <div style={trackingBioTextStyle}>{walkerBio.trim()}</div>
         </div>
+      ) : null}
+      {whatsappAvailable ? (
+        <button
+          type="button"
+          onClick={onWhatsApp}
+          style={{
+            ...trackingCommunicationSingleWrapStyle,
+            ...trackingCommunicationButtonStyle,
+            ...trackingCommunicationButtonLightStyle,
+          }}
+        >
+          <span style={trackingCommunicationButtonInnerStyle}>
+            <span style={trackingCommunicationWhatsAppDotStyle} aria-hidden="true" />
+            <span>{t('tracking.whatsapp')}</span>
+          </span>
+        </button>
       ) : null}
       <div style={trackingTitleStyle}>{title}</div>
       {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
@@ -7729,6 +7816,46 @@ const trackingBioTextStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.5,
   color: 'rgba(226, 232, 240, 0.90)',
+}
+
+const trackingCommunicationSingleWrapStyle: React.CSSProperties = {
+  width: '100%',
+  justifySelf: 'center',
+  maxWidth: 240,
+}
+
+const trackingCommunicationButtonStyle: React.CSSProperties = {
+  minHeight: 38,
+  borderRadius: 14,
+  width: '100%',
+  border: '1px solid rgba(191, 219, 254, 0.26)',
+  background: 'rgba(255,255,255,0.14)',
+  color: '#F8FAFC',
+  fontSize: 12.5,
+  fontWeight: 800,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  transition: 'transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease',
+}
+
+const trackingCommunicationButtonInnerStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+}
+
+const trackingCommunicationWhatsAppDotStyle: React.CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: 999,
+  background: '#22C55E',
+  boxShadow: '0 0 0 4px rgba(34, 197, 94, 0.16)',
+  flexShrink: 0,
+}
+
+const trackingCommunicationButtonLightStyle: React.CSSProperties = {
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10), 0 8px 18px rgba(15, 23, 42, 0.10)',
 }
 
 const trackingTitleStyle: React.CSSProperties = {

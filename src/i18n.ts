@@ -199,6 +199,8 @@ const resources = {
         aboutMeSubtitle: 'A short introduction clients can see after you accept.',
         aboutMePlaceholder:
           'Tell clients a little about yourself, your experience, or what makes your service great.',
+        whatsappNumber: 'WhatsApp number',
+        whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'About me saved.',
         bioSaveError: 'Could not save your bio.',
         bioHint: '{{count}} / 240',
@@ -224,6 +226,7 @@ const resources = {
         providerWithYou: '{{walkerName}} is with you',
         confirmArrival: 'Confirm arrival',
         confirmingArrival: 'Confirming...',
+        whatsapp: 'WhatsApp',
         arrived: 'Arrived',
         here: 'Here',
         live: 'Live',
@@ -535,6 +538,8 @@ const resources = {
         aboutMeSubtitle: 'היכרות קצרה שלקוחות יראו אחרי קבלת ההזמנה.',
         aboutMePlaceholder:
           'ספר ללקוחות בקצרה על עצמך, הניסיון שלך או מה מיוחד בשירות שלך.',
+        whatsappNumber: 'מספר וואטסאפ',
+        whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'הטקסט נשמר.',
         bioSaveError: 'לא הצלחנו לשמור את הטקסט.',
         bioHint: '{{count}} / 240',
@@ -560,6 +565,7 @@ const resources = {
         providerWithYou: '{{walkerName}} איתכם',
         confirmArrival: 'אישור הגעה',
         confirmingArrival: 'מאשרים...',
+        whatsapp: 'וואטסאפ',
         arrived: 'הגיע',
         here: 'כאן',
         live: 'חי',
