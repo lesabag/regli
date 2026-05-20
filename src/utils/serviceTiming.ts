@@ -36,6 +36,22 @@ export function formatDurationFromMinutes(minutes: number | null | undefined): s
   return `${safe} min`
 }
 
+export function formatElapsedDurationFromSeconds(seconds: number | null | undefined): string | null {
+  if (seconds == null || Number.isNaN(seconds)) return null
+
+  const safe = Math.max(0, Math.floor(seconds))
+
+  if (safe < 60) return `${safe} sec`
+
+  const totalMinutes = Math.floor(safe / 60)
+  if (totalMinutes < 60) return `${totalMinutes} min`
+
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (minutes <= 0) return `${hours} h`
+  return `${hours} h ${minutes} min`
+}
+
 export function getElapsedSeconds(
   startedAt: string | null | undefined,
   completedAt?: string | null | undefined,
@@ -54,8 +70,7 @@ export function getElapsedSeconds(
 export function getDurationSummary(input: DurationSummaryInput): DurationSummary {
   const elapsedSeconds = getElapsedSeconds(input.startedAt, input.completedAt, input.now)
   const plannedLabel = formatDurationFromMinutes(input.plannedMinutes ?? null)
-  const actualLabel =
-    elapsedSeconds == null ? null : formatDurationFromMinutes(Math.round(elapsedSeconds / 60))
+  const actualLabel = formatElapsedDurationFromSeconds(elapsedSeconds)
 
   return {
     elapsedSeconds,

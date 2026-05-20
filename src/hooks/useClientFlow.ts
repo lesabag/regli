@@ -73,6 +73,13 @@ type CompletionJob = {
   jobId: string
   walkerName: string
   walkerId: string | null
+  durationMinutes?: number | null
+  serviceStartedAt?: string | null
+  serviceCompletedAt?: string | null
+  price?: number | null
+  paymentStatus?: WalkRequestRow['payment_status']
+  dogCount?: number | null
+  serviceType?: string | null
 } | null
 
 type TipJob = {
@@ -611,6 +618,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [availabilityNotice, setAvailabilityNotice] = useState<AvailabilityNotice>(null)
   const [bookingComposerResetKey, setBookingComposerResetKey] = useState(0)
+  const [bookingComposerResetReason, setBookingComposerResetReason] = useState<string | null>(null)
 
   const [gpsQualityBase, setGpsQualityBase] = useState<GpsQuality>('live')
   const [completionJob, setCompletionJob] = useState<CompletionJob>(null)
@@ -1752,6 +1760,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setBookingTiming('asap')
     setScheduledFor(getNowPlus15LocalInput())
     _setDuration('20min')
+    setBookingComposerResetReason(reason)
     setBookingComposerResetKey((current) => current + 1)
   }, [bookingTiming, duration, profileId, scheduledFor])
 
@@ -2514,6 +2523,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
                 jobId: updated.id,
                 walkerId: updated.walker_id,
                 walkerName: walkerLabel,
+                durationMinutes: updated.duration_minutes ?? null,
+                serviceStartedAt: updated.service_started_at ?? null,
+                serviceCompletedAt: updated.service_completed_at ?? null,
+                price: updated.price ?? null,
+                paymentStatus: updated.payment_status ?? null,
+                dogCount: updated.dog_count ?? null,
+                serviceType: updated.service_type ?? null,
               })
             }
           }
@@ -2887,6 +2903,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
           jobId: pending.jobId,
           walkerId: pending.walkerId,
           walkerName: pending.walkerName,
+          durationMinutes: completedJob?.duration_minutes ?? fallbackJob?.duration_minutes ?? null,
+          serviceStartedAt: completedJob?.service_started_at ?? fallbackJob?.service_started_at ?? null,
+          serviceCompletedAt: completedJob?.service_completed_at ?? fallbackJob?.service_completed_at ?? null,
+          price: completedJob?.price ?? fallbackJob?.price ?? null,
+          paymentStatus: completedJob?.payment_status ?? fallbackJob?.payment_status ?? null,
+          dogCount: completedJob?.dog_count ?? fallbackJob?.dog_count ?? null,
+          serviceType: completedJob?.service_type ?? fallbackJob?.service_type ?? null,
         })
       }
 
@@ -3214,9 +3237,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
         walkerName: walkerLabel,
       })
       setCompletionJob(null)
+      resetBookingComposerAfterCompletion()
       void fetchCurrentAndLists()
     },
-    [completionJob, completedJobs, profileId, walkerNameById, fetchCurrentAndLists],
+    [completionJob, completedJobs, profileId, walkerNameById, fetchCurrentAndLists, resetBookingComposerAfterCompletion],
   )
 
   const dismissCompletion = useCallback(() => {
@@ -3247,6 +3271,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
       return null
     })
+    resetBookingComposerAfterCompletion()
   }, [profileId, resetBookingComposerAfterCompletion])
 
   const submitTip = useCallback(
@@ -3955,6 +3980,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     scheduledMinInput,
     scheduledSummary,
     bookingComposerResetKey,
+    bookingComposerResetReason,
 
     loading,
     error,

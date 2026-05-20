@@ -2277,10 +2277,24 @@ export default function ClientDashboard({
     ],
   )
   const completionJobDetails = useMemo(
-    () =>
-      flow.completionJob
-        ? flow.completedJobs.find((job) => job.id === flow.completionJob?.jobId) ?? null
-        : null,
+    () => {
+      if (!flow.completionJob) return null
+      const completedJob =
+        flow.completedJobs.find((job) => job.id === flow.completionJob?.jobId) ?? null
+
+      if (completedJob) return completedJob
+
+      return {
+        id: flow.completionJob.jobId,
+        dog_count: flow.completionJob.dogCount ?? null,
+        duration_minutes: flow.completionJob.durationMinutes ?? null,
+        service_started_at: flow.completionJob.serviceStartedAt ?? null,
+        service_completed_at: flow.completionJob.serviceCompletedAt ?? null,
+        price: flow.completionJob.price ?? null,
+        payment_status: flow.completionJob.paymentStatus ?? null,
+        service_type: flow.completionJob.serviceType ?? null,
+      }
+    },
     [flow.completedJobs, flow.completionJob],
   )
   const completionDurationSummary = useMemo(
@@ -2296,6 +2310,28 @@ export default function ClientDashboard({
       completionJobDetails?.service_completed_at,
     ],
   )
+
+  useEffect(() => {
+    if (!flow.completionJob) return
+    const startedTs = completionJobDetails?.service_started_at ? new Date(completionJobDetails.service_started_at).getTime() : null
+    const completedTs = completionJobDetails?.service_completed_at ? new Date(completionJobDetails.service_completed_at).getTime() : null
+    const diffSeconds =
+      startedTs != null && completedTs != null && !Number.isNaN(startedTs) && !Number.isNaN(completedTs)
+        ? Math.max(0, Math.floor((completedTs - startedTs) / 1000))
+        : null
+    console.debug('[ClientDashboard] completion card duration', {
+      service_started_at: completionJobDetails?.service_started_at ?? null,
+      service_completed_at: completionJobDetails?.service_completed_at ?? null,
+      computedDiffSeconds: diffSeconds,
+      computedActualDurationLabel: completionDurationSummary.actualLabel ?? '—',
+    })
+  }, [
+    completionDurationSummary.actualLabel,
+    completionJobDetails?.service_completed_at,
+    completionJobDetails?.service_started_at,
+    flow.completionJob,
+  ])
+
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
     if (completionJobDetails?.payment_status === 'paid') {
@@ -2322,16 +2358,17 @@ export default function ClientDashboard({
         value: localizeMinuteUnitLabel(completionDurationSummary.plannedLabel) || completionDurationSummary.plannedLabel,
       })
     }
+    rows.push({
+      label: t('completion.actualDuration'),
+      value:
+        localizeMinuteUnitLabel(completionDurationSummary.actualLabel) ||
+        completionDurationSummary.actualLabel ||
+        '—',
+    })
     if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
       rows.push({
         label: isRtl ? 'Dogs' : 'Dogs',
         value: formatDogCountLabel(completionJobDetails.dog_count ?? 1, { isHebrew: isRtl }),
-      })
-    }
-    if (completionDurationSummary.actualLabel) {
-      rows.push({
-        label: t('tracking.actual'),
-        value: localizeMinuteUnitLabel(completionDurationSummary.actualLabel) || completionDurationSummary.actualLabel,
       })
     }
     return rows
@@ -2931,19 +2968,33 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!flow.bookingComposerResetKey) return
+    const shouldClearPricing =
+      flow.bookingComposerResetReason === 'request_created_asap' ||
+      flow.bookingComposerResetReason === 'request_created_scheduled' ||
+      flow.bookingComposerResetReason === 'completion'
+
     setBabysitterDurationHours(String(BABYSITTER_DEFAULT_DURATION_HOURS))
-    setBabysitterBudgetFixed(String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
+    setBabysitterBudgetFixed(shouldClearPricing ? '0' : String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
     setDogWalkerDurationHours(String(DOG_WALKER_DEFAULT_DURATION_HOURS))
-    setDogWalkerBudgetFixed(String(DOG_WALKER_DEFAULT_BUDGET_ILS))
+    setDogWalkerBudgetFixed(shouldClearPricing ? '0' : String(DOG_WALKER_DEFAULT_BUDGET_ILS))
     const nextDraft = clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput())
     setScheduleDraft(nextDraft)
     setRepeatStartTime(splitScheduledDraft(nextDraft).time)
     setMatchingUiState(null)
     console.log('[ClientDashboard] booking composer reset applied', {
       bookingComposerResetKey: flow.bookingComposerResetKey,
+      bookingComposerResetReason: flow.bookingComposerResetReason,
+      pricingCleared: shouldClearPricing,
       requestServiceType: effectiveRequestServiceType,
     })
-  }, [effectiveRequestServiceType, flow.bookingComposerResetKey])
+    if (shouldClearPricing && flow.bookingComposerResetReason === 'completion') {
+      console.debug('[ClientDashboard] budget reset after completion', {
+        babysitterBudgetFixed: 0,
+        dogWalkerBudgetFixed: 0,
+        requestServiceType: effectiveRequestServiceType,
+      })
+    }
+  }, [effectiveRequestServiceType, flow.bookingComposerResetKey, flow.bookingComposerResetReason])
   const bookingSubjectLabel = isBabySitterMode
     ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.inputLabel)
@@ -5822,6 +5873,10 @@ function localizeMinuteUnitLabel(value: string | null | undefined): string | nul
   if (i18n.resolvedLanguage !== 'he') return value
 
   return value
+    .replace(/\bsec\b/gi, 'שנ׳')
+    .replace(/\bsecs\b/gi, 'שנ׳')
+    .replace(/\bseconds\b/gi, 'שנ׳')
+    .replace(/\bsecond\b/gi, 'שנ׳')
     .replace(/\bmin\b/gi, 'דק׳')
     .replace(/\bmins\b/gi, 'דק׳')
     .replace(/\bminutes\b/gi, 'דק׳')

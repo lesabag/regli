@@ -918,10 +918,30 @@ export default function WalkerDashboard({
   )
 
   const completionJobDetails = useMemo(
-    () =>
-      flow.completionSuccess
-        ? flow.completedJobs.find((job) => job.id === flow.completionSuccess?.jobId) ?? null
-        : null,
+    () => {
+      if (!flow.completionSuccess) return null
+      const completedJob =
+        flow.completedJobs.find((job) => job.id === flow.completionSuccess?.jobId) ?? null
+
+      if (completedJob) return completedJob
+
+      return {
+        id: flow.completionSuccess.jobId,
+        client: flow.completionSuccess.clientId
+          ? {
+              id: flow.completionSuccess.clientId,
+              full_name: flow.completionSuccess.clientName ?? null,
+              email: null,
+            }
+          : null,
+        dog_name: flow.completionSuccess.dogName ?? null,
+        dog_count: flow.completionSuccess.dogCount ?? null,
+        duration_minutes: flow.completionSuccess.durationMinutes ?? null,
+        service_started_at: flow.completionSuccess.serviceStartedAt ?? null,
+        service_completed_at: flow.completionSuccess.serviceCompletedAt ?? null,
+        service_type: flow.completionSuccess.serviceType ?? null,
+      }
+    },
     [flow.completedJobs, flow.completionSuccess],
   )
 
@@ -939,6 +959,27 @@ export default function WalkerDashboard({
     ],
   )
 
+  useEffect(() => {
+    if (!flow.completionSuccess) return
+    const startedTs = completionJobDetails?.service_started_at ? new Date(completionJobDetails.service_started_at).getTime() : null
+    const completedTs = completionJobDetails?.service_completed_at ? new Date(completionJobDetails.service_completed_at).getTime() : null
+    const diffSeconds =
+      startedTs != null && completedTs != null && !Number.isNaN(startedTs) && !Number.isNaN(completedTs)
+        ? Math.max(0, Math.floor((completedTs - startedTs) / 1000))
+        : null
+    console.debug('[WalkerDashboard] completion card duration', {
+      service_started_at: completionJobDetails?.service_started_at ?? null,
+      service_completed_at: completionJobDetails?.service_completed_at ?? null,
+      computedDiffSeconds: diffSeconds,
+      computedActualDurationLabel: completionDurationSummary.actualLabel ?? '—',
+    })
+  }, [
+    completionDurationSummary.actualLabel,
+    completionJobDetails?.service_completed_at,
+    completionJobDetails?.service_started_at,
+    flow.completionSuccess,
+  ])
+
   const completionMetaRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = []
     if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
@@ -950,9 +991,10 @@ export default function WalkerDashboard({
     if (completionDurationSummary.plannedLabel) {
       rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
     }
-    if (completionDurationSummary.actualLabel) {
-      rows.push({ label: 'Actual', value: completionDurationSummary.actualLabel })
-    }
+    rows.push({
+      label: isHebrew ? 'משך בפועל' : 'Actual duration',
+      value: completionDurationSummary.actualLabel || '—',
+    })
     return rows
   }, [
     completionDurationSummary.actualLabel,

@@ -400,6 +400,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     dogName: string
     earnings: number | null
     clientName: string
+    dogCount?: number | null
+    durationMinutes?: number | null
+    serviceStartedAt?: string | null
+    serviceCompletedAt?: string | null
+    serviceType?: string | null
   } | null>(null)
   const [completionBlockedJob] = useState<WalkRequestRow | null>(null)
   const [completionPaymentError] = useState<{
@@ -878,6 +883,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         dogName: pendingCompletion.dog_name || 'the dog',
         earnings: pendingCompletion.walker_earnings,
         clientName: pendingCompletion.client?.full_name || pendingCompletion.client?.email || 'Client',
+        dogCount: pendingCompletion.dog_count ?? null,
+        durationMinutes: pendingCompletion.duration_minutes ?? null,
+        serviceStartedAt: pendingCompletion.service_started_at ?? null,
+        serviceCompletedAt: pendingCompletion.service_completed_at ?? null,
+        serviceType: pendingCompletion.service_type ?? null,
       }
 
       if (
@@ -885,7 +895,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         prev.clientId === next.clientId &&
         prev.dogName === next.dogName &&
         prev.earnings === next.earnings &&
-        prev.clientName === next.clientName
+        prev.clientName === next.clientName &&
+        prev.dogCount === next.dogCount &&
+        prev.durationMinutes === next.durationMinutes &&
+        prev.serviceStartedAt === next.serviceStartedAt &&
+        prev.serviceCompletedAt === next.serviceCompletedAt &&
+        prev.serviceType === next.serviceType
       ) {
         return prev
       }
@@ -914,6 +929,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       dogName: confirmed.dog_name || 'the dog',
       earnings: confirmed.walker_earnings,
       clientName: confirmed.client?.full_name || confirmed.client?.email || 'Client',
+      dogCount: confirmed.dog_count ?? null,
+      durationMinutes: confirmed.duration_minutes ?? null,
+      serviceStartedAt: confirmed.service_started_at ?? null,
+      serviceCompletedAt: confirmed.service_completed_at ?? null,
+      serviceType: confirmed.service_type ?? null,
     })
   }, [pendingClientConfirmation, completedJobs, myJobs, showStateMessage])
 
