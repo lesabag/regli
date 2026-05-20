@@ -78,7 +78,7 @@ interface WalkRequestRow {
     | 'exhausted'
     | 'cancelled'
     | null
-  client?: { id: string; full_name: string | null; email: string | null } | null
+  client?: { id: string; full_name: string | null; email: string | null; avatar_url?: string | null } | null
 }
 
 interface DispatchOfferRow {
@@ -124,6 +124,7 @@ interface DispatchOfferRow {
     | null
   client_full_name: string | null
   client_email: string | null
+  client_avatar_url?: string | null
 }
 
 interface DispatchCandidateRow {
@@ -981,7 +982,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setError(null)
 
     const selectFields =
-      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email)'
+      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email, avatar_url)'
 
     const now = new Date().toISOString()
     let acceptedJobsFromAttempts: WalkRequestRow[] = []
@@ -1009,6 +1010,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         request_id: offer.request_id,
         offer_id: offer.id,
         dog_count: offer.dog_count ?? null,
+      })))
+      console.debug('[useWalkerFlow] raw active_dispatch_offers client avatar', offers.map((offer) => ({
+        request_id: offer.request_id,
+        client_id: offer.client_id ?? null,
+        client_name: offer.client_full_name ?? offer.client_email ?? null,
+        client_avatar_raw: offer.client_avatar_url ?? null,
       })))
     }
 
@@ -1065,8 +1072,42 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             smart_dispatch_state: request.smart_dispatch_state ?? offer.smart_dispatch_state,
             client_full_name: request.client?.full_name ?? offer.client_full_name,
             client_email: request.client?.email ?? offer.client_email,
+            client_avatar_url: request.client?.avatar_url ?? offer.client_avatar_url ?? null,
           }
         })
+      }
+    }
+
+    const offerClientIds = [...new Set(offers.map((offer) => offer.client_id).filter((value): value is string => !!value))]
+    if (offerClientIds.length > 0) {
+      const { data: offerClientProfilesData, error: offerClientProfilesErr } = await supabase
+        .from('profiles')
+        .select('id, avatar_url')
+        .in('id', offerClientIds)
+
+      if (offerClientProfilesErr) {
+        console.warn('[useWalkerFlow] offer client avatar lookup unavailable:', offerClientProfilesErr.message)
+      } else {
+        const avatarByClientId = new Map(
+          (((offerClientProfilesData as Array<{ id: string; avatar_url: string | null }> | null) ?? []).map((row) => [
+            row.id,
+            row.avatar_url ?? null,
+          ])),
+        )
+
+        offers = offers.map((offer) => ({
+          ...offer,
+          client_avatar_url: avatarByClientId.get(offer.client_id ?? '') ?? offer.client_avatar_url ?? null,
+        }))
+
+        console.debug('[useWalkerFlow] resolved incoming offer client avatar', offers.map((offer) => ({
+          request_id: offer.request_id,
+          client_id: offer.client_id ?? null,
+          client_name: offer.client_full_name ?? offer.client_email ?? null,
+          client_avatar_raw: offer.client_avatar_url ?? null,
+          resolved_client_avatar: offer.client_avatar_url ?? null,
+          fallback_used: !offer.client_avatar_url,
+        })))
       }
     }
 
@@ -1187,6 +1228,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               smart_dispatch_state: request?.smart_dispatch_state ?? 'dispatching',
               client_full_name: request?.client?.full_name ?? null,
               client_email: request?.client?.email ?? null,
+              client_avatar_url: request?.client?.avatar_url ?? null,
             }
           })
           .filter((offer): offer is DispatchOfferRow => offer !== null)
@@ -1267,6 +1309,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         id: offer.client_id ?? '',
         full_name: offer.client_full_name,
         email: offer.client_email,
+        avatar_url: offer.client_avatar_url ?? null,
       },
     })).sort((a, b) => {
       const aOffer = offerRows.find((o) => o.request_id === a.id)

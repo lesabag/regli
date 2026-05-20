@@ -128,6 +128,17 @@ function parseBabysitterNotes(notes: string | null | undefined): {
   return parsed
 }
 
+function getDisplayServiceNote(serviceType: string | null | undefined, notes: string | null | undefined): string | null {
+  if (!notes || hasProviderIssue(notes)) return null
+
+  if (serviceType === 'baby_sitter') {
+    return parseBabysitterNotes(notes).details
+  }
+
+  const trimmed = notes.trim()
+  return trimmed || null
+}
+
 function formatMoney(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   return `₪${Math.round(value).toLocaleString()}`
@@ -857,6 +868,27 @@ export default function WalkerDashboard({
       label: requestDogCountLabel,
     })
   }, [requestDogCountLabel, topOffer?.dog_count, topRequest])
+
+  useEffect(() => {
+    if (!topRequest) return
+    const clientName = getCustomerDisplayName(
+      {
+        client: topRequest.client ?? null,
+        clientName: topRequest.client?.full_name || topRequest.client?.email || null,
+        dogName: topRequest.dog_name || null,
+      },
+      isHebrew,
+    )
+    const resolvedClientAvatar = topRequest.client?.avatar_url ?? null
+
+    console.debug('[WalkerDashboard] incoming request client avatar', {
+      client_id: topRequest.client_id ?? topRequest.client?.id ?? null,
+      client_name: clientName,
+      client_avatar_raw: topRequest.client?.avatar_url ?? null,
+      resolved_client_avatar: resolvedClientAvatar,
+      fallback_used: !resolvedClientAvatar,
+    })
+  }, [isHebrew, topRequest])
 
   useEffect(() => {
     const runningService = !!activeJob?.service_started_at && !activeJob?.service_completed_at
@@ -2732,213 +2764,222 @@ export default function WalkerDashboard({
 
           {flow.screenState === 'waiting' && renderHomeDashboard(true)}
 
-          {flow.screenState === 'on_the_way' && onTheWayJob && (
-            <div className="sheet-state-enter" style={activeCardStyle}>
-              <div style={activeHeaderRowStyle}>
-                <div style={onTheWayBadgeStyle}>
-                  <div style={onTheWayBadgeDotStyle} />
-                  {flow.screenPhase === 'arrived_pending_confirmation'
-                    ? 'Waiting for client confirmation'
-                    : flow.screenPhase === 'arrival_confirmed'
-                      ? 'Arrival confirmed'
-                      : 'Head to the client'}
-                </div>
-              </div>
+          {(flow.screenState === 'on_the_way' && onTheWayJob) || (flow.screenState === 'active' && activeJob) ? (() => {
+            const missionJob = flow.screenState === 'active' ? activeJob : onTheWayJob
+            if (!missionJob) return null
 
-              <h3 style={activeDogNameStyle}>{onTheWayJob.dog_name || 'Dog'}</h3>
-              <p style={activeClientStyle}>
-                {isHebrew ? 'עבור ' : 'for '}
-                {getCustomerDisplayName(
-                  {
-                    client: onTheWayJob.client ?? null,
-                    clientName: onTheWayJob.client?.full_name || onTheWayJob.client?.email || null,
-                    dogName: onTheWayJob.dog_name || null,
-                  },
-                  isHebrew,
+            const isMissionActive = flow.screenState === 'active'
+            const missionHasProviderIssue = isMissionActive ? activeJobHasProviderIssue : onTheWayJobHasProviderIssue
+            const missionCustomerName = getCustomerDisplayName(
+              {
+                client: missionJob.client ?? null,
+                clientName: missionJob.client?.full_name || missionJob.client?.email || null,
+                dogName: missionJob.dog_name || null,
+              },
+              isHebrew,
+            )
+            const missionDogCountLabel = isDogServiceType(missionJob.service_type)
+              ? formatDogCountLabel(missionJob.dog_count ?? 1, { isHebrew })
+              : null
+            const missionAddress = missionJob.location ? formatShortAddress(missionJob.address || missionJob.location) : null
+            const missionNote = getDisplayServiceNote(missionJob.service_type, missionJob.notes)
+
+            const missionStatusLabel = isMissionActive
+              ? activeLabels.activeTitle
+              : flow.screenPhase === 'arrived_pending_confirmation'
+                ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for confirmation')
+                : flow.screenPhase === 'arrival_confirmed'
+                  ? (isHebrew ? 'הגעת ללקוח' : 'Arrived')
+                  : (isHebrew ? 'בדרך ללקוח' : 'On the way')
+
+            const missionHeadline = isMissionActive
+              ? (missionJob.dog_name || (isHebrew ? 'השירות פעיל' : 'Service is live'))
+              : missionJob.dog_name || (isHebrew ? 'משימה פעילה' : 'Live mission')
+
+            const missionSubline = isMissionActive
+              ? (isHebrew ? 'השירות פעיל כעת' : 'Your service is now active')
+              : flow.screenPhase === 'arrival_confirmed'
+                ? (isHebrew ? 'אפשר להתחיל את השירות' : 'Ready to start the service')
+                : flow.screenPhase === 'arrived_pending_confirmation'
+                  ? (isHebrew ? 'ממתין לאישור הלקוח כדי להתחיל' : 'Waiting for client confirmation to start')
+                  : (isHebrew ? 'נווט אל הלקוח והכן את השירות' : 'Head to the client and prepare the service')
+
+            const missionProgressStep = isMissionActive
+              ? 3
+              : flow.screenPhase === 'arrival_confirmed' || flow.screenPhase === 'arrived_pending_confirmation'
+                ? 2
+                : 1
+
+            const missionMetaItems = isMissionActive
+              ? [
+                  activeDurationSummary.elapsedLabel
+                    ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
+                    : null,
+                  activeDurationSummary.plannedLabel
+                    ? { label: isHebrew ? 'מתוכנן' : 'Planned', value: activeDurationSummary.plannedLabel }
+                    : null,
+                  activeDurationSummary.actualLabel
+                    ? { label: isHebrew ? 'בפועל' : 'Actual', value: activeDurationSummary.actualLabel }
+                    : null,
+                ].filter(Boolean) as Array<{ label: string; value: string }>
+              : [
+                  missionJob.duration_minutes
+                    ? { label: isHebrew ? 'משך' : 'Duration', value: durationFromMinutes(missionJob.duration_minutes) }
+                    : null,
+                  missionDogCountLabel ? { label: isHebrew ? 'פרטים' : 'Details', value: missionDogCountLabel } : null,
+                ].filter(Boolean) as Array<{ label: string; value: string }>
+
+            const missionCtaDisabled = isMissionActive
+              ? flow.completingJobId === missionJob.id ||
+                flow.pendingClientConfirmation === missionJob.id ||
+                !activeJobCanComplete
+              : flow.screenPhase === 'arrived_pending_confirmation'
+
+            const missionCtaLabel = isMissionActive
+              ? flow.completingJobId === missionJob.id
+                ? (isHebrew ? 'מסיים...' : 'Completing...')
+                : flow.pendingClientConfirmation === missionJob.id
+                  ? t('completion.walkerWaiting')
+                  : activeJobCanComplete
+                    ? walkerCompleteServiceLabel
+                    : (isHebrew ? 'זמין במועד השירות' : 'Available at dispatch time')
+              : flow.screenPhase === 'on_the_way'
+                ? (isHebrew ? 'הגעתי' : 'Confirm arrival')
+                : flow.screenPhase === 'arrival_confirmed'
+                  ? walkerStartServiceLabel
+                  : (isHebrew ? 'ממתין ללקוח' : 'Waiting for client')
+
+            const missionSupportTitle = missionHasProviderIssue
+              ? (isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review')
+              : flow.screenPhase === 'arrived_pending_confirmation'
+                ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client confirmation')
+                : (isHebrew ? 'מוכן לשלב הבא' : 'Ready for the next step')
+
+            const missionSupportBody = missionHasProviderIssue
+              ? (
+                  isHebrew
+                    ? 'השירות חסום כרגע עד לעדכון מצוות התמיכה.'
+                    : 'This mission is temporarily blocked until support reviews the request.'
+                )
+              : flow.screenPhase === 'arrived_pending_confirmation'
+                ? (isHebrew ? 'השירות יתחיל ברגע שהלקוח יאשר שהגעת.' : 'The service can start as soon as the client confirms you are with them.')
+                : (isHebrew ? 'הכול מוכן. אפשר להתקדם לשלב הבא.' : 'Everything is ready. You can move to the next step.')
+
+            return (
+              <div className="sheet-state-enter" style={activeCardStyle}>
+                <div style={activeHeaderRowStyle}>
+                  <div style={isMissionActive ? activeBadgeStyle : onTheWayBadgeStyle}>
+                    <div style={isMissionActive ? activeBadgeDotStyle : onTheWayBadgeDotStyle} />
+                    {missionStatusLabel}
+                  </div>
+                </div>
+
+                <div style={missionProgressStyle}>
+                  {[1, 2, 3].map((step) => (
+                    <span
+                      key={step}
+                      style={{
+                        ...missionProgressSegmentStyle,
+                        opacity: step <= missionProgressStep ? 1 : 0.28,
+                      }}
+                    />
+                  ))}
+                </div>
+
+                <div style={missionHeroStackStyle}>
+                  <h3 style={activeDogNameStyle}>{missionHeadline}</h3>
+                  <p style={missionSublineStyle}>{missionSubline}</p>
+                  <p style={activeClientStyle}>
+                    {isHebrew ? 'עבור ' : 'for '}
+                    {missionCustomerName}
+                    {missionDogCountLabel ? ` · ${missionDogCountLabel}` : ''}
+                  </p>
+                </div>
+
+                {missionAddress && (
+                  <div style={activeLocationStyle}>
+                    <div style={missionInfoLabelStyle}>{isHebrew ? 'מיקום הלקוח' : 'Client location'}</div>
+                    <span style={ellipsisStyle}>{missionAddress}</span>
+                  </div>
                 )}
-                {isDogServiceType(onTheWayJob.service_type) ? ` · ${formatDogCountLabel(onTheWayJob.dog_count ?? 1, { isHebrew })}` : ''}
-              </p>
 
-              {onTheWayJob.location && (
-                <div style={activeLocationStyle}>
-                  <span style={ellipsisStyle}>{formatShortAddress(onTheWayJob.address || onTheWayJob.location)}</span>
-                </div>
-              )}
-
-              {(flow.screenPhase === 'arrived_pending_confirmation' || flow.screenPhase === 'arrival_confirmed') && (
-                <div style={waitingStateStyle}>
-                  <div style={waitingStateTitleStyle}>
-                    {onTheWayJobHasProviderIssue
-                      ? (isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review')
-                      : flow.screenPhase === 'arrived_pending_confirmation'
-                      ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client to confirm arrival')
-                      : (isHebrew ? 'הגעה אושרה' : 'Arrival confirmed')}
+                {missionNote && (
+                  <div style={missionNotesStyle}>
+                    <div style={missionInfoLabelStyle}>{isHebrew ? 'הערות שירות' : 'Service notes'}</div>
+                    <div style={missionNotesBodyStyle}>{missionNote}</div>
                   </div>
-                  <div style={waitingStateBodyStyle}>
-                    {onTheWayJobHasProviderIssue
-                      ? (
-                          isHebrew
-                            ? 'השירות חסום כרגע. דיווחת על בעיה והבקשה ממתינה לבדיקה של צוות התמיכה.'
-                            : 'Service is blocked right now. You reported an issue and the request is waiting for support review.'
-                        )
-                      : flow.screenPhase === 'arrived_pending_confirmation'
-                      ? (isHebrew ? 'השירות יתחיל ברגע שהלקוח יאשר שהגעת.' : 'The service can start as soon as the client confirms you are with them.')
-                      : (isHebrew ? 'אפשר להתחיל את השירות.' : 'You can start the service now.')}
-                  </div>
-                  {onTheWayJobHasProviderIssue ? (
-                    <div style={reportIssueFeedbackStyle}>
-                      {isHebrew ? 'השירות יישאר מושהה עד לעדכון מהתמיכה.' : 'The service will stay paused until support updates the request.'}
-                    </div>
-                  ) : reportIssueFeedback ? (
-                    <div style={reportIssueFeedbackStyle}>
-                      {reportIssueFeedback}
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setReportIssueOpen(true)}
-                      disabled={reportIssueSubmitting}
-                      style={reportIssueBtnStyle}
-                    >
-                      {isHebrew ? 'דיווח על בעיה' : 'Report an issue'}
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {(!onTheWayJobHasProviderIssue || flow.screenPhase === 'on_the_way') && (
-                <button
-                  onClick={async () => {
-                    await hapticSuccess()
-                    if (flow.screenPhase === 'on_the_way') {
-                      void flow.markArrived(onTheWayJob.id)
-                      return
-                    }
-                    void flow.startService(onTheWayJob.id)
-                  }}
-                  disabled={flow.screenPhase === 'arrived_pending_confirmation'}
-                  style={completeBtnStyle}
-                >
-                  {flow.screenPhase === 'on_the_way'
-                    ? 'Arrived'
-                    : flow.screenPhase === 'arrival_confirmed'
-                      ? walkerStartServiceLabel
-                      : 'Waiting for client'}
-                </button>
-              )}
-            </div>
-          )}
-
-          {flow.screenState === 'active' && activeJob && (
-            <div className="sheet-state-enter" style={activeCardStyle}>
-              <div style={activeHeaderRowStyle}>
-                <div style={activeBadgeStyle}>
-                  <div style={activeBadgeDotStyle} />
-                  {activeLabels.activeTitle}
-                </div>
-              </div>
-
-              <h3 style={activeDogNameStyle}>{activeJob.dog_name || 'Dog'}</h3>
-              <p style={activeClientStyle}>
-                {isHebrew ? 'עבור ' : 'for '}
-                {getCustomerDisplayName(
-                  {
-                    client: activeJob.client ?? null,
-                    clientName: activeJob.client?.full_name || activeJob.client?.email || null,
-                    dogName: activeJob.dog_name || null,
-                  },
-                  isHebrew,
                 )}
-                {isDogServiceType(activeJob.service_type) ? ` · ${formatDogCountLabel(activeJob.dog_count ?? 1, { isHebrew })}` : ''}
-              </p>
 
-              {activeJob.location && (
-                <div style={activeLocationStyle}>
-                  <span style={ellipsisStyle}>{formatShortAddress(activeJob.address || activeJob.location)}</span>
-                </div>
-              )}
-
-              {flow.completionPaymentError?.jobId === activeJob.id && (
-                <div style={completionPaymentErrorStyle}>
-                  {flow.completionPaymentError.message}
-                </div>
-              )}
-
-              {activeJobHasProviderIssue && (
-                <div style={waitingStateStyle}>
-                  <div style={waitingStateTitleStyle}>
-                    {isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review'}
+                {flow.completionPaymentError?.jobId === missionJob.id && (
+                  <div style={completionPaymentErrorStyle}>
+                    {flow.completionPaymentError.message}
                   </div>
-                  <div style={waitingStateBodyStyle}>
-                    {isHebrew
-                      ? 'השירות חסום עד שהבקשה תיבדק ותקבל עדכון מצוות התמיכה.'
-                      : 'Service is blocked until support reviews the request and sends an update.'}
+                )}
+
+                {missionMetaItems.length > 0 && (
+                  <div style={serviceTimerPanelStyle}>
+                    {missionMetaItems.map((item) => (
+                      <div key={item.label} style={missionMetaCardStyle}>
+                        <span style={serviceTimerLabelStyle}>{item.label}</span>
+                        <span style={serviceTimerValueStyle}>{item.value}</span>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {(activeDurationSummary.elapsedLabel ||
-                activeDurationSummary.plannedLabel ||
-                activeDurationSummary.actualLabel) && (
-                <div style={serviceTimerPanelStyle}>
-                  {activeDurationSummary.elapsedLabel && (
-                    <div style={serviceTimerPrimaryRowStyle}>
-                      <span style={serviceTimerLabelStyle}>Elapsed</span>
-                      <span style={serviceTimerValueStyle}>{activeDurationSummary.elapsedLabel}</span>
-                    </div>
-                  )}
-                  {(activeDurationSummary.plannedLabel || activeDurationSummary.actualLabel) && (
-                    <div style={serviceTimerMetaRowStyle}>
-                      {activeDurationSummary.plannedLabel && (
-                        <span style={serviceTimerMetaStyle}>Planned: {activeDurationSummary.plannedLabel}</span>
-                      )}
-                      {activeDurationSummary.actualLabel && (
-                        <span style={serviceTimerMetaStyle}>Actual: {activeDurationSummary.actualLabel}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+                {(missionHasProviderIssue || flow.screenPhase === 'arrived_pending_confirmation' || flow.screenPhase === 'arrival_confirmed') && (
+                  <div style={waitingStateStyle}>
+                    <div style={waitingStateTitleStyle}>{missionSupportTitle}</div>
+                    <div style={waitingStateBodyStyle}>{missionSupportBody}</div>
+                    {missionHasProviderIssue ? (
+                      <div style={reportIssueFeedbackStyle}>
+                        {isHebrew ? 'המשימה תישאר מושהית עד לעדכון מהתמיכה.' : 'The mission will stay paused until support updates the request.'}
+                      </div>
+                    ) : reportIssueFeedback ? (
+                      <div style={reportIssueFeedbackStyle}>
+                        {reportIssueFeedback}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setReportIssueOpen(true)}
+                        disabled={reportIssueSubmitting}
+                        style={reportIssueBtnStyle}
+                      >
+                        {isHebrew ? 'דיווח על בעיה' : 'Report an issue'}
+                      </button>
+                    )}
+                  </div>
+                )}
 
-              {!activeJobHasProviderIssue && (
-                <button
-                  onClick={async () => {
-                    await hapticSuccess()
-                    void flow.handleComplete(activeJob.id)
-                  }}
-                  disabled={
-                    flow.completingJobId === activeJob.id ||
-                    flow.pendingClientConfirmation === activeJob.id ||
-                    !activeJobCanComplete
-                  }
-                  style={{
-                    ...completeBtnStyle,
-                    ...(flow.pendingClientConfirmation === activeJob.id ? pendingConfirmationBtnStyle : null),
-                    opacity:
-                      flow.completingJobId === activeJob.id ||
-                      flow.pendingClientConfirmation === activeJob.id ||
-                      !activeJobCanComplete
-                        ? 0.7
-                        : 1,
-                    cursor:
-                      flow.completingJobId === activeJob.id ||
-                      flow.pendingClientConfirmation === activeJob.id ||
-                      !activeJobCanComplete
-                        ? 'not-allowed'
-                        : 'pointer',
-                  }}
-                >
-                  {flow.completingJobId === activeJob.id
-                    ? 'Completing...'
-                    : flow.pendingClientConfirmation === activeJob.id
-                      ? t('completion.walkerWaiting')
-                      : activeJobCanComplete
-                        ? walkerCompleteServiceLabel
-                        : 'Available at dispatch time'}
-                </button>
-              )}
-            </div>
-          )}
+                {(!missionHasProviderIssue || (!isMissionActive && flow.screenPhase === 'on_the_way')) && (
+                  <button
+                    onClick={async () => {
+                      await hapticSuccess()
+                      if (isMissionActive) {
+                        void flow.handleComplete(missionJob.id)
+                        return
+                      }
+                      if (flow.screenPhase === 'on_the_way') {
+                        void flow.markArrived(missionJob.id)
+                        return
+                      }
+                      void flow.startService(missionJob.id)
+                    }}
+                    disabled={missionCtaDisabled}
+                    style={{
+                      ...completeBtnStyle,
+                      ...(isMissionActive && flow.pendingClientConfirmation === missionJob.id ? pendingConfirmationBtnStyle : null),
+                      opacity: missionCtaDisabled ? 0.72 : 1,
+                      cursor: missionCtaDisabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {missionCtaLabel}
+                  </button>
+                )}
+              </div>
+            )
+          })() : null}
 
           </div>
         </div>
@@ -2972,9 +3013,39 @@ export default function WalkerDashboard({
             </div>
 
             <div style={incomingMainCardStyle}>
+              <div style={incomingClientHeroStyle}>
+                <ProfileAvatar
+                  name={getCustomerDisplayName(
+                    {
+                      client: topRequest.client ?? null,
+                      clientName: topRequest.client?.full_name || topRequest.client?.email || null,
+                      dogName: topRequest.dog_name || null,
+                    },
+                    isHebrew,
+                  )}
+                  url={topRequest.client?.avatar_url ?? null}
+                  size={58}
+                />
+                <div style={incomingClientHeroBodyStyle}>
+                  <div style={incomingClientHeroNameStyle}>
+                    {getCustomerDisplayName(
+                      {
+                        client: topRequest.client ?? null,
+                        clientName: topRequest.client?.full_name || topRequest.client?.email || null,
+                        dogName: topRequest.dog_name || null,
+                      },
+                      isHebrew,
+                    )}
+                  </div>
+                  <div style={incomingClientHeroMetaStyle}>
+                    {isHebrew ? 'לקוח פעיל' : 'Active client'}
+                  </div>
+                </div>
+              </div>
+
               <div style={incomingInfoCardStyle}>
                 <div style={incomingInfoLabelStyle}>
-                  {isBabysitterRequest ? (isHebrew ? 'פרטי שירות' : 'Service details') : (isHebrew ? 'שם הזמנה' : 'Order name')}
+                  {isBabysitterRequest ? (isHebrew ? 'פרטי שירות' : 'Service details') : (isHebrew ? 'שם' : 'Name')}
                 </div>
                 <div style={dogNameStyle}>
                   {isBabysitterRequest
@@ -3009,7 +3080,7 @@ export default function WalkerDashboard({
                   <span style={incomingMetaLabelStyle}>
                     {isBabysitterRequest ? (isHebrew ? 'תקציב לקוח' : 'Client budget') : t('booking.priceLabel')}
                   </span>
-                  <span style={{ ...incomingMetaValueStyle, color: '#15803D' }}>
+                  <span style={incomingPriceValueStyle}>
                     {requestPrice !== '—' ? requestPrice : isBabysitterRequest ? babysitterRequestNotes.budget || '—' : '—'}
                   </span>
                 </div>
@@ -4870,20 +4941,29 @@ const walletSetupButtonPulseAndNudgeStyle: React.CSSProperties = {
 }
 
 const activeCardStyle: React.CSSProperties = {
-  padding: '20px',
-  borderRadius: 28,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 14px 40px rgba(15,23,42,0.06)',
+  position: 'fixed',
+  left: 18,
+  right: 18,
+  bottom: 'calc(12px + env(safe-area-inset-bottom))',
+  width: 'auto',
+  maxWidth: 560,
+  margin: '0 auto',
+  zIndex: 34,
+  padding: '18px',
+  borderRadius: 30,
+  background: 'linear-gradient(180deg, rgba(8,15,33,0.98) 0%, rgba(14,23,43,0.98) 100%)',
+  border: '1px solid rgba(96, 165, 250, 0.12)',
+  boxShadow: '0 24px 52px rgba(2,6,23,0.34), inset 0 1px 0 rgba(255,255,255,0.04)',
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  marginBottom: 'calc(10px + env(safe-area-inset-bottom))',
+  gap: 14,
 }
 
 const activeHeaderRowStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
+  alignItems: 'center',
 }
 
 const activeBadgeStyle: React.CSSProperties = {
@@ -4892,17 +4972,20 @@ const activeBadgeStyle: React.CSSProperties = {
   gap: 8,
   padding: '8px 12px',
   borderRadius: 999,
-  background: '#ECFDF5',
-  color: '#166534',
+  background: 'rgba(34, 197, 94, 0.14)',
+  color: '#BBF7D0',
   fontSize: 12,
   fontWeight: 800,
+  letterSpacing: 0.2,
+  boxShadow: 'inset 0 0 0 1px rgba(74, 222, 128, 0.18)',
 }
 
 const activeBadgeDotStyle: React.CSSProperties = {
   width: 8,
   height: 8,
   borderRadius: 999,
-  background: '#16A34A',
+  background: '#4ADE80',
+  boxShadow: '0 0 0 6px rgba(74, 222, 128, 0.16)',
 }
 
 const onTheWayBadgeStyle: React.CSSProperties = {
@@ -4911,71 +4994,123 @@ const onTheWayBadgeStyle: React.CSSProperties = {
   gap: 8,
   padding: '8px 12px',
   borderRadius: 999,
-  background: '#EFF6FF',
-  color: '#1D4ED8',
+  background: 'rgba(59, 130, 246, 0.16)',
+  color: '#BFDBFE',
   fontSize: 12,
   fontWeight: 800,
+  letterSpacing: 0.2,
+  boxShadow: 'inset 0 0 0 1px rgba(96, 165, 250, 0.16)',
 }
 
 const onTheWayBadgeDotStyle: React.CSSProperties = {
   width: 8,
   height: 8,
   borderRadius: 999,
-  background: '#2563EB',
+  background: '#60A5FA',
+  boxShadow: '0 0 0 6px rgba(96, 165, 250, 0.14)',
+}
+
+const missionProgressStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 8,
+}
+
+const missionProgressSegmentStyle: React.CSSProperties = {
+  height: 4,
+  borderRadius: 999,
+  background: 'linear-gradient(90deg, rgba(96,165,250,0.92) 0%, rgba(56,189,248,0.92) 100%)',
+  transition: 'opacity 180ms ease',
+}
+
+const missionHeroStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
 }
 
 const activeDogNameStyle: React.CSSProperties = {
-  margin: '14px 0 4px',
+  margin: 0,
   fontSize: 24,
   fontWeight: 800,
+  color: '#F8FAFC',
+}
+
+const missionSublineStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  fontWeight: 700,
+  color: 'rgba(191, 219, 254, 0.94)',
 }
 
 const activeClientStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 15,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.82)',
   fontWeight: 700,
 }
 
 const activeLocationStyle: React.CSSProperties = {
-  marginTop: 12,
   padding: '14px 16px',
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  background: 'rgba(15, 23, 42, 0.62)',
+  border: '1px solid rgba(148, 163, 184, 0.14)',
+  color: '#F8FAFC',
+  display: 'grid',
+  gap: 6,
+}
+
+const missionInfoLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  color: 'rgba(148, 163, 184, 0.86)',
+  letterSpacing: 0.4,
+  textTransform: 'uppercase',
+}
+
+const missionNotesStyle: React.CSSProperties = {
+  padding: '14px 16px',
+  borderRadius: 18,
+  background: 'rgba(15, 23, 42, 0.42)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  display: 'grid',
+  gap: 6,
+}
+
+const missionNotesBodyStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.55,
+  color: 'rgba(226, 232, 240, 0.88)',
 }
 
 const completionPaymentErrorStyle: React.CSSProperties = {
-  marginTop: 12,
   padding: '12px 14px',
   borderRadius: 16,
-  background: '#FEF2F2',
-  border: '1px solid #FECACA',
-  color: '#991B1B',
+  background: 'rgba(127, 29, 29, 0.32)',
+  border: '1px solid rgba(248, 113, 113, 0.22)',
+  color: '#FECACA',
   fontSize: 13,
   fontWeight: 700,
   lineHeight: 1.45,
 }
 
 const waitingStateStyle: React.CSSProperties = {
-  marginTop: 12,
   padding: '14px 16px',
-  borderRadius: 16,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  borderRadius: 18,
+  background: 'rgba(15, 23, 42, 0.5)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
   display: 'grid',
-  gap: 4,
+  gap: 6,
 }
 
 const waitingStateTitleStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const waitingStateBodyStyle: React.CSSProperties = {
   fontSize: 13,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.82)',
   lineHeight: 1.45,
 }
 
@@ -4986,69 +5121,62 @@ const ellipsisStyle: React.CSSProperties = {
 }
 
 const completeBtnStyle: React.CSSProperties = {
-  width: 'min(100%, 224px)',
-  minHeight: 48,
-  alignSelf: 'center',
+  width: '100%',
+  minHeight: 56,
+  alignSelf: 'stretch',
   flexShrink: 0,
-  borderRadius: 16,
-  border: 'none',
-  background: '#08153B',
+  borderRadius: 20,
+  border: '1px solid rgba(125, 211, 252, 0.12)',
+  background: 'linear-gradient(180deg, #17306D 0%, #0D1E49 100%)',
   color: '#FFFFFF',
   fontSize: 15,
   fontWeight: 800,
   cursor: 'pointer',
-  marginTop: 16,
-  padding: '12px 18px',
+  padding: '14px 18px',
   lineHeight: 1.2,
   boxSizing: 'border-box',
   WebkitTapHighlightColor: 'transparent',
+  boxShadow: '0 18px 34px rgba(29, 78, 216, 0.22)',
 }
 
 const pendingConfirmationBtnStyle: React.CSSProperties = {
-  background: '#F59E0B',
+  background: 'linear-gradient(180deg, #F59E0B 0%, #D97706 100%)',
   color: '#FFFFFF',
+  border: '1px solid rgba(251, 191, 36, 0.28)',
 }
 
 const serviceTimerPanelStyle: React.CSSProperties = {
-  marginTop: 14,
-  borderRadius: 18,
+  borderRadius: 20,
   background: 'transparent',
-  border: '1px solid rgba(148, 163, 184, 0.10)',
-  padding: '14px 16px',
   display: 'grid',
-  gap: 8,
-}
-
-const serviceTimerPrimaryRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+  gap: 10,
 }
 
 const serviceTimerLabelStyle: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: 11,
   fontWeight: 700,
-  color: 'rgba(148, 163, 184, 0.82)',
+  color: 'rgba(148, 163, 184, 0.9)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.35,
 }
 
 const serviceTimerValueStyle: React.CSSProperties = {
-  fontSize: 18,
+  fontSize: 17,
   fontWeight: 800,
   color: '#F8FAFC',
   fontVariantNumeric: 'tabular-nums',
 }
 
-const serviceTimerMetaRowStyle: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 10,
-}
-
-const serviceTimerMetaStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  color: 'rgba(203, 213, 225, 0.84)',
+const missionMetaCardStyle: React.CSSProperties = {
+  minHeight: 66,
+  borderRadius: 18,
+  background: 'rgba(15, 23, 42, 0.54)',
+  border: '1px solid rgba(96, 165, 250, 0.12)',
+  padding: '12px 14px',
+  display: 'grid',
+  alignContent: 'space-between',
+  gap: 8,
 }
 
 const checkStyle: React.CSSProperties = {
@@ -5081,11 +5209,11 @@ const completionSubStyle: React.CSSProperties = {
 
 const reportIssueBtnStyle: React.CSSProperties = {
   width: '100%',
-  minHeight: 36,
-  borderRadius: 10,
-  border: '1px solid rgba(220, 38, 38, 0.25)',
-  background: '#FEF2F2',
-  color: '#B91C1C',
+  minHeight: 40,
+  borderRadius: 12,
+  border: '1px solid rgba(248, 113, 113, 0.22)',
+  background: 'rgba(127, 29, 29, 0.2)',
+  color: '#FCA5A5',
   fontSize: 12,
   fontWeight: 700,
   fontFamily: 'inherit',
@@ -5097,9 +5225,8 @@ const reportIssueBtnStyle: React.CSSProperties = {
 const reportIssueFeedbackStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
-  color: '#16A34A',
+  color: '#93C5FD',
   textAlign: 'center',
-  marginTop: 8,
 }
 
 const dismissBtnStyle: React.CSSProperties = {
@@ -5132,11 +5259,12 @@ const bottomSheetStyle: React.CSSProperties = {
   left: 0,
   right: 0,
   bottom: 0,
-  background: '#FFFFFF',
+  background: 'linear-gradient(180deg, rgba(8,15,33,0.99) 0%, rgba(14,23,43,0.99) 100%)',
   borderTopLeftRadius: 28,
   borderTopRightRadius: 28,
   padding: '18px 18px calc(18px + env(safe-area-inset-bottom))',
-  boxShadow: '0 -18px 60px rgba(15,23,42,0.16)',
+  boxShadow: '0 -24px 70px rgba(2,6,23,0.45)',
+  borderTop: '1px solid rgba(96, 165, 250, 0.12)',
 }
 
 const sheetHeaderStyle: React.CSSProperties = {
@@ -5154,25 +5282,26 @@ const incomingSheetTitleWrapStyle: React.CSSProperties = {
 const newRequestLabelStyle: React.CSSProperties = {
   fontSize: 20,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const incomingSheetSubtitleStyle: React.CSSProperties = {
   fontSize: 13,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.8)',
   fontWeight: 700,
 }
 
 const countdownLabelStyle: React.CSSProperties = {
   fontSize: 16,
   fontWeight: 900,
+  color: '#F8FAFC',
 }
 
 const progressTrackStyle: React.CSSProperties = {
   marginTop: 12,
   height: 6,
   borderRadius: 999,
-  background: '#E2E8F0',
+  background: 'rgba(148, 163, 184, 0.22)',
   overflow: 'hidden',
 }
 
@@ -5184,25 +5313,51 @@ const progressFillStyle: React.CSSProperties = {
 }
 
 const dogNameStyle: React.CSSProperties = {
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#F8FAFC',
 }
 
 const incomingMainCardStyle: React.CSSProperties = {
   marginTop: 16,
   padding: 18,
   borderRadius: 24,
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  boxShadow: '0 12px 26px rgba(15,23,42,0.08)',
+  background: 'rgba(15, 23, 42, 0.52)',
+  border: '1px solid rgba(96, 165, 250, 0.12)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+}
+
+const incomingClientHeroStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  marginBottom: 14,
+}
+
+const incomingClientHeroBodyStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 4,
+}
+
+const incomingClientHeroNameStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+  color: '#F8FAFC',
+  lineHeight: 1.2,
+}
+
+const incomingClientHeroMetaStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: 'rgba(191, 219, 254, 0.82)',
 }
 
 const incomingInfoCardStyle: React.CSSProperties = {
   padding: '14px 16px',
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  background: 'rgba(8, 15, 33, 0.5)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
   display: 'grid',
   gap: 6,
 }
@@ -5210,7 +5365,7 @@ const incomingInfoCardStyle: React.CSSProperties = {
 const incomingInfoLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.86)',
   letterSpacing: '0.05em',
   textTransform: 'uppercase',
 }
@@ -5219,8 +5374,9 @@ const reqLocationStyle: React.CSSProperties = {
   marginTop: 10,
   padding: '14px 16px',
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  background: 'rgba(8, 15, 33, 0.5)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
+  color: '#F8FAFC',
 }
 
 const incomingMetaRowStyle: React.CSSProperties = {
@@ -5233,8 +5389,8 @@ const incomingMetaRowStyle: React.CSSProperties = {
 const incomingMetaCardStyle: React.CSSProperties = {
   padding: '12px 14px',
   borderRadius: 18,
-  background: '#F8FAFC',
-  border: '1px solid #E2E8F0',
+  background: 'rgba(8, 15, 33, 0.5)',
+  border: '1px solid rgba(148, 163, 184, 0.12)',
   display: 'grid',
   gap: 4,
 }
@@ -5242,22 +5398,32 @@ const incomingMetaCardStyle: React.CSSProperties = {
 const incomingMetaLabelStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 800,
-  color: '#64748B',
+  color: 'rgba(148, 163, 184, 0.86)',
   letterSpacing: '0.05em',
   textTransform: 'uppercase',
 }
 
 const incomingMetaValueStyle: React.CSSProperties = {
   fontSize: 15,
-  color: '#0F172A',
+  color: '#F8FAFC',
   fontWeight: 800,
+}
+
+const incomingPriceValueStyle: React.CSSProperties = {
+  ...incomingMetaValueStyle,
+  fontSize: 24,
+  lineHeight: 1.05,
+  color: '#4ADE80',
+  fontWeight: 900,
+  letterSpacing: -0.3,
 }
 
 const queueHintStyle: React.CSSProperties = {
   marginTop: 12,
   fontSize: 12,
-  color: '#64748B',
+  color: 'rgba(203, 213, 225, 0.76)',
   fontWeight: 700,
+  textAlign: 'center',
 }
 
 const ctaContainerStyle: React.CSSProperties = {
@@ -5268,22 +5434,23 @@ const ctaContainerStyle: React.CSSProperties = {
 }
 
 const acceptBtnStyle: React.CSSProperties = {
-  minHeight: 52,
+  minHeight: 54,
   borderRadius: 18,
-  border: 'none',
-  background: '#08153B',
+  border: '1px solid rgba(125, 211, 252, 0.12)',
+  background: 'linear-gradient(180deg, #17306D 0%, #0D1E49 100%)',
   color: '#FFFFFF',
   fontSize: 16,
   fontWeight: 800,
   cursor: 'pointer',
+  boxShadow: '0 18px 34px rgba(29, 78, 216, 0.2)',
 }
 
 const declineBtnStyle: React.CSSProperties = {
-  minHeight: 52,
+  minHeight: 54,
   borderRadius: 18,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#334155',
+  border: '1px solid rgba(148, 163, 184, 0.2)',
+  background: 'rgba(15, 23, 42, 0.62)',
+  color: '#E2E8F0',
   fontSize: 16,
   fontWeight: 800,
   cursor: 'pointer',
