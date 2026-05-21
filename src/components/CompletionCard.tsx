@@ -232,9 +232,9 @@ export default function CompletionCard({
 const cardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
-  borderRadius: 30,
-  minHeight: 300,
-  padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
+  borderRadius: '30px 30px 0 0',
+  minHeight: 276,
+  padding: '12px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
   width: '100%',
   boxSizing: 'border-box',
   textAlign: 'center',
@@ -251,7 +251,7 @@ const checkStyle: React.CSSProperties = {
   background: '#DCFCE7',
   display: 'grid',
   placeItems: 'center',
-  margin: '0 auto 16px',
+  margin: '0 auto 12px',
   animation: 'checkmarkPop 0.5s ease-out 0.15s both',
 }
 
@@ -264,7 +264,7 @@ const titleStyle: React.CSSProperties = {
 }
 
 const subtitleStyle: React.CSSProperties = {
-  margin: '0 0 20px',
+  margin: '0 0 14px',
   fontSize: 14,
   color: 'rgba(203, 213, 225, 0.86)',
   lineHeight: 1.4,
@@ -342,7 +342,7 @@ const favoriteIconStyle: React.CSSProperties = {
 
 const ratingContainerStyle: React.CSSProperties = {
   marginTop: 4,
-  padding: '18px 16px 16px',
+  padding: '14px 14px 12px',
   background: 'transparent',
   borderRadius: 16,
   border: '1px solid rgba(148, 163, 184, 0.10)',
@@ -380,7 +380,7 @@ const textareaStyle: React.CSSProperties = {
 }
 
 const buttonsContainerStyle: React.CSSProperties = {
-  marginTop: 18,
+  marginTop: 14,
   display: 'flex',
   flexDirection: 'column',
   gap: 8,

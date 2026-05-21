@@ -7609,7 +7609,7 @@ const completionOverlayStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
-  padding: '14px 0 env(safe-area-inset-bottom)',
+  padding: '0 0 env(safe-area-inset-bottom)',
   boxSizing: 'border-box',
   pointerEvents: 'auto',
   overflow: 'hidden',
@@ -7640,8 +7640,8 @@ const pendingConfirmCardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   borderRadius: '30px 30px 0 0',
-  minHeight: 300,
-  padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
+  minHeight: 356,
+  padding: '16px 14px calc(16px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -7713,16 +7713,19 @@ const pendingRejectBtnStyle: React.CSSProperties = {
 
 const tipCardStyle: React.CSSProperties = {
   position: 'relative',
-  borderRadius: 30,
+  width: '100%',
+  minHeight: 326,
+  borderRadius: '30px 30px 0 0',
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   boxShadow: '0 20px 40px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255,255,255,0.04)',
   backdropFilter: 'blur(24px)',
   WebkitBackdropFilter: 'blur(24px)',
-  padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
+  padding: '16px 14px calc(16px + env(safe-area-inset-bottom, 0px))',
   display: 'grid',
   gap: 12,
   textAlign: 'center',
+  boxSizing: 'border-box',
 }
 
 const tipIconStyle: React.CSSProperties = {
