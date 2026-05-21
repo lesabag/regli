@@ -22,6 +22,7 @@ import {
 } from '../lib/serviceTypes'
 import {
   applyDogCountPricing,
+  getGuidanceServiceTypeAliases,
   getBudgetGuidance,
   getBudgetGuidanceFromProviderPreferences,
   getInitialSuggestedBudgetILS,
@@ -115,6 +116,44 @@ function splitScheduledDraft(value: string): { date: string; time: string } {
 function mergeScheduledDraft(datePart: string, timePart: string): string {
   if (!datePart || !timePart) return ''
   return `${datePart}T${timePart}`
+}
+
+type ClientBookingBudgetDraft = {
+  babysitterBudgetFixed?: string
+  dogWalkerBudgetFixed?: string
+}
+
+function clientBookingDraftStorageKey(profileId: string): string {
+  return `regli_client_last_booking_${profileId}`
+}
+
+function readClientBookingBudgetDraft(profileId: string): ClientBookingBudgetDraft | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(clientBookingDraftStorageKey(profileId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as ClientBookingBudgetDraft
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function mergeClientBookingBudgetDraft(profileId: string, patch: ClientBookingBudgetDraft): void {
+  if (typeof window === 'undefined') return
+  try {
+    const key = clientBookingDraftStorageKey(profileId)
+    const current = readClientBookingBudgetDraft(profileId) ?? {}
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        ...current,
+        ...patch,
+      }),
+    )
+  } catch {
+    // noop
+  }
 }
 
 function safeScrollTo(el: HTMLElement | null, options: ScrollToOptions): void {
@@ -473,6 +512,8 @@ export default function ClientDashboard({
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
   const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
   const [providerPricingPreferences, setProviderPricingPreferences] = useState<ProviderPricingPreferenceInput[]>([])
+  const [budgetDraftHydrated, setBudgetDraftHydrated] = useState(false)
+  const [locallyDismissedCompletionIds, setLocallyDismissedCompletionIds] = useState<Set<string>>(() => new Set())
   const [providerHeroMeta, setProviderHeroMeta] = useState<ProviderHeroMeta>({
     avatarUrl: null,
     rating: null,
@@ -1066,6 +1107,42 @@ export default function ClientDashboard({
       // noop
     }
   }, [babysitterServiceDetails, profile.id, requestServiceType])
+
+  useEffect(() => {
+    setBudgetDraftHydrated(false)
+    const storedDraft = readClientBookingBudgetDraft(profile.id)
+    const nextBabysitterBudget = storedDraft?.babysitterBudgetFixed
+    const nextDogWalkerBudget = storedDraft?.dogWalkerBudgetFixed
+
+    console.debug('[ClientDashboard] budget hydration', {
+      profileId: profile.id,
+      storedDraft,
+      nextBabysitterBudget,
+      nextDogWalkerBudget,
+    })
+
+    if (typeof nextBabysitterBudget === 'string' && nextBabysitterBudget.trim()) {
+      setBabysitterBudgetFixed(nextBabysitterBudget)
+    }
+    if (typeof nextDogWalkerBudget === 'string' && nextDogWalkerBudget.trim()) {
+      setDogWalkerBudgetFixed(nextDogWalkerBudget)
+    }
+
+    setBudgetDraftHydrated(true)
+  }, [profile.id])
+
+  useEffect(() => {
+    if (!budgetDraftHydrated) return
+    console.debug('[ClientDashboard] budget draft persist', {
+      profileId: profile.id,
+      babysitterBudgetFixed,
+      dogWalkerBudgetFixed,
+    })
+    mergeClientBookingBudgetDraft(profile.id, {
+      babysitterBudgetFixed,
+      dogWalkerBudgetFixed,
+    })
+  }, [babysitterBudgetFixed, budgetDraftHydrated, dogWalkerBudgetFixed, profile.id])
 
   useEffect(() => {
     if (!showDogNameSheet) return
@@ -1918,7 +1995,8 @@ export default function ClientDashboard({
     [allHistoryItems],
   )
 
-  const hasCompletionPrompt = !!flow.completionJob
+  const hasCompletionPrompt =
+    !!flow.completionJob && !locallyDismissedCompletionIds.has(flow.completionJob.jobId)
   const preferredWalkers = flow.favoriteWalkers
   const favoriteIndicatorLabel =
     preferredWalkers.length === 1
@@ -2384,6 +2462,22 @@ export default function ClientDashboard({
     isRtl,
     t,
   ])
+
+  const handleDismissCompletionCard = useCallback(() => {
+    const completionJobId = flow.completionJob?.jobId
+    if (completionJobId) {
+      setLocallyDismissedCompletionIds((current) => {
+        const next = new Set(current)
+        next.add(completionJobId)
+        return next
+      })
+      console.debug('[ClientDashboard] completion card dismissed locally', {
+        completionJobId,
+      })
+    }
+    flow.dismissCompletion()
+  }, [flow])
+
   const activeJobHasProviderIssue = hasProviderIssue(flow.activeJob?.notes)
 
   const closeAll = useCallback(() => {
@@ -2664,13 +2758,22 @@ export default function ClientDashboard({
         return
       }
 
-      const { data, error } = await supabase
+      const serviceTypeAliases = getGuidanceServiceTypeAliases(serviceType)
+
+      let query = supabase
         .from('provider_service_preferences')
         .select('service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
-        .eq('service_type', serviceType)
         .eq('booking_type', bookingTypeForGuidance)
         .eq('is_enabled', true)
         .eq('pricing_model', 'time_based')
+
+      if (serviceTypeAliases.length > 1) {
+        query = query.in('service_type', serviceTypeAliases)
+      } else {
+        query = query.eq('service_type', serviceTypeAliases[0] ?? serviceType)
+      }
+
+      const { data, error } = await query
 
       if (cancelled) return
 
@@ -2683,9 +2786,16 @@ export default function ClientDashboard({
       const nextRows = (data as ProviderPricingPreferenceInput[] | null) ?? []
       console.debug('[ClientDashboard] provider pricing preferences fetched', {
         service_type: serviceType,
+        service_type_aliases: serviceTypeAliases,
         booking_type: bookingTypeForGuidance,
         dog_count: normalizedDogCount,
         fetchedRowsCount: nextRows.length,
+        providerPrefsUsed: nextRows.map((row) => ({
+          service_type: row.service_type,
+          booking_type: row.booking_type,
+          hourly_rate_min: row.hourly_rate_min,
+          hourly_rate_preferred: row.hourly_rate_preferred,
+        })),
       })
       setProviderPricingPreferences(nextRows)
     }
@@ -2792,6 +2902,12 @@ export default function ClientDashboard({
       duration_minutes: currentBookingDurationMinutes,
       dogCount: normalizedDogCount,
       fetchedProviderRowsCount: providerPricingPreferences.length,
+      providerPrefsUsed: providerPricingPreferences.map((row) => ({
+        service_type: row.service_type,
+        booking_type: row.booking_type,
+        hourly_rate_min: row.hourly_rate_min,
+        hourly_rate_preferred: row.hourly_rate_preferred,
+      })),
       selectedBudget: currentBudgetForGuidanceILS,
       aggregatedMinimumHourly: budgetGuidance.aggregatedMinHourly,
       aggregatedPreferredHourly: budgetGuidance.aggregatedPreferredHourly,
@@ -2814,7 +2930,7 @@ export default function ClientDashboard({
     currentBudgetForGuidanceILS,
     effectiveRequestServiceType,
     normalizedDogCount,
-    providerPricingPreferences.length,
+    providerPricingPreferences,
     resolvedBookingService,
   ])
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
@@ -2977,6 +3093,12 @@ export default function ClientDashboard({
     setBabysitterBudgetFixed(shouldClearPricing ? '0' : String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
     setDogWalkerDurationHours(String(DOG_WALKER_DEFAULT_DURATION_HOURS))
     setDogWalkerBudgetFixed(shouldClearPricing ? '0' : String(DOG_WALKER_DEFAULT_BUDGET_ILS))
+    if (shouldClearPricing) {
+      mergeClientBookingBudgetDraft(profile.id, {
+        babysitterBudgetFixed: '0',
+        dogWalkerBudgetFixed: '0',
+      })
+    }
     const nextDraft = clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput())
     setScheduleDraft(nextDraft)
     setRepeatStartTime(splitScheduledDraft(nextDraft).time)
@@ -2994,7 +3116,7 @@ export default function ClientDashboard({
         requestServiceType: effectiveRequestServiceType,
       })
     }
-  }, [effectiveRequestServiceType, flow.bookingComposerResetKey, flow.bookingComposerResetReason])
+  }, [effectiveRequestServiceType, flow.bookingComposerResetKey, flow.bookingComposerResetReason, profile.id])
   const bookingSubjectLabel = isBabySitterMode
     ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.inputLabel)
@@ -4453,79 +4575,83 @@ export default function ClientDashboard({
 
           {shouldRenderSearchingSheet && (
             <div style={searchingSheetContentStyle}>
-              <SearchingSheet
-                searchStartedAt={flow.searchStartTime}
-                elapsedSeconds={flow.elapsedSeconds}
-                durationLabel={requestDurationLabel}
-                priceLabel={requestPriceLabel}
-                mode={isDispatchExhausted || shouldShowNoProvidersEmptyState ? 'empty' : 'matching'}
-                serviceType={flow.currentJob?.service_type}
-                emptyTitle={matchingEmptyTitle}
-                emptySubtitle={matchingEmptySubtitle}
-                emptyPrimaryLabel={isBudgetMinimumExhausted ? t('booking.raiseBudget') : undefined}
-                emptySecondaryLabel={isBudgetMinimumExhausted ? t('booking.scheduleForLater') : undefined}
-                onCancel={
-                  isDispatchExhausted || shouldShowNoProvidersEmptyState
-                    ? handleMatchingTryAgain
-                    : flow.cancelSearch
-                }
-                onTryAgain={handleMatchingTryAgain}
-                onSecondaryAction={isBudgetMinimumExhausted ? openScheduleSheet : undefined}
-              />
+              <div style={clientBottomSheetShellStyle}>
+                <SearchingSheet
+                  searchStartedAt={flow.searchStartTime}
+                  elapsedSeconds={flow.elapsedSeconds}
+                  durationLabel={requestDurationLabel}
+                  priceLabel={requestPriceLabel}
+                  mode={isDispatchExhausted || shouldShowNoProvidersEmptyState ? 'empty' : 'matching'}
+                  serviceType={flow.currentJob?.service_type}
+                  emptyTitle={matchingEmptyTitle}
+                  emptySubtitle={matchingEmptySubtitle}
+                  emptyPrimaryLabel={isBudgetMinimumExhausted ? t('booking.raiseBudget') : undefined}
+                  emptySecondaryLabel={isBudgetMinimumExhausted ? t('booking.scheduleForLater') : undefined}
+                  onCancel={
+                    isDispatchExhausted || shouldShowNoProvidersEmptyState
+                      ? handleMatchingTryAgain
+                      : flow.cancelSearch
+                  }
+                  onTryAgain={handleMatchingTryAgain}
+                  onSecondaryAction={isBudgetMinimumExhausted ? openScheduleSheet : undefined}
+                />
+              </div>
             </div>
           )}
 
           {(flow.screenState === 'tracking' || flow.screenState === 'active') && flow.activeJob && (
             <div style={sheetContentStyle}>
-              {activeJobHasProviderIssue ? (
-                <div style={providerIssueClientCardStyle}>
-                  <div style={providerIssueClientBadgeStyle}>
-                    {isRtl ? 'בהמתנה לבדיקת התמיכה' : 'Waiting for support review'}
+              <div style={clientBottomSheetShellStyle}>
+                {activeJobHasProviderIssue ? (
+                  <div style={providerIssueClientCardStyle}>
+                    <div style={providerIssueClientBadgeStyle}>
+                      {isRtl ? 'בהמתנה לבדיקת התמיכה' : 'Waiting for support review'}
+                    </div>
+                    <div style={providerIssueClientTitleStyle}>
+                      {isRtl
+                        ? 'הספק דיווח על בעיה'
+                        : 'Provider reported an issue'}
+                    </div>
+                    <div style={providerIssueClientBodyStyle}>
+                      {isRtl
+                        ? 'הספק דיווח על בעיה. צוות התמיכה בודק את הבקשה לפני שהשירות יוכל להתחיל.'
+                        : 'Provider reported an issue. Support is reviewing the request before the service can begin.'}
+                    </div>
                   </div>
-                  <div style={providerIssueClientTitleStyle}>
-                    {isRtl
-                      ? 'הספק דיווח על בעיה'
-                      : 'Provider reported an issue'}
-                  </div>
-                  <div style={providerIssueClientBodyStyle}>
-                    {isRtl
-                      ? 'הספק דיווח על בעיה. צוות התמיכה בודק את הבקשה לפני שהשירות יוכל להתחיל.'
-                      : 'Provider reported an issue. Support is reviewing the request before the service can begin.'}
-                  </div>
-                </div>
-              ) : (
-                <TrackingCard
-                  walkerName={
-                    flow.activeJob.walker_id
-                      ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
-                      : t('common.provider')
-                  }
-                  walkerAvatarUrl={providerHeroMeta.avatarUrl}
-                  walkerRating={providerHeroMeta.rating}
-                  completedCount={providerHeroMeta.completedCount}
-                  walkerBio={providerHeroMeta.shortBio}
-                  whatsappAvailable={!!activeProviderWhatsAppPhone}
-                  phase={
-                    flow.screenPhase === 'in_progress' ||
-                    flow.screenPhase === 'arrival_confirmed' ||
-                    flow.screenPhase === 'arrived_pending_confirmation'
-                      ? flow.screenPhase
-                      : 'on_the_way'
-                  }
-                  isArrived={flow.isArrived}
-                  etaMinutes={flow.etaMinutes}
-                  displayEtaSeconds={flow.displayEtaSeconds}
-                  distanceMeters={flow.distanceMeters}
-                  gpsQuality={trackingGpsQuality}
-                  activeTitle={t('tracking.walkInProgress')}
-                  onWhatsApp={handleWhatsAppProvider}
-                  onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
-                  confirmingArrival={flow.arrivalConfirming}
-                  elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
-                  plannedLabel={localizeMinuteUnitLabel(trackingDurationSummary.plannedLabel)}
-                  actualLabel={localizeMinuteUnitLabel(trackingDurationSummary.actualLabel)}
-                />
-              )}
+                ) : (
+                  <TrackingCard
+                    walkerName={
+                      flow.activeJob.walker_id
+                        ? flow.walkerNameById.get(flow.activeJob.walker_id) || t('common.provider')
+                        : t('common.provider')
+                    }
+                    walkerAvatarUrl={providerHeroMeta.avatarUrl}
+                    walkerRating={providerHeroMeta.rating}
+                    completedCount={providerHeroMeta.completedCount}
+                    walkerBio={providerHeroMeta.shortBio}
+                    whatsappAvailable={!!activeProviderWhatsAppPhone}
+                    phase={
+                      flow.screenPhase === 'in_progress' ||
+                      flow.screenPhase === 'arrival_confirmed' ||
+                      flow.screenPhase === 'arrived_pending_confirmation'
+                        ? flow.screenPhase
+                        : 'on_the_way'
+                    }
+                    isArrived={flow.isArrived}
+                    etaMinutes={flow.etaMinutes}
+                    displayEtaSeconds={flow.displayEtaSeconds}
+                    distanceMeters={flow.distanceMeters}
+                    gpsQuality={trackingGpsQuality}
+                    activeTitle={t('tracking.walkInProgress')}
+                    onWhatsApp={handleWhatsAppProvider}
+                    onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
+                    confirmingArrival={flow.arrivalConfirming}
+                    elapsedLabel={localizeMinuteUnitLabel(trackingDurationSummary.elapsedLabel)}
+                    plannedLabel={localizeMinuteUnitLabel(trackingDurationSummary.plannedLabel)}
+                    actualLabel={localizeMinuteUnitLabel(trackingDurationSummary.actualLabel)}
+                  />
+                )}
+              </div>
             </div>
           )}
 
@@ -4779,7 +4905,7 @@ export default function ClientDashboard({
                     }
                   : undefined
               }
-              onDismiss={flow.dismissCompletion}
+              onDismiss={handleDismissCompletionCard}
             />
           </div>
         </div>
@@ -5648,9 +5774,11 @@ function TrackingCard({
   const isArrivalPending = phase === 'arrived_pending_confirmation'
   const isArrivalConfirmed = phase === 'arrival_confirmed'
   const isOnTheWay = !isServiceActive && !isArrivalPending && !isArrivalConfirmed
-  const resolvedTrackingCardStyle = isArrivalPending
-    ? { ...trackingCardStyle, ...trackingArrivedCardCompactStyle }
-    : trackingCardStyle
+  const resolvedTrackingCardStyle = isServiceActive
+    ? { ...trackingCardStyle, ...trackingActiveCardCompactStyle }
+    : isArrivalPending
+      ? { ...trackingCardStyle, ...trackingArrivedCardCompactStyle }
+      : trackingCardStyle
   const statusToneStyle = isServiceActive
     ? trackingTopBadgeActiveStyle
     : isArrivalPending
@@ -5677,7 +5805,7 @@ function TrackingCard({
   const subtitle = isOnTheWay
     ? t('tracking.liveRouteSubtitle', { walkerName })
     : isServiceActive
-    ? t('tracking.startedSubtitle')
+    ? null
     : isArrivalPending
       ? t('tracking.arrivalConfirmationSubtitle')
       : isArrivalConfirmed
@@ -5685,13 +5813,30 @@ function TrackingCard({
         : t('tracking.headingToYou', { walkerName })
   const completedTasksLabel = i18n.resolvedLanguage === 'he' ? 'משימות הושלמו' : 'completed tasks'
   const serviceStartedLabel = i18n.resolvedLanguage === 'he' ? 'השירות התחיל' : 'Service started'
-  const serviceActiveHint = i18n.resolvedLanguage === 'he' ? 'השירות שלך פעיל עכשיו' : 'Your service is now active'
   const ratingValue = walkerRating != null ? walkerRating.toFixed(1) : '—'
   const etaHeroValue = formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)
-
+  const shouldShowWalkerBio = isOnTheWay && !!walkerBio?.trim()
   return (
     <div style={resolvedTrackingCardStyle}>
-      <div style={{ ...trackingTopBadgeStyle, ...statusToneStyle }}>{topBadge}</div>
+      <div style={trackingTopUtilityRowStyle}>
+        <div style={{ ...trackingTopBadgeStyle, ...statusToneStyle }}>{topBadge}</div>
+        {whatsappAvailable ? (
+          <button
+            type="button"
+            onClick={onWhatsApp}
+            style={{
+              ...trackingTopActionChipStyle,
+              ...trackingTopActionChipWhatsAppStyle,
+            }}
+            aria-label={t('tracking.whatsapp')}
+          >
+            <span style={trackingTopActionChipInnerStyle}>
+              <span style={trackingCommunicationWhatsAppDotStyle} aria-hidden="true" />
+              <span style={trackingTopActionChipTextStyle}>{t('tracking.whatsapp')}</span>
+            </span>
+          </button>
+        ) : null}
+      </div>
       <div style={trackingHeroRowStyle}>
         <div style={trackingHeroLeadStyle}>
           <div style={trackingHeroAvatarWrapStyle}>
@@ -5723,29 +5868,12 @@ function TrackingCard({
       {isServiceActive ? (
         <div style={trackingServiceStartedRowStyle}>
           <span style={trackingServiceStartedPillStyle}>{serviceStartedLabel}</span>
-          <span style={trackingServiceStartedHintStyle}>{serviceActiveHint}</span>
         </div>
       ) : null}
-      {walkerBio?.trim() ? (
+      {shouldShowWalkerBio ? (
         <div style={trackingBioCardStyle}>
-          <div style={trackingBioTextStyle}>{walkerBio.trim()}</div>
+          <div style={trackingBioTextStyle}>{walkerBio?.trim()}</div>
         </div>
-      ) : null}
-      {whatsappAvailable ? (
-        <button
-          type="button"
-          onClick={onWhatsApp}
-          style={{
-            ...trackingCommunicationSingleWrapStyle,
-            ...trackingCommunicationButtonStyle,
-            ...trackingCommunicationButtonLightStyle,
-          }}
-        >
-          <span style={trackingCommunicationButtonInnerStyle}>
-            <span style={trackingCommunicationWhatsAppDotStyle} aria-hidden="true" />
-            <span>{t('tracking.whatsapp')}</span>
-          </span>
-        </button>
       ) : null}
       <div style={trackingTitleStyle}>{title}</div>
       {subtitle ? <div style={trackingSubtitleStyle}>{subtitle}</div> : null}
@@ -6110,9 +6238,9 @@ const searchingSheetScrollStyle: React.CSSProperties = {
   overflowY: 'visible',
   overflowX: 'hidden',
   paddingTop: 0,
-  paddingRight: 8,
+  paddingRight: 0,
   paddingBottom: 0,
-  paddingLeft: 8,
+  paddingLeft: 0,
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
@@ -6125,9 +6253,9 @@ const trackingSheetScrollStyle: React.CSSProperties = {
   overflowY: 'visible',
   overflowX: 'hidden',
   paddingTop: 0,
-  paddingRight: 14,
-  paddingBottom: 8,
-  paddingLeft: 14,
+  paddingRight: 0,
+  paddingBottom: 0,
+  paddingLeft: 0,
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
@@ -6149,7 +6277,7 @@ const idleSheetScrollStyle: React.CSSProperties = {
 }
 
 const sheetContentStyle: React.CSSProperties = {
-  paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+  paddingBottom: 0,
   width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
@@ -6160,7 +6288,18 @@ const searchingSheetContentStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'center',
   pointerEvents: 'auto',
-  paddingBottom: 'max(4px, calc(env(safe-area-inset-bottom, 0px) - 8px))',
+  paddingBottom: 0,
+}
+
+const clientBottomSheetShellStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  borderTopLeftRadius: 30,
+  borderTopRightRadius: 30,
+  borderBottomLeftRadius: 0,
+  borderBottomRightRadius: 0,
+  boxSizing: 'border-box',
 }
 
 const idleSheetContentStyle: React.CSSProperties = {
@@ -7470,7 +7609,7 @@ const completionOverlayStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
-  padding: '18px 14px calc(18px + env(safe-area-inset-bottom))',
+  padding: '14px 0 env(safe-area-inset-bottom)',
   boxSizing: 'border-box',
   pointerEvents: 'auto',
   overflow: 'hidden',
@@ -7487,16 +7626,22 @@ const completionOverlayBackdropStyle: React.CSSProperties = {
 
 const completionOverlayCardStyle: React.CSSProperties = {
   position: 'relative',
-  width: 'min(100%, 520px)',
+  width: '100%',
   maxWidth: '100%',
   boxSizing: 'border-box',
+  overflow: 'hidden',
+  borderTopLeftRadius: 30,
+  borderTopRightRadius: 30,
+  borderBottomLeftRadius: 0,
+  borderBottomRightRadius: 0,
 }
 
 const pendingConfirmCardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
-  borderRadius: 30,
-  padding: '22px 18px calc(18px + env(safe-area-inset-bottom, 0px))',
+  borderRadius: '30px 30px 0 0',
+  minHeight: 300,
+  padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -7684,7 +7829,8 @@ const tipSkipButtonStyle: React.CSSProperties = {
 const trackingCardStyle: React.CSSProperties = {
   width: '100%',
   maxWidth: '100%',
-  borderRadius: 30,
+  minHeight: 300,
+  borderRadius: '30px 30px 0 0',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   padding: '14px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
@@ -7703,8 +7849,23 @@ const trackingArrivedCardCompactStyle: React.CSSProperties = {
   gap: 9,
 }
 
+const trackingActiveCardCompactStyle: React.CSSProperties = {
+  minHeight: 264,
+  padding: '13px 14px calc(13px + env(safe-area-inset-bottom, 0px))',
+  gap: 8,
+}
+
+const trackingTopUtilityRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  minWidth: 0,
+}
+
 const trackingTopBadgeStyle: React.CSSProperties = {
   justifySelf: 'start',
+  flexShrink: 0,
   padding: '6px 10px',
   borderRadius: 999,
   fontSize: 12,
@@ -7802,7 +7963,8 @@ const trackingHeroDotStyle: React.CSSProperties = {
 }
 
 const trackingHeroEtaBadgeStyle: React.CSSProperties = {
-  minWidth: 88,
+  minWidth: 116,
+  width: 116,
   minHeight: 88,
   padding: '10px 12px',
   borderRadius: 26,
@@ -7835,7 +7997,7 @@ const trackingHeroEtaValueStyle: React.CSSProperties = {
 const trackingServiceStartedRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 0,
   flexWrap: 'wrap',
 }
 
@@ -7853,12 +8015,6 @@ const trackingServiceStartedPillStyle: React.CSSProperties = {
   fontWeight: 800,
 }
 
-const trackingServiceStartedHintStyle: React.CSSProperties = {
-  fontSize: 12.5,
-  fontWeight: 600,
-  color: 'rgba(203, 213, 225, 0.82)',
-}
-
 const trackingBioCardStyle: React.CSSProperties = {
   borderRadius: 18,
   border: '1px solid rgba(148, 163, 184, 0.10)',
@@ -7873,31 +8029,47 @@ const trackingBioTextStyle: React.CSSProperties = {
   color: 'rgba(226, 232, 240, 0.90)',
 }
 
-const trackingCommunicationSingleWrapStyle: React.CSSProperties = {
-  width: '100%',
-  justifySelf: 'center',
-  maxWidth: 240,
-}
-
-const trackingCommunicationButtonStyle: React.CSSProperties = {
-  minHeight: 38,
-  borderRadius: 14,
-  width: '100%',
-  border: '1px solid rgba(191, 219, 254, 0.26)',
-  background: 'rgba(255,255,255,0.14)',
+const trackingTopActionChipStyle: React.CSSProperties = {
+  minWidth: 116,
+  width: 116,
+  maxWidth: 116,
+  minHeight: 30,
+  padding: '0 12px',
+  borderRadius: 999,
+  border: '1px solid rgba(191, 219, 254, 0.22)',
+  background: 'rgba(255,255,255,0.10)',
   color: '#F8FAFC',
-  fontSize: 12.5,
+  fontSize: 11.5,
   fontWeight: 800,
   cursor: 'pointer',
   fontFamily: 'inherit',
+  flexShrink: 0,
   transition: 'transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
 }
 
-const trackingCommunicationButtonInnerStyle: React.CSSProperties = {
+const trackingTopActionChipWhatsAppStyle: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.12)',
+  borderColor: 'rgba(74, 222, 128, 0.16)',
+}
+
+const trackingTopActionChipInnerStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 8,
+  gap: 7,
+  width: '100%',
+  minWidth: 0,
+}
+
+const trackingTopActionChipTextStyle: React.CSSProperties = {
+  display: 'block',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  textAlign: 'center',
+  lineHeight: 1,
 }
 
 const trackingCommunicationWhatsAppDotStyle: React.CSSProperties = {
@@ -7907,10 +8079,6 @@ const trackingCommunicationWhatsAppDotStyle: React.CSSProperties = {
   background: '#22C55E',
   boxShadow: '0 0 0 4px rgba(34, 197, 94, 0.16)',
   flexShrink: 0,
-}
-
-const trackingCommunicationButtonLightStyle: React.CSSProperties = {
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10), 0 8px 18px rgba(15, 23, 42, 0.10)',
 }
 
 const trackingTitleStyle: React.CSSProperties = {
@@ -7974,7 +8142,7 @@ const trackingStatValueStyle: React.CSSProperties = {
 }
 
 const trackingTimerPanelStyle: React.CSSProperties = {
-  marginTop: 12,
+  marginTop: 8,
   borderRadius: 18,
   background: 'transparent',
   border: '1px solid rgba(148, 163, 184, 0.10)',
@@ -9096,7 +9264,7 @@ const expressCheckoutSetupBadgeStyle: React.CSSProperties = {
 }
 
 const providerIssueClientCardStyle: React.CSSProperties = {
-  borderRadius: 28,
+  borderRadius: '30px 30px 0 0',
   padding: 24,
   background: 'linear-gradient(180deg, rgba(255,251,235,0.98) 0%, rgba(255,255,255,0.98) 100%)',
   border: '1px solid rgba(245, 158, 11, 0.22)',

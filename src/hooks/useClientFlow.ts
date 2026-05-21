@@ -492,6 +492,8 @@ type LastBookingDraft = {
   dogName: string
   location: string
   duration?: '20min' | '40min' | '60min'
+  babysitterBudgetFixed?: string
+  dogWalkerBudgetFixed?: string
   locationSource?: AddressSource
   locationUpdatedAt?: number
 }
@@ -1028,6 +1030,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       window.localStorage.setItem(
         key,
         JSON.stringify({
+          ...current,
           dogName: reusableName,
           location: typeof current.location === 'string' ? current.location : '',
           duration:
@@ -1100,6 +1103,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               window.localStorage.setItem(
                 key,
                 JSON.stringify({
+                  ...current,
                   dogName: typeof current.dogName === 'string' ? current.dogName : '',
                   location: address,
                   duration:
@@ -1132,6 +1136,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               window.localStorage.setItem(
                 key,
                 JSON.stringify({
+                  ...current,
                   dogName: typeof current.dogName === 'string' ? current.dogName : '',
                   location: address,
                   duration:
@@ -1361,6 +1366,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
               : current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
                 ? current.duration
                 : '20min',
+          babysitterBudgetFixed:
+            typeof patch.babysitterBudgetFixed === 'string'
+              ? patch.babysitterBudgetFixed
+              : typeof current.babysitterBudgetFixed === 'string'
+                ? current.babysitterBudgetFixed
+                : undefined,
+          dogWalkerBudgetFixed:
+            typeof patch.dogWalkerBudgetFixed === 'string'
+              ? patch.dogWalkerBudgetFixed
+              : typeof current.dogWalkerBudgetFixed === 'string'
+                ? current.dogWalkerBudgetFixed
+                : undefined,
           locationSource:
             patch.locationSource === 'gps' || patch.locationSource === 'manual'
               ? patch.locationSource

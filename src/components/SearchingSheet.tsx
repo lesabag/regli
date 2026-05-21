@@ -506,13 +506,14 @@ const wrapStyle: CSSProperties = {
   display: 'flex',
   justifyContent: 'center',
   paddingBottom: 0,
-  paddingInline: 'max(2px, env(safe-area-inset-left, 0px)) max(2px, env(safe-area-inset-right, 0px))',
+  paddingInline: 0,
   boxSizing: 'border-box',
 }
 
 const cardStyle: CSSProperties = {
   position: 'relative',
   width: '100%',
+  minHeight: 336,
   overflow: 'hidden',
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
@@ -524,20 +525,23 @@ const cardStyle: CSSProperties = {
 }
 
 const collapsedCardStyle: CSSProperties = {
-  borderRadius: 28,
-  padding: '13px 16px',
+  borderRadius: 30,
+  padding: '14px 14px',
+  minHeight: 84,
   maxHeight: 84,
 }
 
 const expandedCardStyle: CSSProperties = {
   borderRadius: 30,
-  padding: '13px 16px calc(env(safe-area-inset-bottom, 0px) + 16px)',
-  maxHeight: 248,
+  padding: '14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px)',
+  minHeight: 336,
+  maxHeight: 390,
 }
 
 const emptyCardStyle: CSSProperties = {
-  borderRadius: 24,
-  padding: '16px 16px 18px',
+  borderRadius: 30,
+  padding: '14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px)',
+  minHeight: 336,
   display: 'grid',
   gap: 14,
 }
@@ -642,7 +646,8 @@ const expandedSectionStyle: CSSProperties = {
 }
 
 const expandedSectionOpenStyle: CSSProperties = {
-  maxHeight: 180,
+  minHeight: 236,
+  maxHeight: 290,
   opacity: 1,
   marginTop: 10,
 }
