@@ -138,6 +138,25 @@ function normalizeGuidanceServiceType(value: string | null | undefined): string 
   return normalized
 }
 
+export function getGuidanceServiceTypeAliases(value: string | null | undefined): string[] {
+  const normalized = normalizeGuidanceServiceType(value)
+  if (!normalized) return []
+
+  if (normalized === 'dog_walker') {
+    return ['dog_walker', 'dog-walker', 'dog_walking']
+  }
+
+  if (normalized === 'baby_sitter') {
+    return ['baby_sitter', 'baby-sitter', 'babysitter']
+  }
+
+  if (normalized === 'cleaning') {
+    return ['cleaning', 'cleaner']
+  }
+
+  return [normalized]
+}
+
 function pickClosestBand(bands: PricingBand[], durationMinutes: number): PricingBand {
   return bands.reduce((closest, band) => {
     const closestDelta = Math.abs(closest.minutes - durationMinutes)
