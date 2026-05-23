@@ -205,29 +205,31 @@ export default function AdminDashboard() {
       </div>
 
       <div style={contentStyle}>
-        {tab === 'overview' && (
-          <>
-            <AdminKpiPanel timeRange={timeRange} />
-            <AdminSearchAnalytics timeRange={timeRange} />
-            <AdminAlerts />
-          </>
-        )}
+        <div style={tabPanelStyle}>
+          {tab === 'overview' && (
+            <>
+              <AdminKpiPanel timeRange={timeRange} />
+              <AdminSearchAnalytics timeRange={timeRange} />
+              <AdminAlerts />
+            </>
+          )}
 
-        {tab === 'dispatch' && <AdminDispatchLive />}
-        {tab === 'alerts' && <AdminAlerts />}
-        {tab === 'matching' && (
-          <>
-            <AdminSearchAnalytics timeRange={timeRange} />
-            <MatchingDebugV2 />
-          </>
-        )}
-        {tab === 'supply' && <AdminSupplyDemand timeRange={timeRange} />}
-        {tab === 'pricing' && <AdminPricing />}
-        {tab === 'finance' && <AdminFinance timeRange={timeRange} />}
-        {tab === 'disputes' && <AdminDisputes />}
-        {tab === 'stuck' && <AdminStuckRequests />}
-        {tab === 'failures' && <AdminRecentFailures />}
-        {tab === 'retention' && <AdminRetention timeRange={timeRange} />}
+          {tab === 'dispatch' && <AdminDispatchLive />}
+          {tab === 'alerts' && <AdminAlerts />}
+          {tab === 'matching' && (
+            <>
+              <AdminSearchAnalytics timeRange={timeRange} />
+              <MatchingDebugV2 />
+            </>
+          )}
+          {tab === 'supply' && <AdminSupplyDemand timeRange={timeRange} />}
+          {tab === 'pricing' && <AdminPricing />}
+          {tab === 'finance' && <AdminFinance timeRange={timeRange} />}
+          {tab === 'disputes' && <AdminDisputes />}
+          {tab === 'stuck' && <AdminStuckRequests />}
+          {tab === 'failures' && <AdminRecentFailures />}
+          {tab === 'retention' && <AdminRetention timeRange={timeRange} />}
+        </div>
       </div>
     </div>
   )
@@ -284,6 +286,8 @@ const screenStyle: React.CSSProperties = {
   flexDirection: 'column',
   minHeight: '100vh',
   background: '#F8FAFC',
+  overflowY: 'scroll',
+  scrollbarGutter: 'stable both-edges',
 }
 
 const pageStyle: React.CSSProperties = {
@@ -380,10 +384,17 @@ const rangeBtnActiveStyle: React.CSSProperties = {
 
 const contentStyle: React.CSSProperties = {
   flex: 1,
-  overflowY: 'auto',
+  overflowY: 'scroll',
+  scrollbarGutter: 'stable both-edges',
   padding: '0 20px 20px',
+}
+
+const tabPanelStyle: React.CSSProperties = {
   display: 'grid',
   gap: 16,
+  width: '100%',
+  minHeight: 'max(760px, calc(100vh - 188px))',
+  alignContent: 'start',
 }
 
 const centerCardStyle: React.CSSProperties = {

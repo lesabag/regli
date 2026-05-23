@@ -167,7 +167,22 @@ export default function AdminSearchAnalytics({ timeRange }: Props) {
   if (loading && !data) {
     return (
       <div style={shellStyle}>
-        <div style={loadingStyle}>Loading search analytics...</div>
+        <div style={headerRowStyle}>
+          <div>
+            <div style={titleStyle}>Search Analytics</div>
+            <div style={subtitleStyle}>Matching funnel, exhaustion, and search outcomes</div>
+          </div>
+        </div>
+        <div style={cardGridStyle}>
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} style={{ ...cardStyle, ...cardSkeletonStyle }} />
+          ))}
+        </div>
+        <div style={splitGridStyle}>
+          <div style={{ ...panelStyle, minHeight: 220 }} />
+          <div style={{ ...panelStyle, minHeight: 220 }} />
+        </div>
+        <div style={{ ...panelStyle, minHeight: 240 }} />
       </div>
     )
   }
@@ -335,6 +350,7 @@ const shellStyle: CSSProperties = {
   boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
   display: 'grid',
   gap: 18,
+  minHeight: 760,
 }
 
 const headerRowStyle: CSSProperties = {
@@ -382,6 +398,12 @@ const cardStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
   background: '#FFFFFF',
+  minHeight: 130,
+  boxSizing: 'border-box',
+}
+
+const cardSkeletonStyle: CSSProperties = {
+  background: '#F8FAFC',
 }
 
 const dotWrapStyle: CSSProperties = {
@@ -403,6 +425,8 @@ const cardValueStyle: CSSProperties = {
   fontWeight: 900,
   lineHeight: 1,
   letterSpacing: -0.5,
+  fontVariantNumeric: 'tabular-nums',
+  minWidth: '6ch',
 }
 
 const cardLabelStyle: CSSProperties = {
@@ -429,6 +453,8 @@ const panelStyle: CSSProperties = {
   padding: 14,
   display: 'grid',
   gap: 12,
+  minHeight: 200,
+  boxSizing: 'border-box',
 }
 
 const sectionLabelStyle: CSSProperties = {
@@ -493,6 +519,8 @@ const funnelValueStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 800,
   color: '#0F172A',
+  fontVariantNumeric: 'tabular-nums',
+  minWidth: 56,
 }
 
 const reasonListStyle: CSSProperties = {
@@ -520,6 +548,9 @@ const reasonCountStyle: CSSProperties = {
   fontWeight: 800,
   color: '#0F172A',
   whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+  minWidth: '3ch',
+  textAlign: 'right',
 }
 
 const emptyTextStyle: CSSProperties = {
@@ -553,6 +584,7 @@ const tdStyle: CSSProperties = {
   fontSize: 13,
   color: '#334155',
   borderBottom: '1px solid #F8FAFC',
+  fontVariantNumeric: 'tabular-nums',
 }
 
 const tdPrimaryStyle: CSSProperties = {
@@ -566,11 +598,6 @@ const emptyCellStyle: CSSProperties = {
   fontSize: 13,
   color: '#94A3B8',
   textAlign: 'center',
-}
-
-const loadingStyle: CSSProperties = {
-  fontSize: 14,
-  color: '#64748B',
 }
 
 const errorBoxStyle: CSSProperties = {

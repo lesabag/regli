@@ -91,7 +91,36 @@ export default function AdminKpiPanel({ timeRange }: Props) {
   if (loading && !kpi) {
     return (
       <div style={st.shell}>
-        <div style={st.loading}>Loading analytics...</div>
+        <div style={st.panelHeader}>
+          <div style={st.panelTitle}>Analytics</div>
+          <div style={st.filterRow}>
+            <div style={{ ...st.filterSelect, ...st.filterSkeleton }} />
+            <div style={{ ...st.filterSelect, ...st.filterSkeleton }} />
+          </div>
+        </div>
+        <div style={st.cardGrid}>
+          {Array.from({ length: 7 }).map((_, index) => (
+            <div key={index} style={{ ...st.card, ...st.cardSkeleton }} />
+          ))}
+        </div>
+        <div style={st.sectionSkeleton} />
+        <div style={st.funnelList}>
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} style={st.funnelRow}>
+              <div style={st.funnelLabelSkeleton} />
+              <div style={st.barTrack}>
+                <div style={{ ...st.barSkeleton, width: `${72 - index * 8}%` }} />
+              </div>
+              <div style={st.counterSkeleton} />
+            </div>
+          ))}
+        </div>
+        <div style={st.sectionSkeleton} />
+        <div style={st.timeRow}>
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} style={{ ...st.timeCard, ...st.cardSkeleton }} />
+          ))}
+        </div>
       </div>
     )
   }
@@ -175,7 +204,7 @@ export default function AdminKpiPanel({ timeRange }: Props) {
             <div style={{ ...st.cardDot, background: card.bg }}>
               <div style={{ width: 6, height: 6, borderRadius: 3, background: card.color }} />
             </div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: card.color, lineHeight: 1, letterSpacing: -0.5 }}>
+            <div style={{ ...st.summaryValue, color: card.color }}>
               {card.value}
             </div>
             <div style={st.cardLabel}>{card.label}</div>
@@ -261,7 +290,7 @@ function SectionLabel({ children, style }: { children: string; style?: CSSProper
 function TimeCard({ label, value }: { label: string; value: string }) {
   return (
     <div style={st.timeCard}>
-      <div style={{ fontSize: 20, fontWeight: 900, color: '#0F172A', lineHeight: 1 }}>{value}</div>
+      <div style={st.timeValue}>{value}</div>
       <div style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', marginTop: 6 }}>{label}</div>
     </div>
   )
@@ -275,7 +304,7 @@ function HealthPill({ label, value, sev }: { label: string; value: number; sev: 
   }[sev]
   return (
     <div style={{ ...st.healthPill, background: palette.bg, borderColor: palette.border }}>
-      <span style={{ fontSize: 20, fontWeight: 900, color: palette.fg, lineHeight: 1 }}>{value}</span>
+      <span style={{ ...st.timeValue, color: palette.fg }}>{value}</span>
       <span style={{ fontSize: 10, fontWeight: 600, color: palette.fg, opacity: 0.85 }}>{label}</span>
     </div>
   )
@@ -291,6 +320,7 @@ const st: Record<string, CSSProperties> = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
     padding: 20,
     marginBottom: 16,
+    minHeight: 720,
   },
   loading: {
     textAlign: 'center',
@@ -327,6 +357,7 @@ const st: Record<string, CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
+    minHeight: 36,
   },
   filterSelect: {
     padding: '5px 10px',
@@ -337,6 +368,13 @@ const st: Record<string, CSSProperties> = {
     background: '#F8FAFC',
     color: '#334155',
     fontWeight: 500,
+    minHeight: 34,
+    minWidth: 132,
+    boxSizing: 'border-box',
+  },
+  filterSkeleton: {
+    border: '1px solid #E2E8F0',
+    background: '#F1F5F9',
   },
   staleBadge: {
     fontSize: 10,
@@ -359,6 +397,11 @@ const st: Record<string, CSSProperties> = {
     background: '#FAFAFA',
     border: '1px solid #F1F5F9',
     textAlign: 'center',
+    minHeight: 112,
+    boxSizing: 'border-box',
+  },
+  cardSkeleton: {
+    background: '#F8FAFC',
   },
   cardDot: {
     width: 18,
@@ -375,6 +418,14 @@ const st: Record<string, CSSProperties> = {
     marginTop: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
+  },
+  summaryValue: {
+    fontSize: 22,
+    fontWeight: 900,
+    lineHeight: 1,
+    letterSpacing: -0.5,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: '5ch',
   },
 
   /* Funnel */
@@ -413,6 +464,26 @@ const st: Record<string, CSSProperties> = {
     fontWeight: 800,
     color: '#0F172A',
     textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: 44,
+  },
+  funnelLabelSkeleton: {
+    width: 74,
+    height: 14,
+    borderRadius: 999,
+    background: '#E2E8F0',
+  },
+  barSkeleton: {
+    height: '100%',
+    borderRadius: 4,
+    background: '#CBD5E1',
+  },
+  counterSkeleton: {
+    justifySelf: 'end',
+    width: 32,
+    height: 14,
+    borderRadius: 999,
+    background: '#E2E8F0',
   },
 
   /* Time metrics */
@@ -427,6 +498,16 @@ const st: Record<string, CSSProperties> = {
     background: '#F8FAFC',
     border: '1px solid #F1F5F9',
     textAlign: 'center',
+    minHeight: 86,
+    boxSizing: 'border-box',
+  },
+  timeValue: {
+    fontSize: 20,
+    fontWeight: 900,
+    color: '#0F172A',
+    lineHeight: 1,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: '4ch',
   },
 
   /* Health */
@@ -444,5 +525,13 @@ const st: Record<string, CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     gap: 4,
+    minHeight: 74,
+    boxSizing: 'border-box',
+  },
+  sectionSkeleton: {
+    width: 128,
+    height: 12,
+    borderRadius: 999,
+    background: '#E2E8F0',
   },
 }
