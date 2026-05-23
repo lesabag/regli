@@ -32,7 +32,7 @@ import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
-import { formatDogCountLabel, isDogServiceType, normalizeDogCount, type DogCount } from '../utils/dogCount'
+import { formatDogCountLabel, isDogServiceType, normalizeDogCount } from '../utils/dogCount'
 import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
 import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
@@ -258,6 +258,16 @@ interface UpcomingBookingItem {
   startsInMin: number | null
   price: number | null
   findingProviderAt: string | null
+}
+
+type ClientPetRow = {
+  id: string
+  client_id: string
+  name: string
+  pet_type: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
 }
 
 type RepeatType = 'one_time' | 'weekly'
@@ -497,7 +507,11 @@ export default function ClientDashboard({
   const [dogWalkerBudgetFixed, setDogWalkerBudgetFixed] = useState(
     String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
-  const [dogCount, setDogCount] = useState<DogCount>(1)
+  const [clientPets, setClientPets] = useState<ClientPetRow[]>([])
+  const [clientPetsLoaded, setClientPetsLoaded] = useState(false)
+  const [clientPetsSaving, setClientPetsSaving] = useState(false)
+  const [clientPetsError, setClientPetsError] = useState<string | null>(null)
+  const [selectedDogPetIds, setSelectedDogPetIds] = useState<string[]>([])
   const [repeatType, setRepeatType] = useState<RepeatType>('one_time')
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('later')
   const [repeatDays, setRepeatDays] = useState<number[]>([])
@@ -619,6 +633,44 @@ export default function ClientDashboard({
     mapBookingServiceTypeToProfileServiceType(resolvedBookingService) ??
     availableProfileServiceTypes[0] ??
     normalizeProfileServiceType(profile.service_type)
+  const effectiveRequestServiceType =
+    requestServiceTypeRef.current ?? requestServiceType
+  const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
+  const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
+  const activeDogPets = useMemo(
+    () =>
+      clientPets
+        .filter((pet) => pet.is_active && pet.pet_type === 'dog')
+        .map((pet) => ({ ...pet, normalizedName: normalizeDogName(pet.name) }))
+        .filter((pet) => !!pet.normalizedName),
+    [clientPets],
+  )
+  const selectedDogPets = useMemo(
+    () => activeDogPets.filter((pet) => selectedDogPetIds.includes(pet.id)).slice(0, 2),
+    [activeDogPets, selectedDogPetIds],
+  )
+  const selectedDogNames = useMemo(
+    () => selectedDogPets.map((pet) => pet.normalizedName),
+    [selectedDogPets],
+  )
+  const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
+  const shouldShowDogCountControl = isDogWalkerRequest && activeDogPets.length >= 2
+  const normalizedDogCount = shouldShowDogCountControl
+    ? normalizeDogCount(Math.min(2, Math.max(1, selectedDogPets.length)))
+    : 1
+  const selectedDogNamesLabel = selectedDogNames.join(', ')
+  const effectiveDogBookingName = selectedDogNamesLabel || flow.dogName.trim()
+  const bookingSubjectDisplayValue = isBabysitterRequest
+    ? babysitterServiceDetails.trim()
+    : selectedDogNames.length > 1
+      ? `${selectedDogNames[0]} +${selectedDogNames.length - 1}`
+      : selectedDogNames[0] || flow.dogName.trim()
+  const selectedDogNamesNote = selectedDogNames.length > 0 ? `Dogs: ${selectedDogNames.join(', ')}` : null
+  const canAddCurrentDogProfile = useMemo(() => {
+    const nextName = normalizeDogName(clientAttrPetName)
+    if (!nextName) return false
+    return !activeDogPets.some((pet) => pet.normalizedName === nextName)
+  }, [activeDogPets, clientAttrPetName])
 
   useEffect(() => {
     selectedBookingServiceRef.current = resolvedBookingService
@@ -628,16 +680,6 @@ export default function ClientDashboard({
   useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
-
-  useEffect(() => {
-    if (!isDogServiceType(requestServiceType ?? resolvedBookingService)) {
-      setDogCount(1)
-    }
-  }, [requestServiceType, resolvedBookingService])
-
-  useEffect(() => {
-    setDogCount(1)
-  }, [flow.bookingComposerResetKey])
 
   useEffect(() => {
     if (availableBookingServices.length === 0) return
@@ -734,6 +776,29 @@ export default function ClientDashboard({
     return () => { cancelled = true }
   }, [clientAttrLoaded, profile.id])
 
+  const loadClientPets = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('client_pets')
+      .select('id, client_id, name, pet_type, is_active, created_at, updated_at')
+      .eq('client_id', profile.id)
+      .eq('is_active', true)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.warn('[ClientDashboard] failed to load client pets:', error.message)
+      setClientPets([])
+      setClientPetsLoaded(true)
+      return
+    }
+
+    setClientPets(((data as ClientPetRow[] | null) ?? []).filter((pet) => pet.pet_type === 'dog'))
+    setClientPetsLoaded(true)
+  }, [profile.id])
+
+  useEffect(() => {
+    void loadClientPets()
+  }, [loadClientPets])
+
   const clientAttrDirty = useMemo(() => {
     const orig = clientAttrOrigRef.current
     return (
@@ -802,6 +867,51 @@ export default function ClientDashboard({
     setClientAttrSaving(false)
     setClientAttrSavedAt(Date.now())
   }, [clientAttrSaving, clientAttrDirty, profile.id, profileServiceTypes, clientAttrPetName, clientAttrDogSize, clientAttrEnergy, clientAttrNumKids, clientAttrChildAges, clientAttrSpecialNotes, isRtl])
+
+  const handleAddClientPet = useCallback(async () => {
+    const nextName = normalizeDogName(clientAttrPetName)
+    if (!nextName || clientPetsSaving) return
+
+    setClientPetsSaving(true)
+    setClientPetsError(null)
+
+    const { error } = await supabase.from('client_pets').insert({
+      client_id: profile.id,
+      name: nextName,
+      pet_type: 'dog',
+      is_active: true,
+    })
+
+    if (error) {
+      setClientPetsSaving(false)
+      setClientPetsError(error.message)
+      return
+    }
+
+    await loadClientPets()
+    setClientPetsSaving(false)
+  }, [clientAttrPetName, clientPetsSaving, loadClientPets, profile.id])
+
+  const handleDeactivateClientPet = useCallback(async (petId: string) => {
+    if (clientPetsSaving) return
+    setClientPetsSaving(true)
+    setClientPetsError(null)
+
+    const { error } = await supabase
+      .from('client_pets')
+      .update({ is_active: false })
+      .eq('id', petId)
+      .eq('client_id', profile.id)
+
+    if (error) {
+      setClientPetsSaving(false)
+      setClientPetsError(error.message)
+      return
+    }
+
+    await loadClientPets()
+    setClientPetsSaving(false)
+  }, [clientPetsSaving, loadClientPets, profile.id])
 
   useEffect(() => {
     if (!debugFlags().interactionDebug) return
@@ -1405,8 +1515,8 @@ export default function ClientDashboard({
       return
     }
 
-    const nextDogCount = shouldShowDogCountControl ? normalizedDogCount : 1
-    const notes = flow.currentJob?.notes ?? null
+    const nextDogCount = normalizedDogCount
+    const notes = [flow.currentJob?.notes ?? null, selectedDogNamesNote].filter(Boolean).join('\n') || null
     const dogNameValue = bookingSubjectValue
     const recurringStartDraft = clampScheduledDraft(
       mergeScheduledDraft(repeatScheduleParts.date, repeatStartTime),
@@ -1469,7 +1579,7 @@ export default function ClientDashboard({
       return
     }
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
-    const effectiveDogCount = normalizeDogCount(dogCount)
+    const effectiveDogCount = normalizedDogCount
     const dogWalkerBudgetRequestValue =
       dogWalkerBudgetValue > 0
         ? applyDogCountPricing(dogWalkerBudgetValue, {
@@ -1593,7 +1703,8 @@ export default function ClientDashboard({
         selectedBookingService: effectiveBookingService,
         profileServiceTypes: profile.service_types ?? null,
         legacyProfileServiceType: profile.service_type ?? null,
-        dogNameOverride: flow.dogName.trim(),
+        dogNameOverride: effectiveDogBookingName,
+        notesOverride: selectedDogNamesNote,
         durationOverride: pricingDuration,
         durationMinutesOverride: dogWalkerDurationMinutes,
         priceOverrideILS: dogWalkerBudgetRequestValue,
@@ -1614,12 +1725,12 @@ export default function ClientDashboard({
     dogWalkerBudgetValue,
     dogWalkerDurationMinutes,
     dogWalkerDurationValue,
-    dogCount,
     babysitterBudgetFixed,
     babysitterServiceDetails,
     babysitterDurationValue,
     babysitterFixedBudgetValue,
     availableBookingServices,
+    effectiveDogBookingName,
     flow,
     flow.dogName,
     flow.duration,
@@ -1631,7 +1742,9 @@ export default function ClientDashboard({
     profile.service_type,
     profile.service_types,
     resolvedBookingService,
+    selectedDogNamesNote,
     serviceSelectionRequiredLabel,
+    normalizedDogCount,
   ])
 
   const handleFirstBookingAddPayment = useCallback(() => {
@@ -1675,6 +1788,58 @@ export default function ClientDashboard({
     },
     [profile.id, requestServiceType],
   )
+
+  useEffect(() => {
+    if (activeDogPets.length === 0) return
+    const mergedNames = [
+      ...activeDogPets.map((pet) => pet.normalizedName),
+      ...recentDogNames,
+    ]
+      .map((name) => normalizeDogName(name))
+      .filter(Boolean)
+      .filter((name, index, arr) => arr.indexOf(name) === index)
+      .slice(0, 8)
+
+    const same =
+      mergedNames.length === recentDogNames.length &&
+      mergedNames.every((name, index) => name === recentDogNames[index])
+    if (!same) {
+      persistRecentDogNames(mergedNames)
+    }
+  }, [activeDogPets, persistRecentDogNames, recentDogNames])
+
+  useEffect(() => {
+    if (!isDogWalkerRequest) return
+
+    if (activeDogPets.length === 1) {
+      const onlyPet = activeDogPets[0]
+      setSelectedDogPetIds((prev) => (prev.length === 1 && prev[0] === onlyPet.id ? prev : [onlyPet.id]))
+      if (flow.dogName !== onlyPet.normalizedName) {
+        flow.setDogName(onlyPet.normalizedName)
+        persistSelectedBookingSubject(onlyPet.normalizedName)
+      }
+      return
+    }
+
+    if (activeDogPets.length >= 2) {
+      setSelectedDogPetIds((prev) => {
+        const valid = prev.filter((id) => activeDogPets.some((pet) => pet.id === id)).slice(0, 2)
+        if (valid.length > 0) return valid
+        return [activeDogPets[0].id]
+      })
+      return
+    }
+
+    setSelectedDogPetIds((prev) => (prev.length === 0 ? prev : []))
+  }, [activeDogPets, flow, isDogWalkerRequest, persistSelectedBookingSubject])
+
+  useEffect(() => {
+    if (!isDogWalkerRequest || !shouldShowDogCountControl) return
+    const nextDogName = selectedDogNames.join(', ')
+    if (!nextDogName || flow.dogName === nextDogName) return
+    flow.setDogName(nextDogName)
+    persistSelectedBookingSubject(nextDogName)
+  }, [flow, isDogWalkerRequest, persistSelectedBookingSubject, selectedDogNames, shouldShowDogCountControl])
 
   const commitDogName = useCallback(
     (rawValue: string) => {
@@ -2715,21 +2880,7 @@ export default function ClientDashboard({
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
-  const effectiveRequestServiceType =
-    requestServiceTypeRef.current ?? requestServiceType
-  const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
-  const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
-  const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
-  const savedDogCount = useMemo(() => {
-    const normalizedUniqueNames = recentDogNames
-      .map((name) => normalizeDogName(name))
-      .filter(Boolean)
-
-    return new Set(normalizedUniqueNames).size
-  }, [recentDogNames])
-  const shouldShowDogCountControl = isDogWalkerRequest && savedDogCount >= 2
-  const normalizedDogCount = shouldShowDogCountControl ? normalizeDogCount(dogCount) : 1
-  const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : flow.dogName.trim()
+  const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : effectiveDogBookingName
   const hasValidDurationForSelectedService = isBabysitterRequest
     ? !!babysitterDurationMinutes
     : isDogWalkerRequest
@@ -2842,11 +2993,6 @@ export default function ClientDashboard({
     resolvedBookingService,
   ])
 
-  useEffect(() => {
-    if (shouldShowDogCountControl) return
-    if (dogCount === 1) return
-    setDogCount(1)
-  }, [dogCount, shouldShowDogCountControl])
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
   const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
   const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
@@ -3182,12 +3328,12 @@ export default function ClientDashboard({
             )}
             <div
               style={
-                (isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim())
+                bookingSubjectDisplayValue
                   ? dogInputValueTextStyle
                   : dogInputPlaceholderTextStyle
               }
             >
-              {(isBabySitterMode ? babysitterServiceDetails.trim() : flow.dogName.trim()) || bookingSubjectPlaceholder}
+              {bookingSubjectDisplayValue || bookingSubjectPlaceholder}
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -3238,22 +3384,34 @@ export default function ClientDashboard({
 
   const dogCountSelectorBlock = shouldShowDogCountControl ? (
     <div style={dogCountInlineRowStyle}>
-      <span style={dogCountInlineLabelStyle}>{isRtl ? 'מספר כלבים' : 'Number of dogs'}</span>
+      <span style={dogCountInlineLabelStyle}>{isRtl ? 'בחירת כלבים' : 'Select dogs'}</span>
       <div style={dogCountSegmentedStyle}>
-        {[1, 2].map((value) => {
-          const selected = normalizedDogCount === value
+        {activeDogPets.map((pet) => {
+          const selected = selectedDogPetIds.includes(pet.id)
           return (
             <button
-              key={value}
+              key={pet.id}
               type="button"
-              onClick={() => setDogCount(value as DogCount)}
+              onClick={() => {
+                setSelectedDogPetIds((current) => {
+                  const isSelected = current.includes(pet.id)
+                  if (isSelected) {
+                    if (current.length <= 1) return current
+                    return current.filter((id) => id !== pet.id)
+                  }
+                  if (current.length >= 2) {
+                    return [current[0], pet.id]
+                  }
+                  return [...current, pet.id]
+                })
+              }}
               style={{
                 ...dogCountChipStyle,
                 ...(selected ? dogCountChipActiveStyle : null),
               }}
               aria-pressed={selected}
             >
-              {value}
+              {pet.normalizedName}
             </button>
           )
         })}
@@ -3856,6 +4014,49 @@ export default function ClientDashboard({
                                     placeholder={isRtl ? 'לדוגמה: רקסי' : 'e.g. Rex'}
                                     style={clientAttrInputStyle}
                                   />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void handleAddClientPet()
+                                    }}
+                                    style={{
+                                      ...clientAttrSaveButtonStyle,
+                                      ...clientAddDogButtonStyle,
+                                    }}
+                                    disabled={clientPetsSaving || !canAddCurrentDogProfile}
+                                  >
+                                    {clientPetsSaving ? (isRtl ? 'שומר...' : 'Saving...') : isRtl ? '+ הוסף כלב' : '+ Add dog'}
+                                  </button>
+                                </div>
+
+                                <div style={clientPetsManagerStyle}>
+                                  <div style={clientAttrFieldStyle}>
+                                    <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הכלבים שלי' : 'My dogs'}</div>
+                                    <div style={clientPetsListStyle}>
+                                      {clientPetsLoaded && activeDogPets.length > 0 ? (
+                                        activeDogPets.map((pet) => (
+                                          <div key={pet.id} style={clientPetItemStyle}>
+                                            <span style={clientPetNameStyle}>{pet.normalizedName}</span>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                void handleDeactivateClientPet(pet.id)
+                                              }}
+                                              style={clientPetRemoveButtonStyle}
+                                              disabled={clientPetsSaving}
+                                            >
+                                              {isRtl ? 'הסר' : 'Remove'}
+                                            </button>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div style={clientPetsEmptyStyle}>
+                                          {isRtl ? 'עדיין לא שמרת כלבים.' : 'No saved dogs yet.'}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {clientPetsError ? <div style={serviceTypeStatusErrorStyle}>{clientPetsError}</div> : null}
                                 </div>
 
                                 <div style={clientAttrFieldStyle}>
@@ -8559,10 +8760,61 @@ const clientAttrSectionStyle: React.CSSProperties = {
   border: '1px solid #E2E8F0',
 }
 
+const clientPetsManagerStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const clientAddDogButtonStyle: React.CSSProperties = {
+  width: 'auto',
+  minWidth: 120,
+  padding: '0 16px',
+}
+
 const clientAttrFieldStyle: React.CSSProperties = {
   display: 'grid',
   gap: 7,
 }
+
+const clientPetsListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
+const clientPetItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  padding: '10px 12px',
+  borderRadius: 14,
+  border: '1px solid rgba(148, 163, 184, 0.14)',
+  background: '#FFFFFF',
+}
+
+const clientPetNameStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#0F172A',
+}
+
+const clientPetRemoveButtonStyle: React.CSSProperties = {
+  border: '1px solid rgba(248, 113, 113, 0.24)',
+  background: '#FEF2F2',
+  color: '#B91C1C',
+  borderRadius: 999,
+  padding: '6px 10px',
+  fontSize: 12,
+  fontWeight: 700,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+}
+
+const clientPetsEmptyStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: '#64748B',
+}
+
 
 const clientAttrFieldLabelStyle: React.CSSProperties = {
   fontSize: 12,

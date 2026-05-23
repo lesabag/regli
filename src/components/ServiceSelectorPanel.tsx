@@ -33,7 +33,7 @@ export default function ServiceSelectorPanel({
   const isMoreSelected = (visibleMoreServices as readonly ServiceType[]).includes(selected)
   const renderServiceIcon = (service: ServiceType) => {
     if (service === 'dog_walking') {
-      return <PawPrint size={16} strokeWidth={2.2} color="#FACC15" />
+      return <PawPrint size={14} strokeWidth={2.2} color="#FACC15" />
     }
     return SERVICE_ICONS[service]
   }
@@ -103,7 +103,7 @@ export default function ServiceSelectorPanel({
 const wrapStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 6,
 }
 
 const titleStyle: CSSProperties = {
@@ -115,7 +115,7 @@ const titleStyle: CSSProperties = {
 
 const rowStyle: CSSProperties = {
   display: 'flex',
-  gap: 10,
+  gap: 8,
   overflowX: 'auto',
   WebkitOverflowScrolling: 'touch',
   scrollbarWidth: 'none',
@@ -131,14 +131,14 @@ const itemStyle: CSSProperties = {
   flexDirection: 'row',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 8,
-  height: 44,
-  padding: '0 15px',
+  gap: 6,
+  height: 38,
+  padding: '0 12px',
   cursor: 'pointer',
   fontFamily: 'inherit',
   WebkitTapHighlightColor: 'transparent',
   touchAction: 'manipulation',
-  minWidth: 132,
+  minWidth: 104,
   flexShrink: 0,
   borderRadius: 999,
   boxShadow: '0 6px 14px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255,255,255,0.82)',
@@ -151,8 +151,8 @@ const itemActiveStyle: CSSProperties = {
 }
 
 const iconWrapStyle: CSSProperties = {
-  width: 24,
-  height: 24,
+  width: 20,
+  height: 20,
   borderRadius: 999,
   background: 'transparent',
   display: 'grid',
@@ -168,7 +168,7 @@ const iconWrapActiveStyle: CSSProperties = {
 }
 
 const iconStyle: CSSProperties = {
-  fontSize: 16,
+  fontSize: 14,
   lineHeight: 1,
   display: 'inline-flex',
   alignItems: 'center',
@@ -176,14 +176,14 @@ const iconStyle: CSSProperties = {
 }
 
 const moreIconStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: 16,
   lineHeight: 1,
   color: '#64748B',
   fontWeight: 700,
 }
 
 const labelStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 700,
   color: '#64748B',
   lineHeight: 1.2,
@@ -195,7 +195,7 @@ const labelStyle: CSSProperties = {
 }
 
 const labelActiveStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 800,
   color: '#F8FAFC',
   lineHeight: 1.2,
