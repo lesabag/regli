@@ -2720,7 +2720,14 @@ export default function ClientDashboard({
   const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
   const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
   const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
-  const shouldShowDogCountControl = isDogServiceType(effectiveRequestServiceType ?? resolvedBookingService)
+  const savedDogCount = useMemo(() => {
+    const normalizedUniqueNames = recentDogNames
+      .map((name) => normalizeDogName(name))
+      .filter(Boolean)
+
+    return new Set(normalizedUniqueNames).size
+  }, [recentDogNames])
+  const shouldShowDogCountControl = isDogWalkerRequest && savedDogCount >= 2
   const normalizedDogCount = shouldShowDogCountControl ? normalizeDogCount(dogCount) : 1
   const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : flow.dogName.trim()
   const hasValidDurationForSelectedService = isBabysitterRequest
@@ -2834,6 +2841,12 @@ export default function ClientDashboard({
     providerPricingPreferences,
     resolvedBookingService,
   ])
+
+  useEffect(() => {
+    if (shouldShowDogCountControl) return
+    if (dogCount === 1) return
+    setDogCount(1)
+  }, [dogCount, shouldShowDogCountControl])
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
   const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
   const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
