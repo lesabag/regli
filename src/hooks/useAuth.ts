@@ -50,6 +50,8 @@ function getFallbackProfile(currentUser: User): Profile {
       (currentUser.user_metadata?.full_name as string | undefined) ?? null,
     role:
       (currentUser.user_metadata?.role as ProfileRole | undefined) ?? 'client',
+    short_bio:
+      (currentUser.user_metadata?.short_bio as string | undefined) ?? null,
     service_types: fallbackServiceTypes,
     service_type:
       fallbackServiceTypes[0] ??
@@ -226,6 +228,7 @@ export function useAuth() {
       role,
       primaryService,
       locationAddress,
+      shortBio,
       serviceTypes,
       serviceAttributes,
     }: {
@@ -235,6 +238,7 @@ export function useAuth() {
       role: AppRole
       primaryService?: string
       locationAddress?: string
+      shortBio?: string
       serviceTypes?: ProfileServiceType[]
       serviceAttributes?: ServiceAttributes | null
     }) => {
@@ -253,6 +257,7 @@ export function useAuth() {
               data: {
                 full_name: fullName,
                 role: safeRole,
+                short_bio: shortBio ?? null,
                 primary_service: primaryService ?? null,
                 location_address: locationAddress ?? null,
                 service_type: normalizedServiceTypes[0] ?? null,
@@ -280,6 +285,7 @@ export function useAuth() {
           email,
           full_name: fullName,
           role: safeRole,
+          short_bio: shortBio ?? null,
           primary_service: primaryService ?? null,
           location_address: locationAddress ?? null,
           service_type: normalizedServiceTypes[0] ?? null,

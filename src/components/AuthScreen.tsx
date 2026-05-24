@@ -19,6 +19,7 @@ interface AuthScreenProps {
     role: AppRole
     primaryService?: string
     locationAddress?: string
+    shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
@@ -37,6 +38,8 @@ type ServiceOption = {
 type DogSize = 'S' | 'M' | 'L' | 'XL'
 type EnergyLevel = 'low' | 'medium' | 'high'
 type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
+type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
 
 interface DogWalkerAttrs {
   petName: string
@@ -53,14 +56,16 @@ interface BabySitterAttrs {
 interface ProviderDogWalkerAttrs {
   supportedDogSizes: DogSize[]
   supportedEnergyLevels: EnergyLevel[]
-  experienceYears: number
-  notes: string
 }
 
 interface ProviderBabySitterAttrs {
   supportedAgeRanges: AgeRange[]
-  experienceYears: number
-  notes: string
+}
+
+interface ProviderIdentityAttrs {
+  experienceRange: ProviderExperienceRange | ''
+  shortBio: string
+  languages: ProviderLanguage[]
 }
 
 const DOG_SIZE_OPTIONS: { value: DogSize; label: string; desc: string }[] = [
@@ -83,13 +88,39 @@ const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
   { value: '7+', label: '7+' },
 ]
 
-const EXPERIENCE_YEAR_OPTIONS = [0, 1, 2, 3, 5, 10] as const
+const PROVIDER_EXPERIENCE_OPTIONS: {
+  value: ProviderExperienceRange
+  label: string
+  normalizedYears: number
+}[] = [
+  { value: '0_1', label: '0–1 years', normalizedYears: 1 },
+  { value: '1_3', label: '1–3 years', normalizedYears: 2 },
+  { value: '3_5', label: '3–5 years', normalizedYears: 4 },
+  { value: '5_10', label: '5–10 years', normalizedYears: 7 },
+  { value: '10_plus', label: '10+ years', normalizedYears: 10 },
+]
 
-const SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
+const PROVIDER_LANGUAGE_OPTIONS: {
+  value: ProviderLanguage
+  label: string
+}[] = [
+  { value: 'hebrew', label: 'Hebrew' },
+  { value: 'english', label: 'English' },
+  { value: 'russian', label: 'Russian' },
+  { value: 'arabic', label: 'Arabic' },
+  { value: 'french', label: 'French' },
+]
 
-function getStepIndex(mode: OnboardingMode, step: SignupStep) {
-  if (mode === 'signin') return SIGNUP_STEPS.indexOf('auth')
-  return SIGNUP_STEPS.indexOf(step)
+const PROVIDER_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
+const CLIENT_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'location', 'auth']
+
+function getSignupSteps(role: AppRole): SignupStep[] {
+  return role === 'walker' ? PROVIDER_SIGNUP_STEPS : CLIENT_SIGNUP_STEPS
+}
+
+function getStepIndex(mode: OnboardingMode, step: SignupStep, signupSteps: SignupStep[]) {
+  if (mode === 'signin') return signupSteps.indexOf('auth')
+  return signupSteps.indexOf(step)
 }
 
 function getStepTitle(mode: OnboardingMode, step: SignupStep, role: AppRole) {
@@ -109,6 +140,10 @@ async function reverseGeocodeLocation(lat: number, lng: number): Promise<string>
     language: 'en',
     fallbackLabel: 'Current location detected',
   })
+}
+
+function getNormalizedExperienceYears(range: ProviderExperienceRange | ''): number {
+  return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.normalizedYears ?? 0
 }
 
 export default function AuthScreen({
@@ -131,8 +166,13 @@ export default function AuthScreen({
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
-  const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [], experienceYears: 0, notes: '' })
-  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [], experienceYears: 0, notes: '' })
+  const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [] })
+  const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [] })
+  const [providerIdentity, setProviderIdentity] = useState<ProviderIdentityAttrs>({
+    experienceRange: '',
+    shortBio: '',
+    languages: [],
+  })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
       id: option.value,
@@ -142,9 +182,11 @@ export default function AuthScreen({
     })),
     [],
   )
+  const signupSteps = useMemo(() => getSignupSteps(role), [role])
 
   const currentStep = mode === 'signin' ? 'auth' : signupStep
-  const activeStepIndex = getStepIndex(mode, currentStep)
+  const activeStepIndex = getStepIndex(mode, currentStep, signupSteps)
+  const signupStepNumber = mode === 'signup' ? Math.max(1, signupSteps.indexOf(currentStep)) : null
 
   const selectedServiceMeta = useMemo(
     () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
@@ -154,6 +196,7 @@ export default function AuthScreen({
   const hasDog = selectedServices.includes('dog_walker')
   const hasSitter = selectedServices.includes('baby_sitter')
   const isProvider = role === 'walker'
+  const onboardingServiceTypes = isProvider ? selectedServices : []
 
   const dogValid = isProvider
     ? !hasDog || provDogAttrs.supportedDogSizes.length > 0
@@ -166,15 +209,17 @@ export default function AuthScreen({
         sitterAttrs.childrenAges.every((a) => a.trim().length > 0)
       )
 
+  const providerIdentityValid = !isProvider || providerIdentity.experienceRange !== ''
+
   const canContinue = useMemo(() => {
     if (mode === 'signin') return !!email && !!password
     if (currentStep === 'role') return !!role
     if (currentStep === 'service') return selectedServices.length > 0
     if (currentStep === 'location') return true
-    if (currentStep === 'details') return dogValid && sitterValid
+    if (currentStep === 'details') return dogValid && sitterValid && providerIdentityValid
     if (currentStep === 'auth') return !!email && !!password && !!fullName.trim()
     return true
-  }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid])
+  }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
 
@@ -257,13 +302,13 @@ export default function AuthScreen({
       return
     }
 
-    const currentIndex = SIGNUP_STEPS.indexOf(signupStep)
+    const currentIndex = signupSteps.indexOf(signupStep)
     if (currentIndex <= 0) {
       setMode('welcome')
       setSignupStep('welcome')
       return
     }
-    setSignupStep(SIGNUP_STEPS[currentIndex - 1])
+    setSignupStep(signupSteps[currentIndex - 1])
   }
 
   const handleContinue = async () => {
@@ -281,23 +326,16 @@ export default function AuthScreen({
       return
     }
 
-    if (signupStep === 'role') {
-      setSignupStep('service')
-      return
-    }
-
-    if (signupStep === 'service') {
-      setSignupStep('location')
-      return
-    }
-
-    if (signupStep === 'location') {
-      setSignupStep('details')
-      return
+    if (mode === 'signup') {
+      const currentIndex = signupSteps.indexOf(signupStep)
+      const nextStep = currentIndex >= 0 ? signupSteps[currentIndex + 1] : null
+      if (nextStep) {
+        setSignupStep(nextStep)
+        return
+      }
     }
 
     if (signupStep === 'details') {
-      setSignupStep('auth')
       return
     }
 
@@ -305,37 +343,22 @@ export default function AuthScreen({
       setSubmitting(true)
       const attrs: ServiceAttributes = {}
       if (isProvider) {
+        attrs.provider_profile = {
+          experienceRange: providerIdentity.experienceRange,
+          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+          languagesSpoken: providerIdentity.languages,
+        }
         if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
           attrs.dog_walker = {
             supportedDogSizes: provDogAttrs.supportedDogSizes,
             supportedEnergyLevels: provDogAttrs.supportedEnergyLevels,
-            experienceYears: provDogAttrs.experienceYears,
-            notes: provDogAttrs.notes.trim() || null,
+            experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
           }
         }
         if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
           attrs.baby_sitter = {
             supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
-            experienceYears: provSitterAttrs.experienceYears,
-            notes: provSitterAttrs.notes.trim() || null,
-          }
-        }
-      } else {
-        if (hasDog && dogAttrs.petName.trim()) {
-          attrs.dog_walker = {
-            petName: dogAttrs.petName.trim(),
-            dogSize: dogAttrs.dogSize,
-            energyLevel: dogAttrs.energyLevel,
-          }
-        }
-        if (hasSitter && sitterAttrs.numberOfKids >= 1) {
-          attrs.baby_sitter = {
-            numberOfKids: sitterAttrs.numberOfKids,
-            childrenAges: sitterAttrs.childrenAges.filter((a) => a.trim().length > 0).map((a) => {
-              const n = Number(a.trim())
-              return Number.isFinite(n) ? n : a.trim()
-            }),
-            specialNotes: sitterAttrs.specialNotes.trim() || null,
+            experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
           }
         }
       }
@@ -344,10 +367,11 @@ export default function AuthScreen({
         password,
         fullName: fullName.trim(),
         role,
-        primaryService: selectedServiceMeta.label,
+        primaryService: isProvider ? selectedServiceMeta.label : undefined,
         locationAddress: locationLabel,
-        serviceTypes: selectedServices,
-        serviceAttributes: Object.keys(attrs).length > 0 ? attrs : null,
+        shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
+        serviceTypes: onboardingServiceTypes,
+        serviceAttributes: isProvider && Object.keys(attrs).length > 0 ? attrs : null,
       })
       if (result.ok && typeof window !== 'undefined') {
         window.sessionStorage.setItem(
@@ -411,7 +435,7 @@ export default function AuthScreen({
           </div>
 
           <div style={stepsRowStyle}>
-            {SIGNUP_STEPS.map((step, index) => (
+            {signupSteps.map((step, index) => (
               <span
                 key={step}
                 style={{
@@ -457,7 +481,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'role' && (
             <>
-              <div style={eyebrowStyle}>Step 1</div>
+              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <div style={optionStackStyle}>
                 <RoleCard
@@ -467,7 +491,10 @@ export default function AuthScreen({
                   icon="🧑‍💼"
                   imageSrc={providerCharacterImage}
                   imageAlt="Provider onboarding character"
-                  onClick={() => setRole('walker')}
+                  onClick={() => {
+                    setRole('walker')
+                    setSelectedServices((current) => current.length > 0 ? current : ['dog_walker'])
+                  }}
                 />
                 <RoleCard
                   title="Customer"
@@ -476,7 +503,10 @@ export default function AuthScreen({
                   icon="✨"
                   imageSrc={customerCharacterImage}
                   imageAlt="Customer onboarding character"
-                  onClick={() => setRole('client')}
+                  onClick={() => {
+                    setRole('client')
+                    setSelectedServices([])
+                  }}
                 />
               </div>
             </>
@@ -484,7 +514,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'service' && (
             <>
-              <div style={eyebrowStyle}>Step 2</div>
+              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 Pick one primary service for now. You can expand this later in settings.
@@ -517,7 +547,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'location' && (
             <>
-              <div style={eyebrowStyle}>Step 3</div>
+              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 We’ll use this to tailor nearby availability and a smoother first experience.
@@ -568,7 +598,7 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'details' && (
             <>
-              <div style={eyebrowStyle}>Step 4</div>
+              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 {isProvider
@@ -579,6 +609,74 @@ export default function AuthScreen({
               <div style={detailsSectionsStyle}>
                 {isProvider ? (
                   <>
+                    <div style={providerIdentityCardStyle}>
+                      <div style={providerIdentityHeaderStyle}>
+                        <div style={providerIdentityTitleStyle}>Build trust quickly</div>
+                        <div style={providerIdentitySubtitleStyle}>
+                          A few profile basics help clients understand who you are before they book.
+                        </div>
+                      </div>
+
+                      <div style={detailsFieldBlockStyle}>
+                        <label style={labelStyle}>Years of experience</label>
+                        <div style={chipRowStyle}>
+                          {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setProviderIdentity((prev) => ({ ...prev, experienceRange: option.value }))}
+                              style={{
+                                ...chipStyle,
+                                ...compactChipStyle,
+                                ...(providerIdentity.experienceRange === option.value ? chipSelectedStyle : null),
+                              }}
+                            >
+                              <span style={compactChipLabelStyle}>{option.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={detailsFieldBlockStyle}>
+                        <label style={labelStyle}>Short bio</label>
+                        <textarea
+                          value={providerIdentity.shortBio}
+                          onChange={(e) => setProviderIdentity((prev) => ({ ...prev, shortBio: e.target.value }))}
+                          placeholder="Reliable electrician specializing in residential repairs."
+                          rows={2}
+                          style={compactTextareaStyle}
+                        />
+                      </div>
+
+                      <div style={detailsFieldBlockStyle}>
+                        <label style={labelStyle}>Languages spoken</label>
+                        <div style={chipRowStyle}>
+                          {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                            const selected = providerIdentity.languages.includes(option.value)
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => setProviderIdentity((prev) => ({
+                                  ...prev,
+                                  languages: selected
+                                    ? prev.languages.filter((value) => value !== option.value)
+                                    : [...prev.languages, option.value],
+                                }))}
+                                style={{
+                                  ...chipStyle,
+                                  ...compactChipStyle,
+                                  ...(selected ? chipSelectedStyle : null),
+                                }}
+                              >
+                                <span style={compactChipLabelStyle}>{option.label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
                     {hasDog && (
                       <div style={detailsSectionStyle}>
                         {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
@@ -637,35 +735,6 @@ export default function AuthScreen({
                           </div>
                         </div>
 
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Years of experience</label>
-                          <div style={chipRowStyle}>
-                            {EXPERIENCE_YEAR_OPTIONS.map((yr) => (
-                              <button
-                                key={yr}
-                                type="button"
-                                onClick={() => setProvDogAttrs((prev) => ({ ...prev, experienceYears: yr }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...(provDogAttrs.experienceYears === yr ? chipSelectedStyle : null),
-                                }}
-                              >
-                                <span style={chipLabelStyle}>{yr === 0 ? 'New' : `${yr}+`}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Notes (optional)</label>
-                          <textarea
-                            value={provDogAttrs.notes}
-                            onChange={(e) => setProvDogAttrs((prev) => ({ ...prev, notes: e.target.value }))}
-                            placeholder="e.g. Comfortable with large dogs"
-                            rows={2}
-                            style={textareaStyle}
-                          />
-                        </div>
                       </div>
                     )}
 
@@ -699,35 +768,6 @@ export default function AuthScreen({
                           </div>
                         </div>
 
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Years of experience</label>
-                          <div style={chipRowStyle}>
-                            {EXPERIENCE_YEAR_OPTIONS.map((yr) => (
-                              <button
-                                key={yr}
-                                type="button"
-                                onClick={() => setProvSitterAttrs((prev) => ({ ...prev, experienceYears: yr }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...(provSitterAttrs.experienceYears === yr ? chipSelectedStyle : null),
-                                }}
-                              >
-                                <span style={chipLabelStyle}>{yr === 0 ? 'New' : `${yr}+`}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Notes (optional)</label>
-                          <textarea
-                            value={provSitterAttrs.notes}
-                            onChange={(e) => setProvSitterAttrs((prev) => ({ ...prev, notes: e.target.value }))}
-                            placeholder="e.g. Experienced with infants"
-                            rows={2}
-                            style={textareaStyle}
-                          />
-                        </div>
                       </div>
                     )}
                   </>
@@ -858,7 +898,7 @@ export default function AuthScreen({
 
           {currentStep === 'auth' && (
             <>
-              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : 'Step 5'}</div>
+              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
                 {mode === 'signin'
@@ -870,7 +910,11 @@ export default function AuthScreen({
                 <div style={summaryCardStyle}>
                   <div style={summaryRowStyle}>
                     <span>{roleSummary}</span>
-                    <span>{selectedServices.map((value) => serviceOptions.find((service) => service.id === value)?.label).filter(Boolean).join(', ')}</span>
+                    <span>
+                      {isProvider
+                        ? selectedServices.map((value) => serviceOptions.find((service) => service.id === value)?.label).filter(Boolean).join(', ')
+                        : 'Ready to book'}
+                    </span>
                   </div>
                   <div style={summaryLocationStyle}>{locationLabel}</div>
                 </div>
@@ -1753,6 +1797,33 @@ const detailsSectionsStyle: CSSProperties = {
   gap: 18,
 }
 
+const providerIdentityCardStyle: CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  padding: '14px 14px 12px',
+  borderRadius: 20,
+  border: '1px solid rgba(145, 164, 196, 0.18)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
+  boxShadow: '0 12px 26px rgba(45, 68, 126, 0.08)',
+}
+
+const providerIdentityHeaderStyle: CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const providerIdentityTitleStyle: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const providerIdentitySubtitleStyle: CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
 const detailsSectionStyle: CSSProperties = {
   display: 'grid',
   gap: 12,
@@ -1797,8 +1868,20 @@ const chipSelectedStyle: CSSProperties = {
   boxShadow: '0 8px 20px rgba(91, 124, 250, 0.12)',
 }
 
+const compactChipStyle: CSSProperties = {
+  padding: '9px 12px',
+  minWidth: 0,
+}
+
 const chipLabelStyle: CSSProperties = {
   fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const compactChipLabelStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.25,
   fontWeight: 800,
   color: '#0F172A',
 }
@@ -1822,4 +1905,12 @@ const textareaStyle: CSSProperties = {
   outline: 'none',
   resize: 'vertical',
   fontFamily: 'inherit',
+}
+
+const compactTextareaStyle: CSSProperties = {
+  ...textareaStyle,
+  minHeight: 56,
+  maxHeight: 80,
+  lineHeight: 1.45,
+  resize: 'none',
 }
