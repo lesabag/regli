@@ -487,23 +487,17 @@ export default function AuthScreen({
               <div style={eyebrowStyle}>Step 2</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
-                Pick the service focus for now. You can expand this later.
+                Pick one primary service for now. You can expand this later in settings.
               </p>
               <div style={serviceGridStyle}>
                 {serviceOptions.map((service) => {
-                  const selected = selectedServices.includes(service.id)
+                  const selected = selectedServices[0] === service.id
                   return (
                     <button
                       key={service.id}
                       type="button"
                       onClick={() => {
-                        setSelectedServices((current) => {
-                          if (current.includes(service.id)) {
-                            if (current.length === 1) return current
-                            return current.filter((value) => value !== service.id)
-                          }
-                          return [...current, service.id]
-                        })
+                        setSelectedServices([service.id])
                       }}
                       style={{
                         ...serviceCardStyle,

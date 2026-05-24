@@ -8013,19 +8013,24 @@ const budgetGuidanceInlineTextStyle: React.CSSProperties = {
 
 const fixedVisitGuidanceStackStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  justifyItems: 'start',
+  alignItems: 'start',
+  gap: 4,
   minWidth: 0,
   paddingTop: 4,
 }
 
 const fixedVisitGuidanceTextStyle: React.CSSProperties = {
   minWidth: 0,
+  width: '100%',
   fontSize: 10.5,
   lineHeight: 1.35,
   fontWeight: 700,
   color: '#64748B',
   whiteSpace: 'normal',
   overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 
 const fixedVisitDisclaimerStyle: React.CSSProperties = {
