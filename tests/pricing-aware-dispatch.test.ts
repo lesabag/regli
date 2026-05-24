@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluatePricingEligibility, getDogPricingMultiplier, type ProviderPricingPreferenceRow } from '../supabase/functions/_shared/pricingEligibility.ts'
+import { getBudgetGuidanceFromProviderPreferences } from '../src/lib/pricing.ts'
 
 function pref(params: {
   providerId: string
@@ -139,4 +140,66 @@ test('pricing-aware dispatch recommends aggregated budgets from provider prefere
   assert.equal(result.aggregatedPreferredHourly, 75)
   assert.equal(result.recommendedMinBudget, 30)
   assert.equal(result.recommendedPreferredBudget, 38)
+})
+
+test('budget guidance uses provider coverage instead of flattening the full market range', () => {
+  const preferences = [
+    pref({ providerId: 'walker-a', bookingType: 'asap', minimum: 40, preferred: 50 }),
+    pref({ providerId: 'walker-b', bookingType: 'asap', minimum: 30, preferred: 40 }),
+  ]
+
+  const low = getBudgetGuidanceFromProviderPreferences({
+    serviceType: 'dog_walker',
+    bookingType: 'asap',
+    durationMinutes: 60,
+    selectedPriceILS: 25,
+    dogCount: 1,
+    preferences,
+  })
+  const some = getBudgetGuidanceFromProviderPreferences({
+    serviceType: 'dog_walker',
+    bookingType: 'asap',
+    durationMinutes: 60,
+    selectedPriceILS: 35,
+    dogCount: 1,
+    preferences,
+  })
+  const most = getBudgetGuidanceFromProviderPreferences({
+    serviceType: 'dog_walker',
+    bookingType: 'asap',
+    durationMinutes: 60,
+    selectedPriceILS: 45,
+    dogCount: 1,
+    preferences,
+  })
+
+  assert.ok(low)
+  assert.ok(some)
+  assert.ok(most)
+  assert.equal(low.likelihood, 'low')
+  assert.equal(some.likelihood, 'medium')
+  assert.equal(most.likelihood, 'high')
+  assert.equal(some.coveredProviderCount, 1)
+  assert.equal(some.eligibleProviderCount, 2)
+  assert.equal(some.recommendedMin, 30)
+  assert.equal(some.recommendedGood, 40)
+})
+
+test('budget guidance excludes providers that cannot support requested multi-item dog walks', () => {
+  const guidance = getBudgetGuidanceFromProviderPreferences({
+    serviceType: 'dog_walker',
+    bookingType: 'asap',
+    durationMinutes: 60,
+    selectedPriceILS: 80,
+    dogCount: 2,
+    preferences: [
+      pref({ providerId: 'walker-a', bookingType: 'asap', minimum: 40, preferred: 50, acceptsMultiItem: false, maxItemCount: 1 }),
+      pref({ providerId: 'walker-b', bookingType: 'asap', minimum: 40, preferred: 50, acceptsMultiItem: true, maxItemCount: 3 }),
+    ],
+  })
+
+  assert.ok(guidance)
+  assert.equal(guidance.eligibleProviderCount, 1)
+  assert.equal(guidance.coveredProviderCount, 1)
+  assert.equal(guidance.likelihood, 'high')
 })

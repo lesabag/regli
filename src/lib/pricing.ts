@@ -1,4 +1,4 @@
-import { isDogServiceType, normalizeDogCount } from '../utils/dogCount'
+import { isDogServiceType, normalizeDogCount } from '../utils/dogCount.ts'
 
 /**
  * Dynamic Pricing Engine V1
@@ -87,9 +87,13 @@ export interface BudgetGuidance {
   providerRowsCount: number
   aggregatedMinHourly: number | null
   aggregatedPreferredHourly: number | null
+  coveredProviderCount: number
+  eligibleProviderCount: number
+  coverageRatio: number | null
 }
 
 export interface ProviderPricingPreferenceInput {
+  provider_id?: string | null | undefined
   service_type: string | null | undefined
   pricing_model: 'time_based' | 'visit_based' | 'hybrid' | string | null | undefined
   booking_type: 'asap' | 'scheduled' | string | null | undefined
@@ -104,6 +108,11 @@ type PricingBand = {
   minutes: number
   min: number
   good: number
+}
+
+type CoverageThresholds = {
+  mediumCount: number
+  highCount: number
 }
 
 const SERVICE_GUIDANCE_TABLE: Record<string, PricingBand[]> = {
@@ -190,6 +199,23 @@ function toFiniteNumber(value: number | string | null | undefined): number | nul
         ? Number(value)
         : NaN
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function getCoverageThresholds(providerCount: number): CoverageThresholds {
+  const safeCount = Math.max(1, Math.floor(providerCount))
+  return {
+    mediumCount: Math.max(1, Math.ceil(safeCount * 0.25)),
+    highCount: Math.max(1, Math.ceil(safeCount * 0.75)),
+  }
+}
+
+function getBudgetAtCoverageTarget(sortedBudgets: number[], coveredProvidersTarget: number): number {
+  if (sortedBudgets.length === 0) return 1
+  const normalizedIndex = Math.min(
+    sortedBudgets.length - 1,
+    Math.max(0, coveredProvidersTarget - 1),
+  )
+  return Math.max(1, Math.round(sortedBudgets[normalizedIndex] ?? sortedBudgets[0] ?? 1))
 }
 
 function getRecommendedBand(params: {
@@ -298,6 +324,9 @@ export function getBudgetGuidance(params: {
     providerRowsCount: 0,
     aggregatedMinHourly: null,
     aggregatedPreferredHourly: null,
+    coveredProviderCount: 0,
+    eligibleProviderCount: 0,
+    coverageRatio: null,
   }
 }
 
@@ -336,17 +365,61 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
 
   if (relevant.length === 0) return null
 
-  const minimumRates = relevant
+  const hours = durationMinutes / 60
+  const preferenceRows = Array.from(
+    relevant.reduce((map, row) => {
+      const providerId = typeof row.provider_id === 'string' && row.provider_id.length > 0
+        ? row.provider_id
+        : null
+
+      if (providerId) {
+        if (!map.has(providerId)) map.set(providerId, row)
+        return map
+      }
+
+      map.set(`row-${map.size}`, row)
+      return map
+    }, new Map<string, ProviderPricingPreferenceInput>()).values(),
+  )
+
+  const budgetBands = preferenceRows
     .map((row) => {
-      const baseRate = toFiniteNumber(row.hourly_rate_min)
-      return baseRate != null && baseRate >= 0 ? baseRate * multiItemMultiplier : null
+      const minimumHourly = toFiniteNumber(row.hourly_rate_min)
+      const preferredHourly = toFiniteNumber(row.hourly_rate_preferred)
+      const adjustedMinimumHourly =
+        minimumHourly != null && minimumHourly >= 0 ? minimumHourly * multiItemMultiplier : null
+      const adjustedPreferredHourly =
+        preferredHourly != null && preferredHourly >= 0 ? preferredHourly * multiItemMultiplier : null
+
+      const minimumBudget =
+        adjustedMinimumHourly != null
+          ? Math.max(1, Math.round(adjustedMinimumHourly * hours))
+          : adjustedPreferredHourly != null
+            ? Math.max(1, Math.round(adjustedPreferredHourly * hours))
+            : null
+      const preferredBudget =
+        adjustedPreferredHourly != null
+          ? Math.max(1, Math.round(adjustedPreferredHourly * hours))
+          : minimumBudget
+
+      if (minimumBudget == null) return null
+
+      return {
+        minimumHourly: adjustedMinimumHourly,
+        preferredHourly: adjustedPreferredHourly,
+        minimumBudget,
+        preferredBudget: preferredBudget ?? minimumBudget,
+      }
     })
+    .filter((value): value is NonNullable<typeof value> => value != null)
+
+  if (budgetBands.length === 0) return null
+
+  const minimumRates = budgetBands
+    .map((band) => band.minimumHourly)
     .filter((value): value is number => value != null && value >= 0)
-  const preferredRates = relevant
-    .map((row) => {
-      const baseRate = toFiniteNumber(row.hourly_rate_preferred)
-      return baseRate != null && baseRate >= 0 ? baseRate * multiItemMultiplier : null
-    })
+  const preferredRates = budgetBands
+    .map((band) => band.preferredHourly)
     .filter((value): value is number => value != null && value >= 0)
 
   if (minimumRates.length === 0 && preferredRates.length === 0) return null
@@ -361,18 +434,32 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
       ? preferredRates.reduce((sum, value) => sum + value, 0) / preferredRates.length
       : averageMinRate
 
-  const hours = durationMinutes / 60
-  const recommendedMin = Math.max(1, Math.round(averageMinRate * hours))
-  const recommendedGood = Math.max(recommendedMin, Math.round(averagePreferredRate * hours))
-  const effectiveHourlyRate =
+  const sortedMinimumBudgets = budgetBands
+    .map((band) => band.minimumBudget)
+    .sort((a, b) => a - b)
+  const { mediumCount, highCount } = getCoverageThresholds(sortedMinimumBudgets.length)
+  const recommendedMin = getBudgetAtCoverageTarget(sortedMinimumBudgets, mediumCount)
+  const recommendedGood = Math.max(
+    recommendedMin,
+    getBudgetAtCoverageTarget(sortedMinimumBudgets, highCount),
+  )
+  const roundedSelectedPrice =
     Number.isFinite(selectedPriceILS) && selectedPriceILS > 0
-      ? selectedPriceILS / hours
+      ? Math.round(selectedPriceILS)
       : 0
+  const coveredProviderCount = budgetBands.reduce((count, band) => (
+    roundedSelectedPrice >= band.minimumBudget ? count + 1 : count
+  ), 0)
+  const eligibleProviderCount = budgetBands.length
+  const coverageRatio =
+    eligibleProviderCount > 0
+      ? coveredProviderCount / eligibleProviderCount
+      : null
 
   const likelihood: BudgetAcceptanceLikelihood =
-    effectiveHourlyRate < averageMinRate
+    coverageRatio == null || coverageRatio < 0.25
       ? 'low'
-      : effectiveHourlyRate < averagePreferredRate
+      : coverageRatio < 0.75
         ? 'medium'
         : 'high'
 
@@ -383,9 +470,12 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
     suggestedLow: recommendedMin,
     suggestedHigh: recommendedGood,
     fallback: false,
-    providerRowsCount: relevant.length,
+    providerRowsCount: budgetBands.length,
     aggregatedMinHourly: Math.round(averageMinRate * 100) / 100,
     aggregatedPreferredHourly: Math.round(averagePreferredRate * 100) / 100,
+    coveredProviderCount,
+    eligibleProviderCount,
+    coverageRatio: coverageRatio != null ? Math.round(coverageRatio * 100) / 100 : null,
   }
 }
 

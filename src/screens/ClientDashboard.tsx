@@ -2352,6 +2352,14 @@ export default function ClientDashboard({
     requestServiceType,
     flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
   )
+  const nearbyProviderIdsForGuidance = useMemo(
+    () => Array.from(new Set(nearbyWalkers.map((walker) => walker.id).filter((value) => value.length > 0))).sort(),
+    [nearbyWalkers],
+  )
+  const nearbyProviderIdsForGuidanceKey = useMemo(
+    () => nearbyProviderIdsForGuidance.join(','),
+    [nearbyProviderIdsForGuidance],
+  )
 
   const mapUserLocation: [number, number] =
     flow.userLocation ?? flow.walkerLocation ?? ([32.0853, 34.7818] as [number, number])
@@ -2911,7 +2919,7 @@ export default function ClientDashboard({
 
     async function loadProviderPricingPreferences() {
       const serviceType = effectiveRequestServiceType ?? null
-      if (!serviceType) {
+      if (!serviceType || nearbyProviderIdsForGuidance.length === 0) {
         if (!cancelled) setProviderPricingPreferences([])
         return
       }
@@ -2920,7 +2928,8 @@ export default function ClientDashboard({
 
       let query = supabase
         .from('provider_service_preferences')
-        .select('service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+        .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+        .in('provider_id', nearbyProviderIdsForGuidance)
         .eq('booking_type', bookingTypeForGuidance)
         .eq('is_enabled', true)
         .eq('pricing_model', 'time_based')
@@ -2947,8 +2956,10 @@ export default function ClientDashboard({
         service_type_aliases: serviceTypeAliases,
         booking_type: bookingTypeForGuidance,
         dog_count: normalizedDogCount,
+        nearbyProviderCount: nearbyProviderIdsForGuidance.length,
         fetchedRowsCount: nextRows.length,
         providerPrefsUsed: nextRows.map((row) => ({
+          provider_id: row.provider_id ?? null,
           service_type: row.service_type,
           booking_type: row.booking_type,
           hourly_rate_min: row.hourly_rate_min,
@@ -2963,7 +2974,7 @@ export default function ClientDashboard({
     return () => {
       cancelled = true
     }
-  }, [bookingTypeForGuidance, effectiveRequestServiceType])
+  }, [bookingTypeForGuidance, effectiveRequestServiceType, nearbyProviderIdsForGuidance, nearbyProviderIdsForGuidanceKey, normalizedDogCount])
 
   const budgetGuidance = useMemo(() => {
     const marketGuidance = getBudgetGuidanceFromProviderPreferences({
@@ -3042,12 +3053,16 @@ export default function ClientDashboard({
       booking_type: bookingTypeForGuidance,
       duration_minutes: currentBookingDurationMinutes,
       dogCount: normalizedDogCount,
+      nearbyProviderCount: nearbyProviderIdsForGuidance.length,
       fetchedProviderRowsCount: providerPricingPreferences.length,
       selectedBudget: currentBudgetForGuidanceILS,
       aggregatedMinimumHourly: budgetGuidance.aggregatedMinHourly,
       aggregatedPreferredHourly: budgetGuidance.aggregatedPreferredHourly,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
+      coveredProviderCount: budgetGuidance.coveredProviderCount,
+      eligibleProviderCount: budgetGuidance.eligibleProviderCount,
+      coverageRatio: budgetGuidance.coverageRatio,
       likelihood: budgetGuidance.likelihood,
       fallbackUsed: budgetGuidance.fallback,
     })
@@ -3060,8 +3075,10 @@ export default function ClientDashboard({
       booking_type: bookingTypeForGuidance,
       duration_minutes: currentBookingDurationMinutes,
       dogCount: normalizedDogCount,
+      nearbyProviderCount: nearbyProviderIdsForGuidance.length,
       fetchedProviderRowsCount: providerPricingPreferences.length,
       providerPrefsUsed: providerPricingPreferences.map((row) => ({
+        provider_id: row.provider_id ?? null,
         service_type: row.service_type,
         booking_type: row.booking_type,
         hourly_rate_min: row.hourly_rate_min,
@@ -3074,6 +3091,9 @@ export default function ClientDashboard({
       calculatedRecommendedPreferredBudget: budgetGuidance.recommendedGood,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
+      coveredProviderCount: budgetGuidance.coveredProviderCount,
+      eligibleProviderCount: budgetGuidance.eligibleProviderCount,
+      coverageRatio: budgetGuidance.coverageRatio,
       likelihood: budgetGuidance.likelihood,
       fallbackUsed: budgetGuidance.fallback,
     })
@@ -3085,9 +3105,13 @@ export default function ClientDashboard({
     budgetGuidance.likelihood,
     budgetGuidance.recommendedGood,
     budgetGuidance.recommendedMin,
+    budgetGuidance.coverageRatio,
+    budgetGuidance.coveredProviderCount,
+    budgetGuidance.eligibleProviderCount,
     currentBookingDurationMinutes,
     currentBudgetForGuidanceILS,
     effectiveRequestServiceType,
+    nearbyProviderIdsForGuidance.length,
     normalizedDogCount,
     providerPricingPreferences,
     resolvedBookingService,
@@ -3384,8 +3408,34 @@ export default function ClientDashboard({
 
   const dogCountSelectorBlock = shouldShowDogCountControl ? (
     <div style={dogCountInlineRowStyle}>
-      <span style={dogCountInlineLabelStyle}>{isRtl ? 'בחירת כלבים' : 'Select dogs'}</span>
-      <div style={dogCountSegmentedStyle}>
+      <div style={dogSummaryInlineGroupStyle}>
+        <span style={dogSummaryInlineLabelStyle}>{isRtl ? 'שם' : 'Name'}</span>
+        <button
+          type="button"
+          onClick={() => {
+            if (Date.now() < suppressDogNameOpenUntilRef.current) return
+            openDogNameSheet()
+          }}
+          style={{
+            ...dogSummaryInlineButtonStyle,
+            ...(isDogNameGuided ? guidedFieldButtonStyle : null),
+            ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+          }}
+        >
+          <span style={dogSummaryInlineIconStyle}>{SERVICE_ICONS[resolvedBookingService]}</span>
+          <span
+            style={
+              bookingSubjectDisplayValue
+                ? dogSummaryInlineValueStyle
+                : dogSummaryInlinePlaceholderStyle
+            }
+          >
+            {bookingSubjectDisplayValue || bookingSubjectPlaceholder}
+          </span>
+        </button>
+      </div>
+      <div style={dogCountScrollWrapStyle}>
+        <div style={dogCountSegmentedStyle}>
         {activeDogPets.map((pet) => {
           const selected = selectedDogPetIds.includes(pet.id)
           return (
@@ -3415,6 +3465,7 @@ export default function ClientDashboard({
             </button>
           )
         })}
+        </div>
       </div>
     </div>
   ) : null
@@ -3539,6 +3590,29 @@ export default function ClientDashboard({
     </div>
   )
 
+  const activeBudgetValue = isBabySitterMode ? babysitterFixedBudgetValue : dogWalkerBudgetValue
+  const activeBudgetMin = isBabySitterMode ? BABYSITTER_BUDGET_MIN_ILS : DOG_WALKER_BUDGET_MIN_ILS
+  const activeBudgetMax = isBabySitterMode ? BABYSITTER_BUDGET_MAX_ILS : DOG_WALKER_BUDGET_MAX_ILS
+  const activeBudgetStep = isBabySitterMode ? BABYSITTER_BUDGET_STEP_ILS : DOG_WALKER_BUDGET_STEP_ILS
+  const activeDurationValue = isBabySitterMode ? babysitterDurationValue : dogWalkerDurationValue
+  const activeDurationGuidedStyle = !isBabySitterMode && isDurationGuided ? durationGuidedFieldShellStyle : null
+  const activeDurationAnimationStyle =
+    !isBabySitterMode && isDurationGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null
+  const handleActiveBudgetChange = (nextValue: number) => {
+    if (isBabySitterMode) {
+      handleBabysitterFixedBudgetChange(nextValue)
+      return
+    }
+    setDogWalkerBudgetFixed(String(nextValue))
+  }
+  const handleActiveDurationStep = (direction: 'up' | 'down') => {
+    if (isBabySitterMode) {
+      handleBabysitterDurationStep(direction)
+      return
+    }
+    handleDogWalkerDurationStep(direction)
+  }
+
   const compactSavedCardSummary =
     flow.savedCard && !flow.setupClientSecret ? (
       <button
@@ -3563,28 +3637,65 @@ export default function ClientDashboard({
       </button>
     ) : null
 
-  const compactBudgetSliderBlock = isBabySitterMode ? (
-    <div style={unifiedPriceSliderBlockStyle}>
-      <div style={unifiedPriceValueRowStyle}>
-        <span style={unifiedPriceValueStyle}>₪{babysitterFixedBudgetValue}</span>
-      </div>
-      <div style={unifiedPriceSliderWrapStyle}>
-        <input
-          type="range"
-          min={BABYSITTER_BUDGET_MIN_ILS}
-          max={BABYSITTER_BUDGET_MAX_ILS}
-          step={BABYSITTER_BUDGET_STEP_ILS}
-          value={babysitterFixedBudgetValue}
-          onChange={(e) => handleBabysitterFixedBudgetChange(Number(e.target.value))}
-          style={unifiedBudgetSliderStyle}
-          aria-label={isRtl ? 'תקציב' : 'Budget'}
-        />
-        <div style={unifiedBudgetScaleRowStyle}>
-          <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
-          <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
+  const sharedPricingRows = (
+    <div style={dogWalkerPricingStackStyle}>
+      <div style={dogWalkerPriceRowStyle}>
+        <span aria-hidden="true" />
+        <div style={dogWalkerPriceValueWrapStyle}>
+          <span style={dogWalkerPriceValueStyle}>₪{activeBudgetValue}</span>
         </div>
       </div>
-      <div style={budgetGuidanceRowStyle}>
+      <div style={dogWalkerDurationSliderRowStyle}>
+        <div style={dogWalkerDurationInlineStyle}>
+          <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+          <div
+            style={{
+              ...babysitterDurationStepperStyle,
+              ...(activeDurationGuidedStyle ?? null),
+              ...(activeDurationAnimationStyle ?? null),
+            }}
+          >
+            <div style={babysitterDurationValueStyle}>
+              {formatHoursValue(activeDurationValue)}
+            </div>
+            <div style={babysitterDurationStepperButtonsStyle}>
+              <button
+                type="button"
+                onClick={() => handleActiveDurationStep('up')}
+                style={babysitterStepButtonStyle}
+                aria-label={isRtl ? 'הגדל משך' : 'Increase duration'}
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                onClick={() => handleActiveDurationStep('down')}
+                style={babysitterStepButtonStyle}
+                aria-label={isRtl ? 'הקטן משך' : 'Decrease duration'}
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+        </div>
+        <div style={dogWalkerSliderInlineStyle}>
+          <input
+            type="range"
+            min={activeBudgetMin}
+            max={activeBudgetMax}
+            step={activeBudgetStep}
+            value={activeBudgetValue}
+            onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
+            style={unifiedBudgetSliderStyle}
+            aria-label={isRtl ? 'תקציב' : 'Budget'}
+          />
+          <div style={unifiedBudgetScaleRowStyle}>
+            <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
+            <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
+          </div>
+        </div>
+      </div>
+      <div style={budgetGuidanceInlineRowStyle}>
         <span
           style={{
             ...budgetGuidanceChipStyle,
@@ -3597,44 +3708,7 @@ export default function ClientDashboard({
         >
           {budgetLikelihoodLabel}
         </span>
-        {budgetGuidanceText && <span style={budgetGuidanceTextStyle}>{budgetGuidanceText}</span>}
-      </div>
-    </div>
-  ) : (
-    <div style={unifiedPriceSliderBlockStyle}>
-      <div style={unifiedPriceValueRowStyle}>
-        <span style={unifiedPriceValueStyle}>₪{dogWalkerBudgetValue}</span>
-      </div>
-      <div style={unifiedPriceSliderWrapStyle}>
-        <input
-          type="range"
-          min={DOG_WALKER_BUDGET_MIN_ILS}
-          max={DOG_WALKER_BUDGET_MAX_ILS}
-          step={DOG_WALKER_BUDGET_STEP_ILS}
-          value={dogWalkerBudgetValue}
-          onChange={(e) => setDogWalkerBudgetFixed(String(Number(e.target.value)))}
-          style={unifiedBudgetSliderStyle}
-          aria-label={isRtl ? 'תקציב' : 'Budget'}
-        />
-        <div style={unifiedBudgetScaleRowStyle}>
-          <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
-          <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
-        </div>
-      </div>
-      <div style={budgetGuidanceRowStyle}>
-        <span
-          style={{
-            ...budgetGuidanceChipStyle,
-            ...(budgetGuidance.likelihood === 'high'
-              ? budgetGuidanceChipHighStyle
-              : budgetGuidance.likelihood === 'medium'
-                ? budgetGuidanceChipMediumStyle
-                : budgetGuidanceChipLowStyle),
-          }}
-        >
-          {budgetLikelihoodLabel}
-        </span>
-        {budgetGuidanceText && <span style={budgetGuidanceTextStyle}>{budgetGuidanceText}</span>}
+        {budgetGuidanceText && <span style={budgetGuidanceInlineTextStyle}>{budgetGuidanceText}</span>}
       </div>
     </div>
   )
@@ -3691,7 +3765,7 @@ export default function ClientDashboard({
 
   const unifiedPricingPaymentCard = (
     <div style={unifiedPricingPaymentCardInnerStyle}>
-      {compactBudgetSliderBlock}
+      {sharedPricingRows}
       <div style={unifiedPaymentRowWrapStyle}>{compactPaymentCardContent}</div>
     </div>
   )
@@ -4725,14 +4799,8 @@ export default function ClientDashboard({
                 <>
                 <div style={compactFormGridStyle}>
                   {dogCountSelectorBlock}
-                  <div style={subjectAddressRowStyle}>
-                    <div style={subjectAddressPrimaryCellStyle}>
-                      {dogSelectorBlock}
-                    </div>
-                    <div style={subjectAddressSecondaryCellStyle}>
-                      {pickupSelectorBlock}
-                    </div>
-                  </div>
+                  {shouldShowDogCountControl ? pickupSelectorBlock : dogSelectorBlock}
+                  {!shouldShowDogCountControl && pickupSelectorBlock}
 
                   {!isSheetCollapsed && preferredWalkers.length > 0 && (
                     <button
@@ -4754,25 +4822,17 @@ export default function ClientDashboard({
                   )}
 
                   {isSelectedServiceAvailable && !isSheetCollapsed ? (
-                    <div style={compactControlsRowStyle}>
-                      <div style={compactControlsMainStyle}>
-                        {isBabySitterMode ? babysitterPlannerBlock : durationPickerBlock}
-                      </div>
-                      <div style={compactControlsPaymentStyle}>
-                        {isPaymentGuided && (
-                          <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
-                        )}
-                        <div
-                          style={{
-                            ...compactPaymentWrapStyle,
-                            ...compactPaymentWrapCondensedStyle,
-                            ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
-                            ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                          }}
-                        >
-                          {unifiedPricingPaymentCard}
-                        </div>
-                      </div>
+                    <div
+                      style={{
+                        ...compactPaymentWrapStyle,
+                        ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                        ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                      }}
+                    >
+                      {isPaymentGuided && (
+                        <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
+                      )}
+                      {unifiedPricingPaymentCard}
                     </div>
                   ) : (
                     <>
@@ -6934,25 +6994,91 @@ const dogCountInlineRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
-  minHeight: 28,
+  gap: 8,
+  minHeight: 24,
+  minWidth: 0,
 }
 
-const dogCountInlineLabelStyle: React.CSSProperties = {
+const dogSummaryInlineGroupStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+  flexShrink: 0,
+}
+
+const dogSummaryInlineLabelStyle: React.CSSProperties = {
   fontSize: 11.5,
   fontWeight: 700,
   color: '#64748B',
   whiteSpace: 'nowrap',
 }
 
+const dogSummaryInlineButtonStyle: React.CSSProperties = {
+  minWidth: 0,
+  maxWidth: 168,
+  height: 28,
+  borderRadius: 999,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.82)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '0 10px 0 8px',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.76)',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const dogSummaryInlineIconStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  width: 18,
+  height: 18,
+  fontSize: 11,
+}
+
+const dogSummaryInlineValueStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const dogSummaryInlinePlaceholderStyle: React.CSSProperties = {
+  ...dogSummaryInlineValueStyle,
+  color: '#94A3B8',
+}
+
+const dogCountScrollWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  alignItems: 'center',
+  minWidth: 0,
+  flex: 1,
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  WebkitOverflowScrolling: 'touch',
+  scrollbarWidth: 'none',
+}
+
 const dogCountSegmentedStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
+  minWidth: 'max-content',
+  justifyContent: 'flex-end',
+  paddingInlineStart: 10,
 }
 
 const dogCountChipStyle: React.CSSProperties = {
-  minWidth: 36,
+  minWidth: 0,
+  maxWidth: 88,
   height: 30,
   borderRadius: 999,
   border: '1px solid rgba(148, 163, 184, 0.18)',
@@ -6960,9 +7086,13 @@ const dogCountChipStyle: React.CSSProperties = {
   color: '#475569',
   fontSize: 12,
   fontWeight: 800,
+  padding: '0 10px',
   cursor: 'pointer',
   fontFamily: 'inherit',
   boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.76)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const dogCountChipActiveStyle: React.CSSProperties = {
@@ -6971,22 +7101,6 @@ const dogCountChipActiveStyle: React.CSSProperties = {
   color: '#FFFFFF',
   boxShadow: '0 10px 18px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255,255,255,0.08)',
 }
-
-const subjectAddressRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 0.86fr) minmax(0, 1.28fr)',
-  gap: 7,
-  alignItems: 'start',
-}
-
-const subjectAddressPrimaryCellStyle: React.CSSProperties = {
-  minWidth: 0,
-}
-
-const subjectAddressSecondaryCellStyle: React.CSSProperties = {
-  minWidth: 0,
-}
-
 
 const comingSoonOverlayStyle: React.CSSProperties = {
   display: 'flex',
@@ -7045,6 +7159,8 @@ const babysitterAddressFieldWrapStyle: React.CSSProperties = {
 
 const dogWalkerAddressFieldWrapStyle: React.CSSProperties = {
   marginBottom: 2,
+  marginTop: 6,
+  minWidth: 0,
 }
 
 const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
@@ -7053,36 +7169,6 @@ const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
 
 const dogWalkerPlannerFieldWrapStyle: React.CSSProperties = {
   marginBottom: 0,
-}
-
-const compactControlsRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(94px, 0.4fr) minmax(0, 1fr)',
-  alignItems: 'start',
-  gap: 0,
-  marginBottom: 12,
-  border: '1px solid rgba(148, 163, 184, 0.14)',
-  borderRadius: 24,
-  background: 'rgba(255,255,255,0.86)',
-  boxShadow: '0 10px 28px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.76)',
-  padding: '6px 10px',
-  boxSizing: 'border-box',
-}
-
-const compactControlsMainStyle: React.CSSProperties = {
-  minWidth: 0,
-  paddingInlineEnd: 8,
-  marginInlineEnd: 8,
-  borderInlineEnd: '1px solid rgba(226, 232, 240, 0.9)',
-  alignSelf: 'stretch',
-}
-
-const compactControlsPaymentStyle: React.CSSProperties = {
-  minWidth: 0,
-  display: 'grid',
-  gap: 0,
-  alignContent: 'start',
-  paddingInlineStart: 0,
 }
 
 const guidedFieldButtonStyle: React.CSSProperties = {
@@ -7128,7 +7214,8 @@ const pickupSelectorShellStyle: React.CSSProperties = {
   gap: 8,
   width: '100%',
   boxSizing: 'border-box',
-  padding: '0 10px',
+  minWidth: 0,
+  padding: '0 11px 0 9px',
   cursor: 'pointer',
   boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
 }
@@ -7143,19 +7230,19 @@ const pickupSelectorInlineIconStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   flexShrink: 0,
-  width: 24,
-  height: 24,
+  width: 22,
+  height: 22,
   borderRadius: 9,
   background: 'rgba(59,130,246,0.10)',
   color: '#2563EB',
-  fontSize: 12,
+  fontSize: 11.5,
   lineHeight: 1,
 }
 
 const pickupSelectorValueStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.5,
+  fontSize: 12.75,
   color: '#0F172A',
   fontWeight: 700,
   lineHeight: 'normal',
@@ -7173,7 +7260,7 @@ const pickupSelectorValueCompactStyle: React.CSSProperties = {
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.5,
+  fontSize: 12.75,
   color: '#94A3B8',
   fontWeight: 600,
   lineHeight: 'normal',
@@ -7434,13 +7521,6 @@ const compactPaymentWrapStyle: React.CSSProperties = {
   boxShadow: 'none',
 }
 
-const compactPaymentWrapCondensedStyle: React.CSSProperties = {
-  height: '100%',
-  minHeight: 58,
-  padding: 0,
-  alignSelf: 'stretch',
-}
-
 const compactSavedCardRowStyle: React.CSSProperties = {
   appearance: 'none',
   border: 'none',
@@ -7577,45 +7657,20 @@ const babysitterStepButtonStyle: React.CSSProperties = {
 
 const unifiedPricingPaymentCardInnerStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 3,
+  gap: 0,
   minHeight: '100%',
-}
-
-const unifiedPriceSliderBlockStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 2,
-}
-
-const unifiedPriceValueRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 16,
-}
-
-const unifiedPriceValueStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#0F172A',
-  fontSize: 18,
-  fontWeight: 900,
-  lineHeight: 1,
-  whiteSpace: 'nowrap',
-}
-
-const unifiedPriceSliderWrapStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 2,
 }
 
 const unifiedBudgetSliderStyle: React.CSSProperties = {
   width: '100%',
   margin: 0,
   accentColor: '#2563EB',
-  height: 22,
+  minWidth: 0,
+  height: 30,
+  padding: '5px 0',
   cursor: 'pointer',
   touchAction: 'pan-x',
+  WebkitTapHighlightColor: 'transparent',
 }
 
 const unifiedBudgetScaleRowStyle: React.CSSProperties = {
@@ -7623,7 +7678,8 @@ const unifiedBudgetScaleRowStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  marginTop: -5,
+  marginTop: -2,
+  paddingInline: 10,
 }
 
 const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
@@ -7631,14 +7687,6 @@ const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
   fontWeight: 700,
   color: '#94A3B8',
   lineHeight: 1,
-}
-
-const budgetGuidanceRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 7,
-  flexWrap: 'wrap',
-  marginTop: 1,
 }
 
 const budgetGuidanceChipStyle: React.CSSProperties = {
@@ -7673,19 +7721,81 @@ const budgetGuidanceChipHighStyle: React.CSSProperties = {
   color: '#047857',
 }
 
-const budgetGuidanceTextStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  lineHeight: 1.35,
-  fontWeight: 600,
-  color: '#64748B',
+const dogWalkerPricingStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 0,
+}
+
+const dogWalkerPriceRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(88px, auto) minmax(0, 1fr)',
+  gap: 14,
+  alignItems: 'center',
+  minWidth: 0,
+}
+
+const dogWalkerPriceValueWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  minHeight: 14,
+  minWidth: 0,
+}
+
+const dogWalkerPriceValueStyle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  lineHeight: 1,
+  color: '#0F172A',
+  whiteSpace: 'nowrap',
+}
+
+const dogWalkerDurationSliderRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(88px, auto) minmax(0, 1fr)',
+  gap: 14,
+  alignItems: 'center',
+}
+
+const dogWalkerDurationInlineStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  minWidth: 0,
+  alignContent: 'start',
+}
+
+const dogWalkerSliderInlineStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+}
+
+const budgetGuidanceInlineRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  minWidth: 0,
+  paddingTop: 2,
+}
+
+const budgetGuidanceInlineTextStyle: React.CSSProperties = {
   minWidth: 0,
   flex: 1,
+  textAlign: 'right',
+  fontSize: 10.5,
+  lineHeight: 1.2,
+  fontWeight: 700,
+  color: '#64748B',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(226, 232, 240, 0.58)',
-  paddingTop: 5,
-  marginTop: 1,
+  paddingTop: 7,
+  marginTop: 8,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
