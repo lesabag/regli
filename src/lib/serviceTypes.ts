@@ -25,6 +25,13 @@ export const MORE_SERVICES: ServiceType[] = [
   'shutters',
 ]
 
+export const FIXED_VISIT_BOOKING_SERVICES: ServiceType[] = [
+  'technician',
+  'electrician',
+  'plumber',
+  'shutters',
+]
+
 export const SERVICE_ICONS: Record<ServiceType, string> = {
   dog_walking: '🐾',
   babysitter: '👶',
@@ -105,5 +112,32 @@ export const SERVICE_I18N_KEYS: Record<
 }
 
 export function isServiceAvailable(serviceType: ServiceType): boolean {
-  return serviceType === 'dog_walking' || serviceType === 'babysitter'
+  return (
+    serviceType === 'dog_walking' ||
+    serviceType === 'babysitter' ||
+    FIXED_VISIT_BOOKING_SERVICES.includes(serviceType)
+  )
+}
+
+export function getBookingPricingModelForService(serviceType: ServiceType | string | null | undefined): 'time_based' | 'fixed_visit' {
+  const normalized = (serviceType ?? '').trim().toLowerCase()
+  if (
+    normalized === 'technician' ||
+    normalized === 'electrician' ||
+    normalized === 'plumber' ||
+    normalized === 'shutters'
+  ) {
+    return 'fixed_visit'
+  }
+  return 'time_based'
+}
+
+export function isFixedVisitBookingService(serviceType: ServiceType | string | null | undefined): boolean {
+  return getBookingPricingModelForService(serviceType) === 'fixed_visit'
+}
+
+export function mapBookingServiceTypeToRequestServiceType(serviceType: ServiceType): string {
+  if (serviceType === 'babysitter') return 'baby_sitter'
+  if (serviceType === 'dog_walking') return 'dog_walker'
+  return serviceType
 }

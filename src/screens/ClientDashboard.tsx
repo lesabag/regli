@@ -16,9 +16,12 @@ import { usePushNotifications } from '../hooks/usePushNotifications'
 import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
+  FIXED_VISIT_BOOKING_SERVICES,
   SERVICE_ICONS,
   SERVICE_I18N_KEYS,
+  getBookingPricingModelForService,
   isServiceAvailable as checkServiceAvailable,
+  mapBookingServiceTypeToRequestServiceType,
 } from '../lib/serviceTypes'
 import {
   applyDogCountPricing,
@@ -44,7 +47,6 @@ import {
 } from '../utils/firstInteractionPerf'
 import {
   getProfileServiceOptions,
-  mapBookingServiceTypeToProfileServiceType,
   mapProfileServiceTypeToBookingServiceType,
   normalizeProfileServiceType,
   normalizeProfileServiceTypes,
@@ -495,6 +497,7 @@ export default function ClientDashboard({
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
   const [babysitterServiceDetails, setBabysitterServiceDetails] = useState('')
+  const [fixedVisitIssueDescription, setFixedVisitIssueDescription] = useState('')
   const [babysitterDurationHours, setBabysitterDurationHours] = useState(
     String(BABYSITTER_DEFAULT_DURATION_HOURS),
   )
@@ -585,7 +588,7 @@ export default function ClientDashboard({
   const hasUserInteractedRef = useRef(false)
   const arrivalBeepPlayedJobIdRef = useRef<string | null>(null)
   const selectedBookingServiceRef = useRef<ServiceType>('dog_walking')
-  const requestServiceTypeRef = useRef<ProfileServiceType | null>(null)
+  const requestServiceTypeRef = useRef<string | null>(null)
   const [mapMounted, setMapMounted] = useState(false)
   const [isDraggingSheet, setIsDraggingSheet] = useState(false)
   const sheetDragRef = useRef<{ startY: number; startSnap: SheetSnap; lastDelta: number } | null>(null)
@@ -620,23 +623,31 @@ export default function ClientDashboard({
   const availableProfileServiceTypes = profileServiceTypes.length > 0
     ? profileServiceTypes
     : normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
-  const hasSelectedProfileService = availableProfileServiceTypes.length > 0
+  const fixedVisitBookingServices = useMemo(() => FIXED_VISIT_BOOKING_SERVICES, [])
   const availableBookingServices = useMemo(
-    () => availableProfileServiceTypes.map((serviceType) => mapProfileServiceTypeToBookingServiceType(serviceType)),
-    [availableProfileServiceTypes],
+    () => Array.from(new Set([
+      ...availableProfileServiceTypes.map((serviceType) => mapProfileServiceTypeToBookingServiceType(serviceType)),
+      ...fixedVisitBookingServices,
+    ])),
+    [availableProfileServiceTypes, fixedVisitBookingServices],
   )
   const shouldShowProfileServicePicker = availableBookingServices.length > 1
   const resolvedBookingService = availableBookingServices.includes(selectedService)
     ? selectedService
     : availableBookingServices[0] ?? selectedService
+  const resolvedBookingPricingModel = getBookingPricingModelForService(resolvedBookingService)
   const requestServiceType =
-    mapBookingServiceTypeToProfileServiceType(resolvedBookingService) ??
+    mapBookingServiceTypeToRequestServiceType(resolvedBookingService) ??
     availableProfileServiceTypes[0] ??
+    profile.service_type ??
     normalizeProfileServiceType(profile.service_type)
+  const hasSelectedProfileService =
+    availableProfileServiceTypes.length > 0 || resolvedBookingPricingModel === 'fixed_visit'
   const effectiveRequestServiceType =
     requestServiceTypeRef.current ?? requestServiceType
   const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
   const isDogWalkerRequest = effectiveRequestServiceType === 'dog_walker'
+  const isFixedVisitMode = resolvedBookingPricingModel === 'fixed_visit'
   const activeDogPets = useMemo(
     () =>
       clientPets
@@ -695,7 +706,8 @@ export default function ClientDashboard({
 
     selectedBookingServiceRef.current = normalizedNextService
     requestServiceTypeRef.current =
-      mapBookingServiceTypeToProfileServiceType(normalizedNextService) ??
+      mapBookingServiceTypeToRequestServiceType(normalizedNextService) ??
+      profile.service_type ??
       normalizeProfileServiceType(profile.service_type)
 
     setMatchingUiState(null)
@@ -1494,8 +1506,9 @@ export default function ClientDashboard({
     const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
       ? selectedBookingServiceRef.current
       : resolvedBookingService
+    const effectiveBookingPricingModel = getBookingPricingModelForService(effectiveBookingService)
     const effectiveServiceType =
-      mapBookingServiceTypeToProfileServiceType(effectiveBookingService) ??
+      mapBookingServiceTypeToRequestServiceType(effectiveBookingService) ??
       requestServiceTypeRef.current ??
       requestServiceType
 
@@ -1508,9 +1521,11 @@ export default function ClientDashboard({
       ? babysitterDurationMinutes
       : isDogWalkerRequest
         ? dogWalkerDurationMinutes
+        : effectiveBookingPricingModel === 'fixed_visit'
+          ? null
         : flow.duration ? Math.round((flow.duration === '20min' ? 20 : flow.duration === '40min' ? 40 : 60)) : null
 
-    if (!durationMinutes) {
+    if (effectiveBookingPricingModel !== 'fixed_visit' && !durationMinutes) {
       setRecurringError(t('recurring.missingDuration'))
       return
     }
@@ -1568,8 +1583,9 @@ export default function ClientDashboard({
     const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
       ? selectedBookingServiceRef.current
       : resolvedBookingService
+    const effectiveBookingPricingModel = getBookingPricingModelForService(effectiveBookingService)
     const effectiveServiceType =
-      mapBookingServiceTypeToProfileServiceType(effectiveBookingService) ??
+      mapBookingServiceTypeToRequestServiceType(effectiveBookingService) ??
       requestServiceTypeRef.current ??
       requestServiceType
     if (!hasSelectedProfileService) {
@@ -1608,6 +1624,10 @@ export default function ClientDashboard({
       ) {
         return
       }
+    } else if (effectiveBookingPricingModel === 'fixed_visit') {
+      if (!flow.location.trim() || !flow.savedCard || !(dogWalkerBudgetValue > 0)) {
+        return
+      }
     } else if (!flow.dogName.trim() || !flow.location.trim() || !flow.duration || !flow.savedCard) {
       return
     }
@@ -1616,7 +1636,9 @@ export default function ClientDashboard({
       if (!hasSelectedProfileService) localBookingBlockedReasons.push('missing_profile_service')
       if (!effectiveServiceType) localBookingBlockedReasons.push('missing_request_service_type')
       if (!(effectiveServiceType === 'baby_sitter' ? babysitterServiceDetails.trim() : flow.dogName.trim())) {
-        localBookingBlockedReasons.push('missing_service_name')
+        if (effectiveBookingPricingModel !== 'fixed_visit') {
+          localBookingBlockedReasons.push('missing_service_name')
+        }
       }
       if (!flow.location.trim()) localBookingBlockedReasons.push('missing_location')
       if (
@@ -1625,6 +1647,8 @@ export default function ClientDashboard({
             ? babysitterDurationMinutes
             : effectiveServiceType === 'dog_walker'
               ? dogWalkerDurationMinutes
+              : effectiveBookingPricingModel === 'fixed_visit'
+                ? true
               : flow.duration
         )
       ) {
@@ -1636,6 +1660,8 @@ export default function ClientDashboard({
             ? babysitterFixedBudgetValue > 0
             : effectiveServiceType === 'dog_walker'
               ? dogWalkerBudgetValue > 0
+              : effectiveBookingPricingModel === 'fixed_visit'
+                ? dogWalkerBudgetValue > 0
               : flow.adjustedPriceILS > 0
         )
       ) {
@@ -1650,6 +1676,8 @@ export default function ClientDashboard({
           ? (babysitterDurationMinutes ?? 0)
           : effectiveServiceType === 'dog_walker'
             ? (dogWalkerDurationMinutes ?? 0)
+            : effectiveBookingPricingModel === 'fixed_visit'
+              ? 60
             : flow.duration === '20min'
               ? 20
               : flow.duration === '40min'
@@ -1712,6 +1740,23 @@ export default function ClientDashboard({
         bookingTimingOverride: flow.bookingTiming,
         scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
+    } else if (effectiveBookingPricingModel === 'fixed_visit') {
+      flow.requestWalk({
+        requestServiceType: effectiveServiceType ?? undefined,
+        selectedBookingService: effectiveBookingService,
+        profileServiceTypes: profile.service_types ?? null,
+        legacyProfileServiceType: profile.service_type ?? null,
+        dogNameOverride: null,
+        notesOverride: fixedVisitIssueDescription.trim() || null,
+        durationOverride: null,
+        durationMinutesOverride: null,
+        priceOverrideILS: dogWalkerBudgetValue > 0 ? dogWalkerBudgetValue : null,
+        dogCountOverride: null,
+        issueTypeOverride: effectiveServiceType ?? effectiveBookingService,
+        issueDescriptionOverride: fixedVisitIssueDescription.trim() || null,
+        bookingTimingOverride: flow.bookingTiming,
+        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
+      })
     } else {
       flow.requestWalk({
         requestServiceType: effectiveServiceType ?? undefined,
@@ -1739,6 +1784,7 @@ export default function ClientDashboard({
     flow.savedCard,
     flow.scheduledFor,
     hasSelectedProfileService,
+    fixedVisitIssueDescription,
     profile.service_type,
     profile.service_types,
     resolvedBookingService,
@@ -2229,6 +2275,7 @@ export default function ClientDashboard({
       flow.screenState !== 'searching' &&
       (
         flow.availabilityNotice?.title === 'No providers available right now' ||
+        flow.availabilityNotice?.title === t('booking.noProvidersForService') ||
         flow.availabilityNotice?.title === t('booking.noProvidersAvailable')
       )
     )
@@ -2499,13 +2546,21 @@ export default function ClientDashboard({
       : requestServiceType === 'dog_walker'
         ? dogWalkerDurationMinutes
         : null
+  const currentRequestPricingModel = getBookingPricingModelForService(
+    flow.currentJob?.service_type ?? effectiveRequestServiceType ?? resolvedBookingService,
+  )
+  const activeRequestPricingModel = getBookingPricingModelForService(
+    flow.activeJob?.service_type ?? effectiveRequestServiceType ?? resolvedBookingService,
+  )
   const requestDurationLabel =
-    localizeMinuteUnitLabel(
-      formatDurationFromMinutes(flow.currentJob?.duration_minutes ?? flexibleRequestDurationMinutes),
-    ) ||
-    (requestServiceType === 'baby_sitter' || requestServiceType === 'dog_walker'
-      ? ''
-      : localizeMinuteUnitLabel(flow.selectedDuration.label) || t('booking.walkFallback'))
+    currentRequestPricingModel === 'fixed_visit'
+      ? t('tracking.visitFee')
+      : localizeMinuteUnitLabel(
+          formatDurationFromMinutes(flow.currentJob?.duration_minutes ?? flexibleRequestDurationMinutes),
+        ) ||
+        (requestServiceType === 'baby_sitter' || requestServiceType === 'dog_walker'
+          ? ''
+          : localizeMinuteUnitLabel(flow.selectedDuration.label) || t('booking.walkFallback'))
   const requestPriceLabel =
     flow.currentJob?.price != null && flow.currentJob.price > 0
       ? `₪${flow.currentJob.price}`
@@ -2514,13 +2569,20 @@ export default function ClientDashboard({
         : '₪0'
   const trackingDurationSummary = useMemo(
     () =>
-      getDurationSummary({
-        plannedMinutes: flow.activeJob?.duration_minutes ?? null,
-        startedAt: flow.activeJob?.service_started_at ?? null,
-        completedAt: flow.activeJob?.service_completed_at ?? null,
-        now: serviceClockNow,
-      }),
+      activeRequestPricingModel === 'fixed_visit'
+        ? {
+            elapsedLabel: null,
+            plannedLabel: null,
+            actualLabel: null,
+          }
+        : getDurationSummary({
+            plannedMinutes: flow.activeJob?.duration_minutes ?? null,
+            startedAt: flow.activeJob?.service_started_at ?? null,
+            completedAt: flow.activeJob?.service_completed_at ?? null,
+            now: serviceClockNow,
+          }),
     [
+      activeRequestPricingModel,
       flow.activeJob?.duration_minutes,
       flow.activeJob?.service_started_at,
       flow.activeJob?.service_completed_at,
@@ -2888,12 +2950,20 @@ export default function ClientDashboard({
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
-  const bookingSubjectValue = isBabysitterRequest ? babysitterServiceDetails.trim() : effectiveDogBookingName
+  const isFixedVisitBookingMode = isFixedVisitMode
+  const selectedFixedVisitServiceLabel = t(serviceKeys.label)
+  const bookingSubjectValue = isBabysitterRequest
+    ? babysitterServiceDetails.trim()
+    : isFixedVisitBookingMode
+      ? selectedFixedVisitServiceLabel
+      : effectiveDogBookingName
   const hasValidDurationForSelectedService = isBabysitterRequest
     ? !!babysitterDurationMinutes
     : isDogWalkerRequest
       ? !!dogWalkerDurationMinutes
-      : !!flow.duration
+      : isFixedVisitBookingMode
+        ? true
+        : !!flow.duration
   const currentBookingPriceILS = isBabysitterRequest
     ? babysitterFixedBudgetValue
     : isDogWalkerRequest
@@ -2901,16 +2971,22 @@ export default function ClientDashboard({
           serviceType: effectiveRequestServiceType,
           dogCount: normalizedDogCount,
         })
-      : flow.adjustedPriceILS
+      : isFixedVisitBookingMode
+        ? dogWalkerBudgetValue
+        : flow.adjustedPriceILS
   const currentBudgetForGuidanceILS = isBabysitterRequest
     ? babysitterFixedBudgetValue
     : isDogWalkerRequest
       ? dogWalkerBudgetValue
-      : flow.adjustedPriceILS
+      : isFixedVisitBookingMode
+        ? dogWalkerBudgetValue
+        : flow.adjustedPriceILS
   const currentBookingDurationMinutes = isBabysitterRequest
     ? babysitterDurationMinutes
     : isDogWalkerRequest
       ? dogWalkerDurationMinutes
+      : isFixedVisitBookingMode
+        ? null
       : flow.duration
         ? Math.round((flow.duration === '20min' ? 20 : flow.duration === '40min' ? 40 : 60))
         : null
@@ -2928,11 +3004,10 @@ export default function ClientDashboard({
 
       let query = supabase
         .from('provider_service_preferences')
-        .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+        .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, accepts_multi_item, max_item_count')
         .in('provider_id', nearbyProviderIdsForGuidance)
         .eq('booking_type', bookingTypeForGuidance)
         .eq('is_enabled', true)
-        .eq('pricing_model', 'time_based')
 
       if (serviceTypeAliases.length > 1) {
         query = query.in('service_type', serviceTypeAliases)
@@ -2961,9 +3036,12 @@ export default function ClientDashboard({
         providerPrefsUsed: nextRows.map((row) => ({
           provider_id: row.provider_id ?? null,
           service_type: row.service_type,
+          pricing_model: row.pricing_model,
           booking_type: row.booking_type,
           hourly_rate_min: row.hourly_rate_min,
           hourly_rate_preferred: row.hourly_rate_preferred,
+          visit_fee_min: row.visit_fee_min,
+          visit_fee_preferred: row.visit_fee_preferred,
         })),
       })
       setProviderPricingPreferences(nextRows)
@@ -3024,18 +3102,30 @@ export default function ClientDashboard({
           max: budgetGuidance.suggestedHigh,
         })
       : !budgetGuidance.fallback
-        ? t('booking.budgetTypicalRange', {
-            min: budgetGuidance.suggestedLow,
-            max: budgetGuidance.suggestedHigh,
-          })
+        ? (isFixedVisitBookingMode || budgetGuidance.pricingModel === 'fixed_visit')
+          ? t('booking.budgetTypicalVisitFee', {
+              min: budgetGuidance.suggestedLow,
+              max: budgetGuidance.suggestedHigh,
+            })
+          : t('booking.budgetTypicalRange', {
+              min: budgetGuidance.suggestedLow,
+              max: budgetGuidance.suggestedHigh,
+            })
         : null
   const matchingEmptyTitle = isDispatchExhausted
     ? isBudgetMinimumExhausted
       ? t('booking.budgetMinimumEmptyTitle')
-      : t('booking.noProvidersAvailable')
+      : currentRequestPricingModel === 'fixed_visit'
+        ? t('booking.noProvidersForService')
+        : t('booking.noProvidersAvailable')
     : shouldShowNoProvidersEmptyState
-      ? t('booking.noProvidersAvailable')
-      : flow.availabilityNotice?.title || t('booking.noProvidersAvailable')
+      ? currentRequestPricingModel === 'fixed_visit'
+        ? t('booking.noProvidersForService')
+        : t('booking.noProvidersAvailable')
+      : flow.availabilityNotice?.title ||
+        (currentRequestPricingModel === 'fixed_visit'
+          ? t('booking.noProvidersForService')
+          : t('booking.noProvidersAvailable'))
   const matchingEmptySubtitle = isDispatchExhausted
     ? isBudgetMinimumExhausted && budgetBelowMinimumHint
       ? t('booking.budgetMinimumEmptySubtitle', {
@@ -3060,6 +3150,7 @@ export default function ClientDashboard({
       aggregatedPreferredHourly: budgetGuidance.aggregatedPreferredHourly,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
+      pricingModel: budgetGuidance.pricingModel,
       coveredProviderCount: budgetGuidance.coveredProviderCount,
       eligibleProviderCount: budgetGuidance.eligibleProviderCount,
       coverageRatio: budgetGuidance.coverageRatio,
@@ -3080,9 +3171,12 @@ export default function ClientDashboard({
       providerPrefsUsed: providerPricingPreferences.map((row) => ({
         provider_id: row.provider_id ?? null,
         service_type: row.service_type,
+        pricing_model: row.pricing_model,
         booking_type: row.booking_type,
         hourly_rate_min: row.hourly_rate_min,
         hourly_rate_preferred: row.hourly_rate_preferred,
+        visit_fee_min: row.visit_fee_min,
+        visit_fee_preferred: row.visit_fee_preferred,
       })),
       selectedBudget: currentBudgetForGuidanceILS,
       aggregatedMinimumHourly: budgetGuidance.aggregatedMinHourly,
@@ -3091,6 +3185,7 @@ export default function ClientDashboard({
       calculatedRecommendedPreferredBudget: budgetGuidance.recommendedGood,
       recommendedMin: budgetGuidance.recommendedMin,
       recommendedGood: budgetGuidance.recommendedGood,
+      pricingModel: budgetGuidance.pricingModel,
       coveredProviderCount: budgetGuidance.coveredProviderCount,
       eligibleProviderCount: budgetGuidance.eligibleProviderCount,
       coverageRatio: budgetGuidance.coverageRatio,
@@ -3103,6 +3198,7 @@ export default function ClientDashboard({
     budgetGuidance.aggregatedPreferredHourly,
     budgetGuidance.fallback,
     budgetGuidance.likelihood,
+    budgetGuidance.pricingModel,
     budgetGuidance.recommendedGood,
     budgetGuidance.recommendedMin,
     budgetGuidance.coverageRatio,
@@ -3137,6 +3233,7 @@ export default function ClientDashboard({
     !!flow.savedCard &&
     (!requiresScheduledFor || !!flow.scheduledFor)
   const canSubmitRecurringBooking =
+    !isFixedVisitBookingMode &&
     hasSelectedProfileService &&
     isSelectedServiceAvailable &&
     !!bookingSubjectValue &&
@@ -3219,7 +3316,7 @@ export default function ClientDashboard({
     if (!isSelectedServiceAvailable) reasons.push('selected_service_unavailable')
     if (!bookingSubjectValue) reasons.push('missing_service_name')
     if (!flow.location.trim()) reasons.push('missing_location')
-    if (!hasValidDurationForSelectedService) reasons.push('missing_duration')
+    if (!hasValidDurationForSelectedService && !isFixedVisitBookingMode) reasons.push('missing_duration')
     if (!hasValidPriceForSelectedService) reasons.push('missing_price')
     if (!flow.savedCard) reasons.push('missing_saved_card')
     if (requiresScheduledFor && !flow.scheduledFor) reasons.push('missing_scheduled_for')
@@ -3234,6 +3331,7 @@ export default function ClientDashboard({
     hasSelectedProfileService,
     hasValidDurationForSelectedService,
     hasValidPriceForSelectedService,
+    isFixedVisitBookingMode,
     isSelectedServiceAvailable,
     requiresScheduledFor,
     repeatType,
@@ -3276,6 +3374,7 @@ export default function ClientDashboard({
     setBabysitterBudgetFixed(shouldClearPricing ? '0' : String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS))
     setDogWalkerDurationHours(String(DOG_WALKER_DEFAULT_DURATION_HOURS))
     setDogWalkerBudgetFixed(shouldClearPricing ? '0' : String(DOG_WALKER_DEFAULT_BUDGET_ILS))
+    setFixedVisitIssueDescription('')
     if (shouldClearPricing) {
       mergeClientBookingBudgetDraft(profile.id, {
         babysitterBudgetFixed: '0',
@@ -3299,7 +3398,7 @@ export default function ClientDashboard({
         requestServiceType: effectiveRequestServiceType,
       })
     }
-  }, [effectiveRequestServiceType, flow.bookingComposerResetKey, flow.bookingComposerResetReason, profile.id])
+  }, [effectiveRequestServiceType, flow.bookingComposerResetKey, flow.bookingComposerResetReason, profile.id, resolvedBookingService])
   const bookingSubjectLabel = isBabySitterMode
     ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
     : t(serviceKeys.inputLabel)
@@ -3405,6 +3504,18 @@ export default function ClientDashboard({
       </div>
     </div>
   )
+
+  const fixedVisitDescriptionBlock = isFixedVisitBookingMode ? (
+    <div style={fixedVisitSectionStyle}>
+      <input
+        type="text"
+        value={fixedVisitIssueDescription}
+        onChange={(event) => setFixedVisitIssueDescription(event.target.value)}
+        placeholder={t('booking.fixedVisit.issueDescriptionPlaceholder')}
+        style={fixedVisitTextareaStyle}
+      />
+    </div>
+  ) : null
 
   const dogCountSelectorBlock = shouldShowDogCountControl ? (
     <div style={dogCountInlineRowStyle}>
@@ -3612,6 +3723,12 @@ export default function ClientDashboard({
     }
     handleDogWalkerDurationStep(direction)
   }
+  const guidanceChipToneStyle =
+    budgetGuidance.likelihood === 'high'
+      ? budgetGuidanceChipHighStyle
+      : budgetGuidance.likelihood === 'medium'
+        ? budgetGuidanceChipMediumStyle
+        : budgetGuidanceChipLowStyle
 
   const compactSavedCardSummary =
     flow.savedCard && !flow.setupClientSecret ? (
@@ -3699,17 +3816,54 @@ export default function ClientDashboard({
         <span
           style={{
             ...budgetGuidanceChipStyle,
-            ...(budgetGuidance.likelihood === 'high'
-              ? budgetGuidanceChipHighStyle
-              : budgetGuidance.likelihood === 'medium'
-                ? budgetGuidanceChipMediumStyle
-                : budgetGuidanceChipLowStyle),
+            ...guidanceChipToneStyle,
           }}
         >
           {budgetLikelihoodLabel}
         </span>
         {budgetGuidanceText && <span style={budgetGuidanceInlineTextStyle}>{budgetGuidanceText}</span>}
       </div>
+    </div>
+  )
+
+  const fixedVisitPricingRows = (
+    <div style={dogWalkerPricingStackStyle}>
+      <div style={dogWalkerPriceRowStyle}>
+        <span aria-hidden="true" />
+        <div style={dogWalkerPriceValueWrapStyle}>
+          <span style={dogWalkerPriceValueStyle}>₪{activeBudgetValue}</span>
+        </div>
+      </div>
+      <div style={fixedVisitSliderWrapStyle}>
+        <div style={dogWalkerSliderOnlyRowStyle}>
+          <input
+            type="range"
+            min={activeBudgetMin}
+            max={activeBudgetMax}
+            step={activeBudgetStep}
+            value={activeBudgetValue}
+            onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
+            style={unifiedBudgetSliderStyle}
+            aria-label={isRtl ? 'תקציב ביקור' : 'Visit fee'}
+          />
+        </div>
+        <div style={unifiedBudgetScaleRowStyle}>
+          <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
+          <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
+        </div>
+      </div>
+      <div style={fixedVisitGuidanceStackStyle}>
+        <span
+          style={{
+            ...budgetGuidanceChipStyle,
+            ...guidanceChipToneStyle,
+          }}
+        >
+          {budgetLikelihoodLabel}
+        </span>
+        {budgetGuidanceText && <span style={fixedVisitGuidanceTextStyle}>{budgetGuidanceText}</span>}
+      </div>
+      <div style={fixedVisitDisclaimerStyle}>{t('booking.fixedVisit.disclaimer')}</div>
     </div>
   )
 
@@ -3765,7 +3919,7 @@ export default function ClientDashboard({
 
   const unifiedPricingPaymentCard = (
     <div style={unifiedPricingPaymentCardInnerStyle}>
-      {sharedPricingRows}
+      {isFixedVisitBookingMode ? fixedVisitPricingRows : sharedPricingRows}
       <div style={unifiedPaymentRowWrapStyle}>{compactPaymentCardContent}</div>
     </div>
   )
@@ -4798,9 +4952,18 @@ export default function ClientDashboard({
                 ) : (
                 <>
                 <div style={compactFormGridStyle}>
-                  {dogCountSelectorBlock}
-                  {shouldShowDogCountControl ? pickupSelectorBlock : dogSelectorBlock}
-                  {!shouldShowDogCountControl && pickupSelectorBlock}
+                  {isFixedVisitBookingMode ? (
+                    <>
+                      {fixedVisitDescriptionBlock}
+                      {pickupSelectorBlock}
+                    </>
+                  ) : (
+                    <>
+                      {dogCountSelectorBlock}
+                      {shouldShowDogCountControl ? pickupSelectorBlock : dogSelectorBlock}
+                      {!shouldShowDogCountControl && pickupSelectorBlock}
+                    </>
+                  )}
 
                   {!isSheetCollapsed && preferredWalkers.length > 0 && (
                     <button
@@ -4855,8 +5018,9 @@ export default function ClientDashboard({
                   elapsedSeconds={flow.elapsedSeconds}
                   durationLabel={requestDurationLabel}
                   priceLabel={requestPriceLabel}
+                  isFixedVisit={currentRequestPricingModel === 'fixed_visit'}
                   mode={isDispatchExhausted || shouldShowNoProvidersEmptyState ? 'empty' : 'matching'}
-                  serviceType={flow.currentJob?.service_type}
+                  serviceType={flow.currentJob?.service_type ?? effectiveRequestServiceType ?? resolvedBookingService}
                   emptyTitle={matchingEmptyTitle}
                   emptySubtitle={matchingEmptySubtitle}
                   emptyPrimaryLabel={isBudgetMinimumExhausted ? t('booking.raiseBudget') : undefined}
@@ -4917,6 +5081,7 @@ export default function ClientDashboard({
                     distanceMeters={flow.distanceMeters}
                     gpsQuality={trackingGpsQuality}
                     activeTitle={t('tracking.walkInProgress')}
+                    isFixedVisit={activeRequestPricingModel === 'fixed_visit'}
                     onWhatsApp={handleWhatsAppProvider}
                     onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                     confirmingArrival={flow.arrivalConfirming}
@@ -6016,6 +6181,7 @@ function TrackingCard({
   distanceMeters,
   gpsQuality,
   activeTitle,
+  isFixedVisit,
   onWhatsApp,
   onConfirmArrival,
   confirmingArrival,
@@ -6036,6 +6202,7 @@ function TrackingCard({
   distanceMeters: number | null
   gpsQuality: GpsQuality
   activeTitle: string
+  isFixedVisit?: boolean
   onWhatsApp?: () => void
   onConfirmArrival?: () => void
   confirmingArrival?: boolean
@@ -6087,6 +6254,8 @@ function TrackingCard({
         : t('tracking.headingToYou', { walkerName })
   const completedTasksLabel = i18n.resolvedLanguage === 'he' ? 'משימות הושלמו' : 'completed tasks'
   const serviceStartedLabel = i18n.resolvedLanguage === 'he' ? 'השירות התחיל' : 'Service started'
+  const fixedVisitLabel = t('tracking.fixedVisit')
+  const visitFeeLabel = t('tracking.visitFee')
   const ratingValue = walkerRating != null ? walkerRating.toFixed(1) : '—'
   const etaHeroValue = formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)
   const shouldShowWalkerBio = isOnTheWay && !!walkerBio?.trim()
@@ -6171,7 +6340,14 @@ function TrackingCard({
         </div>
       </div>
 
-      {(elapsedLabel || plannedLabel || actualLabel) && (
+      {isFixedVisit ? (
+        <div style={trackingTimerPanelStyle}>
+          <div style={trackingTimerPrimaryRowStyle}>
+            <span style={trackingTimerLabelStyle}>{fixedVisitLabel}</span>
+            <span style={trackingTimerValueStyle}>{visitFeeLabel}</span>
+          </div>
+        </div>
+      ) : (elapsedLabel || plannedLabel || actualLabel) && (
         <div style={trackingTimerPanelStyle}>
           {elapsedLabel && (
             <div style={trackingTimerPrimaryRowStyle}>
@@ -7149,6 +7325,27 @@ const compactFieldStyle: React.CSSProperties = {
   gap: 3,
 }
 
+const fixedVisitSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 0,
+}
+
+const fixedVisitTextareaStyle: React.CSSProperties = {
+  width: '100%',
+  height: 46,
+  borderRadius: 18,
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+  background: 'rgba(255,255,255,0.86)',
+  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
+  padding: '0 14px',
+  boxSizing: 'border-box',
+  outline: 'none',
+  fontFamily: 'inherit',
+  fontSize: 13,
+  lineHeight: '46px',
+  color: '#0F172A',
+}
+
 const babysitterServiceFieldWrapStyle: React.CSSProperties = {
   marginBottom: 2,
 }
@@ -7666,11 +7863,13 @@ const unifiedBudgetSliderStyle: React.CSSProperties = {
   margin: 0,
   accentColor: '#2563EB',
   minWidth: 0,
-  height: 30,
-  padding: '5px 0',
+  maxWidth: '100%',
+  height: 34,
+  padding: '7px 0',
   cursor: 'pointer',
   touchAction: 'pan-x',
   WebkitTapHighlightColor: 'transparent',
+  boxSizing: 'border-box',
 }
 
 const unifiedBudgetScaleRowStyle: React.CSSProperties = {
@@ -7678,8 +7877,8 @@ const unifiedBudgetScaleRowStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  marginTop: -2,
-  paddingInline: 10,
+  marginTop: 0,
+  paddingInline: 12,
 }
 
 const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
@@ -7770,6 +7969,23 @@ const dogWalkerSliderInlineStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+const dogWalkerSliderOnlyRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+}
+
+const fixedVisitSliderWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 3,
+  minWidth: 0,
+  width: '100%',
+  maxWidth: '100%',
+  paddingInline: 2,
+  paddingBlock: 2,
+  boxSizing: 'border-box',
+}
+
 const budgetGuidanceInlineRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -7790,6 +8006,32 @@ const budgetGuidanceInlineTextStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+}
+
+const fixedVisitGuidanceStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  minWidth: 0,
+  paddingTop: 4,
+}
+
+const fixedVisitGuidanceTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  fontSize: 10.5,
+  lineHeight: 1.35,
+  fontWeight: 700,
+  color: '#64748B',
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+}
+
+const fixedVisitDisclaimerStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  lineHeight: 1.35,
+  fontWeight: 600,
+  color: '#64748B',
+  minWidth: 0,
+  paddingTop: 2,
 }
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {

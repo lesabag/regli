@@ -2,8 +2,7 @@ import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PawPrint } from 'lucide-react'
 import {
-  PRIMARY_SERVICES,
-  MORE_SERVICES,
+  FIXED_VISIT_BOOKING_SERVICES,
   SERVICE_ICONS,
   SERVICE_I18N_KEYS,
   type ServiceType,
@@ -24,13 +23,17 @@ export default function ServiceSelectorPanel({
 }: ServiceSelectorPanelProps) {
   const { t } = useTranslation()
 
-  const visiblePrimaryServices = services && services.length > 0
-    ? PRIMARY_SERVICES.filter((svc) => services.includes(svc))
-    : PRIMARY_SERVICES
-  const visibleMoreServices = services && services.length > 0
-    ? MORE_SERVICES.filter((svc) => services.includes(svc))
-    : MORE_SERVICES
-  const isMoreSelected = (visibleMoreServices as readonly ServiceType[]).includes(selected)
+  const visiblePrimaryServices = (services ?? ['dog_walking', 'babysitter']).filter(
+    (svc): svc is ServiceType => svc === 'dog_walking' || svc === 'babysitter',
+  )
+  const visibleFixedVisitServices = (services ?? FIXED_VISIT_BOOKING_SERVICES).filter((svc) =>
+    FIXED_VISIT_BOOKING_SERVICES.includes(svc),
+  )
+  const hasFixedVisitServices = visibleFixedVisitServices.length > 0
+  const isMoreSelected = visibleFixedVisitServices.includes(selected)
+  const fixedVisitButtonLabel = isMoreSelected
+    ? t(SERVICE_I18N_KEYS[selected].label)
+    : t('booking.fixedVisit.otherService')
   const renderServiceIcon = (service: ServiceType) => {
     if (service === 'dog_walking') {
       return <PawPrint size={14} strokeWidth={2.2} color="#FACC15" />
@@ -64,35 +67,17 @@ export default function ServiceSelectorPanel({
           )
         })}
 
-        {isMoreSelected && (
+        {hasFixedVisitServices && (
           <button
-            key={selected}
             type="button"
             onClick={onMorePress}
             style={{
               ...itemStyle,
-              ...itemActiveStyle,
+              ...(isMoreSelected ? itemActiveStyle : null),
             }}
           >
-            <div style={{ ...iconWrapStyle, ...iconWrapActiveStyle }}>
-              <span style={iconStyle}>{renderServiceIcon(selected)}</span>
-            </div>
-            <span style={labelActiveStyle}>
-              {t(SERVICE_I18N_KEYS[selected].label)}
-            </span>
-          </button>
-        )}
-
-        {visibleMoreServices.length > 0 && (
-          <button
-            type="button"
-            onClick={onMorePress}
-            style={itemStyle}
-          >
-            <div style={iconWrapStyle}>
-              <span style={moreIconStyle}>⋯</span>
-            </div>
-            <span style={labelStyle}>{t('services.more')}</span>
+            <span style={isMoreSelected ? labelActiveStyle : labelStyle}>{fixedVisitButtonLabel}</span>
+            <span style={isMoreSelected ? chevronActiveStyle : chevronStyle}>▼</span>
           </button>
         )}
       </div>
@@ -116,9 +101,7 @@ const titleStyle: CSSProperties = {
 const rowStyle: CSSProperties = {
   display: 'flex',
   gap: 8,
-  overflowX: 'auto',
-  WebkitOverflowScrolling: 'touch',
-  scrollbarWidth: 'none',
+  width: '100%',
   padding: '1px 1px 2px',
 }
 
@@ -138,8 +121,8 @@ const itemStyle: CSSProperties = {
   fontFamily: 'inherit',
   WebkitTapHighlightColor: 'transparent',
   touchAction: 'manipulation',
-  minWidth: 104,
-  flexShrink: 0,
+  minWidth: 0,
+  flex: '1 1 0',
   borderRadius: 999,
   boxShadow: '0 6px 14px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255,255,255,0.82)',
 }
@@ -175,20 +158,13 @@ const iconStyle: CSSProperties = {
   justifyContent: 'center',
 }
 
-const moreIconStyle: CSSProperties = {
-  fontSize: 16,
-  lineHeight: 1,
-  color: '#64748B',
-  fontWeight: 700,
-}
-
 const labelStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: '#64748B',
   lineHeight: 1.2,
-  textAlign: 'left',
-  maxWidth: 'none',
+  textAlign: 'center',
+  maxWidth: '100%',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -199,9 +175,21 @@ const labelActiveStyle: CSSProperties = {
   fontWeight: 800,
   color: '#F8FAFC',
   lineHeight: 1.2,
-  textAlign: 'left',
-  maxWidth: 'none',
+  textAlign: 'center',
+  maxWidth: '100%',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+}
+
+const chevronStyle: CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1,
+  color: '#64748B',
+  flexShrink: 0,
+}
+
+const chevronActiveStyle: CSSProperties = {
+  ...chevronStyle,
+  color: '#F8FAFC',
 }

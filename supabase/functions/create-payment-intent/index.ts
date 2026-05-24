@@ -36,7 +36,7 @@ function getServiceDurationMinutes(serviceType: string): number | null {
   return null
 }
 
-function normalizeRequestServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+function normalizeRequestServiceType(value: string | null | undefined): string | null {
   const normalized = (value ?? '').trim().toLowerCase()
   if (!normalized) return null
   if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
@@ -45,7 +45,20 @@ function normalizeRequestServiceType(value: string | null | undefined): 'dog_wal
   if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
     return 'baby_sitter'
   }
-  return null
+  return normalized
+}
+
+function getRequestPricingModel(requestServiceType: string | null | undefined): 'time_based' | 'fixed_visit' {
+  const normalized = normalizeRequestServiceType(requestServiceType)
+  if (
+    normalized === 'technician' ||
+    normalized === 'electrician' ||
+    normalized === 'plumber' ||
+    normalized === 'shutters'
+  ) {
+    return 'fixed_visit'
+  }
+  return 'time_based'
 }
 
 function parseTimeZoneOffsetMinutes(offsetLabel: string): number | null {
@@ -182,6 +195,8 @@ serve(async (req: Request) => {
       dogName?: string
       location?: string
       notes?: string
+      issueType?: string
+      issueDescription?: string
       serviceType?: string
       requestServiceType?: string
       currency?: string
@@ -221,9 +236,9 @@ serve(async (req: Request) => {
       priceAgorot: rawPriceAgorot,
       durationMinutes: rawDurationMinutes,
       dogCount: rawDogCount,
+      issueType,
+      issueDescription,
     } = body
-
-    const dogCount = rawDogCount === 2 ? 2 : 1
 
     if (!serviceType || !SERVICE_PRICES[serviceType]) {
       return new Response(
@@ -235,7 +250,12 @@ serve(async (req: Request) => {
       )
     }
 
-    if (!dogName?.trim()) {
+    const explicitRequestServiceType = normalizeRequestServiceType(requestServiceType)
+    const isFixedVisitRequest = getRequestPricingModel(explicitRequestServiceType) === 'fixed_visit'
+    const normalizedDogName = typeof dogName === 'string' && dogName.trim() ? dogName.trim() : null
+    const dogCount = isFixedVisitRequest ? 1 : (rawDogCount === 2 ? 2 : 1)
+
+    if (!isFixedVisitRequest && !normalizedDogName) {
       return new Response(
         JSON.stringify({ error: 'Missing dog name', _v: FUNCTION_VERSION }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -315,9 +335,9 @@ serve(async (req: Request) => {
       )
     }
 
-    const explicitRequestServiceType = normalizeRequestServiceType(requestServiceType)
     const profileRequestServiceType = normalizeRequestServiceType(clientProfile.service_type)
     const persistedRequestServiceType = explicitRequestServiceType ?? profileRequestServiceType ?? null
+    const requestPricingModel = getRequestPricingModel(persistedRequestServiceType)
 
     if (!explicitRequestServiceType && !profileRequestServiceType) {
       console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing explicit request service_type and profile service_type`, {
@@ -448,7 +468,16 @@ serve(async (req: Request) => {
       typeof rawDurationMinutes === 'number' && Number.isFinite(rawDurationMinutes) && rawDurationMinutes > 0
         ? Math.round(rawDurationMinutes)
         : null
-    const durationMinutes = clientDurationMinutes ?? getServiceDurationMinutes(serviceType)
+    const durationMinutes =
+      clientDurationMinutes ??
+      (persistedRequestServiceType === 'dog_walker' || persistedRequestServiceType === 'baby_sitter'
+        ? getServiceDurationMinutes(serviceType)
+        : null)
+    const persistedDurationMinutes = requestPricingModel === 'fixed_visit' ? null : durationMinutes
+    const persistedRequestedWindowMinutes = requestPricingModel === 'fixed_visit' ? null : durationMinutes
+    const normalizedIssueType = typeof issueType === 'string' && issueType.trim() ? issueType.trim() : null
+    const normalizedIssueDescription =
+      typeof issueDescription === 'string' && issueDescription.trim() ? issueDescription.trim() : null
 
     console.log(`[PayoutTruth][${FUNCTION_VERSION}] Financial calculation:`, {
       source: clientPriceAgorot != null ? 'client_price' : 'legacy_service_prices',
@@ -465,6 +494,7 @@ serve(async (req: Request) => {
       durationSource: clientDurationMinutes != null ? 'client_override' : 'service_type_default',
       durationMinutes,
       dogCount,
+      requestPricingModel,
     })
 
     if (!customerId || !paymentMethodId) {
@@ -525,10 +555,16 @@ serve(async (req: Request) => {
       .from('walk_requests')
       .select('id, stripe_payment_intent_id, stripe_client_secret, currency')
       .eq('client_id', user.id)
-      .eq('dog_name', dogName.trim())
+      .eq('service_type', persistedRequestServiceType)
       .eq('status', 'awaiting_payment')
       .gte('created_at', sixtySecondsAgo)
       .limit(1)
+
+    if (normalizedDogName) {
+      dupQuery = dupQuery.eq('dog_name', normalizedDogName)
+    } else {
+      dupQuery = dupQuery.is('dog_name', null)
+    }
 
     if (walkerId) {
       dupQuery = dupQuery.eq('selected_walker_id', walkerId)
@@ -607,9 +643,14 @@ serve(async (req: Request) => {
       client_id: user.id,
       service_type: persistedRequestServiceType ?? '',
       pricing_service_type: serviceType,
-      dog_name: dogName.trim(),
+      issue_type: normalizedIssueType,
+      issue_description: normalizedIssueDescription,
       booking_timing: bookingTiming,
       currency: jobCurrency,
+    }
+
+    if (normalizedDogName) {
+      metadata.dog_name = normalizedDogName
     }
 
     if (normalizedScheduledFor) {
@@ -704,10 +745,12 @@ serve(async (req: Request) => {
         client_id: user.id,
         selected_walker_id: walkerId || null,
         service_type: persistedRequestServiceType,
-        dog_name: dogName.trim(),
+        dog_name: normalizedDogName,
         dog_count: dogCount,
         location: location.trim(),
         notes: notes?.trim() || null,
+        issue_type: normalizedIssueType,
+        issue_description: normalizedIssueDescription,
         status: 'awaiting_payment',
         dispatch_state: 'queued',
         smart_dispatch_state: 'idle',
@@ -720,8 +763,8 @@ serve(async (req: Request) => {
         scheduled_fee_snapshot: amount / 100,
         scheduled_pricing_multiplier: surgeMultiplier,
         schedule_timezone: SCHEDULE_TIMEZONE,
-        duration_minutes: durationMinutes,
-        requested_window_minutes: durationMinutes,
+        duration_minutes: persistedDurationMinutes,
+        requested_window_minutes: persistedRequestedWindowMinutes,
         amount,
         currency: jobCurrency,
         platform_fee_percent: PLATFORM_FEE_PERCENT,
@@ -751,14 +794,40 @@ serve(async (req: Request) => {
     })
 
     if (jobError || !job) {
-      console.error('Failed to create job:', jobError)
+      console.error(`[create-payment-intent][${FUNCTION_VERSION}] Failed to create walk_request row`, {
+        error: jobError?.message ?? 'unknown_insert_error',
+        code: jobError?.code ?? null,
+        details: jobError?.details ?? null,
+        hint: jobError?.hint ?? null,
+        service_type: persistedRequestServiceType ?? null,
+        pricing_model: requestPricingModel,
+        duration_minutes: persistedDurationMinutes,
+        requested_window_minutes: persistedRequestedWindowMinutes,
+        issue_type_present: !!normalizedIssueType,
+        issue_description_present: !!normalizedIssueDescription,
+        dog_name_present: !!normalizedDogName,
+        dog_count: dogCount,
+        booking_timing: bookingTiming,
+        payment_status: initialPaymentStatus,
+      })
       try {
         await stripe.paymentIntents.cancel(paymentIntent.id)
       } catch (cancelErr) {
         console.error('Failed to cancel orphaned PaymentIntent:', cancelErr)
       }
       return new Response(
-        JSON.stringify({ error: 'Failed to create job', _v: FUNCTION_VERSION }),
+        JSON.stringify({
+          error: 'Failed to create job',
+          details: jobError?.message ?? 'unknown_insert_error',
+          debugContext: {
+            service_type: persistedRequestServiceType ?? null,
+            pricing_model: requestPricingModel,
+            duration_minutes: persistedDurationMinutes,
+            issue_type_present: !!normalizedIssueType,
+            issue_description_present: !!normalizedIssueDescription,
+          },
+          _v: FUNCTION_VERSION,
+        }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }

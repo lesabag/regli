@@ -4,16 +4,19 @@ import { getProfileServiceTypeLabel, type ProfileServiceType } from '../lib/prof
 import { supabase } from '../services/supabaseClient'
 
 type BookingType = 'asap' | 'scheduled'
+type PricingModel = 'time_based' | 'fixed_visit'
 
 type PreferenceRow = {
   id?: string
   provider_id: string
   service_type: ProfileServiceType
-  pricing_model: 'time_based'
+  pricing_model: PricingModel
   booking_type: BookingType
   is_enabled: boolean
   hourly_rate_min: string
   hourly_rate_preferred: string
+  visit_fee_min: string
+  visit_fee_preferred: string
   service_radius_km: string
   accepts_multi_item: boolean
   max_item_count: string
@@ -23,14 +26,22 @@ type PreferenceDbRow = {
   id: string
   provider_id: string
   service_type: ProfileServiceType
-  pricing_model: 'time_based' | 'visit_based' | 'hybrid'
+  pricing_model: PricingModel | 'visit_based' | 'hybrid'
   booking_type: BookingType
   is_enabled: boolean
   hourly_rate_min: number | null
   hourly_rate_preferred: number | null
+  visit_fee_min: number | null
+  visit_fee_preferred: number | null
   service_radius_km: number | null
   accepts_multi_item: boolean
   max_item_count: number | null
+}
+
+function normalizePricingModel(value: string | null | undefined): PricingModel {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (normalized === 'fixed_visit' || normalized === 'visit_based') return 'fixed_visit'
+  return 'time_based'
 }
 
 const BOOKING_TYPES: BookingType[] = ['asap', 'scheduled']
@@ -48,6 +59,8 @@ function createDefaultRow(providerId: string, serviceType: ProfileServiceType, b
     is_enabled: true,
     hourly_rate_min: '',
     hourly_rate_preferred: '',
+    visit_fee_min: '',
+    visit_fee_preferred: '',
     service_radius_km: '',
     accepts_multi_item: false,
     max_item_count: '',
@@ -59,11 +72,13 @@ function toFormRow(providerId: string, row: PreferenceDbRow): PreferenceRow {
     id: row.id,
     provider_id: providerId,
     service_type: row.service_type,
-    pricing_model: 'time_based',
+    pricing_model: normalizePricingModel(row.pricing_model),
     booking_type: row.booking_type,
     is_enabled: row.is_enabled,
     hourly_rate_min: toInputValue(row.hourly_rate_min),
     hourly_rate_preferred: toInputValue(row.hourly_rate_preferred),
+    visit_fee_min: toInputValue(row.visit_fee_min),
+    visit_fee_preferred: toInputValue(row.visit_fee_preferred),
     service_radius_km: toInputValue(row.service_radius_km),
     accepts_multi_item: row.accepts_multi_item,
     max_item_count: toInputValue(row.max_item_count),
@@ -111,7 +126,7 @@ export default function ProviderPricingPreferences({
 
       const { data, error } = await supabase
         .from('provider_service_preferences')
-        .select('id, provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, service_radius_km, accepts_multi_item, max_item_count')
+        .select('id, provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, service_radius_km, accepts_multi_item, max_item_count')
         .eq('provider_id', providerId)
         .in('service_type', supportedServices)
 
@@ -160,8 +175,12 @@ export default function ProviderPricingPreferences({
     setSuccess(null)
 
     for (const row of rows) {
-      const minValue = parseOptionalNumber(row.hourly_rate_min)
-      const preferredValue = parseOptionalNumber(row.hourly_rate_preferred)
+      const minValue = parseOptionalNumber(
+        row.pricing_model === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min,
+      )
+      const preferredValue = parseOptionalNumber(
+        row.pricing_model === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred,
+      )
 
       if (minValue != null && minValue < 0) {
         setError(t('providerPricing.validation.nonNegative'))
@@ -198,11 +217,13 @@ export default function ProviderPricingPreferences({
     const payload = rows.map((row) => ({
       provider_id: providerId,
       service_type: row.service_type,
-      pricing_model: 'time_based' as const,
+      pricing_model: row.pricing_model,
       booking_type: row.booking_type,
       is_enabled: row.is_enabled,
       hourly_rate_min: parseOptionalNumber(row.hourly_rate_min),
       hourly_rate_preferred: parseOptionalNumber(row.hourly_rate_preferred),
+      visit_fee_min: parseOptionalNumber(row.visit_fee_min),
+      visit_fee_preferred: parseOptionalNumber(row.visit_fee_preferred),
       service_radius_km: parseOptionalNumber(row.service_radius_km),
       accepts_multi_item: row.accepts_multi_item,
       max_item_count: row.accepts_multi_item ? parseOptionalNumber(row.max_item_count) : null,
@@ -279,22 +300,42 @@ export default function ProviderPricingPreferences({
 
                     <div style={fieldGridStyle}>
                       <label style={fieldStyle}>
-                        <span style={fieldLabelStyle}>{t('providerPricing.hourlyRateMin')}</span>
+                        <span style={fieldLabelStyle}>
+                          {row.pricing_model === 'fixed_visit'
+                            ? t('providerPricing.visitFeeMin')
+                            : t('providerPricing.hourlyRateMin')}
+                        </span>
                         <input
                           inputMode="decimal"
-                          value={row.hourly_rate_min}
-                          onChange={(event) => updateRow(row.service_type, row.booking_type, { hourly_rate_min: event.target.value })}
+                          value={row.pricing_model === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min}
+                          onChange={(event) => updateRow(
+                            row.service_type,
+                            row.booking_type,
+                            row.pricing_model === 'fixed_visit'
+                              ? { visit_fee_min: event.target.value }
+                              : { hourly_rate_min: event.target.value },
+                          )}
                           style={inputStyle}
                           placeholder="0"
                         />
                       </label>
 
                       <label style={fieldStyle}>
-                        <span style={fieldLabelStyle}>{t('providerPricing.hourlyRatePreferred')}</span>
+                        <span style={fieldLabelStyle}>
+                          {row.pricing_model === 'fixed_visit'
+                            ? t('providerPricing.visitFeePreferred')
+                            : t('providerPricing.hourlyRatePreferred')}
+                        </span>
                         <input
                           inputMode="decimal"
-                          value={row.hourly_rate_preferred}
-                          onChange={(event) => updateRow(row.service_type, row.booking_type, { hourly_rate_preferred: event.target.value })}
+                          value={row.pricing_model === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred}
+                          onChange={(event) => updateRow(
+                            row.service_type,
+                            row.booking_type,
+                            row.pricing_model === 'fixed_visit'
+                              ? { visit_fee_preferred: event.target.value }
+                              : { hourly_rate_preferred: event.target.value },
+                          )}
                           style={inputStyle}
                           placeholder="0"
                         />

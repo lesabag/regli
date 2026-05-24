@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../services/supabaseClient'
-import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
+import { type ProfileServiceType } from '../lib/profileServiceTypes'
+import { providerSupportsRequestedService } from '../lib/providerServiceTypes'
 import {
   fetchProviderAvailabilityRows,
   groupProviderAvailabilityRows,
@@ -61,7 +62,7 @@ interface BearingEntry {
 export function useNearbyWalkers(
   userLocation: [number, number] | null,
   enabled: boolean,
-  serviceTypeFilter?: ProfileServiceType | null,
+  serviceTypeFilter?: string | ProfileServiceType | null,
   availabilityAt?: string | null,
 ): NearbyWalker[] {
   const [walkers, setWalkers] = useState<NearbyWalker[]>([])
@@ -130,12 +131,9 @@ export function useNearbyWalkers(
         service_types?: string[] | null
         service_type?: string | null
       },
-      expectedServiceType: ProfileServiceType | null,
+      expectedServiceType: string | ProfileServiceType | null,
     ) => {
-      if (!expectedServiceType) return true
-      const supportedServices = normalizeProfileServiceTypes(row.service_types ?? row.service_type)
-      if (supportedServices.length === 0) return true
-      return supportedServices.includes(expectedServiceType)
+      return providerSupportsRequestedService(row, expectedServiceType ?? null)
     },
     [],
   )

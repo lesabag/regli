@@ -21,6 +21,7 @@ import {
 } from '../utils/completionReview'
 import i18n from '../i18n'
 import useExpressCheckout from './useExpressCheckout'
+import { getBookingPricingModelForService } from '../lib/serviceTypes'
 
 interface CapacitorAppState {
   isActive: boolean
@@ -143,6 +144,8 @@ type WalkRequestRow = {
   location: string | null
   address?: string | null
   notes?: string | null
+  issue_type?: string | null
+  issue_description?: string | null
   price: number | null
   scheduled_fee_snapshot: number | null
   duration_minutes: number | null
@@ -228,12 +231,14 @@ type RequestWalkOptions = {
   selectedBookingService?: string | null
   profileServiceTypes?: string[] | null
   legacyProfileServiceType?: string | null
-  dogNameOverride?: string
+  dogNameOverride?: string | null
   notesOverride?: string | null
   durationOverride?: DurationType | null
   durationMinutesOverride?: number | null
   priceOverrideILS?: number | null
   dogCountOverride?: number | null
+  issueTypeOverride?: string | null
+  issueDescriptionOverride?: string | null
   bookingTimingOverride?: 'asap' | 'scheduled'
   scheduledForOverride?: string | null
 }
@@ -258,7 +263,7 @@ type QueryResult<T> = {
 }
 
 const JOB_SELECT =
-  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
+  'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, issue_type, issue_description, price, scheduled_fee_snapshot, duration_minutes, requested_window_minutes, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, smart_dispatch_completed_at, walker_lat, walker_lng, last_location_update, payment_status, paid_at, created_at, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at'
 
 const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
@@ -450,6 +455,15 @@ function isDispatchUnavailableMessage(message: string): boolean {
     normalized.includes('no matching providers for service_type') ||
     normalized.includes('no matching providers for service type') ||
     normalized.includes('no providers available')
+  )
+}
+
+function isCreateBookingFailureMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase()
+  return (
+    normalized.includes('failed to create job') ||
+    normalized.includes('could not create this booking') ||
+    normalized.includes('unknown_insert_error')
   )
 }
 
@@ -1320,8 +1334,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setError(null)
     setSuccessMessage(null)
     setAvailabilityNotice({
-      title: 'No providers available right now',
-      subtitle: 'Try again in a few minutes',
+      title: i18n.t('booking.noProvidersAvailable'),
+      subtitle: i18n.t('booking.tryAgainSoon'),
     })
   }, [])
 
@@ -1486,7 +1500,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     return 'energy'
   }
 
-  function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
+  function normalizeProviderServiceType(value: string | null | undefined): string | null {
     const normalized = (value ?? '').trim().toLowerCase()
     if (!normalized) return null
     if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
@@ -1495,7 +1509,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
       return 'baby_sitter'
     }
-    return null
+    return normalized
   }
 
   function walkerSupportsRequestedService(
@@ -1503,7 +1517,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       service_type?: string | null
       service_types?: string[] | string | null
     },
-    requestServiceType: 'dog_walker' | 'baby_sitter' | null,
+    requestServiceType: string | null,
   ): boolean {
     if (!requestServiceType) return true
 
@@ -1522,7 +1536,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (serviceTypes) {
       const normalizedServiceTypes = serviceTypes
         .map((value) => normalizeProviderServiceType(value))
-        .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
+        .filter((value): value is string => value !== null)
 
       if (normalizedServiceTypes.length > 0) {
         return normalizedServiceTypes.includes(requestServiceType)
@@ -3377,20 +3391,34 @@ export function useClientFlow(profileId: string, _profileName: string) {
         ? { requestServiceType: requestServiceTypeOrOptions }
         : requestServiceTypeOrOptions
 
-    const effectiveDogName = (requestOptions.dogNameOverride ?? dogName).trim()
-    const effectiveDuration = requestOptions.durationOverride ?? duration
+    const hasDurationOverride = Object.prototype.hasOwnProperty.call(requestOptions, 'durationOverride')
+    const hasDurationMinutesOverride = Object.prototype.hasOwnProperty.call(requestOptions, 'durationMinutesOverride')
+    const effectiveDuration = hasDurationOverride ? (requestOptions.durationOverride ?? null) : duration
     const effectiveBookingTiming = requestOptions.bookingTimingOverride ?? bookingTiming
     const effectiveScheduledFor =
       requestOptions.scheduledForOverride === undefined ? scheduledFor : requestOptions.scheduledForOverride
     const effectiveNotes = requestOptions.notesOverride ?? null
+    const effectiveIssueType = (requestOptions.issueTypeOverride ?? '').trim() || null
+    const effectiveIssueDescription = (requestOptions.issueDescriptionOverride ?? '').trim() || null
     const effectiveDurationMinutes =
-      requestOptions.durationMinutesOverride ?? (effectiveDuration ? durationToMinutes(effectiveDuration) : null)
-    const effectiveDogCount = normalizeDogCount(requestOptions.dogCountOverride)
+      hasDurationMinutesOverride
+        ? (requestOptions.durationMinutesOverride ?? null)
+        : (effectiveDuration ? durationToMinutes(effectiveDuration) : null)
     const effectivePriceILS =
       requestOptions.priceOverrideILS ?? adjustedPriceILS
     const effectiveRequestServiceType = requestOptions.requestServiceType
+    const isFixedVisitPayload =
+      hasDurationOverride &&
+      requestOptions.durationOverride == null &&
+      hasDurationMinutesOverride &&
+      requestOptions.durationMinutesOverride == null
+    const effectiveDogName = isFixedVisitPayload
+      ? ((requestOptions.dogNameOverride ?? '').trim() || null)
+      : (requestOptions.dogNameOverride ?? dogName).trim()
+    const effectiveDogCount = isFixedVisitPayload ? 1 : normalizeDogCount(requestOptions.dogCountOverride)
+    const effectiveRequestPricingModel = getBookingPricingModelForService(effectiveRequestServiceType)
 
-    if (!effectiveDogName) {
+    if (!isFixedVisitPayload && !effectiveDogName) {
       setError('Enter name')
       return
     }
@@ -3398,7 +3426,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setError('Enter location')
       return
     }
-    if (!effectiveDuration) {
+    if (!effectiveDuration && !isFixedVisitPayload) {
       setError('Choose duration')
       return
     }
@@ -3428,6 +3456,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         requestServiceType: effectiveRequestServiceType ?? null,
         duration: effectiveDuration,
         bookingTiming: effectiveBookingTiming,
+        issueType: effectiveIssueType,
+        pricingModel: effectiveRequestPricingModel,
       })
       setError('Missing service type. Please update your profile settings and try again.')
       return
@@ -3469,6 +3499,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         hasSavedCard: !!savedCard,
         priceILS: effectivePriceILS,
         dogCount: effectiveDogCount,
+        issueType: effectiveIssueType,
+        issueDescription: effectiveIssueDescription,
       })
       setLoading(true)
       setError(null)
@@ -3488,9 +3520,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
         profileServiceTypes: requestOptions.profileServiceTypes ?? null,
         legacyProfileServiceType: requestOptions.legacyProfileServiceType ?? null,
         profileServiceType: effectiveRequestServiceType ?? null,
-        pricingServiceType: durationToPricingPackage(effectiveDuration),
+        pricingServiceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
         requestServiceType: normalizedRequestServiceType,
+        requestPricingModel: effectiveRequestPricingModel,
         notesOverride: effectiveNotes,
+        issueType: effectiveIssueType,
+        issueDescription: effectiveIssueDescription,
         selectedLocalScheduledDateTime:
           effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor ?? null : null,
         scheduledForBeingSent:
@@ -3501,6 +3536,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
           hasLocation: !!bookingLocation,
           hasDuration: !!effectiveDuration,
           durationMinutes: effectiveDurationMinutes,
+          issueType: effectiveIssueType,
+          issueDescription: effectiveIssueDescription,
           priceILS: effectivePriceILS,
           dogCount: effectiveDogCount,
           hasSavedCard: !!savedCard,
@@ -3516,17 +3553,19 @@ export function useClientFlow(profileId: string, _profileName: string) {
         body: {
           bookingTiming: effectiveBookingTiming,
           timing: effectiveBookingTiming,
-          serviceType: durationToPricingPackage(effectiveDuration),
+          serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
           requestServiceType: normalizedRequestServiceType,
-          dogName: effectiveDogName,
+          dogName: effectiveDogName ?? undefined,
           location: bookingLocation,
           notes: effectiveNotes,
+          issueType: effectiveIssueType ?? undefined,
+          issueDescription: effectiveIssueDescription ?? undefined,
           customerId: stripeCustomerId,
           paymentMethodId: savedCard.id,
           scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
           priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
           durationMinutes: effectiveDurationMinutes ?? undefined,
-          dogCount: effectiveDogCount,
+          dogCount: effectiveDogCount ?? undefined,
         },
       })
 
@@ -3575,7 +3614,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
         requestServiceType: normalizedRequestServiceType,
       })
       createdJobId = jobId
-      saveReusableServiceName(effectiveDogName)
+      if (effectiveDogName) {
+        saveReusableServiceName(effectiveDogName)
+      }
       const shouldSearchNow = effectiveBookingTiming === 'asap'
 
       const platformFeeILS = effectivePriceILS > 0 ? Math.round(effectivePriceILS * 0.20 * 100) / 100 : 0
@@ -3600,6 +3641,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
         walker_earnings: walkerEarningsILS,
         walker_amount: walkerEarningsILS,
         notes: effectiveNotes,
+        issue_type: effectiveIssueType,
+        issue_description: effectiveIssueDescription,
       }
       if (effectiveBookingTiming !== 'scheduled') {
         statusPatch.booking_timing = 'asap'
@@ -3927,9 +3970,15 @@ export function useClientFlow(profileId: string, _profileName: string) {
       } else if (isDispatchUnavailableMessage(message)) {
         setError(null)
         setAvailabilityNotice({
-          title: 'No providers available right now',
-          subtitle: 'Try again in a few minutes',
+          title:
+            effectiveRequestPricingModel === 'fixed_visit'
+              ? i18n.t('booking.noProvidersForService')
+              : i18n.t('booking.noProvidersAvailable'),
+          subtitle: i18n.t('booking.tryAgainSoon'),
         })
+      } else if (isCreateBookingFailureMessage(message)) {
+        setError(i18n.t('booking.createBookingFailed'))
+        setAvailabilityNotice(null)
       } else {
         setError(message)
         setAvailabilityNotice(null)

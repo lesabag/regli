@@ -205,6 +205,16 @@ function isFutureJob(job: {
   return job.dispatch_state !== 'dispatched'
 }
 
+function getRequestSubjectLabel(job: {
+  dog_name?: string | null
+  service_type?: string | null
+} | null | undefined): string {
+  const namedSubject = typeof job?.dog_name === 'string' ? job.dog_name.trim() : ''
+  if (namedSubject) return namedSubject
+  const labels = getServiceLabels(job?.service_type)
+  return `the ${labels.itemLabel}`
+}
+
 function startsInMinutes(value: string | null | undefined): number | null {
   if (!value) return null
   const ts = new Date(value).getTime()
@@ -691,7 +701,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         }
         if (!data) return false
 
-        const dogLabel = data.dog_name || 'the walk'
+        const dogLabel = getRequestSubjectLabel(data)
 
         showStateMessage(job.id, 'accepted', 'Head to the client')
         track(AnalyticsEvent.SERVICE_STARTED, {
@@ -2163,7 +2173,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       showStateMessage(requestId, 'accepted', dispatchNow ? 'Head to the client' : 'Job accepted')
         await fetchAll()
 
-      const dogLabel = job.dog_name || 'a dog'
+      const dogLabel = getRequestSubjectLabel(job)
 
       if (job.client_id) {
         const isScheduled = job.booking_timing === 'scheduled'
@@ -2358,7 +2368,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }).catch(() => {})
 
       if (job.client_id) {
-        const dogLabel = job.dog_name || 'your pet'
+        const dogLabel = getRequestSubjectLabel(job)
         invokeEdgeFunction('send-push-notification', {
           body: {
             title: 'Walker has arrived',
@@ -2441,7 +2451,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       })
 
       if (job.client_id) {
-        const dogLabel = job.dog_name || 'your pet'
+        const dogLabel = getRequestSubjectLabel(job)
         invokeEdgeFunction('send-push-notification', {
           body: {
             title: labels.activeTitle,

@@ -12,6 +12,7 @@ interface SearchingSheetProps {
   elapsedSeconds: number
   durationLabel: string
   priceLabel: string
+  isFixedVisit?: boolean
   mode: 'matching' | 'empty'
   serviceType?: string | null
   emptyTitle?: string
@@ -114,6 +115,7 @@ export default function SearchingSheet({
   elapsedSeconds,
   durationLabel,
   priceLabel,
+  isFixedVisit = false,
   mode,
   serviceType,
   emptyTitle,
@@ -135,7 +137,8 @@ export default function SearchingSheet({
   const activeStep = statusSteps[activeStepIndex] ?? statusSteps[0]
   const title = isRtl ? 'מאתרים ספקים קרובים…' : 'Finding nearby providers…'
   const etaLabel = 'ETA'
-  const durationText = isRtl ? 'Duration' : 'Duration'
+  const durationText = isFixedVisit ? i18n.t('tracking.fixedVisit') : (isRtl ? 'Duration' : 'Duration')
+  const durationValue = isFixedVisit ? i18n.t('tracking.visitFee') : (durationLabel || '—')
   const priceText = isRtl ? 'Price' : 'Price'
   const tryAgainLabel = isRtl ? 'נסה שוב' : 'Try again'
   const emptyResolvedPrimaryLabel = emptyPrimaryLabel || tryAgainLabel
@@ -177,7 +180,7 @@ export default function SearchingSheet({
           </div>
           <div style={dividerStyle} aria-hidden="true" />
           <div style={{ ...infoGridStyle, gridTemplateColumns: '1fr auto 1fr' }}>
-            <InfoItem icon={<ClockIcon />} label={durationText} value={durationLabel || '—'} />
+            <InfoItem icon={<ClockIcon />} label={durationText} value={durationValue} />
             <InfoDivider />
             <InfoItem icon={<CurrencyIcon />} label={priceText} value={priceLabel || '—'} />
           </div>
@@ -281,7 +284,7 @@ export default function SearchingSheet({
           <div style={infoGridStyle}>
             <InfoItem icon={<ClockIcon />} label={etaLabel} value="—" />
             <InfoDivider />
-            <InfoItem icon={<ClockIcon />} label={durationText.toUpperCase()} value={durationLabel || '—'} />
+            <InfoItem icon={<ClockIcon />} label={durationText.toUpperCase()} value={durationValue} />
             <InfoDivider />
             <InfoItem icon={<CurrencyIcon />} label={priceText.toUpperCase()} value={priceLabel || '—'} />
           </div>

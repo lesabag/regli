@@ -76,9 +76,11 @@ export interface PricingResult {
 }
 
 export type BudgetAcceptanceLikelihood = 'low' | 'medium' | 'high'
+export type ProviderPricingModel = 'time_based' | 'fixed_visit'
 
 export interface BudgetGuidance {
   likelihood: BudgetAcceptanceLikelihood
+  pricingModel: ProviderPricingModel
   recommendedMin: number
   recommendedGood: number
   suggestedLow: number
@@ -95,11 +97,13 @@ export interface BudgetGuidance {
 export interface ProviderPricingPreferenceInput {
   provider_id?: string | null | undefined
   service_type: string | null | undefined
-  pricing_model: 'time_based' | 'visit_based' | 'hybrid' | string | null | undefined
+  pricing_model: ProviderPricingModel | 'visit_based' | 'hybrid' | string | null | undefined
   booking_type: 'asap' | 'scheduled' | string | null | undefined
   is_enabled: boolean | null | undefined
   hourly_rate_min: number | string | null | undefined
   hourly_rate_preferred: number | string | null | undefined
+  visit_fee_min?: number | string | null | undefined
+  visit_fee_preferred?: number | string | null | undefined
   accepts_multi_item?: boolean | null | undefined
   max_item_count?: number | string | null | undefined
 }
@@ -199,6 +203,14 @@ function toFiniteNumber(value: number | string | null | undefined): number | nul
         ? Number(value)
         : NaN
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizePricingModel(value: string | null | undefined): ProviderPricingModel | null {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'time_based') return 'time_based'
+  if (normalized === 'fixed_visit' || normalized === 'visit_based') return 'fixed_visit'
+  return null
 }
 
 function getCoverageThresholds(providerCount: number): CoverageThresholds {
@@ -316,6 +328,7 @@ export function getBudgetGuidance(params: {
 
   return {
     likelihood,
+    pricingModel: 'time_based',
     recommendedMin,
     recommendedGood,
     suggestedLow: recommendedMin,
@@ -343,8 +356,9 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
   const normalizedServiceType = normalizeGuidanceServiceType(params.serviceType)
   const requestedItemCount = normalizeRequestedItemCount(params.dogCount)
   const multiItemMultiplier = getDogWalkerMultiItemMultiplier(params.serviceType, params.dogCount)
+  const hasValidDuration = Number.isFinite(durationMinutes) && durationMinutes > 0
 
-  if (!normalizedServiceType || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+  if (!normalizedServiceType) {
     return null
   }
 
@@ -352,7 +366,6 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
     if (!row || row.is_enabled !== true) return false
     if (normalizeGuidanceServiceType(row.service_type) !== normalizedServiceType) return false
     if ((row.booking_type ?? '').toString().toLowerCase() !== params.bookingType) return false
-    if ((row.pricing_model ?? '').toString().toLowerCase() !== 'time_based') return false
 
     if (requestedItemCount > 1) {
       if (row.accepts_multi_item !== true) return false
@@ -365,9 +378,24 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
 
   if (relevant.length === 0) return null
 
-  const hours = durationMinutes / 60
+  const relevantTimeBased = relevant.filter((row) => normalizePricingModel(row.pricing_model) === 'time_based')
+  const relevantFixedVisit = relevant.filter((row) => normalizePricingModel(row.pricing_model) === 'fixed_visit')
+
+  const activePricingModel: ProviderPricingModel | null =
+    hasValidDuration && relevantTimeBased.length > 0
+      ? 'time_based'
+      : relevantFixedVisit.length > 0
+        ? 'fixed_visit'
+        : relevantTimeBased.length > 0
+          ? 'time_based'
+          : null
+
+  if (!activePricingModel) return null
+  if (activePricingModel === 'time_based' && !hasValidDuration) return null
+
+  const hours = hasValidDuration ? durationMinutes / 60 : null
   const preferenceRows = Array.from(
-    relevant.reduce((map, row) => {
+    (activePricingModel === 'time_based' ? relevantTimeBased : relevantFixedVisit).reduce((map, row) => {
       const providerId = typeof row.provider_id === 'string' && row.provider_id.length > 0
         ? row.provider_id
         : null
@@ -384,29 +412,53 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
 
   const budgetBands = preferenceRows
     .map((row) => {
-      const minimumHourly = toFiniteNumber(row.hourly_rate_min)
-      const preferredHourly = toFiniteNumber(row.hourly_rate_preferred)
-      const adjustedMinimumHourly =
-        minimumHourly != null && minimumHourly >= 0 ? minimumHourly * multiItemMultiplier : null
-      const adjustedPreferredHourly =
-        preferredHourly != null && preferredHourly >= 0 ? preferredHourly * multiItemMultiplier : null
+      if (activePricingModel === 'time_based') {
+        const minimumHourly = toFiniteNumber(row.hourly_rate_min)
+        const preferredHourly = toFiniteNumber(row.hourly_rate_preferred)
+        const adjustedMinimumHourly =
+          minimumHourly != null && minimumHourly >= 0 ? minimumHourly * multiItemMultiplier : null
+        const adjustedPreferredHourly =
+          preferredHourly != null && preferredHourly >= 0 ? preferredHourly * multiItemMultiplier : null
 
-      const minimumBudget =
-        adjustedMinimumHourly != null
-          ? Math.max(1, Math.round(adjustedMinimumHourly * hours))
-          : adjustedPreferredHourly != null
+        const minimumBudget =
+          adjustedMinimumHourly != null && hours != null
+            ? Math.max(1, Math.round(adjustedMinimumHourly * hours))
+            : adjustedPreferredHourly != null && hours != null
+              ? Math.max(1, Math.round(adjustedPreferredHourly * hours))
+              : null
+        const preferredBudget =
+          adjustedPreferredHourly != null && hours != null
             ? Math.max(1, Math.round(adjustedPreferredHourly * hours))
+            : minimumBudget
+
+        if (minimumBudget == null) return null
+
+        return {
+          minimumComparableRate: adjustedMinimumHourly,
+          preferredComparableRate: adjustedPreferredHourly,
+          minimumBudget,
+          preferredBudget: preferredBudget ?? minimumBudget,
+        }
+      }
+
+      const minimumVisitFee = toFiniteNumber(row.visit_fee_min)
+      const preferredVisitFee = toFiniteNumber(row.visit_fee_preferred)
+      const minimumBudget =
+        minimumVisitFee != null
+          ? Math.max(1, Math.round(minimumVisitFee))
+          : preferredVisitFee != null
+            ? Math.max(1, Math.round(preferredVisitFee))
             : null
       const preferredBudget =
-        adjustedPreferredHourly != null
-          ? Math.max(1, Math.round(adjustedPreferredHourly * hours))
+        preferredVisitFee != null
+          ? Math.max(1, Math.round(preferredVisitFee))
           : minimumBudget
 
       if (minimumBudget == null) return null
 
       return {
-        minimumHourly: adjustedMinimumHourly,
-        preferredHourly: adjustedPreferredHourly,
+        minimumComparableRate: minimumVisitFee,
+        preferredComparableRate: preferredVisitFee,
         minimumBudget,
         preferredBudget: preferredBudget ?? minimumBudget,
       }
@@ -416,10 +468,10 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
   if (budgetBands.length === 0) return null
 
   const minimumRates = budgetBands
-    .map((band) => band.minimumHourly)
+    .map((band) => band.minimumComparableRate)
     .filter((value): value is number => value != null && value >= 0)
   const preferredRates = budgetBands
-    .map((band) => band.preferredHourly)
+    .map((band) => band.preferredComparableRate)
     .filter((value): value is number => value != null && value >= 0)
 
   if (minimumRates.length === 0 && preferredRates.length === 0) return null
@@ -465,6 +517,7 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
 
   return {
     likelihood,
+    pricingModel: activePricingModel,
     recommendedMin,
     recommendedGood,
     suggestedLow: recommendedMin,

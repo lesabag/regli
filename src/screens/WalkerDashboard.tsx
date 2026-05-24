@@ -26,6 +26,7 @@ import {
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import { normalizeAgeRangeValue } from '../lib/dispatchRanking'
 import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 import { hasProviderIssue } from '../utils/completionReview'
@@ -853,6 +854,7 @@ export default function WalkerDashboard({
   const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
   const requestDogCountLabel = formatDogCountLabel(topRequest?.dog_count ?? 1, { isHebrew })
   const isBabysitterRequest = topRequest?.service_type === 'baby_sitter'
+  const isFixedVisitRequest = getBookingPricingModelForService(topRequest?.service_type) === 'fixed_visit'
   const babysitterRequestNotes = useMemo(
     () => parseBabysitterNotes(topRequest?.notes),
     [topRequest?.notes],
@@ -2825,6 +2827,7 @@ export default function WalkerDashboard({
               : null
             const missionAddress = missionJob.location ? formatShortAddress(missionJob.address || missionJob.location) : null
             const missionNote = getDisplayServiceNote(missionJob.service_type, missionJob.notes)
+            const isFixedVisitMission = getBookingPricingModelForService(missionJob.service_type) === 'fixed_visit'
 
             const missionStatusLabel = isMissionActive
               ? activeLabels.activeTitle
@@ -2853,22 +2856,30 @@ export default function WalkerDashboard({
                 : 1
 
             const missionMetaItems = isMissionActive
-              ? [
-                  activeDurationSummary.elapsedLabel
-                    ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
-                    : null,
-                  activeDurationSummary.plannedLabel
-                    ? { label: isHebrew ? 'מתוכנן' : 'Planned', value: activeDurationSummary.plannedLabel }
-                    : null,
-                  activeDurationSummary.actualLabel
-                    ? { label: isHebrew ? 'בפועל' : 'Actual', value: activeDurationSummary.actualLabel }
-                    : null,
-                ].filter(Boolean) as Array<{ label: string; value: string }>
+              ? (
+                  isFixedVisitMission
+                    ? [{ label: isHebrew ? 'שירות' : 'Service', value: t('tracking.fixedVisit') }]
+                    : [
+                        activeDurationSummary.elapsedLabel
+                          ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
+                          : null,
+                        activeDurationSummary.plannedLabel
+                          ? { label: isHebrew ? 'מתוכנן' : 'Planned', value: activeDurationSummary.plannedLabel }
+                          : null,
+                        activeDurationSummary.actualLabel
+                          ? { label: isHebrew ? 'בפועל' : 'Actual', value: activeDurationSummary.actualLabel }
+                          : null,
+                      ].filter(Boolean)
+                ) as Array<{ label: string; value: string }>
               : [
-                  missionJob.duration_minutes
-                    ? { label: isHebrew ? 'משך' : 'Duration', value: durationFromMinutes(missionJob.duration_minutes) }
+                  isFixedVisitMission
+                    ? { label: isHebrew ? 'שירות' : 'Service', value: t('tracking.fixedVisit') }
+                    : missionJob.duration_minutes
+                      ? { label: isHebrew ? 'משך' : 'Duration', value: durationFromMinutes(missionJob.duration_minutes) }
+                      : null,
+                  !isFixedVisitMission && missionDogCountLabel
+                    ? { label: isHebrew ? 'פרטים' : 'Details', value: missionDogCountLabel }
                     : null,
-                  missionDogCountLabel ? { label: isHebrew ? 'פרטים' : 'Details', value: missionDogCountLabel } : null,
                 ].filter(Boolean) as Array<{ label: string; value: string }>
 
             const missionCtaDisabled = isMissionActive
@@ -3087,10 +3098,16 @@ export default function WalkerDashboard({
 
               <div style={incomingInfoCardStyle}>
                 <div style={incomingInfoLabelStyle}>
-                  {isBabysitterRequest ? (isHebrew ? 'פרטי שירות' : 'Service details') : (isHebrew ? 'שם' : 'Name')}
+                  {isFixedVisitRequest
+                    ? (isHebrew ? 'שירות' : 'Service')
+                    : isBabysitterRequest
+                      ? (isHebrew ? 'פרטי שירות' : 'Service details')
+                      : (isHebrew ? 'שם' : 'Name')}
                 </div>
                 <div style={dogNameStyle}>
-                  {isBabysitterRequest
+                  {isFixedVisitRequest
+                    ? topRequest.notes || t('tracking.fixedVisit')
+                    : isBabysitterRequest
                     ? babysitterRequestNotes.details || topRequest.dog_name || (isHebrew ? 'שירות בייביסיטר' : 'Babysitter service')
                     : topRequest.dog_name || t('booking.walkFallback')}
                 </div>
@@ -3110,10 +3127,16 @@ export default function WalkerDashboard({
               <div style={incomingMetaRowStyle}>
                 <div style={incomingMetaCardStyle}>
                   <span style={incomingMetaLabelStyle}>
-                    {isBabysitterRequest ? (isHebrew ? 'משך מבוקש' : 'Requested duration') : t('booking.durationQuestion')}
+                    {isFixedVisitRequest
+                      ? (isHebrew ? 'שירות' : 'Service')
+                      : isBabysitterRequest
+                        ? (isHebrew ? 'משך מבוקש' : 'Requested duration')
+                        : t('booking.durationQuestion')}
                   </span>
                   <span style={incomingMetaValueStyle}>
-                    {isBabysitterRequest
+                    {isFixedVisitRequest
+                      ? t('tracking.fixedVisit')
+                      : isBabysitterRequest
                       ? babysitterRequestNotes.duration || requestDuration
                       : `${requestDuration}${isDogServiceType(topRequest.service_type) ? ` · ${requestDogCountLabel}` : ''}`}
                   </span>

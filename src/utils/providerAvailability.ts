@@ -1,4 +1,5 @@
-import { normalizeProfileServiceType, type ProfileServiceType } from '../lib/profileServiceTypes'
+import { type ProfileServiceType } from '../lib/profileServiceTypes'
+import { normalizeProviderServiceType } from '../lib/providerServiceTypes'
 import { supabase } from '../services/supabaseClient'
 
 export const BUSINESS_TIMEZONE = 'Asia/Jerusalem'
@@ -79,11 +80,11 @@ export function isProviderAvailableAt(
   const localParts = getBusinessLocalParts(at)
   if (!localParts) return false
 
-  const normalizedServiceType = normalizeProfileServiceType(serviceType ?? null)
+  const normalizedServiceType = normalizeProviderServiceType(serviceType ?? null)
   const relevantRows = rows.filter((row) => {
     if (row.is_active === false) return false
     if (normalizedServiceType == null) return true
-    return normalizeProfileServiceType(row.service_type) === normalizedServiceType
+    return normalizeProviderServiceType(row.service_type) === normalizedServiceType
   })
 
   // Safe default for v1: if a provider has not configured hours yet, we treat them as unavailable.
@@ -116,7 +117,7 @@ export async function fetchProviderAvailabilityRows(
     .in('provider_id', dedupedIds)
     .eq('is_active', true)
 
-  const normalizedServiceType = normalizeProfileServiceType(serviceType ?? null)
+  const normalizedServiceType = normalizeProviderServiceType(serviceType ?? null)
   if (normalizedServiceType) {
     query = query.eq('service_type', normalizedServiceType)
   }

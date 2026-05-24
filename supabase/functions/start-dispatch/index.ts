@@ -9,6 +9,11 @@ import {
 } from '../_shared/dispatch.ts'
 import { rankDispatchCandidatesByFinalScore, computeAttributeScore } from '../_shared/dispatchRanking.ts'
 import { evaluatePricingEligibility, type ProviderPricingPreferenceRow } from '../_shared/pricingEligibility.ts'
+import {
+  getNormalizedProviderServiceTypes,
+  normalizeProviderServiceType,
+  providerSupportsRequestedService,
+} from '../_shared/providerServiceTypes.ts'
 
 type StartDispatchBody = {
   requestId?: string
@@ -86,63 +91,6 @@ function getPersistedCandidateScore(candidate: RankedCandidate): number {
     ? meta.attribute_score
     : 0
   return Number((baseScore + affinityScore + attributeScore).toFixed(6))
-}
-
-function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
-  const normalized = (value ?? '').trim().toLowerCase()
-  if (!normalized) return null
-  if (normalized === 'dog_walking' || normalized === 'dog-walker' || normalized === 'dog_walker') {
-    return 'dog_walker'
-  }
-  if (normalized === 'babysitter' || normalized === 'baby-sitter' || normalized === 'baby_sitter') {
-    return 'baby_sitter'
-  }
-  return null
-}
-
-function parseServiceTypes(
-  rawServiceTypes: string[] | string | null | undefined,
-): string[] {
-  if (Array.isArray(rawServiceTypes)) {
-    return rawServiceTypes
-      .map((value) => String(value ?? '').trim())
-      .filter(Boolean)
-  }
-
-  if (typeof rawServiceTypes === 'string') {
-    return rawServiceTypes
-      .replace(/^\{|\}$/g, '')
-      .split(',')
-      .map((value) => value.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean)
-  }
-
-  return []
-}
-
-function getNormalizedServiceTypes(
-  rawServiceTypes: string[] | string | null | undefined,
-): Array<'dog_walker' | 'baby_sitter'> {
-  return parseServiceTypes(rawServiceTypes)
-    .map((value) => normalizeProviderServiceType(value))
-    .filter((value): value is 'dog_walker' | 'baby_sitter' => value !== null)
-}
-
-function providerSupportsRequestedService(
-  profile: {
-    service_types?: string[] | string | null
-    service_type?: string | null
-  },
-  requestServiceType: 'dog_walker' | 'baby_sitter' | null,
-): boolean {
-  if (!requestServiceType) return true
-
-  const normalizedServiceTypes = getNormalizedServiceTypes(profile.service_types)
-  if (normalizedServiceTypes.length > 0) {
-    return normalizedServiceTypes.includes(requestServiceType)
-  }
-
-  return normalizeProviderServiceType(profile.service_type) === requestServiceType
 }
 
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
@@ -544,7 +492,7 @@ serve(async (req) => {
         }
 
         candidateCapabilityRows.forEach((row) => {
-          const normalizedServiceTypes = getNormalizedServiceTypes(row.service_types)
+          const normalizedServiceTypes = getNormalizedProviderServiceTypes(row.service_types)
           const matched = providerSupportsRequestedService(row, requestProviderServiceType)
           console.log('[start-dispatch] candidate capability', {
             version: START_DISPATCH_VERSION,

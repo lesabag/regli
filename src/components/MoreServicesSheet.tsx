@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  MORE_SERVICES,
+  FIXED_VISIT_BOOKING_SERVICES,
   SERVICE_ICONS,
   SERVICE_I18N_KEYS,
   type ServiceType,
@@ -20,15 +20,15 @@ export default function MoreServicesSheet({
 }: MoreServicesSheetProps) {
   const { t } = useTranslation()
   const visibleServices = services && services.length > 0
-    ? MORE_SERVICES.filter((svc) => services.includes(svc))
-    : MORE_SERVICES
+    ? FIXED_VISIT_BOOKING_SERVICES.filter((svc) => services.includes(svc))
+    : FIXED_VISIT_BOOKING_SERVICES
 
   return (
     <>
       <div style={overlayStyle} onClick={onClose} />
       <div style={sheetStyle}>
         <div style={handleStyle} />
-        <div style={titleStyle}>{t('services.more')}</div>
+        <div style={titleStyle}>{t('booking.fixedVisit.otherService')}</div>
         <div style={listStyle}>
           {visibleServices.map((svc) => (
             <button

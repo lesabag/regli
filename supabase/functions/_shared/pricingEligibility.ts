@@ -6,6 +6,8 @@ export type ProviderPricingPreferenceRow = {
   is_enabled: boolean | null | undefined
   hourly_rate_min: number | string | null | undefined
   hourly_rate_preferred: number | string | null | undefined
+  visit_fee_min?: number | string | null | undefined
+  visit_fee_preferred?: number | string | null | undefined
   accepts_multi_item?: boolean | null | undefined
   max_item_count?: number | string | null | undefined
 }
