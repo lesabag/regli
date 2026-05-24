@@ -1,11 +1,14 @@
 export const SERVICE_TYPES = [
   'dog_walking',
   'babysitter',
+  'electrician',
+  'locksmith',
+  'handyman',
+  'air_conditioner_technician',
+  'plumber',
   'technician',
   'cleaning',
   'tutor',
-  'electrician',
-  'plumber',
   'shutters',
 ] as const
 
@@ -14,32 +17,35 @@ export type ServiceType = (typeof SERVICE_TYPES)[number]
 export const PRIMARY_SERVICES: ServiceType[] = [
   'dog_walking',
   'babysitter',
-  'technician',
 ]
 
 export const MORE_SERVICES: ServiceType[] = [
-  'cleaning',
-  'tutor',
   'electrician',
+  'locksmith',
+  'handyman',
+  'air_conditioner_technician',
   'plumber',
-  'shutters',
 ]
 
 export const FIXED_VISIT_BOOKING_SERVICES: ServiceType[] = [
-  'technician',
   'electrician',
+  'locksmith',
+  'handyman',
+  'air_conditioner_technician',
   'plumber',
-  'shutters',
 ]
 
 export const SERVICE_ICONS: Record<ServiceType, string> = {
   dog_walking: '🐾',
   babysitter: '👶',
+  electrician: '⚡',
+  locksmith: '🔐',
+  handyman: '🛠️',
+  air_conditioner_technician: '❄️',
+  plumber: '🔩',
   technician: '🔧',
   cleaning: '🧹',
   tutor: '📚',
-  electrician: '⚡',
-  plumber: '🔩',
   shutters: '🪟',
 }
 
@@ -67,6 +73,41 @@ export const SERVICE_I18N_KEYS: Record<
     sheetTitle: 'serviceInput.babysitter.sheetTitle',
     sheetSubtitle: 'serviceInput.babysitter.sheetSubtitle',
   },
+  electrician: {
+    label: 'services.electrician',
+    inputLabel: 'serviceInput.electrician.label',
+    inputPlaceholder: 'serviceInput.electrician.placeholder',
+    sheetTitle: 'serviceInput.electrician.sheetTitle',
+    sheetSubtitle: 'serviceInput.electrician.sheetSubtitle',
+  },
+  locksmith: {
+    label: 'services.locksmith',
+    inputLabel: 'serviceInput.locksmith.label',
+    inputPlaceholder: 'serviceInput.locksmith.placeholder',
+    sheetTitle: 'serviceInput.locksmith.sheetTitle',
+    sheetSubtitle: 'serviceInput.locksmith.sheetSubtitle',
+  },
+  handyman: {
+    label: 'services.handyman',
+    inputLabel: 'serviceInput.handyman.label',
+    inputPlaceholder: 'serviceInput.handyman.placeholder',
+    sheetTitle: 'serviceInput.handyman.sheetTitle',
+    sheetSubtitle: 'serviceInput.handyman.sheetSubtitle',
+  },
+  air_conditioner_technician: {
+    label: 'services.airConditionerTechnician',
+    inputLabel: 'serviceInput.airConditionerTechnician.label',
+    inputPlaceholder: 'serviceInput.airConditionerTechnician.placeholder',
+    sheetTitle: 'serviceInput.airConditionerTechnician.sheetTitle',
+    sheetSubtitle: 'serviceInput.airConditionerTechnician.sheetSubtitle',
+  },
+  plumber: {
+    label: 'services.plumber',
+    inputLabel: 'serviceInput.plumber.label',
+    inputPlaceholder: 'serviceInput.plumber.placeholder',
+    sheetTitle: 'serviceInput.plumber.sheetTitle',
+    sheetSubtitle: 'serviceInput.plumber.sheetSubtitle',
+  },
   technician: {
     label: 'services.technician',
     inputLabel: 'serviceInput.technician.label',
@@ -88,20 +129,6 @@ export const SERVICE_I18N_KEYS: Record<
     sheetTitle: 'serviceInput.tutor.sheetTitle',
     sheetSubtitle: 'serviceInput.tutor.sheetSubtitle',
   },
-  electrician: {
-    label: 'services.electrician',
-    inputLabel: 'serviceInput.electrician.label',
-    inputPlaceholder: 'serviceInput.electrician.placeholder',
-    sheetTitle: 'serviceInput.electrician.sheetTitle',
-    sheetSubtitle: 'serviceInput.electrician.sheetSubtitle',
-  },
-  plumber: {
-    label: 'services.plumber',
-    inputLabel: 'serviceInput.plumber.label',
-    inputPlaceholder: 'serviceInput.plumber.placeholder',
-    sheetTitle: 'serviceInput.plumber.sheetTitle',
-    sheetSubtitle: 'serviceInput.plumber.sheetSubtitle',
-  },
   shutters: {
     label: 'services.shutters',
     inputLabel: 'serviceInput.shutters.label',
@@ -122,9 +149,13 @@ export function isServiceAvailable(serviceType: ServiceType): boolean {
 export function getBookingPricingModelForService(serviceType: ServiceType | string | null | undefined): 'time_based' | 'fixed_visit' {
   const normalized = (serviceType ?? '').trim().toLowerCase()
   if (
-    normalized === 'technician' ||
     normalized === 'electrician' ||
+    normalized === 'locksmith' ||
+    normalized === 'handyman' ||
+    normalized === 'air_conditioner_technician' ||
+    normalized === 'air-conditioner-technician' ||
     normalized === 'plumber' ||
+    normalized === 'technician' ||
     normalized === 'shutters'
   ) {
     return 'fixed_visit'

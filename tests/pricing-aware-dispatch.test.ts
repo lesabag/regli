@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluatePricingEligibility, getDogPricingMultiplier, type ProviderPricingPreferenceRow } from '../supabase/functions/_shared/pricingEligibility.ts'
 import { providerSupportsRequestedService } from '../supabase/functions/_shared/providerServiceTypes.ts'
+import { mapBookingServiceTypeToProfileServiceType, mapProfileServiceTypeToBookingServiceType } from '../src/lib/profileServiceTypes.ts'
 import { providerSupportsRequestedService as clientProviderSupportsRequestedService } from '../src/lib/providerServiceTypes.ts'
 import { getBudgetGuidanceFromProviderPreferences } from '../src/lib/pricing.ts'
 import { getBookingPricingModelForService, isFixedVisitBookingService } from '../src/lib/serviceTypes.ts'
@@ -42,37 +43,59 @@ test('dog pricing multiplier grows by 50 percent per extra dog for dog walker on
 
 test('fixed visit booking services resolve to fixed visit pricing mode', () => {
   assert.equal(getBookingPricingModelForService('electrician'), 'fixed_visit')
+  assert.equal(getBookingPricingModelForService('locksmith'), 'fixed_visit')
+  assert.equal(getBookingPricingModelForService('handyman'), 'fixed_visit')
+  assert.equal(getBookingPricingModelForService('air_conditioner_technician'), 'fixed_visit')
   assert.equal(getBookingPricingModelForService('plumber'), 'fixed_visit')
-  assert.equal(isFixedVisitBookingService('technician'), true)
+  assert.equal(isFixedVisitBookingService('electrician'), true)
   assert.equal(getBookingPricingModelForService('dog_walking'), 'time_based')
+})
+
+test('provider and booking service type mapping stays stable for fixed visit onboarding', () => {
+  assert.equal(mapProfileServiceTypeToBookingServiceType('electrician'), 'electrician')
+  assert.equal(mapProfileServiceTypeToBookingServiceType('locksmith'), 'locksmith')
+  assert.equal(mapProfileServiceTypeToBookingServiceType('handyman'), 'handyman')
+  assert.equal(
+    mapProfileServiceTypeToBookingServiceType('air_conditioner_technician'),
+    'air_conditioner_technician',
+  )
+  assert.equal(mapProfileServiceTypeToBookingServiceType('plumber'), 'plumber')
+  assert.equal(mapBookingServiceTypeToProfileServiceType('electrician'), 'electrician')
+  assert.equal(mapBookingServiceTypeToProfileServiceType('locksmith'), 'locksmith')
+  assert.equal(mapBookingServiceTypeToProfileServiceType('handyman'), 'handyman')
+  assert.equal(
+    mapBookingServiceTypeToProfileServiceType('air_conditioner_technician'),
+    'air_conditioner_technician',
+  )
+  assert.equal(mapBookingServiceTypeToProfileServiceType('plumber'), 'plumber')
 })
 
 test('fixed visit requests only match providers supporting the exact fixed visit service', () => {
   assert.equal(
     providerSupportsRequestedService(
       { service_type: 'dog_walker', service_types: ['dog_walker'] },
-      'technician',
+      'electrician',
     ),
     false,
   )
   assert.equal(
     providerSupportsRequestedService(
       { service_type: 'baby_sitter', service_types: ['baby_sitter'] },
-      'technician',
+      'electrician',
     ),
     false,
   )
   assert.equal(
     providerSupportsRequestedService(
-      { service_type: 'technician', service_types: ['technician'] },
-      'technician',
+      { service_type: 'electrician', service_types: ['electrician'] },
+      'electrician',
     ),
     true,
   )
   assert.equal(
     providerSupportsRequestedService(
-      { service_type: 'electrician', service_types: ['electrician'] },
-      'technician',
+      { service_type: 'plumber', service_types: ['plumber'] },
+      'electrician',
     ),
     false,
   )
@@ -106,28 +129,28 @@ test('client-side provider filtering uses exact fixed visit service types', () =
   assert.equal(
     clientProviderSupportsRequestedService(
       { service_type: 'dog_walker', service_types: ['dog_walker'] },
-      'technician',
+      'electrician',
     ),
     false,
   )
   assert.equal(
     clientProviderSupportsRequestedService(
       { service_type: 'baby_sitter', service_types: ['baby_sitter'] },
-      'technician',
+      'electrician',
     ),
     false,
   )
   assert.equal(
     clientProviderSupportsRequestedService(
-      { service_type: 'technician', service_types: ['technician'] },
-      'technician',
+      { service_type: 'electrician', service_types: ['electrician'] },
+      'electrician',
     ),
     true,
   )
   assert.equal(
     clientProviderSupportsRequestedService(
       { service_type: null, service_types: null },
-      'technician',
+      'electrician',
     ),
     false,
   )
@@ -320,10 +343,29 @@ test('fixed visit guidance uses visit fee fields without duration math', () => {
   assert.ok(guidance)
   assert.equal(guidance.pricingModel, 'fixed_visit')
   assert.equal(guidance.recommendedMin, 150)
-  assert.equal(guidance.recommendedGood, 250)
+  assert.equal(guidance.recommendedGood, 320)
   assert.equal(guidance.coveredProviderCount, 1)
   assert.equal(guidance.eligibleProviderCount, 2)
   assert.equal(guidance.likelihood, 'medium')
+})
+
+test('fixed visit guidance preserves preferred fee as the upper range bound', () => {
+  const guidance = getBudgetGuidanceFromProviderPreferences({
+    serviceType: 'electrician',
+    bookingType: 'asap',
+    durationMinutes: null,
+    selectedPriceILS: 170,
+    preferences: [
+      pref({ providerId: 'pro-a', bookingType: 'asap', pricingModel: 'fixed_visit', visitFeeMin: 150, visitFeePreferred: 200, serviceType: 'electrician' }),
+    ],
+  })
+
+  assert.ok(guidance)
+  assert.equal(guidance.pricingModel, 'fixed_visit')
+  assert.equal(guidance.recommendedMin, 150)
+  assert.equal(guidance.recommendedGood, 200)
+  assert.equal(guidance.suggestedLow, 150)
+  assert.equal(guidance.suggestedHigh, 200)
 })
 
 test('mixed pricing-model pools prefer time-based guidance when duration is provided', () => {

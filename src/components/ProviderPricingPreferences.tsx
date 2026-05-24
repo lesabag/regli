@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getProfileServiceTypeLabel, type ProfileServiceType } from '../lib/profileServiceTypes'
+import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import { supabase } from '../services/supabaseClient'
 
 type BookingType = 'asap' | 'scheduled'
@@ -51,10 +52,11 @@ function toInputValue(value: number | null | undefined): string {
 }
 
 function createDefaultRow(providerId: string, serviceType: ProfileServiceType, bookingType: BookingType): PreferenceRow {
+  const pricingModel = getBookingPricingModelForService(serviceType)
   return {
     provider_id: providerId,
     service_type: serviceType,
-    pricing_model: 'time_based',
+    pricing_model: pricingModel,
     booking_type: bookingType,
     is_enabled: true,
     hourly_rate_min: '',
@@ -102,7 +104,7 @@ export default function ProviderPricingPreferences({
   const { t, i18n } = useTranslation()
   const isHebrew = i18n.resolvedLanguage === 'he'
   const supportedServices = useMemo(
-    () => serviceTypes.filter((value): value is ProfileServiceType => value === 'dog_walker' || value === 'baby_sitter'),
+    () => serviceTypes,
     [serviceTypes],
   )
 
@@ -214,10 +216,10 @@ export default function ProviderPricingPreferences({
 
     setSaving(true)
 
-    const payload = rows.map((row) => ({
+      const payload = rows.map((row) => ({
       provider_id: providerId,
       service_type: row.service_type,
-      pricing_model: row.pricing_model,
+      pricing_model: getBookingPricingModelForService(row.service_type),
       booking_type: row.booking_type,
       is_enabled: row.is_enabled,
       hourly_rate_min: parseOptionalNumber(row.hourly_rate_min),
@@ -225,8 +227,13 @@ export default function ProviderPricingPreferences({
       visit_fee_min: parseOptionalNumber(row.visit_fee_min),
       visit_fee_preferred: parseOptionalNumber(row.visit_fee_preferred),
       service_radius_km: parseOptionalNumber(row.service_radius_km),
-      accepts_multi_item: row.accepts_multi_item,
-      max_item_count: row.accepts_multi_item ? parseOptionalNumber(row.max_item_count) : null,
+      accepts_multi_item: row.pricing_model === 'fixed_visit' ? false : row.accepts_multi_item,
+      max_item_count:
+        row.pricing_model === 'fixed_visit'
+          ? null
+          : row.accepts_multi_item
+            ? parseOptionalNumber(row.max_item_count)
+            : null,
     }))
 
     const { error } = await supabase
@@ -353,31 +360,33 @@ export default function ProviderPricingPreferences({
                       </label>
                     </div>
 
-                    <div style={multiItemRowStyle}>
-                      <label style={checkboxLabelStyle}>
-                        <input
-                          type="checkbox"
-                          checked={row.accepts_multi_item}
-                          onChange={(event) => updateRow(row.service_type, row.booking_type, { accepts_multi_item: event.target.checked })}
-                        />
-                        <span>{t('providerPricing.acceptsMultiItem')}</span>
-                      </label>
+                    {row.pricing_model !== 'fixed_visit' ? (
+                      <div style={multiItemRowStyle}>
+                        <label style={checkboxLabelStyle}>
+                          <input
+                            type="checkbox"
+                            checked={row.accepts_multi_item}
+                            onChange={(event) => updateRow(row.service_type, row.booking_type, { accepts_multi_item: event.target.checked })}
+                          />
+                          <span>{t('providerPricing.acceptsMultiItem')}</span>
+                        </label>
 
-                      <label style={fieldStyleCompact}>
-                        <span style={fieldLabelStyle}>{t('providerPricing.maxItemCount')}</span>
-                        <input
-                          inputMode="numeric"
-                          value={row.max_item_count}
-                          onChange={(event) => updateRow(row.service_type, row.booking_type, { max_item_count: event.target.value })}
-                          style={{
-                            ...inputStyle,
-                            opacity: row.accepts_multi_item ? 1 : 0.6,
-                          }}
-                          placeholder="—"
-                          disabled={!row.accepts_multi_item}
-                        />
-                      </label>
-                    </div>
+                        <label style={fieldStyleCompact}>
+                          <span style={fieldLabelStyle}>{t('providerPricing.maxItemCount')}</span>
+                          <input
+                            inputMode="numeric"
+                            value={row.max_item_count}
+                            onChange={(event) => updateRow(row.service_type, row.booking_type, { max_item_count: event.target.value })}
+                            style={{
+                              ...inputStyle,
+                              opacity: row.accepts_multi_item ? 1 : 0.6,
+                            }}
+                            placeholder="—"
+                            disabled={!row.accepts_multi_item}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -436,9 +445,9 @@ const serviceCardStyle: React.CSSProperties = {
   border: '1px solid rgba(226, 232, 240, 0.95)',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)',
   boxShadow: '0 10px 24px rgba(15, 23, 42, 0.06)',
-  padding: 12,
+  padding: 11,
   display: 'grid',
-  gap: 10,
+  gap: 9,
 }
 
 const serviceHeaderStyle: React.CSSProperties = {
@@ -456,16 +465,16 @@ const serviceTitleStyle: React.CSSProperties = {
 
 const bookingGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 8,
 }
 
 const bookingCardStyle: React.CSSProperties = {
   borderRadius: 16,
   border: '1px solid rgba(226, 232, 240, 0.85)',
   background: 'rgba(255,255,255,0.76)',
-  padding: 12,
+  padding: 11,
   display: 'grid',
-  gap: 10,
+  gap: 9,
 }
 
 const bookingHeaderStyle: React.CSSProperties = {
@@ -515,7 +524,7 @@ const toggleThumbActiveStyle: React.CSSProperties = {
 const fieldGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 10,
+  gap: 8,
 }
 
 const fieldStyle: React.CSSProperties = {
@@ -538,12 +547,12 @@ const fieldLabelStyle: React.CSSProperties = {
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  height: 40,
+  height: 38,
   borderRadius: 12,
   border: '1px solid rgba(203, 213, 225, 0.95)',
   background: '#FFFFFF',
-  padding: '0 12px',
-  fontSize: 14,
+  padding: '0 11px',
+  fontSize: 13.5,
   color: '#0F172A',
   boxSizing: 'border-box',
   outline: 'none',

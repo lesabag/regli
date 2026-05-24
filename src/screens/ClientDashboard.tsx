@@ -603,7 +603,10 @@ export default function ClientDashboard({
     }
   }).current
 
-  const profileServiceOptions = useMemo(() => getProfileServiceOptions(isRtl), [isRtl])
+  const profileServiceOptions = useMemo(
+    () => getProfileServiceOptions(isRtl).filter((option) => option.value === 'dog_walker' || option.value === 'baby_sitter'),
+    [isRtl],
+  )
   const serviceTypeSectionTitle = isRtl ? 'סוג שירות' : 'Service type'
   const serviceTypeSectionSubtitle = isRtl
     ? 'בחר את סוג השירות הראשי לחשבון שלך.'

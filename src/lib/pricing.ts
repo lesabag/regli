@@ -128,6 +128,26 @@ const SERVICE_GUIDANCE_TABLE: Record<string, PricingBand[]> = {
     { minutes: 30, min: 40, good: 55 },
     { minutes: 60, min: 70, good: 95 },
   ],
+  electrician: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
+  locksmith: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
+  handyman: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
+  air_conditioner_technician: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
+  plumber: [
+    { minutes: 30, min: 80, good: 120 },
+    { minutes: 60, min: 140, good: 220 },
+  ],
   technician: [
     { minutes: 30, min: 80, good: 120 },
     { minutes: 60, min: 140, good: 220 },
@@ -489,11 +509,18 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
   const sortedMinimumBudgets = budgetBands
     .map((band) => band.minimumBudget)
     .sort((a, b) => a - b)
+  const sortedPreferredBudgets = budgetBands
+    .map((band) => band.preferredBudget)
+    .sort((a, b) => a - b)
   const { mediumCount, highCount } = getCoverageThresholds(sortedMinimumBudgets.length)
   const recommendedMin = getBudgetAtCoverageTarget(sortedMinimumBudgets, mediumCount)
+  const recommendedGoodSource =
+    activePricingModel === 'fixed_visit' && sortedPreferredBudgets.length > 0
+      ? sortedPreferredBudgets
+      : sortedMinimumBudgets
   const recommendedGood = Math.max(
     recommendedMin,
-    getBudgetAtCoverageTarget(sortedMinimumBudgets, highCount),
+    getBudgetAtCoverageTarget(recommendedGoodSource, highCount),
   )
   const roundedSelectedPrice =
     Number.isFinite(selectedPriceILS) && selectedPriceILS > 0

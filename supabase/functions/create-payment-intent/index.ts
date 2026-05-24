@@ -51,9 +51,13 @@ function normalizeRequestServiceType(value: string | null | undefined): string |
 function getRequestPricingModel(requestServiceType: string | null | undefined): 'time_based' | 'fixed_visit' {
   const normalized = normalizeRequestServiceType(requestServiceType)
   if (
-    normalized === 'technician' ||
     normalized === 'electrician' ||
+    normalized === 'locksmith' ||
+    normalized === 'handyman' ||
+    normalized === 'air_conditioner_technician' ||
+    normalized === 'air-conditioner-technician' ||
     normalized === 'plumber' ||
+    normalized === 'technician' ||
     normalized === 'shutters'
   ) {
     return 'fixed_visit'

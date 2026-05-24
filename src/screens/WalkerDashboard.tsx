@@ -21,6 +21,7 @@ import {
 } from '../utils/providerAvailability'
 import i18n from '../i18n'
 import {
+  PROFILE_SERVICE_TYPES,
   getProfileServiceOptions,
   getProfileServiceTypeLabel,
   normalizeProfileServiceTypes,
@@ -199,10 +200,10 @@ function buildDefaultAvailabilityRows(): AvailabilityFormRow[] {
 }
 
 function buildAvailabilityState(rows: ProviderAvailabilityRow[]): AvailabilityFormState {
-  const nextState: AvailabilityFormState = {
-    dog_walker: buildDefaultAvailabilityRows(),
-    baby_sitter: buildDefaultAvailabilityRows(),
-  }
+  const nextState = PROFILE_SERVICE_TYPES.reduce((state, serviceType) => {
+    state[serviceType] = buildDefaultAvailabilityRows()
+    return state
+  }, {} as AvailabilityFormState)
 
   for (const row of rows) {
     const serviceType = normalizeProfileServiceTypes([row.service_type])[0]
@@ -2260,8 +2261,22 @@ export default function WalkerDashboard({
                                 opacity: serviceTypeSaving && !selected ? 0.72 : 1,
                               }}
                             >
-                              <span style={serviceTypeButtonIconStyle}>{option.icon}</span>
-                              <span style={serviceTypeButtonLabelStyle}>{option.label}</span>
+                              <span
+                                style={{
+                                  ...serviceTypeButtonIconStyle,
+                                  ...(selected ? serviceTypeButtonIconActiveStyle : null),
+                                }}
+                              >
+                                {option.icon}
+                              </span>
+                              <span
+                                style={{
+                                  ...serviceTypeButtonLabelStyle,
+                                  ...(selected ? serviceTypeButtonLabelActiveStyle : null),
+                                }}
+                              >
+                                {option.label}
+                              </span>
                               {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
                             </button>
                           )
@@ -4098,49 +4113,63 @@ const languageButtonActiveStyle: React.CSSProperties = {
 const serviceTypeSelectorRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 8,
+  gap: 7,
 }
 
 const serviceTypeButtonStyle: React.CSSProperties = {
   appearance: 'none',
-  minHeight: 54,
-  borderRadius: 14,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
+  minHeight: 46,
+  borderRadius: 13,
+  border: '1px solid rgba(203, 213, 225, 0.95)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)',
   color: '#334155',
-  padding: '8px 10px',
-  display: 'inline-flex',
+  padding: '8px 9px',
+  display: 'grid',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 8,
+  gridTemplateColumns: '18px minmax(0, 1fr)',
+  columnGap: 7,
   textAlign: 'center',
   cursor: 'pointer',
+  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.04)',
 }
 
 const serviceTypeButtonActiveStyle: React.CSSProperties = {
-  borderColor: '#0F172A',
-  background: '#F8FAFC',
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.08)',
+  borderColor: 'rgba(30, 64, 175, 0.28)',
+  background: 'linear-gradient(180deg, rgba(37, 99, 235, 0.14) 0%, rgba(15, 23, 42, 0.08) 100%)',
+  boxShadow: '0 10px 22px rgba(37, 99, 235, 0.12), inset 0 1px 0 rgba(255,255,255,0.4)',
 }
 
 const serviceTypeButtonIconStyle: React.CSSProperties = {
-  fontSize: 17,
+  fontSize: 15,
   lineHeight: 1,
   flexShrink: 0,
 }
 
+const serviceTypeButtonIconActiveStyle: React.CSSProperties = {
+  filter: 'saturate(1.1)',
+}
+
 const serviceTypeButtonLabelStyle: React.CSSProperties = {
-  fontSize: 12.5,
+  fontSize: 11.5,
   fontWeight: 800,
+  color: '#1E293B',
+  whiteSpace: 'normal',
+  lineHeight: 1.2,
+  overflowWrap: 'anywhere',
+}
+
+const serviceTypeButtonLabelActiveStyle: React.CSSProperties = {
   color: '#0F172A',
-  whiteSpace: 'nowrap',
 }
 
 const serviceTypeButtonMetaStyle: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
   color: '#0F172A',
-  marginInlineStart: 2,
+  gridColumn: '1 / -1',
+  justifySelf: 'center',
+  marginTop: 2,
 }
 
 const serviceTypeStatusSuccessStyle: React.CSSProperties = {

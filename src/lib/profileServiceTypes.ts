@@ -1,6 +1,14 @@
 import type { ServiceType } from './serviceTypes'
 
-export const PROFILE_SERVICE_TYPES = ['dog_walker', 'baby_sitter'] as const
+export const PROFILE_SERVICE_TYPES = [
+  'dog_walker',
+  'baby_sitter',
+  'electrician',
+  'locksmith',
+  'handyman',
+  'air_conditioner_technician',
+  'plumber',
+] as const
 
 export type ProfileServiceType = (typeof PROFILE_SERVICE_TYPES)[number]
 
@@ -42,6 +50,66 @@ const PROFILE_SERVICE_TYPE_COPY: Record<
       icon: '👶',
     },
   },
+  electrician: {
+    en: {
+      label: 'Electrician',
+      description: 'Electrical repairs and troubleshooting.',
+      icon: '⚡',
+    },
+    he: {
+      label: 'חשמלאי',
+      description: 'תיקוני חשמל ואיתור תקלות.',
+      icon: '⚡',
+    },
+  },
+  locksmith: {
+    en: {
+      label: 'Locksmith',
+      description: 'Locks, keys, and access issues.',
+      icon: '🔐',
+    },
+    he: {
+      label: 'מנעולן',
+      description: 'מנעולים, מפתחות ובעיות גישה.',
+      icon: '🔐',
+    },
+  },
+  handyman: {
+    en: {
+      label: 'Handyman',
+      description: 'General home fixes and small repairs.',
+      icon: '🛠️',
+    },
+    he: {
+      label: 'הנדימן',
+      description: 'תיקוני בית כלליים ועבודות קטנות.',
+      icon: '🛠️',
+    },
+  },
+  air_conditioner_technician: {
+    en: {
+      label: 'Air Conditioner Technician',
+      description: 'AC diagnostics, repair, and service.',
+      icon: '❄️',
+    },
+    he: {
+      label: 'טכנאי מזגנים',
+      description: 'אבחון, תיקון ושירות למזגנים.',
+      icon: '❄️',
+    },
+  },
+  plumber: {
+    en: {
+      label: 'Plumber',
+      description: 'Leaks, pipes, and water system repairs.',
+      icon: '🔩',
+    },
+    he: {
+      label: 'אינסטלטור',
+      description: 'נזילות, צנרת ותיקוני מים.',
+      icon: '🔩',
+    },
+  },
 }
 
 export function normalizeProfileServiceType(value: string | null | undefined): ProfileServiceType | null {
@@ -53,6 +121,13 @@ export function normalizeProfileServiceType(value: string | null | undefined): P
   if (normalized === 'baby_sitter' || normalized === 'baby-sitter' || normalized === 'babysitter') {
     return 'baby_sitter'
   }
+  if (normalized === 'electrician') return 'electrician'
+  if (normalized === 'locksmith') return 'locksmith'
+  if (normalized === 'handyman') return 'handyman'
+  if (normalized === 'air_conditioner_technician' || normalized === 'air-conditioner-technician') {
+    return 'air_conditioner_technician'
+  }
+  if (normalized === 'plumber') return 'plumber'
   return null
 }
 
@@ -105,11 +180,13 @@ export function getProfileServiceTypesLabel(
 }
 
 export function mapProfileServiceTypeToBookingServiceType(serviceType: ProfileServiceType): ServiceType {
-  return serviceType === 'baby_sitter' ? 'babysitter' : 'dog_walking'
+  if (serviceType === 'baby_sitter') return 'babysitter'
+  if (serviceType === 'dog_walker') return 'dog_walking'
+  return serviceType
 }
 
 export function mapBookingServiceTypeToProfileServiceType(serviceType: ServiceType): ProfileServiceType | null {
   if (serviceType === 'babysitter') return 'baby_sitter'
   if (serviceType === 'dog_walking') return 'dog_walker'
-  return null
+  return normalizeProfileServiceType(serviceType)
 }
