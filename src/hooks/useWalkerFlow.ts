@@ -892,7 +892,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         clientId: pendingCompletion.client_id,
         dogName: pendingCompletion.dog_name || 'the dog',
         earnings: pendingCompletion.walker_earnings,
-        clientName: pendingCompletion.client?.full_name || pendingCompletion.client?.email || 'Client',
+        clientName: pendingCompletion.client?.full_name?.trim() || 'Client',
         dogCount: pendingCompletion.dog_count ?? null,
         durationMinutes: pendingCompletion.duration_minutes ?? null,
         serviceStartedAt: pendingCompletion.service_started_at ?? null,
@@ -938,7 +938,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       clientId: confirmed.client_id,
       dogName: confirmed.dog_name || 'the dog',
       earnings: confirmed.walker_earnings,
-      clientName: confirmed.client?.full_name || confirmed.client?.email || 'Client',
+      clientName: confirmed.client?.full_name?.trim() || 'Client',
       dogCount: confirmed.dog_count ?? null,
       durationMinutes: confirmed.duration_minutes ?? null,
       serviceStartedAt: confirmed.service_started_at ?? null,
@@ -1012,7 +1012,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setError(null)
 
     const selectFields =
-      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, email, avatar_url)'
+      'id, client_id, walker_id, selected_walker_id, status, service_type, dog_name, dog_count, location, address, notes, created_at, price, duration_minutes, platform_fee, walker_earnings, payment_status, paid_at, stripe_payment_intent_id, provider_arrived_at, client_arrival_confirmed_at, service_started_at, service_completed_at, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, client:profiles!walk_requests_client_id_fkey(id, full_name, avatar_url)'
 
     const now = new Date().toISOString()
     let acceptedJobsFromAttempts: WalkRequestRow[] = []

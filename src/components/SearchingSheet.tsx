@@ -137,8 +137,8 @@ export default function SearchingSheet({
   const activeStep = statusSteps[activeStepIndex] ?? statusSteps[0]
   const title = isRtl ? 'מאתרים ספקים קרובים…' : 'Finding nearby providers…'
   const etaLabel = 'ETA'
-  const durationText = isFixedVisit ? i18n.t('tracking.fixedVisit') : (isRtl ? 'Duration' : 'Duration')
-  const durationValue = isFixedVisit ? i18n.t('tracking.visitFee') : (durationLabel || '—')
+  const durationText = isFixedVisit ? i18n.t('tracking.visitFee') : (isRtl ? 'Duration' : 'Duration')
+  const durationValue = isFixedVisit ? (priceLabel || '—') : (durationLabel || '—')
   const priceText = isRtl ? 'Price' : 'Price'
   const tryAgainLabel = isRtl ? 'נסה שוב' : 'Try again'
   const emptyResolvedPrimaryLabel = emptyPrimaryLabel || tryAgainLabel

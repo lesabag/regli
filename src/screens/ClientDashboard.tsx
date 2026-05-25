@@ -6,6 +6,7 @@ import ActionButton from '../components/ActionButton'
 import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
 import ProfileAvatar from '../components/ProfileAvatar'
+import ProviderProfileCard from '../components/ProviderProfileCard'
 import GroupedHistory from '../components/GroupedHistory'
 import type { HistoryItem } from '../components/GroupedHistory'
 import type { GpsQuality } from '../hooks/useJobTracking'
@@ -46,11 +47,9 @@ import {
   markFirstInteractionVisual,
 } from '../utils/firstInteractionPerf'
 import {
-  getProfileServiceOptions,
-  mapProfileServiceTypeToBookingServiceType,
+  getProfileServiceTypeLabel,
   normalizeProfileServiceType,
   normalizeProfileServiceTypes,
-  type ProfileServiceType,
 } from '../lib/profileServiceTypes'
 import { supabase } from '../services/supabaseClient'
 
@@ -97,6 +96,35 @@ function parseBudgetBelowMinimumError(
 
 function getNowPlus15LocalInput(): string {
   return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter(Boolean)
+}
+
+function resolveProviderServiceLabel(params: {
+  requestedServiceType?: string | null
+  serviceType?: string | null
+  serviceTypes?: unknown
+  primaryService?: string | null
+  isHebrew: boolean
+}): string | null {
+  const normalizedRequested = normalizeProfileServiceType(params.requestedServiceType)
+  if (normalizedRequested) return getProfileServiceTypeLabel(normalizedRequested, params.isHebrew)
+
+  const normalizedPrimary = normalizeProfileServiceType(params.serviceType)
+  if (normalizedPrimary) return getProfileServiceTypeLabel(normalizedPrimary, params.isHebrew)
+
+  const normalizedServiceTypes = normalizeProfileServiceTypes(params.serviceTypes)
+  if (normalizedServiceTypes.length > 0) {
+    return getProfileServiceTypeLabel(normalizedServiceTypes[0], params.isHebrew)
+  }
+
+  const primaryService = typeof params.primaryService === 'string' ? params.primaryService.trim() : ''
+  return primaryService || null
 }
 
 function clampScheduledDraft(value: string | null | undefined, minValue?: string): string {
@@ -186,11 +214,7 @@ type SheetSnap = 'collapsed' | 'default'
 type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
 type ClientSettingsSectionKey =
   | 'language'
-  | 'serviceType'
   | 'preferredProviders'
-  | 'serviceDetails'
-  | 'dogDetails'
-  | 'childrenDetails'
 type WheelOption = {
   value: string
   label: string
@@ -278,12 +302,23 @@ type ScheduleMode = 'later' | 'repeat'
 type TimePickerTarget = 'repeat' | 'edit'
 type Meridiem = 'AM' | 'PM'
 type ProviderHeroMeta = {
+  fullName: string | null
   avatarUrl: string | null
   rating: number | null
   completedCount: number
+  serviceLabel: string | null
+  experienceRange: string | null
+  experienceYears: number | null
+  languages: string[]
   shortBio: string | null
   whatsappNumber: string | null
   whatsappNumberRaw: string | null
+}
+
+type ProviderProfileSheetState = {
+  providerId: string
+  fallbackName: string
+  requestedServiceType: string | null
 }
 
 interface RecurringBookingRow {
@@ -511,9 +546,6 @@ export default function ClientDashboard({
     String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
   const [clientPets, setClientPets] = useState<ClientPetRow[]>([])
-  const [clientPetsLoaded, setClientPetsLoaded] = useState(false)
-  const [clientPetsSaving, setClientPetsSaving] = useState(false)
-  const [clientPetsError, setClientPetsError] = useState<string | null>(null)
   const [selectedDogPetIds, setSelectedDogPetIds] = useState<string[]>([])
   const [repeatType, setRepeatType] = useState<RepeatType>('one_time')
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('later')
@@ -532,13 +564,22 @@ export default function ClientDashboard({
   const [budgetDraftHydrated, setBudgetDraftHydrated] = useState(false)
   const [locallyDismissedCompletionIds, setLocallyDismissedCompletionIds] = useState<Set<string>>(() => new Set())
   const [providerHeroMeta, setProviderHeroMeta] = useState<ProviderHeroMeta>({
+    fullName: null,
     avatarUrl: null,
     rating: null,
     completedCount: 0,
+    serviceLabel: null,
+    experienceRange: null,
+    experienceYears: null,
+    languages: [],
     shortBio: null,
     whatsappNumber: null,
     whatsappNumberRaw: null,
   })
+  const [providerProfileSheet, setProviderProfileSheet] = useState<ProviderProfileSheetState | null>(null)
+  const [providerProfileLoading, setProviderProfileLoading] = useState(false)
+  const [providerProfileError, setProviderProfileError] = useState<string | null>(null)
+  const [providerProfileData, setProviderProfileData] = useState<ProviderHeroMeta | null>(null)
   const [timePickerTarget, setTimePickerTarget] = useState<TimePickerTarget | null>(null)
   const [timePickerHour12, setTimePickerHour12] = useState('6')
   const [timePickerMinute, setTimePickerMinute] = useState('00')
@@ -553,31 +594,10 @@ export default function ClientDashboard({
   const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
-  const [profileServiceTypes, setProfileServiceTypes] = useState<ProfileServiceType[]>(
-    normalizeProfileServiceTypes(profile.service_types ?? profile.service_type),
-  )
-  const [serviceTypeSaving, setServiceTypeSaving] = useState(false)
-  const [serviceTypeSaveError, setServiceTypeSaveError] = useState<string | null>(null)
-  const [serviceTypeSavedAt, setServiceTypeSavedAt] = useState(0)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<ClientSettingsSectionKey, boolean>>({
     language: false,
-    serviceType: false,
     preferredProviders: false,
-    serviceDetails: false,
-    dogDetails: false,
-    childrenDetails: false,
   })
-  const [clientAttrPetName, setClientAttrPetName] = useState('')
-  const [clientAttrDogSize, setClientAttrDogSize] = useState('')
-  const [clientAttrEnergy, setClientAttrEnergy] = useState('')
-  const [clientAttrNumKids, setClientAttrNumKids] = useState(0)
-  const [clientAttrChildAges, setClientAttrChildAges] = useState<string[]>([''])
-  const [clientAttrSpecialNotes, setClientAttrSpecialNotes] = useState('')
-  const [clientAttrLoaded, setClientAttrLoaded] = useState(false)
-  const [clientAttrSaving, setClientAttrSaving] = useState(false)
-  const [clientAttrSavedAt, setClientAttrSavedAt] = useState(0)
-  const [clientAttrError, setClientAttrError] = useState<string | null>(null)
-  const clientAttrOrigRef = useRef({ petName: '', dogSize: '', energy: '', numKids: 0, childAges: [''], specialNotes: '' })
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
   const appViewportHeightRef = useRef(appViewportHeight)
   const clientSettingsPhotoInputRef = useRef<HTMLInputElement | null>(null)
@@ -602,50 +622,20 @@ export default function ClientDashboard({
       delayMap: import.meta.env.DEV && params.get('delayMap') === '1',
     }
   }).current
-
-  const profileServiceOptions = useMemo(
-    () => getProfileServiceOptions(isRtl).filter((option) => option.value === 'dog_walker' || option.value === 'baby_sitter'),
-    [isRtl],
-  )
-  const serviceTypeSectionTitle = isRtl ? 'סוג שירות' : 'Service type'
-  const serviceTypeSectionSubtitle = isRtl
-    ? 'בחר את סוג השירות הראשי לחשבון שלך.'
-    : 'Choose the main service for this account.'
-  const serviceTypeSavedLabel = isRtl ? 'סוג השירות נשמר.' : 'Service type saved.'
-  const serviceTypeSavingLabel = isRtl ? 'שומר...' : 'Saving...'
-  const serviceTypeErrorLabel = isRtl
-    ? 'לא הצלחנו לשמור את סוג השירות.'
-    : 'We could not save the service type.'
-  const serviceSelectionRequiredLabel = isRtl
-    ? 'יש לבחור לפחות שירות אחד בהגדרות לפני הזמנה.'
-    : 'Please choose at least one service in Settings before booking.'
-  const openSettingsLabel = isRtl ? 'פתח הגדרות' : 'Open Settings'
   const toggleSettingsSection = useCallback((key: ClientSettingsSectionKey) => {
     setSettingsSectionsOpen((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
-  const availableProfileServiceTypes = profileServiceTypes.length > 0
-    ? profileServiceTypes
-    : normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
   const fixedVisitBookingServices = useMemo(() => FIXED_VISIT_BOOKING_SERVICES, [])
   const availableBookingServices = useMemo(
-    () => Array.from(new Set([
-      ...availableProfileServiceTypes.map((serviceType) => mapProfileServiceTypeToBookingServiceType(serviceType)),
-      ...fixedVisitBookingServices,
-    ])),
-    [availableProfileServiceTypes, fixedVisitBookingServices],
+    () => ['dog_walking', 'babysitter', ...fixedVisitBookingServices] as ServiceType[],
+    [fixedVisitBookingServices],
   )
   const shouldShowProfileServicePicker = availableBookingServices.length > 1
   const resolvedBookingService = availableBookingServices.includes(selectedService)
     ? selectedService
     : availableBookingServices[0] ?? selectedService
   const resolvedBookingPricingModel = getBookingPricingModelForService(resolvedBookingService)
-  const requestServiceType =
-    mapBookingServiceTypeToRequestServiceType(resolvedBookingService) ??
-    availableProfileServiceTypes[0] ??
-    profile.service_type ??
-    normalizeProfileServiceType(profile.service_type)
-  const hasSelectedProfileService =
-    availableProfileServiceTypes.length > 0 || resolvedBookingPricingModel === 'fixed_visit'
+  const requestServiceType = mapBookingServiceTypeToRequestServiceType(resolvedBookingService)
   const effectiveRequestServiceType =
     requestServiceTypeRef.current ?? requestServiceType
   const isBabysitterRequest = effectiveRequestServiceType === 'baby_sitter'
@@ -680,20 +670,10 @@ export default function ClientDashboard({
       ? `${selectedDogNames[0]} +${selectedDogNames.length - 1}`
       : selectedDogNames[0] || flow.dogName.trim()
   const selectedDogNamesNote = selectedDogNames.length > 0 ? `Dogs: ${selectedDogNames.join(', ')}` : null
-  const canAddCurrentDogProfile = useMemo(() => {
-    const nextName = normalizeDogName(clientAttrPetName)
-    if (!nextName) return false
-    return !activeDogPets.some((pet) => pet.normalizedName === nextName)
-  }, [activeDogPets, clientAttrPetName])
-
   useEffect(() => {
     selectedBookingServiceRef.current = resolvedBookingService
     requestServiceTypeRef.current = requestServiceType
   }, [requestServiceType, resolvedBookingService])
-
-  useEffect(() => {
-    setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
-  }, [profile.service_type, profile.service_types])
 
   useEffect(() => {
     if (availableBookingServices.length === 0) return
@@ -708,10 +688,7 @@ export default function ClientDashboard({
       : availableBookingServices[0] ?? nextService
 
     selectedBookingServiceRef.current = normalizedNextService
-    requestServiceTypeRef.current =
-      mapBookingServiceTypeToRequestServiceType(normalizedNextService) ??
-      profile.service_type ??
-      normalizeProfileServiceType(profile.service_type)
+    requestServiceTypeRef.current = mapBookingServiceTypeToRequestServiceType(normalizedNextService)
 
     setMatchingUiState(null)
     flow.clearAvailabilityNotice()
@@ -720,76 +697,7 @@ export default function ClientDashboard({
   }, [
     availableBookingServices,
     flow,
-    profile.service_type,
   ])
-
-  const handleProfileServiceTypeToggle = useCallback(async (nextServiceType: ProfileServiceType) => {
-    if (serviceTypeSaving) return
-    const previousServiceTypes = profileServiceTypes
-    const nextServiceTypes = profileServiceTypes.includes(nextServiceType)
-      ? profileServiceTypes.length > 1
-        ? profileServiceTypes.filter((value) => value !== nextServiceType)
-        : profileServiceTypes
-      : [...profileServiceTypes, nextServiceType]
-
-    if (nextServiceTypes === previousServiceTypes) return
-
-    setProfileServiceTypes(nextServiceTypes)
-    setServiceTypeSaving(true)
-    setServiceTypeSaveError(null)
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        service_types: nextServiceTypes,
-        service_type: nextServiceTypes[0] ?? null,
-      })
-      .eq('id', profile.id)
-
-    if (error) {
-      console.warn('[ClientDashboard] failed to update service_type:', error.message)
-      setProfileServiceTypes(previousServiceTypes)
-      setServiceTypeSaveError(serviceTypeErrorLabel)
-      setServiceTypeSaving(false)
-      return
-    }
-
-    setServiceTypeSaving(false)
-    setServiceTypeSavedAt(Date.now())
-  }, [profile.id, profileServiceTypes, serviceTypeErrorLabel, serviceTypeSaving])
-
-  useEffect(() => {
-    if (clientAttrLoaded) return
-    let cancelled = false
-    supabase
-      .from('profiles')
-      .select('service_attributes')
-      .eq('id', profile.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (cancelled) return
-        const sa = (data?.service_attributes as Record<string, unknown> | null) ?? {}
-        const dog = (sa.dog_walker ?? {}) as Record<string, unknown>
-        const sitter = (sa.baby_sitter ?? {}) as Record<string, unknown>
-        const petName = typeof dog.petName === 'string' ? dog.petName : ''
-        const dogSize = typeof dog.dogSize === 'string' ? dog.dogSize : ''
-        const energy = typeof dog.energyLevel === 'string' ? dog.energyLevel : ''
-        const numKids = typeof sitter.numberOfKids === 'number' ? sitter.numberOfKids : 0
-        const childAges = Array.isArray(sitter.childrenAges)
-          ? sitter.childrenAges.map((a: unknown) => String(a ?? ''))
-          : ['']
-        const specialNotes = typeof sitter.specialNotes === 'string' ? sitter.specialNotes : ''
-        setClientAttrPetName(petName)
-        setClientAttrDogSize(dogSize)
-        setClientAttrEnergy(energy)
-        setClientAttrNumKids(numKids)
-        setClientAttrChildAges(childAges.length > 0 ? childAges : [''])
-        setClientAttrSpecialNotes(specialNotes)
-        clientAttrOrigRef.current = { petName, dogSize, energy, numKids, childAges: childAges.length > 0 ? childAges : [''], specialNotes }
-        setClientAttrLoaded(true)
-      })
-    return () => { cancelled = true }
-  }, [clientAttrLoaded, profile.id])
 
   const loadClientPets = useCallback(async () => {
     const { data, error } = await supabase
@@ -802,131 +710,15 @@ export default function ClientDashboard({
     if (error) {
       console.warn('[ClientDashboard] failed to load client pets:', error.message)
       setClientPets([])
-      setClientPetsLoaded(true)
       return
     }
 
     setClientPets(((data as ClientPetRow[] | null) ?? []).filter((pet) => pet.pet_type === 'dog'))
-    setClientPetsLoaded(true)
   }, [profile.id])
 
   useEffect(() => {
     void loadClientPets()
   }, [loadClientPets])
-
-  const clientAttrDirty = useMemo(() => {
-    const orig = clientAttrOrigRef.current
-    return (
-      clientAttrPetName !== orig.petName ||
-      clientAttrDogSize !== orig.dogSize ||
-      clientAttrEnergy !== orig.energy ||
-      clientAttrNumKids !== orig.numKids ||
-      clientAttrSpecialNotes !== orig.specialNotes ||
-      clientAttrChildAges.length !== orig.childAges.length ||
-      clientAttrChildAges.some((v, i) => v !== orig.childAges[i])
-    )
-  }, [clientAttrPetName, clientAttrDogSize, clientAttrEnergy, clientAttrNumKids, clientAttrChildAges, clientAttrSpecialNotes])
-
-  const handleSaveClientAttrs = useCallback(async () => {
-    if (clientAttrSaving || !clientAttrDirty) return
-    setClientAttrSaving(true)
-    setClientAttrError(null)
-
-    const { data: currentRow } = await supabase
-      .from('profiles')
-      .select('service_attributes')
-      .eq('id', profile.id)
-      .maybeSingle()
-
-    const existing = (currentRow?.service_attributes as Record<string, unknown> | null) ?? {}
-    const next: Record<string, unknown> = { ...existing }
-
-    if (profileServiceTypes.includes('dog_walker')) {
-      next.dog_walker = {
-        ...((existing.dog_walker ?? {}) as Record<string, unknown>),
-        petName: clientAttrPetName.trim() || null,
-        dogSize: clientAttrDogSize || null,
-        energyLevel: clientAttrEnergy || null,
-      }
-    }
-
-    if (profileServiceTypes.includes('baby_sitter')) {
-      const numericAges = clientAttrChildAges.map((a) => a.trim()).filter(Boolean)
-      next.baby_sitter = {
-        ...((existing.baby_sitter ?? {}) as Record<string, unknown>),
-        numberOfKids: clientAttrNumKids,
-        childrenAges: numericAges,
-        specialNotes: clientAttrSpecialNotes.trim() || null,
-      }
-    }
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({ service_attributes: next })
-      .eq('id', profile.id)
-
-    if (error) {
-      setClientAttrError(isRtl ? 'שמירה נכשלה' : 'Save failed')
-      setClientAttrSaving(false)
-      return
-    }
-
-    clientAttrOrigRef.current = {
-      petName: clientAttrPetName,
-      dogSize: clientAttrDogSize,
-      energy: clientAttrEnergy,
-      numKids: clientAttrNumKids,
-      childAges: [...clientAttrChildAges],
-      specialNotes: clientAttrSpecialNotes,
-    }
-    setClientAttrSaving(false)
-    setClientAttrSavedAt(Date.now())
-  }, [clientAttrSaving, clientAttrDirty, profile.id, profileServiceTypes, clientAttrPetName, clientAttrDogSize, clientAttrEnergy, clientAttrNumKids, clientAttrChildAges, clientAttrSpecialNotes, isRtl])
-
-  const handleAddClientPet = useCallback(async () => {
-    const nextName = normalizeDogName(clientAttrPetName)
-    if (!nextName || clientPetsSaving) return
-
-    setClientPetsSaving(true)
-    setClientPetsError(null)
-
-    const { error } = await supabase.from('client_pets').insert({
-      client_id: profile.id,
-      name: nextName,
-      pet_type: 'dog',
-      is_active: true,
-    })
-
-    if (error) {
-      setClientPetsSaving(false)
-      setClientPetsError(error.message)
-      return
-    }
-
-    await loadClientPets()
-    setClientPetsSaving(false)
-  }, [clientAttrPetName, clientPetsSaving, loadClientPets, profile.id])
-
-  const handleDeactivateClientPet = useCallback(async (petId: string) => {
-    if (clientPetsSaving) return
-    setClientPetsSaving(true)
-    setClientPetsError(null)
-
-    const { error } = await supabase
-      .from('client_pets')
-      .update({ is_active: false })
-      .eq('id', petId)
-      .eq('client_id', profile.id)
-
-    if (error) {
-      setClientPetsSaving(false)
-      setClientPetsError(error.message)
-      return
-    }
-
-    await loadClientPets()
-    setClientPetsSaving(false)
-  }, [clientPetsSaving, loadClientPets, profile.id])
 
   useEffect(() => {
     if (!debugFlags().interactionDebug) return
@@ -1046,6 +838,16 @@ export default function ClientDashboard({
       @keyframes regliScheduleSheetRise {
         0% { opacity: 0; transform: translateY(24px) scale(0.985); }
         100% { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      @keyframes regliMenuFadeIn {
+        0% { opacity: 0; }
+        100% { opacity: 1; }
+      }
+
+      @keyframes regliBottomSheetEnter {
+        0% { opacity: 0; transform: translateY(28px); }
+        100% { opacity: 1; transform: translateY(0); }
       }
     `
     document.head.appendChild(style)
@@ -1591,12 +1393,6 @@ export default function ClientDashboard({
       mapBookingServiceTypeToRequestServiceType(effectiveBookingService) ??
       requestServiceTypeRef.current ??
       requestServiceType
-    if (!hasSelectedProfileService) {
-      setServiceTypeSaveError(serviceSelectionRequiredLabel)
-      setBurgerOpen(true)
-      setMenuPage('settings')
-      return
-    }
     const babysitterBudgetValue = babysitterFixedBudgetValue > 0 ? babysitterFixedBudgetValue : null
     const effectiveDogCount = normalizedDogCount
     const dogWalkerBudgetRequestValue =
@@ -1636,7 +1432,6 @@ export default function ClientDashboard({
     }
     if (import.meta.env.DEV) {
       const localBookingBlockedReasons: string[] = []
-      if (!hasSelectedProfileService) localBookingBlockedReasons.push('missing_profile_service')
       if (!effectiveServiceType) localBookingBlockedReasons.push('missing_request_service_type')
       if (!(effectiveServiceType === 'baby_sitter' ? babysitterServiceDetails.trim() : flow.dogName.trim())) {
         if (effectiveBookingPricingModel !== 'fixed_visit') {
@@ -1786,13 +1581,11 @@ export default function ClientDashboard({
     flow.requestWalk,
     flow.savedCard,
     flow.scheduledFor,
-    hasSelectedProfileService,
     fixedVisitIssueDescription,
     profile.service_type,
     profile.service_types,
     resolvedBookingService,
     selectedDogNamesNote,
-    serviceSelectionRequiredLabel,
     normalizedDogCount,
   ])
 
@@ -1996,9 +1789,11 @@ export default function ClientDashboard({
           row.repeat_ends_on,
         )
         const language = i18n.resolvedLanguage || 'en'
-        const serviceLabel = t(`services.${SERVICE_I18N_KEYS[mapProfileServiceTypeToBookingServiceType(row.service_type as ProfileServiceType) ?? 'dog_walking']}` as never, {
-          defaultValue: row.service_type,
-        })
+        const serviceLabel =
+          getProfileServiceTypeLabel(
+            normalizeProfileServiceType(row.service_type) ?? 'dog_walker',
+            language === 'he',
+          ) || row.service_type
         const titleParts = [serviceLabel]
         if (isDogServiceType(row.service_type)) {
           titleParts.push(formatDogCountLabel(row.dog_count ?? 1, { isHebrew: language === 'he' }))
@@ -2451,9 +2246,14 @@ export default function ClientDashboard({
         if (!activeProviderId) {
           if (!cancelled) {
             setProviderHeroMeta({
+              fullName: null,
               avatarUrl: null,
               rating: null,
               completedCount: 0,
+              serviceLabel: null,
+              experienceRange: null,
+              experienceYears: null,
+              languages: [],
               shortBio: null,
               whatsappNumber: null,
               whatsappNumberRaw: null,
@@ -2503,14 +2303,58 @@ export default function ClientDashboard({
                     ? (profileResult.data.mobile as string | null)
                     : null) ?? null)
             : null
+        const providerServiceAttributes =
+          profileResult.error == null && profileResult.data && 'service_attributes' in profileResult.data
+            ? (profileResult.data.service_attributes as Record<string, unknown> | null) ?? null
+            : null
+        const providerProfileAttributes =
+          providerServiceAttributes && typeof providerServiceAttributes.provider_profile === 'object'
+            ? (providerServiceAttributes.provider_profile as Record<string, unknown>)
+            : null
+        const providerFullName =
+          profileResult.error == null && profileResult.data && 'full_name' in profileResult.data
+            ? (profileResult.data.full_name as string | null) ?? null
+            : null
+        const providerServiceLabel = resolveProviderServiceLabel({
+          requestedServiceType: flow.activeJob?.service_type ?? null,
+          serviceType:
+            profileResult.error == null && profileResult.data && 'service_type' in profileResult.data
+              ? (profileResult.data.service_type as string | null) ?? null
+              : null,
+          serviceTypes:
+            profileResult.error == null && profileResult.data && 'service_types' in profileResult.data
+              ? (profileResult.data.service_types as unknown) ?? null
+              : null,
+          primaryService:
+            profileResult.error == null && profileResult.data && 'primary_service' in profileResult.data
+              ? (profileResult.data.primary_service as string | null) ?? null
+              : null,
+          isHebrew: isRtl,
+        })
 
         setProviderHeroMeta({
+          fullName: providerFullName,
           avatarUrl:
             profileResult.error == null && profileResult.data && 'avatar_url' in profileResult.data
               ? (profileResult.data.avatar_url as string | null) ?? null
               : null,
           rating: averageRating,
           completedCount: completedResult.count ?? 0,
+          serviceLabel: providerServiceLabel,
+          experienceRange:
+            providerProfileAttributes && typeof providerProfileAttributes.experienceRange === 'string'
+              ? providerProfileAttributes.experienceRange
+              : null,
+          experienceYears:
+            providerProfileAttributes && typeof providerProfileAttributes.experienceYears === 'number'
+              ? providerProfileAttributes.experienceYears
+              : null,
+          languages:
+            providerProfileAttributes
+              ? parseStringArray(
+                  providerProfileAttributes.languagesSpoken ?? providerProfileAttributes.languages,
+                )
+              : [],
           shortBio:
             profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
               ? (profileResult.data.short_bio as string | null) ?? null
@@ -2525,9 +2369,14 @@ export default function ClientDashboard({
         })
         if (!cancelled) {
           setProviderHeroMeta({
+            fullName: null,
             avatarUrl: null,
             rating: null,
             completedCount: 0,
+            serviceLabel: null,
+            experienceRange: null,
+            experienceYears: null,
+            languages: [],
             shortBio: null,
             whatsappNumber: null,
             whatsappNumberRaw: null,
@@ -2541,7 +2390,146 @@ export default function ClientDashboard({
     return () => {
       cancelled = true
     }
-  }, [activeProviderId])
+  }, [activeProviderId, flow.activeJob?.service_type, isRtl])
+
+  const openProviderProfile = useCallback((providerId: string, fallbackName: string, requestedServiceType?: string | null) => {
+    if (!providerId) return
+    setProviderProfileError(null)
+    setProviderProfileLoading(false)
+    if (providerId === activeProviderId) {
+      setProviderProfileData({
+        ...providerHeroMeta,
+        fullName: providerHeroMeta.fullName || fallbackName,
+      })
+    } else {
+      setProviderProfileData(null)
+    }
+    setProviderProfileSheet({
+      providerId,
+      fallbackName,
+      requestedServiceType: requestedServiceType ?? null,
+    })
+  }, [activeProviderId, providerHeroMeta])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProviderProfileSheet() {
+      if (!providerProfileSheet) return
+
+      setProviderProfileLoading(true)
+      setProviderProfileError(null)
+
+      try {
+        const [profileResult, ratingsResult, completedResult] = await Promise.all([
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', providerProfileSheet.providerId)
+            .maybeSingle(),
+          supabase
+            .from('ratings')
+            .select('rating')
+            .eq('to_user_id', providerProfileSheet.providerId),
+          supabase
+            .from('walk_requests')
+            .select('id', { count: 'exact', head: true })
+            .eq('walker_id', providerProfileSheet.providerId)
+            .eq('status', 'completed'),
+        ])
+
+        if (cancelled) return
+
+        const ratingRows = (ratingsResult.data as Array<{ rating: number | null }> | null) ?? []
+        const validRatings = ratingRows
+          .map((row) => row.rating)
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+        const averageRating =
+          validRatings.length > 0
+            ? Math.round((validRatings.reduce((sum, value) => sum + value, 0) / validRatings.length) * 10) / 10
+            : null
+
+        const rawProfile = profileResult.error == null ? profileResult.data : null
+        const serviceAttributes = rawProfile && 'service_attributes' in rawProfile
+          ? (rawProfile.service_attributes as Record<string, unknown> | null) ?? null
+          : null
+        const providerProfileAttributes =
+          serviceAttributes && typeof serviceAttributes.provider_profile === 'object'
+            ? (serviceAttributes.provider_profile as Record<string, unknown>)
+            : null
+
+        setProviderProfileData({
+          fullName:
+            rawProfile && 'full_name' in rawProfile && typeof rawProfile.full_name === 'string' && rawProfile.full_name.trim()
+              ? rawProfile.full_name
+              : providerProfileSheet.fallbackName,
+          avatarUrl:
+            rawProfile && 'avatar_url' in rawProfile
+              ? (rawProfile.avatar_url as string | null) ?? null
+              : null,
+          rating: averageRating,
+          completedCount: completedResult.count ?? 0,
+          serviceLabel: resolveProviderServiceLabel({
+            requestedServiceType: providerProfileSheet.requestedServiceType,
+            serviceType:
+              rawProfile && 'service_type' in rawProfile
+                ? (rawProfile.service_type as string | null) ?? null
+                : null,
+            serviceTypes:
+              rawProfile && 'service_types' in rawProfile
+                ? (rawProfile.service_types as unknown) ?? null
+                : null,
+            primaryService:
+              rawProfile && 'primary_service' in rawProfile
+                ? (rawProfile.primary_service as string | null) ?? null
+                : null,
+            isHebrew: isRtl,
+          }),
+          experienceRange:
+            providerProfileAttributes && typeof providerProfileAttributes.experienceRange === 'string'
+              ? providerProfileAttributes.experienceRange
+              : null,
+          experienceYears:
+            providerProfileAttributes && typeof providerProfileAttributes.experienceYears === 'number'
+              ? providerProfileAttributes.experienceYears
+              : null,
+          languages:
+            providerProfileAttributes
+              ? parseStringArray(
+                  providerProfileAttributes.languagesSpoken ?? providerProfileAttributes.languages,
+                )
+              : [],
+          shortBio:
+            rawProfile && 'short_bio' in rawProfile
+              ? (rawProfile.short_bio as string | null) ?? null
+              : null,
+          whatsappNumber:
+            rawProfile && 'whatsapp_number' in rawProfile
+              ? (rawProfile.whatsapp_number as string | null) ?? null
+              : null,
+          whatsappNumberRaw:
+            rawProfile && 'whatsapp_number' in rawProfile
+              ? (rawProfile.whatsapp_number as string | null) ?? null
+              : null,
+        })
+      } catch (error) {
+        if (cancelled) return
+        console.warn('[ClientDashboard] failed to load provider public profile', {
+          providerId: providerProfileSheet.providerId,
+          error,
+        })
+        setProviderProfileError(t('providerPublicProfile.unavailable'))
+      } finally {
+        if (!cancelled) setProviderProfileLoading(false)
+      }
+    }
+
+    void loadProviderProfileSheet()
+
+    return () => {
+      cancelled = true
+    }
+  }, [providerProfileSheet, isRtl, t])
 
   const flexibleRequestDurationMinutes =
     requestServiceType === 'baby_sitter'
@@ -2570,22 +2558,19 @@ export default function ClientDashboard({
       : flow.adjustedPriceILS > 0
         ? `₪${flow.adjustedPriceILS}`
         : '₪0'
+  const activeRequestPriceLabel =
+    flow.activeJob?.price != null && flow.activeJob.price > 0
+      ? `₪${flow.activeJob.price}`
+      : requestPriceLabel
   const trackingDurationSummary = useMemo(
     () =>
-      activeRequestPricingModel === 'fixed_visit'
-        ? {
-            elapsedLabel: null,
-            plannedLabel: null,
-            actualLabel: null,
-          }
-        : getDurationSummary({
-            plannedMinutes: flow.activeJob?.duration_minutes ?? null,
-            startedAt: flow.activeJob?.service_started_at ?? null,
-            completedAt: flow.activeJob?.service_completed_at ?? null,
-            now: serviceClockNow,
-          }),
+      getDurationSummary({
+        plannedMinutes: flow.activeJob?.duration_minutes ?? null,
+        startedAt: flow.activeJob?.service_started_at ?? null,
+        completedAt: flow.activeJob?.service_completed_at ?? null,
+        now: serviceClockNow,
+      }),
     [
-      activeRequestPricingModel,
       flow.activeJob?.duration_minutes,
       flow.activeJob?.service_started_at,
       flow.activeJob?.service_completed_at,
@@ -3227,7 +3212,6 @@ export default function ClientDashboard({
       )
     : []
   const canSubmitBooking =
-    hasSelectedProfileService &&
     isSelectedServiceAvailable &&
     !!bookingSubjectValue &&
     !!flow.location.trim() &&
@@ -3237,7 +3221,6 @@ export default function ClientDashboard({
     (!requiresScheduledFor || !!flow.scheduledFor)
   const canSubmitRecurringBooking =
     !isFixedVisitBookingMode &&
-    hasSelectedProfileService &&
     isSelectedServiceAvailable &&
     !!bookingSubjectValue &&
     !!flow.location.trim() &&
@@ -3315,7 +3298,6 @@ export default function ClientDashboard({
   ])
   const bookingBlockedReasons = useMemo(() => {
     const reasons: string[] = []
-    if (!hasSelectedProfileService) reasons.push('missing_profile_service')
     if (!isSelectedServiceAvailable) reasons.push('selected_service_unavailable')
     if (!bookingSubjectValue) reasons.push('missing_service_name')
     if (!flow.location.trim()) reasons.push('missing_location')
@@ -3331,7 +3313,6 @@ export default function ClientDashboard({
     flow.location,
     flow.savedCard,
     flow.scheduledFor,
-    hasSelectedProfileService,
     hasValidDurationForSelectedService,
     hasValidPriceForSelectedService,
     isFixedVisitBookingMode,
@@ -4162,43 +4143,6 @@ export default function ClientDashboard({
                   </SettingsCollapsibleSection>
 
                   <SettingsCollapsibleSection
-                    title={serviceTypeSectionTitle}
-                    subtitle={serviceTypeSectionSubtitle}
-                    open={settingsSectionsOpen.serviceType}
-                    onToggle={() => toggleSettingsSection('serviceType')}
-                  >
-                    <div style={clientSettingsServiceTypeSelectorRowStyle}>
-                      {profileServiceOptions.map((option) => {
-                        const selected = profileServiceTypes.includes(option.value)
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => {
-                              void handleProfileServiceTypeToggle(option.value)
-                            }}
-                            disabled={serviceTypeSaving}
-                            style={{
-                              ...clientSettingsServiceTypeButtonStyle,
-                              ...(selected ? clientSettingsServiceTypeButtonActiveStyle : null),
-                              opacity: serviceTypeSaving && !selected ? 0.72 : 1,
-                            }}
-                          >
-                            <span style={clientSettingsServiceTypeButtonIconStyle}>{option.icon}</span>
-                            <span style={clientSettingsServiceTypeButtonLabelStyle}>{option.label}</span>
-                            {serviceTypeSaving && selected ? <span style={serviceTypeButtonMetaStyle}>{serviceTypeSavingLabel}</span> : null}
-                          </button>
-                        )
-                      })}
-                    </div>
-                    {serviceTypeSaveError ? (
-                      <div style={serviceTypeStatusErrorStyle}>{serviceTypeSaveError}</div>
-                    ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
-                      <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
-                    ) : null}
-                  </SettingsCollapsibleSection>
-
-                  <SettingsCollapsibleSection
                     id="client-favorites-section"
                     title={t('menu.preferredWalkers')}
                     subtitle={t('menu.preferredWalkersSubtitle')}
@@ -4209,246 +4153,9 @@ export default function ClientDashboard({
                       favorites={flow.favoriteWalkers}
                       fallbackNames={flow.walkerNameById}
                       onToggleFavorite={flow.toggleFavoriteWalker}
+                      onOpenProfile={openProviderProfile}
                     />
                   </SettingsCollapsibleSection>
-
-                  {clientAttrLoaded && (profileServiceTypes.includes('dog_walker') || profileServiceTypes.includes('baby_sitter')) && (
-                    <SettingsCollapsibleSection
-                      title={isRtl ? 'פרטי השירות שלי' : 'My service details'}
-                      subtitle={isRtl ? 'ככל שנדע יותר, נתאים לך טוב יותר.' : 'The more we know, the better we match.'}
-                      open={settingsSectionsOpen.serviceDetails}
-                      onToggle={() => toggleSettingsSection('serviceDetails')}
-                    >
-                      <div style={clientAttrEditorStyle}>
-                        {profileServiceTypes.includes('dog_walker') && (
-                          <div style={clientAttrSectionStyle}>
-                            <button
-                              type="button"
-                              onClick={() => toggleSettingsSection('dogDetails')}
-                              style={settingsCollapseButtonStyle}
-                              aria-expanded={settingsSectionsOpen.dogDetails}
-                            >
-                              <div style={settingsCollapseButtonTextStyle}>
-                                <div style={burgerSectionTitleStyle}>{isRtl ? 'פרטי הכלב' : 'Dog details'}</div>
-                              </div>
-                              <span style={settingsCollapseIconStyle}>{settingsSectionsOpen.dogDetails ? '−' : '+'}</span>
-                            </button>
-
-                            {settingsSectionsOpen.dogDetails ? (
-                              <>
-                                <div style={clientAttrFieldStyle}>
-                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'שם' : 'Name'}</div>
-                                  <input
-                                    type="text"
-                                    value={clientAttrPetName}
-                                    onChange={(e) => setClientAttrPetName(e.target.value)}
-                                    placeholder={isRtl ? 'לדוגמה: רקסי' : 'e.g. Rex'}
-                                    style={clientAttrInputStyle}
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      void handleAddClientPet()
-                                    }}
-                                    style={{
-                                      ...clientAttrSaveButtonStyle,
-                                      ...clientAddDogButtonStyle,
-                                    }}
-                                    disabled={clientPetsSaving || !canAddCurrentDogProfile}
-                                  >
-                                    {clientPetsSaving ? (isRtl ? 'שומר...' : 'Saving...') : isRtl ? '+ הוסף כלב' : '+ Add dog'}
-                                  </button>
-                                </div>
-
-                                <div style={clientPetsManagerStyle}>
-                                  <div style={clientAttrFieldStyle}>
-                                    <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הכלבים שלי' : 'My dogs'}</div>
-                                    <div style={clientPetsListStyle}>
-                                      {clientPetsLoaded && activeDogPets.length > 0 ? (
-                                        activeDogPets.map((pet) => (
-                                          <div key={pet.id} style={clientPetItemStyle}>
-                                            <span style={clientPetNameStyle}>{pet.normalizedName}</span>
-                                            <button
-                                              type="button"
-                                              onClick={() => {
-                                                void handleDeactivateClientPet(pet.id)
-                                              }}
-                                              style={clientPetRemoveButtonStyle}
-                                              disabled={clientPetsSaving}
-                                            >
-                                              {isRtl ? 'הסר' : 'Remove'}
-                                            </button>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div style={clientPetsEmptyStyle}>
-                                          {isRtl ? 'עדיין לא שמרת כלבים.' : 'No saved dogs yet.'}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {clientPetsError ? <div style={serviceTypeStatusErrorStyle}>{clientPetsError}</div> : null}
-                                </div>
-
-                                <div style={clientAttrFieldStyle}>
-                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גודל' : 'Size'}</div>
-                                  <div style={clientAttrChipRowStyle}>
-                                    {([
-                                      { value: 'S' as const, label: isRtl ? 'קטן' : 'S' },
-                                      { value: 'M' as const, label: isRtl ? 'בינוני' : 'M' },
-                                      { value: 'L' as const, label: isRtl ? 'גדול' : 'L' },
-                                      { value: 'XL' as const, label: isRtl ? 'ענק' : 'XL' },
-                                    ]).map((opt) => {
-                                      const sel = clientAttrDogSize === opt.value
-                                      return (
-                                        <button
-                                          key={opt.value}
-                                          type="button"
-                                          onClick={() => setClientAttrDogSize(sel ? '' : opt.value)}
-                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                        >
-                                          {opt.label}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-
-                                <div style={clientAttrFieldStyle}>
-                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'רמת אנרגיה' : 'Energy level'}</div>
-                                  <div style={clientAttrChipRowStyle}>
-                                    {(['low', 'medium', 'high'] as const).map((level) => {
-                                      const sel = clientAttrEnergy === level
-                                      const label = level === 'low' ? (isRtl ? 'נמוכה' : 'Low')
-                                        : level === 'medium' ? (isRtl ? 'בינונית' : 'Medium')
-                                        : (isRtl ? 'גבוהה' : 'High')
-                                      return (
-                                        <button
-                                          key={level}
-                                          type="button"
-                                          onClick={() => setClientAttrEnergy(sel ? '' : level)}
-                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                        >
-                                          {label}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              </>
-                            ) : null}
-                          </div>
-                        )}
-
-                        {profileServiceTypes.includes('baby_sitter') && (
-                          <div style={clientAttrSectionStyle}>
-                            <button
-                              type="button"
-                              onClick={() => toggleSettingsSection('childrenDetails')}
-                              style={settingsCollapseButtonStyle}
-                              aria-expanded={settingsSectionsOpen.childrenDetails}
-                            >
-                              <div style={settingsCollapseButtonTextStyle}>
-                                <div style={burgerSectionTitleStyle}>{isRtl ? 'פרטי הילדים' : 'Children details'}</div>
-                              </div>
-                              <span style={settingsCollapseIconStyle}>{settingsSectionsOpen.childrenDetails ? '−' : '+'}</span>
-                            </button>
-
-                            {settingsSectionsOpen.childrenDetails ? (
-                              <>
-                                <div style={clientAttrFieldStyle}>
-                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'מספר ילדים' : 'Number of kids'}</div>
-                                  <div style={clientAttrChipRowStyle}>
-                                    {[1, 2, 3, 4, 5].map((n) => {
-                                      const sel = clientAttrNumKids === n
-                                      return (
-                                        <button
-                                          key={n}
-                                          type="button"
-                                          onClick={() => {
-                                            setClientAttrNumKids(sel ? 0 : n)
-                                            if (!sel && clientAttrChildAges.length < n) {
-                                              setClientAttrChildAges((prev) => {
-                                                const next = [...prev]
-                                                while (next.length < n) next.push('')
-                                                return next
-                                              })
-                                            }
-                                          }}
-                                          style={{ ...clientAttrChipStyle, ...(sel ? clientAttrChipSelectedStyle : null) }}
-                                        >
-                                          {n}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-
-                                {clientAttrNumKids > 0 && (
-                                  <div style={clientAttrFieldStyle}>
-                                    <div style={clientAttrFieldLabelStyle}>{isRtl ? 'גיל כל ילד' : 'Age of each child'}</div>
-                                    <div style={clientAttrAgesRowStyle}>
-                                      {clientAttrChildAges.slice(0, clientAttrNumKids).map((age, idx) => (
-                                        <input
-                                          key={idx}
-                                          type="number"
-                                          min="0"
-                                          max="18"
-                                          value={age}
-                                          onChange={(e) => {
-                                            setClientAttrChildAges((prev) => {
-                                              const next = [...prev]
-                                              next[idx] = e.target.value
-                                              return next
-                                            })
-                                          }}
-                                          placeholder={`${idx + 1}`}
-                                          style={clientAttrAgeInputStyle}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div style={clientAttrFieldStyle}>
-                                  <div style={clientAttrFieldLabelStyle}>{isRtl ? 'הערות מיוחדות' : 'Special notes'}</div>
-                                  <textarea
-                                    value={clientAttrSpecialNotes}
-                                    onChange={(e) => setClientAttrSpecialNotes(e.target.value)}
-                                    placeholder={isRtl ? 'לדוגמה: אלרגיה לבוטנים' : 'e.g. Peanut allergy'}
-                                    rows={2}
-                                    style={clientAttrTextareaStyle}
-                                  />
-                                </div>
-                              </>
-                            ) : null}
-                          </div>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() => void handleSaveClientAttrs()}
-                          disabled={clientAttrSaving || !clientAttrDirty}
-                          style={{
-                            ...clientAttrSaveButtonStyle,
-                            ...(clientAttrSaving || !clientAttrDirty ? clientAttrSaveButtonDisabledStyle : null),
-                          }}
-                        >
-                          {clientAttrSaving
-                            ? (isRtl ? 'שומר...' : 'Saving...')
-                            : (isRtl ? 'שמור שינויים' : 'Save changes')}
-                        </button>
-
-                        {clientAttrError && <div style={serviceTypeStatusErrorStyle}>{clientAttrError}</div>}
-                        {!clientAttrSaving && clientAttrSavedAt > 0 && !clientAttrDirty && !clientAttrError && (
-                          <div style={serviceTypeStatusSuccessStyle}>
-                            {isRtl ? 'הפרטים נשמרו בהצלחה.' : 'Details saved successfully.'}
-                          </div>
-                        )}
-                      </div>
-                    </SettingsCollapsibleSection>
-                  )}
-
                   <div style={menuFooterActionWrapStyle}>
                     <MenuNavRow
                       icon="↪"
@@ -5071,6 +4778,15 @@ export default function ClientDashboard({
                     completedCount={providerHeroMeta.completedCount}
                     walkerBio={providerHeroMeta.shortBio}
                     whatsappAvailable={!!activeProviderWhatsAppPhone}
+                    onOpenProfile={
+                      flow.activeJob?.walker_id
+                        ? () => openProviderProfile(
+                            flow.activeJob?.walker_id as string,
+                            flow.walkerNameById.get(flow.activeJob?.walker_id as string) || t('common.provider'),
+                            flow.activeJob?.service_type ?? null,
+                          )
+                        : undefined
+                    }
                     phase={
                       flow.screenPhase === 'in_progress' ||
                       flow.screenPhase === 'arrival_confirmed' ||
@@ -5085,6 +4801,7 @@ export default function ClientDashboard({
                     gpsQuality={trackingGpsQuality}
                     activeTitle={t('tracking.walkInProgress')}
                     isFixedVisit={activeRequestPricingModel === 'fixed_visit'}
+                    fixedVisitPriceLabel={activeRequestPricingModel === 'fixed_visit' ? activeRequestPriceLabel : null}
                     onWhatsApp={handleWhatsAppProvider}
                     onConfirmArrival={flow.screenPhase === 'arrived_pending_confirmation' ? flow.confirmArrival : undefined}
                     confirmingArrival={flow.arrivalConfirming}
@@ -5141,47 +4858,7 @@ export default function ClientDashboard({
                     t('booking.orderNow')
                   )}
                 </button>
-                {!hasSelectedProfileService ? (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      padding: '10px 12px',
-                      borderRadius: 16,
-                      background: 'rgba(255,255,255,0.96)',
-                      border: '1px solid rgba(251, 191, 36, 0.28)',
-                      color: '#92400E',
-                      fontSize: 13,
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    <span>{serviceSelectionRequiredLabel}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setServiceTypeSaveError(serviceSelectionRequiredLabel)
-                        setBurgerOpen(true)
-                        setMenuPage('settings')
-                      }}
-                      style={{
-                        border: 'none',
-                        background: '#FFF7ED',
-                        color: '#B45309',
-                        borderRadius: 999,
-                        padding: '8px 12px',
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {openSettingsLabel}
-                    </button>
-                  </div>
-                ) : hasSelectedProfileService && !flow.location.trim() && !flow.locationLoading ? (
+                {!flow.location.trim() && !flow.locationLoading ? (
                   <div
                     onClick={openAddressPicker}
                     style={{
@@ -5625,6 +5302,52 @@ export default function ClientDashboard({
         </>
       )}
 
+      {providerProfileSheet && (
+        <>
+          <div
+            style={providerProfileOverlayStyle}
+            onClick={() => {
+              setProviderProfileSheet(null)
+              setProviderProfileError(null)
+            }}
+          />
+          <div style={providerProfileSheetStyle}>
+            {providerProfileLoading && !providerProfileData ? (
+              <div style={providerProfileStateCardStyle}>{t('providerPublicProfile.loading')}</div>
+            ) : providerProfileError && !providerProfileData ? (
+              <div style={providerProfileStateCardStyle}>{providerProfileError}</div>
+            ) : providerProfileData ? (
+              <ProviderProfileCard
+                avatarUrl={providerProfileData.avatarUrl}
+                fullName={providerProfileData.fullName || providerProfileSheet.fallbackName}
+                rating={providerProfileData.rating}
+                serviceLabel={providerProfileData.serviceLabel}
+                priceLabel={
+                  providerProfileSheet.requestedServiceType &&
+                  getBookingPricingModelForService(providerProfileSheet.requestedServiceType) === 'fixed_visit'
+                    ? flow.activeJob?.service_type === providerProfileSheet.requestedServiceType
+                      ? activeRequestPriceLabel
+                      : flow.currentJob?.service_type === providerProfileSheet.requestedServiceType
+                        ? requestPriceLabel
+                        : null
+                    : null
+                }
+                experienceRange={providerProfileData.experienceRange}
+                experienceYears={providerProfileData.experienceYears}
+                languages={providerProfileData.languages}
+                shortBio={providerProfileData.shortBio}
+                completedCount={providerProfileData.completedCount}
+                whatsappAvailable={!!providerProfileData.whatsappNumber}
+                onClose={() => {
+                  setProviderProfileSheet(null)
+                  setProviderProfileError(null)
+                }}
+              />
+            ) : null}
+          </div>
+        </>
+      )}
+
       {addressPickerOpen && (
         <AddressPickerSheet
           currentAddress={flow.location}
@@ -5901,10 +5624,12 @@ function FavoriteWalkerMenuList({
   favorites,
   fallbackNames,
   onToggleFavorite,
+  onOpenProfile,
 }: {
   favorites: ReturnType<typeof useClientFlow>['favoriteWalkers']
   fallbackNames: Map<string, string>
   onToggleFavorite: (walkerId: string) => Promise<void>
+  onOpenProfile: (providerId: string, fallbackName: string, requestedServiceType?: string | null) => void
 }) {
   const { t } = useTranslation()
   if (favorites.length === 0) {
@@ -5922,16 +5647,22 @@ function FavoriteWalkerMenuList({
 
         return (
           <div key={favorite.walker_id} style={favoriteMenuItemStyle}>
-            <ProfileAvatar
-              url={favorite.walker?.avatar_url ?? null}
-              name={walkerName}
-              size={34}
-              borderRadius={12}
-            />
-            <div style={favoriteMenuTextStyle}>
-              <div style={favoriteMenuNameStyle}>{walkerName}</div>
-              <div style={favoriteMenuSubStyle}>{t('menu.preferredWalkers')}</div>
-            </div>
+            <button
+              type="button"
+              onClick={() => onOpenProfile(favorite.walker_id, walkerName)}
+              style={favoriteMenuProfileButtonStyle}
+            >
+              <ProfileAvatar
+                url={favorite.walker?.avatar_url ?? null}
+                name={walkerName}
+                size={34}
+                borderRadius={12}
+              />
+              <div style={favoriteMenuTextStyle}>
+                <div style={favoriteMenuNameStyle}>{walkerName}</div>
+                <div style={favoriteMenuSubStyle}>{t('providerPublicProfile.viewProfile')}</div>
+              </div>
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -6177,6 +5908,7 @@ function TrackingCard({
   completedCount,
   walkerBio,
   whatsappAvailable,
+  onOpenProfile,
   phase,
   isArrived,
   etaMinutes,
@@ -6185,6 +5917,7 @@ function TrackingCard({
   gpsQuality,
   activeTitle,
   isFixedVisit,
+  fixedVisitPriceLabel,
   onWhatsApp,
   onConfirmArrival,
   confirmingArrival,
@@ -6198,6 +5931,7 @@ function TrackingCard({
   completedCount: number
   walkerBio: string | null
   whatsappAvailable: boolean
+  onOpenProfile?: () => void
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
   isArrived: boolean
   etaMinutes: number | null
@@ -6206,6 +5940,7 @@ function TrackingCard({
   gpsQuality: GpsQuality
   activeTitle: string
   isFixedVisit?: boolean
+  fixedVisitPriceLabel?: string | null
   onWhatsApp?: () => void
   onConfirmArrival?: () => void
   confirmingArrival?: boolean
@@ -6257,7 +5992,6 @@ function TrackingCard({
         : t('tracking.headingToYou', { walkerName })
   const completedTasksLabel = i18n.resolvedLanguage === 'he' ? 'משימות הושלמו' : 'completed tasks'
   const serviceStartedLabel = i18n.resolvedLanguage === 'he' ? 'השירות התחיל' : 'Service started'
-  const fixedVisitLabel = t('tracking.fixedVisit')
   const visitFeeLabel = t('tracking.visitFee')
   const ratingValue = walkerRating != null ? walkerRating.toFixed(1) : '—'
   const etaHeroValue = formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)
@@ -6280,6 +6014,15 @@ function TrackingCard({
               <span style={trackingCommunicationWhatsAppDotStyle} aria-hidden="true" />
               <span style={trackingTopActionChipTextStyle}>{t('tracking.whatsapp')}</span>
             </span>
+          </button>
+        ) : null}
+        {onOpenProfile ? (
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            style={trackingTopActionChipStyle}
+          >
+            <span style={trackingTopActionChipTextStyle}>{t('providerPublicProfile.viewProfile')}</span>
           </button>
         ) : null}
       </div>
@@ -6346,9 +6089,15 @@ function TrackingCard({
       {isFixedVisit ? (
         <div style={trackingTimerPanelStyle}>
           <div style={trackingTimerPrimaryRowStyle}>
-            <span style={trackingTimerLabelStyle}>{fixedVisitLabel}</span>
-            <span style={trackingTimerValueStyle}>{visitFeeLabel}</span>
+            <span style={trackingTimerLabelStyle}>{visitFeeLabel}</span>
+            <span style={trackingTimerValueStyle}>{fixedVisitPriceLabel || '—'}</span>
           </div>
+          {(elapsedLabel || actualLabel) && (
+            <div style={trackingTimerMetaRowStyle}>
+              {elapsedLabel && <span style={trackingTimerMetaStyle}>{t('tracking.elapsed')}: {elapsedLabel}</span>}
+              {actualLabel && <span style={trackingTimerMetaStyle}>{t('tracking.actual')}: {actualLabel}</span>}
+            </div>
+          )}
         </div>
       ) : (elapsedLabel || plannedLabel || actualLabel) && (
         <div style={trackingTimerPanelStyle}>
@@ -7062,6 +6811,43 @@ const timePickerModalStyle: React.CSSProperties = {
   padding: '18px 16px 16px',
   display: 'grid',
   gap: 14,
+}
+
+const providerProfileOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 40040,
+  background: 'rgba(2, 6, 23, 0.58)',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+  animation: 'regliMenuFadeIn 180ms ease',
+}
+
+const providerProfileSheetStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  width: '100%',
+  maxWidth: 520,
+  margin: '0 auto',
+  maxHeight: 'calc(100dvh - 20px)',
+  overflowY: 'auto',
+  zIndex: 40041,
+  animation: 'regliBottomSheetEnter 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+}
+
+const providerProfileStateCardStyle: React.CSSProperties = {
+  borderRadius: '30px 30px 0 0',
+  background: 'linear-gradient(180deg, rgba(15,23,42,0.98) 0%, rgba(17,24,39,0.98) 100%)',
+  border: '1px solid rgba(148, 163, 184, 0.18)',
+  borderBottom: 'none',
+  boxShadow: '0 -18px 48px rgba(2, 6, 23, 0.32)',
+  padding: '22px 18px calc(22px + env(safe-area-inset-bottom, 0px))',
+  color: '#CBD5E1',
+  fontSize: 14,
+  fontWeight: 700,
+  textAlign: 'center',
 }
 
 const timePickerHeaderStyle: React.CSSProperties = {
@@ -9042,241 +8828,6 @@ const clientSettingsLanguageButtonActiveStyle: React.CSSProperties = {
   color: '#3152C8',
 }
 
-const clientSettingsServiceTypeSelectorRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 8,
-}
-
-const clientSettingsServiceTypeButtonStyle: React.CSSProperties = {
-  minHeight: 42,
-  borderRadius: 12,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-start',
-  gap: 8,
-  padding: '8px 10px',
-  textAlign: 'left',
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-}
-
-const clientSettingsServiceTypeButtonActiveStyle: React.CSSProperties = {
-  borderColor: '#5B7CFA',
-  background: '#EEF4FF',
-  boxShadow: '0 6px 16px rgba(91, 124, 250, 0.12)',
-}
-
-const clientSettingsServiceTypeButtonIconStyle: React.CSSProperties = {
-  fontSize: 16,
-  lineHeight: 1,
-  flexShrink: 0,
-}
-
-const clientSettingsServiceTypeButtonLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  color: '#0F172A',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-}
-
-const serviceTypeButtonMetaStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: '#3152C8',
-}
-
-const serviceTypeStatusSuccessStyle: React.CSSProperties = {
-  marginTop: 10,
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#15803D',
-}
-
-const serviceTypeStatusErrorStyle: React.CSSProperties = {
-  marginTop: 10,
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#DC2626',
-}
-
-const clientAttrEditorStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 20,
-  marginTop: 12,
-}
-
-const clientAttrSectionStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 14,
-  padding: '16px 14px',
-  background: '#F8FAFC',
-  borderRadius: 16,
-  border: '1px solid #E2E8F0',
-}
-
-const clientPetsManagerStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-}
-
-const clientAddDogButtonStyle: React.CSSProperties = {
-  width: 'auto',
-  minWidth: 120,
-  padding: '0 16px',
-}
-
-const clientAttrFieldStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 7,
-}
-
-const clientPetsListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
-}
-
-const clientPetItemStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 10,
-  padding: '10px 12px',
-  borderRadius: 14,
-  border: '1px solid rgba(148, 163, 184, 0.14)',
-  background: '#FFFFFF',
-}
-
-const clientPetNameStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 700,
-  color: '#0F172A',
-}
-
-const clientPetRemoveButtonStyle: React.CSSProperties = {
-  border: '1px solid rgba(248, 113, 113, 0.24)',
-  background: '#FEF2F2',
-  color: '#B91C1C',
-  borderRadius: 999,
-  padding: '6px 10px',
-  fontSize: 12,
-  fontWeight: 700,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-}
-
-const clientPetsEmptyStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: '#64748B',
-}
-
-
-const clientAttrFieldLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#64748B',
-  letterSpacing: 0.1,
-}
-
-const clientAttrChipRowStyle: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 8,
-}
-
-const clientAttrChipStyle: React.CSSProperties = {
-  minWidth: 46,
-  height: 36,
-  borderRadius: 12,
-  border: '1.5px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#334155',
-  fontSize: 13,
-  fontWeight: 700,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  padding: '0 14px',
-  transition: 'background 120ms, border-color 120ms, color 120ms',
-}
-
-const clientAttrChipSelectedStyle: React.CSSProperties = {
-  background: '#3B82F6',
-  borderColor: '#3B82F6',
-  color: '#FFF',
-}
-
-const clientAttrInputStyle: React.CSSProperties = {
-  width: '100%',
-  height: 40,
-  borderRadius: 12,
-  border: '1.5px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 14,
-  fontFamily: 'inherit',
-  padding: '0 14px',
-  outline: 'none',
-  boxSizing: 'border-box',
-}
-
-const clientAttrAgesRowStyle: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 8,
-}
-
-const clientAttrAgeInputStyle: React.CSSProperties = {
-  width: 58,
-  height: 40,
-  borderRadius: 12,
-  border: '1.5px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 14,
-  fontFamily: 'inherit',
-  textAlign: 'center',
-  outline: 'none',
-  boxSizing: 'border-box',
-}
-
-const clientAttrTextareaStyle: React.CSSProperties = {
-  width: '100%',
-  borderRadius: 12,
-  border: '1.5px solid #E2E8F0',
-  background: '#FFFFFF',
-  color: '#0F172A',
-  fontSize: 14,
-  fontFamily: 'inherit',
-  padding: '10px 14px',
-  resize: 'vertical',
-  outline: 'none',
-  boxSizing: 'border-box',
-}
-
-const clientAttrSaveButtonStyle: React.CSSProperties = {
-  width: '100%',
-  height: 46,
-  borderRadius: 14,
-  border: 'none',
-  background: '#3B82F6',
-  color: '#FFF',
-  fontSize: 15,
-  fontWeight: 800,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  transition: 'opacity 120ms',
-}
-
-const clientAttrSaveButtonDisabledStyle: React.CSSProperties = {
-  opacity: 0.4,
-  cursor: 'default',
-}
-
 const burgerSectionHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -9565,6 +9116,21 @@ const favoriteMenuItemStyle: React.CSSProperties = {
 const favoriteMenuTextStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
+}
+
+const favoriteMenuProfileButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+  flex: 1,
+  textAlign: 'start',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
 }
 
 const favoriteMenuNameStyle: React.CSSProperties = {

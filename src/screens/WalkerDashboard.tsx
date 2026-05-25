@@ -292,6 +292,33 @@ function getCustomerDisplayName(
   return isHebrew ? 'לקוח' : 'Customer'
 }
 
+function isGenericCustomerLabel(value: string | null | undefined): boolean {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return true
+  return normalized === 'customer' || normalized === 'client' || normalized === 'לקוח'
+}
+
+function getStrictClientDisplayName(
+  input: {
+    client?: { full_name?: string | null } | null
+    profileName?: string | null
+    customerName?: string | null
+  },
+  isHebrew: boolean,
+): string {
+  const candidates = [
+    input.client?.full_name?.trim() || null,
+    input.profileName?.trim() || null,
+    input.customerName?.trim() || null,
+  ]
+
+  for (const candidate of candidates) {
+    if (candidate && !isGenericCustomerLabel(candidate)) return candidate
+  }
+
+  return isHebrew ? 'לקוח' : 'Client'
+}
+
 function countCodePoints(value: string): number {
   return Array.from(value).length
 }
@@ -396,6 +423,7 @@ export default function WalkerDashboard({
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
   const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
+  const [preferredCustomerAvatars, setPreferredCustomerAvatars] = useState<Map<string, string | null>>(new Map())
   const [profileServiceTypes, setProfileServiceTypes] = useState<ProfileServiceType[]>(
     normalizeProfileServiceTypes(profile.service_types ?? profile.service_type),
   )
@@ -1342,12 +1370,13 @@ export default function WalkerDashboard({
 
     if (ids.length === 0) {
       setPreferredCustomerNames(new Map())
+      setPreferredCustomerAvatars(new Map())
       return
     }
 
     const { data: profilesData, error: profilesError } = await supabase
       .from('profiles')
-      .select('id, full_name, email')
+      .select('id, full_name, avatar_url')
       .in('id', ids)
 
     if (profilesError) {
@@ -1359,11 +1388,19 @@ export default function WalkerDashboard({
         })
         return next
       })
+      setPreferredCustomerAvatars((current) => {
+        const next = new Map(current)
+        ids.forEach((id) => {
+          if (!next.has(id)) next.set(id, null)
+        })
+        return next
+      })
       return
     }
 
     const nextNames = new Map<string, string>()
-    ;((profilesData as Array<{ id: string; full_name: string | null; email: string | null }> | null) ?? []).forEach(
+    const nextAvatars = new Map<string, string | null>()
+    ;((profilesData as Array<{ id: string; full_name: string | null; avatar_url?: string | null }> | null) ?? []).forEach(
       (profileRow) => {
         nextNames.set(
           profileRow.id,
@@ -1371,29 +1408,77 @@ export default function WalkerDashboard({
             {
               client: {
                 full_name: profileRow.full_name,
-                email: profileRow.email,
               },
             },
             isHebrew,
           ),
         )
+        nextAvatars.set(profileRow.id, profileRow.avatar_url ?? null)
       },
     )
     ids.forEach((id) => {
       if (!nextNames.has(id)) nextNames.set(id, isHebrew ? 'לקוח' : 'Customer')
+      if (!nextAvatars.has(id)) nextAvatars.set(id, null)
     })
     setPreferredCustomerNames(nextNames)
+    setPreferredCustomerAvatars(nextAvatars)
   }, [isHebrew, profile.id])
 
   useEffect(() => {
     void fetchPreferredCustomers()
   }, [fetchPreferredCustomers])
 
+  const completionClientId = completionJobDetails?.client?.id ?? flow.completionSuccess?.clientId ?? null
+  const completionClientLookupKey = getPreferredCustomerKey({
+    clientId: completionClientId,
+    clientName: isGenericCustomerLabel(flow.completionSuccess?.clientName)
+      ? null
+      : flow.completionSuccess?.clientName ?? null,
+  })
+  const completionClientMapName =
+    (completionClientId ? preferredCustomerNames.get(completionClientId) ?? null : null) ??
+    (completionClientLookupKey ? preferredCustomerNames.get(completionClientLookupKey) ?? null : null)
+  const completionClientMapAvatar =
+    (completionClientId ? preferredCustomerAvatars.get(completionClientId) ?? null : null) ??
+    (completionClientLookupKey ? preferredCustomerAvatars.get(completionClientLookupKey) ?? null : null)
+  const completionClientAvatarUrl =
+    (completionJobDetails?.client && 'avatar_url' in completionJobDetails.client
+      ? completionJobDetails.client.avatar_url ?? null
+      : null) ??
+    completionClientMapAvatar
+  const completionClientName = getStrictClientDisplayName(
+    {
+      client: completionJobDetails?.client ?? null,
+      profileName: completionClientMapName,
+      customerName: isGenericCustomerLabel(flow.completionSuccess?.clientName)
+        ? null
+        : flow.completionSuccess?.clientName || null,
+    },
+    isHebrew,
+  )
+  const completionClientKey = getPreferredCustomerKey({
+    clientId: completionClientId,
+    clientName: completionClientName,
+  })
+  const completionClientSaved = completionClientKey ? preferredCustomerIds.has(completionClientKey) : false
+
   const toggleFavoriteClient = useCallback(async (clientKey: string, clientName: string) => {
     if (!clientKey) return
     const previousIds = new Set(preferredCustomerIds)
     const previousNames = new Map(preferredCustomerNames)
+    const previousAvatars = new Map(preferredCustomerAvatars)
     const nextIsSaved = !preferredCustomerIds.has(clientKey)
+    const optimisticClientName =
+      clientKey === completionClientKey
+        ? getStrictClientDisplayName(
+            {
+              client: completionJobDetails?.client ?? null,
+              profileName: completionClientMapName,
+              customerName: isGenericCustomerLabel(clientName) ? null : clientName,
+            },
+            isHebrew,
+          )
+        : clientName
 
     setPreferredCustomerIds((current) => {
       const next = new Set(current)
@@ -1407,7 +1492,20 @@ export default function WalkerDashboard({
     setPreferredCustomerNames((current) => {
       const next = new Map(current)
       if (nextIsSaved) {
-        next.set(clientKey, clientName)
+        next.set(clientKey, optimisticClientName)
+      } else {
+        next.delete(clientKey)
+      }
+      return next
+    })
+    setPreferredCustomerAvatars((current) => {
+      const next = new Map(current)
+      if (nextIsSaved) {
+        const completionAvatar =
+          completionClientId && clientKey === completionClientId
+            ? completionClientAvatarUrl
+            : null
+        next.set(clientKey, completionAvatar)
       } else {
         next.delete(clientKey)
       }
@@ -1431,6 +1529,7 @@ export default function WalkerDashboard({
         console.warn('[WalkerDashboard] failed to save favorite customer:', error.message)
         setPreferredCustomerIds(previousIds)
         setPreferredCustomerNames(previousNames)
+        setPreferredCustomerAvatars(previousAvatars)
         return
       }
     } else {
@@ -1444,38 +1543,47 @@ export default function WalkerDashboard({
         console.warn('[WalkerDashboard] failed to remove favorite customer:', error.message)
         setPreferredCustomerIds(previousIds)
         setPreferredCustomerNames(previousNames)
+        setPreferredCustomerAvatars(previousAvatars)
         return
       }
     }
 
     void fetchPreferredCustomers()
-  }, [fetchPreferredCustomers, preferredCustomerIds, preferredCustomerNames, profile.id])
+  }, [
+    completionClientKey,
+    completionClientMapName,
+    completionJobDetails?.client,
+    completionClientAvatarUrl,
+    completionClientId,
+    fetchPreferredCustomers,
+    isHebrew,
+    preferredCustomerAvatars,
+    preferredCustomerIds,
+    preferredCustomerNames,
+    profile.id,
+  ])
 
-  const completionClientId = completionJobDetails?.client?.id ?? flow.completionSuccess?.clientId ?? null
-  const completionClientName =
-    getCustomerDisplayName(
-      {
-        client: completionJobDetails?.client ?? null,
-        clientName: completionJobDetails?.client?.full_name || completionJobDetails?.client?.email || null,
-        customerName: flow.completionSuccess?.clientName || null,
-        dogName: completionJobDetails?.dog_name || null,
-        petName: flow.completionSuccess?.dogName || null,
-      },
-      isHebrew,
-    )
-  const completionClientKey = getPreferredCustomerKey({
-    clientId: completionClientId,
-    clientName: completionClientName,
-  })
-  const completionClientSaved = completionClientKey ? preferredCustomerIds.has(completionClientKey) : false
   const preferredCustomers = useMemo(() => {
     return Array.from(preferredCustomerIds).map((key) => ({
       key,
       name:
         preferredCustomerNames.get(key) ||
         (key === completionClientKey ? completionClientName : isHebrew ? 'לקוח' : 'Customer'),
+      avatarUrl:
+        preferredCustomerAvatars.get(key) ??
+        (key === completionClientKey ? completionClientAvatarUrl : null),
     }))
-  }, [completionClientKey, completionClientName, isHebrew, preferredCustomerIds, preferredCustomerNames])
+  }, [
+    completionClientAvatarUrl,
+    completionClientKey,
+    completionClientName,
+    isHebrew,
+    completionClientMapAvatar,
+    completionClientMapName,
+    preferredCustomerAvatars,
+    preferredCustomerIds,
+    preferredCustomerNames,
+  ])
 
   const handleOnlineToggle = useCallback(async () => {
     if (!hasSelectedProfileService) {
@@ -2707,7 +2815,16 @@ export default function WalkerDashboard({
                         <div style={preferredCustomerListStyle}>
                           {preferredCustomers.map((customer) => (
                             <div key={customer.key} style={preferredCustomerRowStyle}>
-                              <div style={preferredCustomerHeartStyle}>♥</div>
+                              {customer.avatarUrl ? (
+                                <ProfileAvatar
+                                  url={customer.avatarUrl}
+                                  name={customer.name}
+                                  size={30}
+                                  borderRadius={999}
+                                />
+                              ) : (
+                                <div style={preferredCustomerHeartStyle}>♥</div>
+                              )}
                               <div style={preferredCustomerNameStyle}>{customer.name}</div>
                             </div>
                           ))}
@@ -2843,6 +2960,9 @@ export default function WalkerDashboard({
             const missionAddress = missionJob.location ? formatShortAddress(missionJob.address || missionJob.location) : null
             const missionNote = getDisplayServiceNote(missionJob.service_type, missionJob.notes)
             const isFixedVisitMission = getBookingPricingModelForService(missionJob.service_type) === 'fixed_visit'
+            const missionFixedVisitPriceLabel = formatMoney(
+              missionJob.walker_earnings ?? getEstimatedProviderEarnings(missionJob) ?? missionJob.price,
+            )
 
             const missionStatusLabel = isMissionActive
               ? activeLabels.activeTitle
@@ -2873,7 +2993,12 @@ export default function WalkerDashboard({
             const missionMetaItems = isMissionActive
               ? (
                   isFixedVisitMission
-                    ? [{ label: isHebrew ? 'שירות' : 'Service', value: t('tracking.fixedVisit') }]
+                    ? [
+                        { label: t('tracking.visitFee'), value: missionFixedVisitPriceLabel },
+                        activeDurationSummary.elapsedLabel
+                          ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
+                          : null,
+                      ].filter(Boolean)
                     : [
                         activeDurationSummary.elapsedLabel
                           ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
@@ -2888,7 +3013,7 @@ export default function WalkerDashboard({
                 ) as Array<{ label: string; value: string }>
               : [
                   isFixedVisitMission
-                    ? { label: isHebrew ? 'שירות' : 'Service', value: t('tracking.fixedVisit') }
+                    ? { label: t('tracking.visitFee'), value: missionFixedVisitPriceLabel }
                     : missionJob.duration_minutes
                       ? { label: isHebrew ? 'משך' : 'Duration', value: durationFromMinutes(missionJob.duration_minutes) }
                       : null,
@@ -3111,9 +3236,9 @@ export default function WalkerDashboard({
                 </div>
               </div>
 
-              <div style={incomingInfoCardStyle}>
-                <div style={incomingInfoLabelStyle}>
-                  {isFixedVisitRequest
+                <div style={incomingInfoCardStyle}>
+                  <div style={incomingInfoLabelStyle}>
+                    {isFixedVisitRequest
                     ? (isHebrew ? 'שירות' : 'Service')
                     : isBabysitterRequest
                       ? (isHebrew ? 'פרטי שירות' : 'Service details')
@@ -3139,18 +3264,18 @@ export default function WalkerDashboard({
                 </div>
               )}
 
-              <div style={incomingMetaRowStyle}>
-                <div style={incomingMetaCardStyle}>
-                  <span style={incomingMetaLabelStyle}>
-                    {isFixedVisitRequest
-                      ? (isHebrew ? 'שירות' : 'Service')
+                <div style={incomingMetaRowStyle}>
+                  <div style={incomingMetaCardStyle}>
+                    <span style={incomingMetaLabelStyle}>
+                      {isFixedVisitRequest
+                      ? t('tracking.visitFee')
                       : isBabysitterRequest
                         ? (isHebrew ? 'משך מבוקש' : 'Requested duration')
                         : t('booking.durationQuestion')}
-                  </span>
-                  <span style={incomingMetaValueStyle}>
-                    {isFixedVisitRequest
-                      ? t('tracking.fixedVisit')
+                    </span>
+                    <span style={incomingMetaValueStyle}>
+                      {isFixedVisitRequest
+                      ? requestPrice
                       : isBabysitterRequest
                       ? babysitterRequestNotes.duration || requestDuration
                       : `${requestDuration}${isDogServiceType(topRequest.service_type) ? ` · ${requestDogCountLabel}` : ''}`}
