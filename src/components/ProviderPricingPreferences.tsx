@@ -6,6 +6,7 @@ import { supabase } from '../services/supabaseClient'
 
 type BookingType = 'asap' | 'scheduled'
 type PricingModel = 'time_based' | 'fixed_visit'
+type RadiusOptionValue = 'unlimited' | '5' | '10' | '15' | '25' | 'custom'
 
 type PreferenceRow = {
   id?: string
@@ -46,6 +47,7 @@ function normalizePricingModel(value: string | null | undefined): PricingModel {
 }
 
 const BOOKING_TYPES: BookingType[] = ['asap', 'scheduled']
+const SERVICE_RADIUS_PRESETS = [5, 10, 15, 25] as const
 
 function toInputValue(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? '' : String(value)
@@ -94,6 +96,26 @@ function parseOptionalNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function getRadiusOptionValue(value: string): RadiusOptionValue {
+  const trimmed = value.trim()
+  if (!trimmed) return 'unlimited'
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed)) return 'custom'
+  const matchedPreset = SERVICE_RADIUS_PRESETS.find((preset) => preset === parsed)
+  return matchedPreset ? String(matchedPreset) as RadiusOptionValue : 'custom'
+}
+
+function getRadiusDisplayValue(value: RadiusOptionValue, t: (key: string, options?: Record<string, unknown>) => string): string {
+  if (value === 'unlimited') return t('providerPricing.radiusOptions.unlimited')
+  if (value === 'custom') return t('providerPricing.radiusOptions.custom')
+  return t('providerPricing.radiusOptions.kmValue', { value })
+}
+
+function getRadiusHelperText(value: RadiusOptionValue, t: (key: string) => string): string {
+  if (value === 'unlimited') return t('providerPricing.radiusHelper.unlimited')
+  return t('providerPricing.radiusHelper.limited')
+}
+
 export default function ProviderPricingPreferences({
   providerId,
   serviceTypes,
@@ -113,6 +135,18 @@ export default function ProviderPricingPreferences({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [customRadiusKeys, setCustomRadiusKeys] = useState<string[]>([])
+  const radiusOptions = useMemo(
+    () => [
+      { value: 'unlimited' as const, label: t('providerPricing.radiusOptions.unlimited') },
+      ...SERVICE_RADIUS_PRESETS.map((preset) => ({
+        value: String(preset) as RadiusOptionValue,
+        label: t('providerPricing.radiusOptions.kmValue', { value: preset }),
+      })),
+      { value: 'custom' as const, label: t('providerPricing.radiusOptions.custom') },
+    ],
+    [t],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -150,6 +184,11 @@ export default function ProviderPricingPreferences({
       )
 
       setRows(nextRows)
+      setCustomRadiusKeys(
+        nextRows
+          .filter((row) => getRadiusOptionValue(row.service_radius_km) === 'custom')
+          .map((row) => `${row.service_type}:${row.booking_type}`),
+      )
       setLoading(false)
     }
 
@@ -170,6 +209,10 @@ export default function ProviderPricingPreferences({
     )
     setSuccess(null)
     setError(null)
+  }
+
+  function getRadiusRowKey(serviceType: ProfileServiceType, bookingType: BookingType): string {
+    return `${serviceType}:${bookingType}`
   }
 
   async function handleSave() {
@@ -283,6 +326,13 @@ export default function ProviderPricingPreferences({
               <div style={bookingGridStyle}>
                 {serviceRows.map((row) => (
                   <div key={`${row.service_type}:${row.booking_type}`} style={bookingCardStyle}>
+                    {(() => {
+                      const radiusRowKey = getRadiusRowKey(row.service_type, row.booking_type)
+                      const isCustomRadius = customRadiusKeys.includes(radiusRowKey)
+                      const radiusOptionValue = isCustomRadius ? 'custom' : getRadiusOptionValue(row.service_radius_km)
+
+                      return (
+                        <>
                     <div style={bookingHeaderStyle}>
                       <div style={bookingTitleStyle}>
                         {row.booking_type === 'asap' ? t('providerPricing.asap') : t('providerPricing.scheduled')}
@@ -350,13 +400,55 @@ export default function ProviderPricingPreferences({
 
                       <label style={fieldStyle}>
                         <span style={fieldLabelStyle}>{t('providerPricing.serviceRadiusKm')}</span>
-                        <input
-                          inputMode="decimal"
-                          value={row.service_radius_km}
-                          onChange={(event) => updateRow(row.service_type, row.booking_type, { service_radius_km: event.target.value })}
-                          style={inputStyle}
-                          placeholder="0"
-                        />
+                        <div style={radiusFieldStackStyle}>
+                          <div style={selectWrapStyle}>
+                            <select
+                              value={radiusOptionValue}
+                              onChange={(event) => {
+                                const nextValue = event.target.value as RadiusOptionValue
+                                if (nextValue === 'unlimited') {
+                                  setCustomRadiusKeys((current) => current.filter((key) => key !== radiusRowKey))
+                                  updateRow(row.service_type, row.booking_type, { service_radius_km: '' })
+                                  return
+                                }
+                                if (nextValue === 'custom') {
+                                  setCustomRadiusKeys((current) =>
+                                    current.includes(radiusRowKey) ? current : [...current, radiusRowKey],
+                                  )
+                                  return
+                                }
+                                setCustomRadiusKeys((current) => current.filter((key) => key !== radiusRowKey))
+                                updateRow(row.service_type, row.booking_type, { service_radius_km: nextValue })
+                              }}
+                              style={selectStyle}
+                            >
+                              {radiusOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                            <span style={selectChevronStyle}>▼</span>
+                          </div>
+
+                          {isCustomRadius ? (
+                            <input
+                              inputMode="decimal"
+                              value={row.service_radius_km}
+                              onChange={(event) => updateRow(row.service_type, row.booking_type, { service_radius_km: event.target.value })}
+                              style={inputStyle}
+                              placeholder={t('providerPricing.radiusOptions.customPlaceholder')}
+                              aria-label={t('providerPricing.serviceRadiusKm')}
+                            />
+                          ) : (
+                            <div style={radiusPreviewStyle}>
+                              {getRadiusDisplayValue(radiusOptionValue, t)}
+                            </div>
+                          )}
+                          <div style={radiusHelperStyle}>
+                            {getRadiusHelperText(radiusOptionValue, t)}
+                          </div>
+                        </div>
                       </label>
                     </div>
 
@@ -387,6 +479,9 @@ export default function ProviderPricingPreferences({
                         </label>
                       </div>
                     ) : null}
+                        </>
+                      )
+                    })()}
                   </div>
                 ))}
               </div>
@@ -533,6 +628,11 @@ const fieldStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+const radiusFieldStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
 const fieldStyleCompact: React.CSSProperties = {
   display: 'grid',
   gap: 6,
@@ -556,6 +656,53 @@ const inputStyle: React.CSSProperties = {
   color: '#0F172A',
   boxSizing: 'border-box',
   outline: 'none',
+}
+
+const selectWrapStyle: React.CSSProperties = {
+  position: 'relative',
+}
+
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  height: 38,
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  MozAppearance: 'none',
+  borderRadius: 12,
+  border: '1px solid rgba(203, 213, 225, 0.95)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)',
+  padding: '0 34px 0 11px',
+  fontSize: 13.5,
+  color: '#0F172A',
+  boxSizing: 'border-box',
+  outline: 'none',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8)',
+}
+
+const selectChevronStyle: React.CSSProperties = {
+  position: 'absolute',
+  insetInlineEnd: 11,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  fontSize: 10,
+  color: '#64748B',
+  pointerEvents: 'none',
+}
+
+const radiusPreviewStyle: React.CSSProperties = {
+  minHeight: 16,
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: '#64748B',
+  paddingInline: 2,
+}
+
+const radiusHelperStyle: React.CSSProperties = {
+  minHeight: 16,
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#94A3B8',
+  paddingInline: 2,
 }
 
 const multiItemRowStyle: React.CSSProperties = {

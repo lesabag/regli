@@ -193,6 +193,16 @@ const resources = {
         visitFeeMin: 'Minimum visit fee',
         visitFeePreferred: 'Preferred visit fee',
         serviceRadiusKm: 'Service radius (km)',
+        radiusOptions: {
+          unlimited: 'Unlimited',
+          custom: 'Custom',
+          kmValue: '{{value}} km',
+          customPlaceholder: 'Enter km',
+        },
+        radiusHelper: {
+          unlimited: 'Recommended for new providers',
+          limited: 'Customers outside this area will not see you',
+        },
         acceptsMultiItem: 'Accepts multi-item bookings',
         maxItemCount: 'Max item count',
         save: 'Save pricing preferences',
@@ -595,6 +605,16 @@ const resources = {
         visitFeeMin: 'מחיר ביקור מינימלי',
         visitFeePreferred: 'מחיר ביקור מועדף',
         serviceRadiusKm: 'רדיוס שירות (ק״מ)',
+        radiusOptions: {
+          unlimited: 'ללא הגבלה',
+          custom: 'מותאם אישית',
+          kmValue: '{{value}} ק״מ',
+          customPlaceholder: 'הזינו ק״מ',
+        },
+        radiusHelper: {
+          unlimited: 'מומלץ לספקים חדשים',
+          limited: 'לקוחות מחוץ לאזור הזה לא יראו אתכם',
+        },
         acceptsMultiItem: 'מקבל הזמנות מרובות פריטים',
         maxItemCount: 'מספר פריטים מקסימלי',
         save: 'שמירת העדפות תמחור',
