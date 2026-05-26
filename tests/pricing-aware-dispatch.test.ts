@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluatePricingEligibility, getDogPricingMultiplier, type ProviderPricingPreferenceRow } from '../supabase/functions/_shared/pricingEligibility.ts'
 import { providerSupportsRequestedService } from '../supabase/functions/_shared/providerServiceTypes.ts'
+import { computeAttributeScore } from '../supabase/functions/_shared/dispatchRanking.ts'
 import { mapBookingServiceTypeToProfileServiceType, mapProfileServiceTypeToBookingServiceType } from '../src/lib/profileServiceTypes.ts'
 import { providerSupportsRequestedService as clientProviderSupportsRequestedService } from '../src/lib/providerServiceTypes.ts'
 import { getBudgetGuidanceFromProviderPreferences } from '../src/lib/pricing.ts'
@@ -244,6 +245,65 @@ test('pricing-aware dispatch excludes multi-item requests when provider does not
   assert.deepEqual(result.eligibleWalkerIds, ['walker-b'])
   assert.deepEqual(result.filteredByMultiItemWalkerIds, ['walker-a'])
   assert.deepEqual(result.filteredByPriceWalkerIds, [])
+})
+
+test('multi-item eligibility only applies to dog walker requests', () => {
+  const fixedVisitResult = evaluatePricingEligibility({
+    candidateWalkerIds: ['pro-a', 'pro-b'],
+    preferences: [
+      pref({
+        providerId: 'pro-a',
+        bookingType: 'asap',
+        pricingModel: 'fixed_visit',
+        visitFeeMin: 150,
+        visitFeePreferred: 200,
+        acceptsMultiItem: false,
+        maxItemCount: 1,
+        serviceType: 'electrician',
+      }),
+      pref({
+        providerId: 'pro-b',
+        bookingType: 'asap',
+        pricingModel: 'fixed_visit',
+        visitFeeMin: 150,
+        visitFeePreferred: 200,
+        acceptsMultiItem: true,
+        maxItemCount: 3,
+        serviceType: 'electrician',
+      }),
+    ],
+    serviceType: 'electrician',
+    bookingType: 'asap',
+    budgetILS: 180,
+    durationMinutes: null,
+    dogCount: 2,
+  })
+
+  assert.deepEqual(fixedVisitResult.eligibleWalkerIds, ['pro-a', 'pro-b'])
+  assert.deepEqual(fixedVisitResult.filteredByMultiItemWalkerIds, [])
+})
+
+test('fixed visit services do not receive dog walker or babysitter attribute scoring', () => {
+  const fixedVisitResult = computeAttributeScore(
+    'electrician',
+    {
+      dog_walker: { dogSize: 'L', energyLevel: 'high' },
+      baby_sitter: { childrenAges: [2, 6] },
+    },
+    {
+      dog_walker: {
+        supportedDogSizes: ['S'],
+        supportedEnergyLevels: ['low'],
+      },
+      baby_sitter: {
+        supportedAgeRanges: ['1-2'],
+      },
+    },
+  )
+
+  assert.equal(fixedVisitResult.attributeScore, 0)
+  assert.equal(fixedVisitResult.attributeReason, 'neutral_missing_attributes')
+  assert.deepEqual(fixedVisitResult.attributeMatches, [])
 })
 
 test('pricing-aware dispatch recommends aggregated budgets from provider preferences', () => {
