@@ -27,6 +27,15 @@ import {
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import {
+  buildLegacyServiceAttributesFromCapabilities,
+  buildProviderCapabilityRows,
+  getCapabilityScope,
+  getCapabilityShortBio,
+  mergeProviderCapabilitiesSources,
+  type ProviderCapabilitiesMap,
+  type ProviderCapabilityRow,
+} from '../lib/providerCapabilities'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import { normalizeAgeRangeValue } from '../lib/dispatchRanking'
 import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
@@ -39,6 +48,8 @@ type EarningsPeriod = 'today' | 'week' | 'month'
 type AppRole = 'client' | 'walker' | 'admin'
 
 type ServiceAttributes = Record<string, Record<string, unknown>>
+type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
 type AvailabilityFormRow = {
   dayOfWeek: number
   isActive: boolean
@@ -53,6 +64,20 @@ const PROVIDER_BIO_MAX_CHARS = 80
 const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
 const DEFAULT_AVAILABILITY_START = '09:00'
 const DEFAULT_AVAILABILITY_END = '17:00'
+const PROVIDER_EXPERIENCE_OPTIONS: Array<{ value: ProviderExperienceRange; labelEn: string; labelHe: string; years: number }> = [
+  { value: '0_1', labelEn: '0–1 years', labelHe: '0–1 שנים', years: 1 },
+  { value: '1_3', labelEn: '1–3 years', labelHe: '1–3 שנים', years: 2 },
+  { value: '3_5', labelEn: '3–5 years', labelHe: '3–5 שנים', years: 4 },
+  { value: '5_10', labelEn: '5–10 years', labelHe: '5–10 שנים', years: 7 },
+  { value: '10_plus', labelEn: '10+ years', labelHe: '10+ שנים', years: 10 },
+]
+const PROVIDER_LANGUAGE_OPTIONS: Array<{ value: ProviderLanguage; labelEn: string; labelHe: string }> = [
+  { value: 'hebrew', labelEn: 'Hebrew', labelHe: 'עברית' },
+  { value: 'english', labelEn: 'English', labelHe: 'אנגלית' },
+  { value: 'russian', labelEn: 'Russian', labelHe: 'רוסית' },
+  { value: 'arabic', labelEn: 'Arabic', labelHe: 'ערבית' },
+  { value: 'french', labelEn: 'French', labelHe: 'צרפתית' },
+]
 
 interface WalkerDashboardProps {
   profile: {
@@ -319,6 +344,19 @@ function getStrictClientDisplayName(
   return isHebrew ? 'לקוח' : 'Client'
 }
 
+function getProviderExperienceYears(range: ProviderExperienceRange | ''): number {
+  return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.years ?? 0
+}
+
+function getProviderExperienceRangeFromYears(years: number | null | undefined): ProviderExperienceRange | '' {
+  if (typeof years !== 'number' || !Number.isFinite(years) || years <= 0) return ''
+  if (years >= 10) return '10_plus'
+  if (years >= 7) return '5_10'
+  if (years >= 4) return '3_5'
+  if (years >= 2) return '1_3'
+  return '0_1'
+}
+
 function countCodePoints(value: string): number {
   return Array.from(value).length
 }
@@ -435,7 +473,19 @@ export default function WalkerDashboard({
   const [availabilitySaving, setAvailabilitySaving] = useState(false)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
-  const [providerBio, setProviderBio] = useState(profile.short_bio ?? '')
+  const initialProviderCapabilities = useMemo(
+    () => mergeProviderCapabilitiesSources({
+      fallbackServiceAttributes: profile.service_attributes,
+      shortBio: profile.short_bio ?? null,
+    }),
+    [profile.service_attributes, profile.short_bio],
+  )
+  const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilitiesMap>(initialProviderCapabilities)
+  const providerProfileCapabilities = useMemo(
+    () => getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {},
+    [providerCapabilities],
+  )
+  const [providerBio, setProviderBio] = useState(getCapabilityShortBio(initialProviderCapabilities, profile.short_bio ?? null))
   const [providerWhatsAppNumber, setProviderWhatsAppNumber] = useState(profile.whatsapp_number ?? '')
   const [providerBioSaving, setProviderBioSaving] = useState(false)
   const [providerBioSavedAt, setProviderBioSavedAt] = useState(0)
@@ -454,24 +504,41 @@ export default function WalkerDashboard({
   const [capSaving, setCapSaving] = useState(false)
   const [capSavedAt, setCapSavedAt] = useState(0)
   const [capError, setCapError] = useState<string | null>(null)
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
+  const [provExperienceRange, setProvExperienceRange] = useState<ProviderExperienceRange | ''>(() => {
+    const experienceRange = typeof providerProfileCapabilities.experienceRange === 'string'
+      ? providerProfileCapabilities.experienceRange as ProviderExperienceRange
+      : ''
+    if (experienceRange) return experienceRange
+    const experienceYears = typeof providerProfileCapabilities.experienceYears === 'number'
+      ? providerProfileCapabilities.experienceYears
+      : null
+    return getProviderExperienceRangeFromYears(experienceYears)
+  })
+  const [provLanguages, setProvLanguages] = useState<ProviderLanguage[]>(() => {
+    const rawLanguages = providerProfileCapabilities.languagesSpoken ?? providerProfileCapabilities.languages
+    return Array.isArray(rawLanguages)
+      ? rawLanguages.filter((value): value is ProviderLanguage => typeof value === 'string') as ProviderLanguage[]
+      : []
+  })
   const [provDogSizes, setProvDogSizes] = useState<string[]>(() => {
-    const sa = profile.service_attributes?.dog_walker
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return Array.isArray(sa?.supportedDogSizes) ? (sa.supportedDogSizes as string[]) : []
   })
   const [provDogEnergy, setProvDogEnergy] = useState<string[]>(() => {
-    const sa = profile.service_attributes?.dog_walker
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return Array.isArray(sa?.supportedEnergyLevels) ? (sa.supportedEnergyLevels as string[]) : []
   })
   const [provDogExp, setProvDogExp] = useState<number>(() => {
-    const sa = profile.service_attributes?.dog_walker
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
   })
   const [provDogNotes, setProvDogNotes] = useState<string>(() => {
-    const sa = profile.service_attributes?.dog_walker
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
   const [provSitterAges, setProvSitterAges] = useState<string[]>(() => {
-    const sa = profile.service_attributes?.baby_sitter
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'baby_sitter')
     return Array.isArray(sa?.supportedAgeRanges)
       ? (sa.supportedAgeRanges as unknown[])
           .map((range) => normalizeAgeRangeValue(range))
@@ -479,22 +546,32 @@ export default function WalkerDashboard({
       : []
   })
   const [provSitterExp, setProvSitterExp] = useState<number>(() => {
-    const sa = profile.service_attributes?.baby_sitter
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'baby_sitter')
     return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
   })
   const [provSitterNotes, setProvSitterNotes] = useState<string>(() => {
-    const sa = profile.service_attributes?.baby_sitter
+    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'baby_sitter')
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
   const providerBioCharCount = useMemo(() => countCodePoints(providerBio), [providerBio])
   const capDirty = useMemo(() => {
-    const sa = profile.service_attributes ?? {}
-    const dogSa = sa.dog_walker ?? {}
-    const sitterSa = sa.baby_sitter ?? {}
+    const providerProfileSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {}
+    const dogSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'dog_walker') ?? {}
+    const sitterSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'baby_sitter') ?? {}
     const origDogSizes = Array.isArray(dogSa.supportedDogSizes) ? (dogSa.supportedDogSizes as string[]) : []
     const origDogEnergy = Array.isArray(dogSa.supportedEnergyLevels) ? (dogSa.supportedEnergyLevels as string[]) : []
     const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
     const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
+    const origExperienceRange =
+      typeof providerProfileSa.experienceRange === 'string'
+        ? providerProfileSa.experienceRange as ProviderExperienceRange
+        : getProviderExperienceRangeFromYears(
+            typeof providerProfileSa.experienceYears === 'number' ? providerProfileSa.experienceYears : null,
+          )
+    const origLanguagesRaw = providerProfileSa.languagesSpoken ?? providerProfileSa.languages
+    const origLanguages = Array.isArray(origLanguagesRaw)
+      ? origLanguagesRaw.filter((value): value is ProviderLanguage => typeof value === 'string')
+      : []
     const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges)
       ? (sitterSa.supportedAgeRanges as unknown[])
           .map((range) => normalizeAgeRangeValue(range))
@@ -504,6 +581,8 @@ export default function WalkerDashboard({
     const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
     const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
     return (
+      provExperienceRange !== origExperienceRange ||
+      !arrEq(provLanguages, origLanguages) ||
       !arrEq(provDogSizes, origDogSizes) ||
       !arrEq(provDogEnergy, origDogEnergy) ||
       provDogExp !== origDogExp ||
@@ -513,7 +592,9 @@ export default function WalkerDashboard({
       provSitterNotes !== origSitterNotes
     )
   }, [
-    profile.service_attributes,
+    providerCapabilities,
+    provExperienceRange,
+    provLanguages,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
@@ -537,12 +618,111 @@ export default function WalkerDashboard({
   }, [profile.service_type, profile.service_types])
 
   useEffect(() => {
-    setProviderBio(profile.short_bio ?? '')
-  }, [profile.short_bio])
+    const mergedCapabilities = mergeProviderCapabilitiesSources({
+      fallbackServiceAttributes: profile.service_attributes,
+      shortBio: profile.short_bio ?? null,
+    })
+    setProviderCapabilities(mergedCapabilities)
+    setProviderBio(getCapabilityShortBio(mergedCapabilities, profile.short_bio ?? null))
+    const providerProfileAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'provider_profile') ?? {}
+    const nextExperienceRange =
+      typeof providerProfileAttrs.experienceRange === 'string'
+        ? providerProfileAttrs.experienceRange as ProviderExperienceRange
+        : getProviderExperienceRangeFromYears(
+            typeof providerProfileAttrs.experienceYears === 'number' ? providerProfileAttrs.experienceYears : null,
+          )
+    const rawLanguages = providerProfileAttrs.languagesSpoken ?? providerProfileAttrs.languages
+    setProvExperienceRange(nextExperienceRange)
+    setProvLanguages(
+      Array.isArray(rawLanguages)
+        ? rawLanguages.filter((value): value is ProviderLanguage => typeof value === 'string')
+        : [],
+    )
+    const dogAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'dog_walker') ?? {}
+    setProvDogSizes(Array.isArray(dogAttrs.supportedDogSizes) ? (dogAttrs.supportedDogSizes as string[]) : [])
+    setProvDogEnergy(Array.isArray(dogAttrs.supportedEnergyLevels) ? (dogAttrs.supportedEnergyLevels as string[]) : [])
+    setProvDogExp(typeof dogAttrs.experienceYears === 'number' ? (dogAttrs.experienceYears as number) : 0)
+    setProvDogNotes(typeof dogAttrs.notes === 'string' ? (dogAttrs.notes as string) : '')
+    const sitterAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'baby_sitter') ?? {}
+    setProvSitterAges(
+      Array.isArray(sitterAttrs.supportedAgeRanges)
+        ? (sitterAttrs.supportedAgeRanges as unknown[])
+            .map((range) => normalizeAgeRangeValue(range))
+            .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+        : [],
+    )
+    setProvSitterExp(typeof sitterAttrs.experienceYears === 'number' ? (sitterAttrs.experienceYears as number) : 0)
+    setProvSitterNotes(typeof sitterAttrs.notes === 'string' ? (sitterAttrs.notes as string) : '')
+  }, [profile.service_attributes, profile.short_bio])
 
   useEffect(() => {
     setProviderWhatsAppNumber(profile.whatsapp_number ?? '')
   }, [profile.whatsapp_number])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadProviderCapabilities = async () => {
+      setCapabilitiesLoading(true)
+      const { data, error } = await supabase
+        .from('provider_capabilities')
+        .select('provider_id, capability_scope, capabilities, updated_at')
+        .eq('provider_id', profile.id)
+
+      if (cancelled) return
+
+      if (error) {
+        console.warn('[WalkerDashboard] failed to load provider_capabilities:', error.message)
+        setCapabilitiesLoading(false)
+        return
+      }
+
+      const mergedCapabilities = mergeProviderCapabilitiesSources({
+        rows: (data as ProviderCapabilityRow[] | null) ?? [],
+        fallbackServiceAttributes: profile.service_attributes,
+        shortBio: profile.short_bio ?? null,
+      })
+
+      setProviderCapabilities(mergedCapabilities)
+      setProviderBio(getCapabilityShortBio(mergedCapabilities, profile.short_bio ?? null))
+      const providerProfileAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'provider_profile') ?? {}
+      const nextExperienceRange =
+        typeof providerProfileAttrs.experienceRange === 'string'
+          ? providerProfileAttrs.experienceRange as ProviderExperienceRange
+          : getProviderExperienceRangeFromYears(
+              typeof providerProfileAttrs.experienceYears === 'number' ? providerProfileAttrs.experienceYears : null,
+            )
+      const rawLanguages = providerProfileAttrs.languagesSpoken ?? providerProfileAttrs.languages
+      setProvExperienceRange(nextExperienceRange)
+      setProvLanguages(
+        Array.isArray(rawLanguages)
+          ? rawLanguages.filter((value): value is ProviderLanguage => typeof value === 'string')
+          : [],
+      )
+      const dogAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'dog_walker') ?? {}
+      setProvDogSizes(Array.isArray(dogAttrs.supportedDogSizes) ? (dogAttrs.supportedDogSizes as string[]) : [])
+      setProvDogEnergy(Array.isArray(dogAttrs.supportedEnergyLevels) ? (dogAttrs.supportedEnergyLevels as string[]) : [])
+      setProvDogExp(typeof dogAttrs.experienceYears === 'number' ? (dogAttrs.experienceYears as number) : 0)
+      setProvDogNotes(typeof dogAttrs.notes === 'string' ? (dogAttrs.notes as string) : '')
+      const sitterAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'baby_sitter') ?? {}
+      setProvSitterAges(
+        Array.isArray(sitterAttrs.supportedAgeRanges)
+          ? (sitterAttrs.supportedAgeRanges as unknown[])
+              .map((range) => normalizeAgeRangeValue(range))
+              .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+          : [],
+      )
+      setProvSitterExp(typeof sitterAttrs.experienceYears === 'number' ? (sitterAttrs.experienceYears as number) : 0)
+      setProvSitterNotes(typeof sitterAttrs.notes === 'string' ? (sitterAttrs.notes as string) : '')
+      setCapabilitiesLoading(false)
+    }
+
+    void loadProviderCapabilities()
+
+    return () => {
+      cancelled = true
+    }
+  }, [profile.id, profile.service_attributes, profile.short_bio])
 
   useEffect(() => {
     availabilityRowsRef.current = availabilityRows
@@ -681,12 +861,20 @@ export default function WalkerDashboard({
     setCapSaving(true)
     setCapError(null)
 
-    const existing: ServiceAttributes = (profile.service_attributes as ServiceAttributes) ?? {}
-    const next: ServiceAttributes = { ...existing }
+    const existing = providerCapabilities
+    const next: ProviderCapabilitiesMap = { ...existing }
+
+    next.provider_profile = {
+      ...(getCapabilityScope<Record<string, unknown>>(existing, 'provider_profile') ?? {}),
+      experienceRange: provExperienceRange || null,
+      experienceYears: getProviderExperienceYears(provExperienceRange),
+      languagesSpoken: provLanguages,
+      shortBio: providerBio.trim() || null,
+    }
 
     if (profileServiceTypes.includes('dog_walker')) {
       next.dog_walker = {
-        ...(existing.dog_walker ?? {}),
+        ...(getCapabilityScope<Record<string, unknown>>(existing, 'dog_walker') ?? {}),
         supportedDogSizes: provDogSizes,
         supportedEnergyLevels: provDogEnergy,
         experienceYears: provDogExp,
@@ -696,7 +884,7 @@ export default function WalkerDashboard({
 
     if (profileServiceTypes.includes('baby_sitter')) {
       next.baby_sitter = {
-        ...(existing.baby_sitter ?? {}),
+        ...(getCapabilityScope<Record<string, unknown>>(existing, 'baby_sitter') ?? {}),
         supportedAgeRanges: provSitterAges
           .map((range) => normalizeAgeRangeValue(range))
           .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null),
@@ -705,21 +893,36 @@ export default function WalkerDashboard({
       }
     }
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({ service_attributes: next })
-      .eq('id', profile.id)
+    const capabilityRows = buildProviderCapabilityRows(profile.id, next).map((row) => ({
+      ...row,
+      updated_at: new Date().toISOString(),
+    }))
+    const legacyServiceAttributes = buildLegacyServiceAttributesFromCapabilities(next)
 
-    if (error) {
+    const [{ error: capabilityError }, { error: profileError }] = await Promise.all([
+      capabilityRows.length > 0
+        ? supabase
+            .from('provider_capabilities')
+            .upsert(capabilityRows, { onConflict: 'provider_id,capability_scope' })
+        : Promise.resolve({ error: null }),
+      supabase
+      .from('profiles')
+      .update({ service_attributes: legacyServiceAttributes })
+      .eq('id', profile.id)
+    ])
+
+    if (capabilityError || profileError) {
       setCapError(isHebrew ? 'לא הצלחנו לשמור.' : 'Could not save capabilities.')
       setCapSaving(false)
       return
     }
 
+    setProviderCapabilities(next)
     setCapSaving(false)
     setCapSavedAt(Date.now())
   }, [
-    capSaving, profile.id, profile.service_attributes, profileServiceTypes, isHebrew,
+    capSaving, profile.id, profileServiceTypes, isHebrew, providerCapabilities, providerBio,
+    provExperienceRange, provLanguages,
     provDogSizes, provDogEnergy, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
@@ -809,32 +1012,52 @@ export default function WalkerDashboard({
       char_count: countCodePoints(nextBio),
     })
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({
-        short_bio: nextBio || null,
-        whatsapp_number: nextWhatsAppNumber || null,
-      })
-      .eq('id', profile.id)
-      .select('id, short_bio, whatsapp_number')
-      .maybeSingle()
+    const nextCapabilities = {
+      ...providerCapabilities,
+      provider_profile: {
+        ...(getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {}),
+        shortBio: nextBio || null,
+      },
+    }
+    const providerCapabilityRows = buildProviderCapabilityRows(profile.id, nextCapabilities).map((row) => ({
+      ...row,
+      updated_at: new Date().toISOString(),
+    }))
+
+    const [{ data, error }, { error: capabilityError }] = await Promise.all([
+      supabase
+        .from('profiles')
+        .update({
+          short_bio: nextBio || null,
+          whatsapp_number: nextWhatsAppNumber || null,
+          service_attributes: buildLegacyServiceAttributesFromCapabilities(nextCapabilities),
+        })
+        .eq('id', profile.id)
+        .select('id, short_bio, whatsapp_number')
+        .maybeSingle(),
+      providerCapabilityRows.length > 0
+        ? supabase
+            .from('provider_capabilities')
+            .upsert(providerCapabilityRows, { onConflict: 'provider_id,capability_scope' })
+        : Promise.resolve({ error: null }),
+    ])
 
     console.debug('[WalkerDashboard] short_bio update result', {
       user_id: profile.id,
       short_bio: nextBio,
       whatsapp_number: nextWhatsAppNumber || null,
       result: data,
-      error,
+      error: error ?? capabilityError,
     })
 
-    if (error) {
+    if (error || capabilityError) {
       console.warn('[WalkerDashboard] failed to save short_bio:', {
         user_id: profile.id,
         short_bio: nextBio,
         whatsapp_number: nextWhatsAppNumber || null,
-        error,
+        error: error ?? capabilityError,
       })
-      setProviderBioError(error.message || t('providerProfile.bioSaveError'))
+      setProviderBioError(error?.message || capabilityError?.message || t('providerProfile.bioSaveError'))
       setProviderBioSaving(false)
       return
     }
@@ -853,9 +1076,10 @@ export default function WalkerDashboard({
 
     setProviderBio((data.short_bio as string | null) ?? '')
     setProviderWhatsAppNumber((data.whatsapp_number as string | null) ?? '')
+    setProviderCapabilities(nextCapabilities)
     setProviderBioSaving(false)
     setProviderBioSavedAt(Date.now())
-  }, [profile.id, providerBio, providerBioSaving, providerWhatsAppNumber, t])
+  }, [profile.id, providerBio, providerBioSaving, providerCapabilities, providerWhatsAppNumber, t])
 
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
@@ -2639,6 +2863,51 @@ export default function WalkerDashboard({
                       onToggle={() => toggleSettingsSection('capabilities')}
                     >
                         <div style={capEditorStyle}>
+                          <div style={capSectionStyle}>
+                            <div style={capSectionLabelStyle}>
+                              {isHebrew ? 'פרופיל ספק' : 'Provider profile'}
+                            </div>
+
+                            <div style={capFieldStyle}>
+                              <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
+                              <div style={capChipRowStyle}>
+                                {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => setProvExperienceRange(option.value)}
+                                    style={{ ...capChipStyle, ...(provExperienceRange === option.value ? capChipSelectedStyle : null) }}
+                                  >
+                                    {isHebrew ? option.labelHe : option.labelEn}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div style={capFieldStyle}>
+                              <div style={capFieldLabelStyle}>{isHebrew ? 'שפות' : 'Languages'}</div>
+                              <div style={capChipRowStyle}>
+                                {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                                  const selected = provLanguages.includes(option.value)
+                                  return (
+                                    <button
+                                      key={option.value}
+                                      type="button"
+                                      onClick={() => setProvLanguages((prev) =>
+                                        selected
+                                          ? prev.filter((value) => value !== option.value)
+                                          : [...prev, option.value]
+                                      )}
+                                      style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
+                                    >
+                                      {isHebrew ? option.labelHe : option.labelEn}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          </div>
+
                           {profileServiceTypes.includes('dog_walker') && (
                             <div style={capSectionStyle}>
                               {profileServiceTypes.length > 1 && (
@@ -2795,6 +3064,11 @@ export default function WalkerDashboard({
                           </button>
 
                           {capError && <div style={serviceTypeStatusErrorStyle}>{capError}</div>}
+                          {!capError && capabilitiesLoading ? (
+                            <div style={serviceTypeStatusMutedStyle}>
+                              {isHebrew ? 'טוען יכולות שמורות...' : 'Loading saved capabilities...'}
+                            </div>
+                          ) : null}
                           {!capSaving && capSavedAt > 0 && !capDirty && !capError && (
                             <div style={serviceTypeStatusSuccessStyle}>
                               {isHebrew ? 'היכולות נשמרו.' : 'Capabilities saved.'}
@@ -4309,6 +4583,13 @@ const serviceTypeStatusErrorStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: '#DC2626',
+}
+
+const serviceTypeStatusMutedStyle: React.CSSProperties = {
+  marginTop: 10,
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#64748B',
 }
 
 const providerBioSectionStyle: React.CSSProperties = {

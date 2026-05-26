@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
+import { buildProviderCapabilityRows, buildProviderSignupCapabilities } from '../lib/providerCapabilities'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -247,6 +248,12 @@ export function useAuth() {
       const safeRole: AppRole = role === 'admin' ? 'client' : role
 
       const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
+      const normalizedProviderCapabilities = safeRole === 'walker'
+        ? buildProviderSignupCapabilities({
+            serviceAttributes: serviceAttributes ?? null,
+            shortBio: shortBio ?? null,
+          })
+        : null
 
       try {
         const { data, error } = await withTimeout(
@@ -290,7 +297,7 @@ export function useAuth() {
           location_address: locationAddress ?? null,
           service_type: normalizedServiceTypes[0] ?? null,
           service_types: normalizedServiceTypes,
-          service_attributes: serviceAttributes ?? null,
+          service_attributes: normalizedProviderCapabilities ?? serviceAttributes ?? null,
         }
 
         const { error: profileError } = await withTimeout(
@@ -304,6 +311,28 @@ export function useAuth() {
         if (profileError) {
           setProfile(profilePayload)
           return { ok: true }
+        }
+
+        if (safeRole === 'walker' && normalizedProviderCapabilities) {
+          const providerCapabilityRows = buildProviderCapabilityRows(newUser.id, normalizedProviderCapabilities)
+            .map((row) => ({
+              ...row,
+              updated_at: new Date().toISOString(),
+            }))
+
+          if (providerCapabilityRows.length > 0) {
+            const { error: capabilityError } = await withTimeout(
+              supabase
+                .from('provider_capabilities')
+                .upsert(providerCapabilityRows, { onConflict: 'provider_id,capability_scope' }),
+              PROFILE_LOAD_TIMEOUT_MS,
+              'Provider capabilities setup timed out',
+            )
+
+            if (capabilityError) {
+              console.warn('[useAuth] provider_capabilities upsert failed during signup:', capabilityError.message)
+            }
+          }
         }
 
         await loadProfile(newUser)
