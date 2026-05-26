@@ -45,6 +45,7 @@ export type FinalDispatchSelectionInput = {
   avgRating?: number | null
   reviewCount?: number | null
   attributeScore?: number
+  recentAttemptCount?: number | null
 }
 
 export type FinalDispatchSelectionCandidate = {
@@ -59,6 +60,8 @@ export type FinalDispatchSelectionCandidate = {
   distanceKm: number | null
   avgRating: number | null
   reviewCount: number
+  cooldownPenalty: number
+  recentAttemptCount: number
 }
 
 const LEGACY_TO_NORMALIZED_AGE_RANGE: Record<string, '1-2' | '2-4' | '5-7' | '7+'> = {
@@ -81,6 +84,8 @@ const AFFINITY_SCORE_CAP = 30
 const NORMALIZED_PROVIDER_SAVED_CUSTOMER_AFFINITY_BOOST = 0.1
 const NORMALIZED_CUSTOMER_SAVED_PROVIDER_AFFINITY_BOOST = 0.2
 const NORMALIZED_AFFINITY_SCORE_CAP = 0.3
+const FAIRNESS_RECENT_ATTEMPT_PENALTY = 0.02
+const FAIRNESS_RECENT_ATTEMPT_PENALTY_CAP = 0.08
 
 const ATTR_DOG_SIZE_BONUS = 0.025
 const ATTR_DOG_SIZE_PENALTY = -0.01
@@ -294,6 +299,16 @@ function normalizeSelectionReviewCount(reviewCount: number | null | undefined): 
   return Math.max(0, Math.floor(toFiniteNumber(reviewCount) ?? 0))
 }
 
+function normalizeRecentAttemptCount(recentAttemptCount: number | null | undefined): number {
+  return Math.max(0, Math.floor(toFiniteNumber(recentAttemptCount) ?? 0))
+}
+
+function computeCooldownPenalty(recentAttemptCount: number): number {
+  return Number(
+    Math.min(recentAttemptCount * FAIRNESS_RECENT_ATTEMPT_PENALTY, FAIRNESS_RECENT_ATTEMPT_PENALTY_CAP).toFixed(6),
+  )
+}
+
 export function computeNormalizedAffinityScore(
   affinityProviderSaved: boolean,
   affinityClientSaved: boolean,
@@ -317,7 +332,9 @@ export function rankDispatchCandidatesByFinalScore(
         affinityClientSaved,
       )
       const attributeScore = Number((toFiniteNumber(input.attributeScore) ?? 0).toFixed(6))
-      const finalScore = Number((baseScore + affinityScore + attributeScore).toFixed(6))
+      const recentAttemptCount = normalizeRecentAttemptCount(input.recentAttemptCount)
+      const cooldownPenalty = computeCooldownPenalty(recentAttemptCount)
+      const finalScore = Number((baseScore + affinityScore + attributeScore - cooldownPenalty).toFixed(6))
       const distanceKm = toFiniteNumber(input.distanceKm)
       const avgRating = toFiniteNumber(input.avgRating)
       const reviewCount = normalizeSelectionReviewCount(input.reviewCount)
@@ -334,6 +351,8 @@ export function rankDispatchCandidatesByFinalScore(
         distanceKm: distanceKm == null ? null : Number(distanceKm.toFixed(3)),
         avgRating: avgRating == null ? null : Number(avgRating.toFixed(3)),
         reviewCount,
+        cooldownPenalty,
+        recentAttemptCount,
       }
     })
     .sort((left, right) => {

@@ -104,8 +104,8 @@ test('final_score controls candidate order and ties resolve deterministically', 
 })
 
 test('affinity improves ranking but does not replace upstream eligibility filters', () => {
-  // Fairness, cooldowns, or randomized top-pool selection are not implemented today.
-  // This test intentionally locks down current ranking-only affinity behavior for a future phase.
+  // Eligibility still happens upstream. Ranking boosts and fairness penalties only reorder
+  // providers that already passed service, availability, pricing, and capability filters.
   const rankedCandidates = rankDispatchCandidatesByFinalScore([
     {
       walkerId: 'eligible-neutral',
@@ -127,4 +127,85 @@ test('affinity improves ranking but does not replace upstream eligibility filter
   )
   assert.equal(rankedCandidates[0]?.affinityScore, 0.2)
   assert.equal(rankedCandidates[0]?.finalScore, 1)
+})
+
+test('recent dispatch attempts apply a small fairness cooldown penalty', () => {
+  const rankedCandidates = rankDispatchCandidatesByFinalScore([
+    {
+      walkerId: 'fresh-provider',
+      baseScore: 0.85,
+      recentAttemptCount: 0,
+    },
+    {
+      walkerId: 'recently-offered-provider',
+      baseScore: 0.85,
+      recentAttemptCount: 2,
+    },
+  ])
+
+  assert.deepEqual(
+    rankedCandidates.map((candidate) => candidate.walkerId),
+    ['fresh-provider', 'recently-offered-provider'],
+  )
+  assert.equal(rankedCandidates[0]?.cooldownPenalty, 0)
+  assert.equal(rankedCandidates[1]?.cooldownPenalty, 0.04)
+  assert.equal(rankedCandidates[0]?.finalScore, 0.85)
+  assert.equal(rankedCandidates[1]?.finalScore, 0.81)
+})
+
+test('strong providers can still win despite the fairness cooldown penalty', () => {
+  const rankedCandidates = rankDispatchCandidatesByFinalScore([
+    {
+      walkerId: 'strong-but-recent',
+      baseScore: 0.98,
+      recentAttemptCount: 4,
+    },
+    {
+      walkerId: 'fresh-but-weaker',
+      baseScore: 0.88,
+      recentAttemptCount: 0,
+    },
+  ])
+
+  assert.equal(rankedCandidates[0]?.walkerId, 'strong-but-recent')
+  assert.equal(rankedCandidates[0]?.cooldownPenalty, 0.08)
+  assert.equal(rankedCandidates[0]?.finalScore, 0.9)
+  assert.equal(rankedCandidates[1]?.finalScore, 0.88)
+})
+
+test('fairness cooldown is capped and no recent attempts preserve the existing order', () => {
+  const withoutRecentAttempts = rankDispatchCandidatesByFinalScore([
+    {
+      walkerId: 'walker-a',
+      baseScore: 0.82,
+      distanceKm: 1.4,
+      avgRating: 4.6,
+      reviewCount: 12,
+      recentAttemptCount: 0,
+    },
+    {
+      walkerId: 'walker-b',
+      baseScore: 0.82,
+      distanceKm: 2.1,
+      avgRating: 4.4,
+      reviewCount: 8,
+      recentAttemptCount: 0,
+    },
+  ])
+
+  const cappedPenalty = rankDispatchCandidatesByFinalScore([
+    {
+      walkerId: 'capped-provider',
+      baseScore: 0.82,
+      recentAttemptCount: 7,
+    },
+  ])
+
+  assert.deepEqual(
+    withoutRecentAttempts.map((candidate) => candidate.walkerId),
+    ['walker-a', 'walker-b'],
+  )
+  assert.equal(withoutRecentAttempts[0]?.cooldownPenalty, 0)
+  assert.equal(withoutRecentAttempts[1]?.cooldownPenalty, 0)
+  assert.equal(cappedPenalty[0]?.cooldownPenalty, 0.08)
 })

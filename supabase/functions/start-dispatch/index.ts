@@ -31,6 +31,7 @@ function getScheduledDispatchLeadMinutes(): number {
 const SCHEDULED_DISPATCH_LEAD_MINUTES = getScheduledDispatchLeadMinutes()
 const START_DISPATCH_VERSION = '2026-04-22-payment-gate-01'
 const BUDGET_BELOW_MINIMUM_ERROR_PREFIX = 'budget_below_provider_minimum'
+const FAIRNESS_RECENT_ATTEMPT_WINDOW_MS = 5 * 60 * 1000
 
 function toFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -69,7 +70,20 @@ function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<s
   const attributeScore = typeof safeMeta.attribute_score === 'number' && Number.isFinite(safeMeta.attribute_score)
     ? Number(safeMeta.attribute_score.toFixed(6))
     : 0
-  const finalScore = baseScore == null ? null : Number((baseScore + affinityScore + attributeScore).toFixed(6))
+  const cooldownPenalty =
+    typeof safeMeta.cooldown_penalty === 'number' && Number.isFinite(safeMeta.cooldown_penalty)
+      ? Number(safeMeta.cooldown_penalty.toFixed(6))
+      : 0
+  const recentAttemptCount =
+    typeof safeMeta.recent_attempt_count === 'number' && Number.isFinite(safeMeta.recent_attempt_count)
+      ? Math.max(0, Math.floor(safeMeta.recent_attempt_count))
+      : 0
+  const finalScore =
+    typeof safeMeta.final_score === 'number' && Number.isFinite(safeMeta.final_score)
+      ? Number(safeMeta.final_score.toFixed(6))
+      : baseScore == null
+        ? null
+        : Number((baseScore + affinityScore + attributeScore - cooldownPenalty).toFixed(6))
 
   persistedMeta.base_score = baseScore
   persistedMeta.affinity_score = affinityScore
@@ -78,6 +92,8 @@ function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<s
   persistedMeta.attribute_score = attributeScore
   persistedMeta.attribute_reason = typeof safeMeta.attribute_reason === 'string' ? safeMeta.attribute_reason : 'neutral_missing_attributes'
   persistedMeta.attribute_matches = Array.isArray(safeMeta.attribute_matches) ? safeMeta.attribute_matches : []
+  persistedMeta.cooldown_penalty = cooldownPenalty
+  persistedMeta.recent_attempt_count = recentAttemptCount
   persistedMeta.final_score = finalScore
 
   return persistedMeta
@@ -85,12 +101,19 @@ function buildPersistedMeta(meta: Record<string, unknown> | undefined): Record<s
 
 function getPersistedCandidateScore(candidate: RankedCandidate): number {
   const meta = candidate.meta ?? {}
+  const persistedFinalScore = toFiniteNumber(meta.final_score)
+  if (persistedFinalScore != null) {
+    return Number(persistedFinalScore.toFixed(6))
+  }
   const baseScore = getBaseScore(candidate)
   const affinityScore = normalizeAffinityScore(meta)
   const attributeScore = typeof meta.attribute_score === 'number' && Number.isFinite(meta.attribute_score)
     ? meta.attribute_score
     : 0
-  return Number((baseScore + affinityScore + attributeScore).toFixed(6))
+  const cooldownPenalty = typeof meta.cooldown_penalty === 'number' && Number.isFinite(meta.cooldown_penalty)
+    ? meta.cooldown_penalty
+    : 0
+  return Number((baseScore + affinityScore + attributeScore - cooldownPenalty).toFixed(6))
 }
 
 function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
@@ -101,7 +124,18 @@ function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
     typeof meta.attribute_score === 'number' && Number.isFinite(meta.attribute_score)
       ? meta.attribute_score
       : 0
-  const finalScore = Number((baseScore + affinityScore + attributeScore).toFixed(6))
+  const cooldownPenalty =
+    typeof meta.cooldown_penalty === 'number' && Number.isFinite(meta.cooldown_penalty)
+      ? Number(meta.cooldown_penalty.toFixed(6))
+      : 0
+  const recentAttemptCount =
+    typeof meta.recent_attempt_count === 'number' && Number.isFinite(meta.recent_attempt_count)
+      ? Math.max(0, Math.floor(meta.recent_attempt_count))
+      : 0
+  const finalScore =
+    typeof meta.final_score === 'number' && Number.isFinite(meta.final_score)
+      ? Number(meta.final_score.toFixed(6))
+      : Number((baseScore + affinityScore + attributeScore - cooldownPenalty).toFixed(6))
   return {
     rank,
     walkerId: candidate.walkerId,
@@ -129,6 +163,8 @@ function buildCandidateScoreLog(candidate: RankedCandidate, rank: number) {
       typeof meta.attribute_reason === 'string' ? meta.attribute_reason : 'neutral_missing_attributes',
     attribute_matches:
       Array.isArray(meta.attribute_matches) ? meta.attribute_matches : [],
+    cooldown_penalty: cooldownPenalty,
+    recent_attempt_count: recentAttemptCount,
   }
 }
 
@@ -764,6 +800,35 @@ serve(async (req) => {
       )
     }
 
+    const recentAttemptCountsByWalkerId = new Map<string, number>()
+    const fairnessWindowStartIso = new Date(Date.now() - FAIRNESS_RECENT_ATTEMPT_WINDOW_MS).toISOString()
+
+    if (pricingFilteredCandidates.length > 0) {
+      const fairnessWalkerIds = pricingFilteredCandidates.map((candidate) => candidate.walkerId)
+      const { data: recentAttemptsRows, error: recentAttemptsError } = await supabase
+        .from('dispatch_attempts')
+        .select('walker_id, created_at')
+        .in('walker_id', fairnessWalkerIds)
+        .gte('created_at', fairnessWindowStartIso)
+
+      if (recentAttemptsError) {
+        console.error('[start-dispatch] failed loading recent dispatch attempts for fairness scoring', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          windowStart: fairnessWindowStartIso,
+          error: recentAttemptsError.message,
+        })
+      } else {
+        for (const row of (recentAttemptsRows ?? []) as Array<{ walker_id?: string | null }>) {
+          if (typeof row.walker_id !== 'string' || row.walker_id.length === 0) continue
+          recentAttemptCountsByWalkerId.set(
+            row.walker_id,
+            (recentAttemptCountsByWalkerId.get(row.walker_id) ?? 0) + 1,
+          )
+        }
+      }
+    }
+
     const affinityRankedCandidateOrder = rankDispatchCandidatesByFinalScore(
       pricingFilteredCandidates.map((candidate) => ({
         walkerId: candidate.walkerId,
@@ -774,6 +839,7 @@ serve(async (req) => {
         avgRating: toFiniteNumber(candidate.meta?.avg_rating),
         reviewCount: toFiniteNumber(candidate.meta?.review_count),
         attributeScore: typeof candidate.meta?.attribute_score === 'number' ? candidate.meta.attribute_score : 0,
+        recentAttemptCount: recentAttemptCountsByWalkerId.get(candidate.walkerId) ?? 0,
       })),
     )
 
@@ -804,6 +870,8 @@ serve(async (req) => {
                 : 'neutral_missing_attributes',
             attribute_matches:
               Array.isArray(candidate.meta?.attribute_matches) ? candidate.meta.attribute_matches : [],
+            cooldown_penalty: selection.cooldownPenalty,
+            recent_attempt_count: selection.recentAttemptCount,
             final_score: selection.finalScore,
           },
         }
