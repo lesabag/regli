@@ -170,11 +170,6 @@ export function useAuth() {
       mountedRef.current && profileRequestRef.current === requestId
 
     try {
-      console.log('[useAuth] loadProfile:start', {
-        requestId,
-        userId: currentUser.id,
-        email: currentUser.email ?? null,
-      })
       const { data, error } = await withTimeout(
         supabase
           .from('profiles')
@@ -224,12 +219,6 @@ export function useAuth() {
 
         clearOAuthOnboardingContext()
         const normalizedProfile = normalizeLoadedProfile(nextProfileData)
-        console.log('[useAuth] loadProfile:existing-profile', {
-          requestId,
-          userId: currentUser.id,
-          role: normalizedProfile.role,
-          serviceType: normalizedProfile.service_type ?? null,
-        })
         setProfile(normalizedProfile)
         setAuthError(null)
         return normalizedProfile
@@ -285,12 +274,6 @@ export function useAuth() {
 
       clearOAuthOnboardingContext()
       const normalizedProfile = normalizeLoadedProfile(insertedProfile as Profile)
-      console.log('[useAuth] loadProfile:created-profile', {
-        requestId,
-        userId: currentUser.id,
-        role: normalizedProfile.role,
-        serviceType: normalizedProfile.service_type ?? null,
-      })
       setProfile(normalizedProfile)
       setAuthError(null)
       return normalizedProfile
@@ -319,11 +302,6 @@ export function useAuth() {
         let sessionFromExchange: Session | null = null
 
         if (hasOAuthCode && url) {
-          console.log('[auth-oauth-callback] returned origin:', window.location.origin)
-          console.log('[useAuth] session before exchange', {
-            currentHref: window.location.href,
-          })
-          console.log('[auth-oauth-callback] code detected before getSession')
           const { data: exchangeData, error: exchangeError } = await withTimeout(
             supabase.auth.exchangeCodeForSession(window.location.href),
             SESSION_INIT_TIMEOUT_MS,
@@ -338,20 +316,9 @@ export function useAuth() {
               userId: exchangedUserId,
             })
             setAuthError(exchangeError.message)
-          } else {
-            console.log('[auth-oauth-callback] exchange success', {
-              userId: exchangedUserId,
-            })
-            console.log('[auth-oauth-callback] exchange session user:', {
-              userId: sessionFromExchange?.user?.id ?? null,
-              email: sessionFromExchange?.user?.email ?? null,
-            })
           }
 
           window.history.replaceState({}, document.title, window.location.pathname)
-          console.log('[auth-oauth-callback] cleaned URL')
-        } else {
-          console.log('[auth-oauth-callback] no code in URL')
         }
 
         if (oauthError) {
@@ -359,7 +326,6 @@ export function useAuth() {
           setAuthError(oauthError)
           if (typeof window !== 'undefined') {
             window.history.replaceState({}, document.title, window.location.pathname)
-            console.log('[auth-oauth-callback] cleaned callback URL')
           }
         }
 
@@ -382,29 +348,7 @@ export function useAuth() {
         const currentSession = data.session ?? sessionFromExchange
         const currentUser = currentSession?.user ?? null
 
-        console.log('[auth-oauth-callback] getSession after exchange:', {
-          hasSession: !!data.session,
-          userId: data.session?.user?.id ?? sessionFromExchange?.user?.id ?? null,
-          email: data.session?.user?.email ?? sessionFromExchange?.user?.email ?? null,
-        })
-
-        console.log('[useAuth] init:getSession', {
-          hasSession: !!currentSession,
-          userId: currentUser?.id ?? null,
-          email: currentUser?.email ?? null,
-        })
-
-        console.log('[useAuth] current user after initialization', {
-          userId: currentUser?.id ?? null,
-          email: currentUser?.email ?? null,
-          hasSession: !!currentSession,
-        })
-
         if (currentUser) {
-          console.log('[auth-oauth-callback] session user found', {
-            userId: currentUser.id,
-            email: currentUser.email ?? null,
-          })
           if (typeof window !== 'undefined') {
             window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
           }
@@ -436,16 +380,8 @@ export function useAuth() {
     // ✅ FIX: בלי await
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, newSession) => {
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
       const currentUser = newSession?.user ?? null
-
-      console.log('[useAuth] onAuthStateChange', {
-        event,
-        hasSession: !!newSession,
-        userId: currentUser?.id ?? null,
-        email: currentUser?.email ?? null,
-        currentProfileRequest: profileRequestRef.current,
-      })
 
       setSession(newSession)
       setUser(currentUser)
@@ -655,15 +591,6 @@ export function useAuth() {
       const redirectTo = Capacitor.isNativePlatform()
         ? 'regli://auth/callback'
         : `${window.location.origin}/`
-
-      console.log('[auth-oauth] using redirectTo:', window.location.origin)
-
-      console.log('[useAuth] signInWithGoogle:start', {
-        role: safeRole,
-        redirectTo,
-        serviceType: normalizedServiceTypes[0] ?? null,
-        native: Capacitor.isNativePlatform(),
-      })
 
       const { data, error } = await withTimeout(
         supabase.auth.signInWithOAuth({

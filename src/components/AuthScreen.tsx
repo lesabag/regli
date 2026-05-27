@@ -175,7 +175,6 @@ function readPersistedSignupStep(): SignupStep | null {
 
 function writePersistedSignupStep(step: SignupStep) {
   if (typeof window === 'undefined') return
-  console.log('[auth-oauth] saving signup step', step)
   window.sessionStorage.setItem(SIGNUP_STEP_STORAGE_KEY, step)
 }
 
@@ -198,13 +197,6 @@ export default function AuthScreen({
   const [submitting, setSubmitting] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
-
-  useEffect(() => {
-    console.log('[auth-build-check] AuthScreen mounted BUILD_20260527')
-    const restoredSignupStep = readPersistedSignupStep()
-    console.log('[auth-oauth] restoring signup step')
-    console.log('[auth-oauth] restored value:', restoredSignupStep)
-  }, [])
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
@@ -236,12 +228,6 @@ export default function AuthScreen({
     if (mode !== 'signup') return
     const normalizedStep = normalizeSignupStepForRole(safeSignupStep, role)
     if (normalizedStep !== signupStep) {
-      console.log('[auth-render] onboarding step reset', {
-        previousStep: signupStep,
-        normalizedStep,
-        role,
-        mode,
-      })
       setSignupStep(normalizedStep)
     }
   }, [mode, role, safeSignupStep, signupStep])
@@ -254,7 +240,6 @@ export default function AuthScreen({
   const activeStepIndex = Math.max(0, getStepIndex(mode, currentStep, signupSteps))
   const signupStepNumber = Math.max(1, signupSteps.indexOf(currentStep) + 1)
   const isCreateAccountStep = (mode === 'signin' || mode === 'signup') && currentStep === 'auth'
-  const authBranchLabel = 'REAL_STEP3_BRANCH_FIXED'
 
   const selectedServiceMeta = useMemo(
     () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
@@ -290,33 +275,6 @@ export default function AuthScreen({
   }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
-
-  useEffect(() => {
-    console.log('[auth-render] AuthScreen', {
-      mode,
-      currentStep,
-      signupStep,
-      safeSignupStep,
-      isCreateAccountStep,
-      role,
-      showEmailAuth,
-      authError: authError ?? null,
-    })
-  }, [authError, currentStep, isCreateAccountStep, mode, role, safeSignupStep, showEmailAuth, signupStep])
-
-  useEffect(() => {
-    if (currentStep === 'auth') {
-      console.log('[auth-render] AuthScreen create-account path')
-      console.log('[auth-render] Social button Google active', {
-        googleDisabled: false,
-        googleSubmitting,
-        submitting,
-        showEmailAuth,
-        mode,
-        currentStep,
-      })
-    }
-  }, [currentStep, googleSubmitting, mode, showEmailAuth, submitting])
 
   useEffect(() => {
     document.body.dataset.authOnboarding = 'true'
@@ -521,8 +479,6 @@ export default function AuthScreen({
 
   const handleGoogleContinue = async () => {
     if (googleSubmitting || submitting) return
-
-    console.log('[auth] visible google button clicked')
     setGoogleSubmitting(true)
     if (mode === 'signup' && typeof window !== 'undefined') {
       writePersistedSignupStep(currentStep)
@@ -550,7 +506,7 @@ export default function AuthScreen({
   }
 
   const renderSocialAuthButtons = () => (
-    <div style={socialStackStyle} data-google-auth-enabled="true" data-auth-branch={authBranchLabel}>
+    <div style={socialStackStyle}>
       <button
         type="button"
         onClick={() => {
@@ -1095,7 +1051,6 @@ export default function AuthScreen({
             <>
               <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
-              <div style={authBranchMarkerStyle}>{authBranchLabel}</div>
               <p style={subtitleStyle}>
                 {mode === 'signin'
                   ? 'Log in to continue where you left off.'
@@ -1516,15 +1471,6 @@ const subtitleStyle: CSSProperties = {
   fontSize: 13,
   lineHeight: 1.45,
   color: '#5E6B83',
-}
-
-const authBranchMarkerStyle: CSSProperties = {
-  marginTop: 8,
-  fontSize: 11,
-  lineHeight: 1.35,
-  fontWeight: 900,
-  letterSpacing: 0.18,
-  color: '#2563EB',
 }
 
 const welcomeHeroWrapStyle: CSSProperties = {
