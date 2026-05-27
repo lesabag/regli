@@ -559,7 +559,8 @@ export function useAuth() {
     []
   )
 
-  const signInWithGoogle = useCallback(async ({
+  const signInWithOAuthProvider = useCallback(async ({
+    provider,
     role,
     primaryService,
     locationAddress,
@@ -567,6 +568,7 @@ export function useAuth() {
     serviceTypes,
     serviceAttributes,
   }: {
+    provider: 'google' | 'apple'
     role: AppRole
     primaryService?: string
     locationAddress?: string
@@ -594,18 +596,20 @@ export function useAuth() {
 
       const { data, error } = await withTimeout(
         supabase.auth.signInWithOAuth({
-          provider: 'google',
+          provider,
           options: {
             redirectTo,
             skipBrowserRedirect: Capacitor.isNativePlatform(),
-            queryParams: {
-              access_type: 'offline',
-              prompt: 'select_account',
-            },
+            queryParams: provider === 'google'
+              ? {
+                  access_type: 'offline',
+                  prompt: 'select_account',
+                }
+              : undefined,
           },
         }),
         SESSION_INIT_TIMEOUT_MS,
-        'Google sign in timed out',
+        `${provider === 'google' ? 'Google' : 'Apple'} sign in timed out`,
       )
 
       if (error) {
@@ -617,7 +621,13 @@ export function useAuth() {
       if (Capacitor.isNativePlatform()) {
         if (!data?.url) {
           clearOAuthOnboardingContext()
-          setAuthError('Could not start Google sign in')
+          const message = provider === 'google'
+            ? 'Could not start Google sign in'
+            : 'Could not start Apple sign in'
+          if (provider === 'apple') {
+            console.error('[useAuth] Apple provider failed to start', message)
+          }
+          setAuthError(message)
           return { ok: false }
         }
 
@@ -627,10 +637,68 @@ export function useAuth() {
       return { ok: true }
     } catch (err) {
       clearOAuthOnboardingContext()
-      setAuthError(getErrorMessage(err, 'Failed to sign in with Google'))
+      if (provider === 'apple') {
+        console.error('[useAuth] Apple provider failed to start', err)
+      }
+      setAuthError(getErrorMessage(
+        err,
+        provider === 'google' ? 'Failed to sign in with Google' : 'Failed to sign in with Apple',
+      ))
       return { ok: false }
     }
   }, [])
+
+  const signInWithGoogle = useCallback(async ({
+    role,
+    primaryService,
+    locationAddress,
+    shortBio,
+    serviceTypes,
+    serviceAttributes,
+  }: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => {
+    return signInWithOAuthProvider({
+      provider: 'google',
+      role,
+      primaryService,
+      locationAddress,
+      shortBio,
+      serviceTypes,
+      serviceAttributes,
+    })
+  }, [signInWithOAuthProvider])
+
+  const signInWithApple = useCallback(async ({
+    role,
+    primaryService,
+    locationAddress,
+    shortBio,
+    serviceTypes,
+    serviceAttributes,
+  }: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => {
+    return signInWithOAuthProvider({
+      provider: 'apple',
+      role,
+      primaryService,
+      locationAddress,
+      shortBio,
+      serviceTypes,
+      serviceAttributes,
+    })
+  }, [signInWithOAuthProvider])
 
   const signOut = useCallback(async () => {
     profileRequestRef.current += 1
@@ -665,6 +733,7 @@ export function useAuth() {
     signUp,
     signIn,
     signInWithGoogle,
+    signInWithApple,
     signOut,
   }
 }

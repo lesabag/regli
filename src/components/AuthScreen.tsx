@@ -31,6 +31,14 @@ interface AuthScreenProps {
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
+  onAppleSignIn: (args: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => Promise<{ ok: boolean }>
   authError?: string | null
 }
 
@@ -182,6 +190,7 @@ export default function AuthScreen({
   onSignIn,
   onSignUp,
   onGoogleSignIn,
+  onAppleSignIn,
   authError,
 }: AuthScreenProps) {
   const [mode, setMode] = useState<OnboardingMode>(() => (readPersistedSignupStep() ? 'signup' : 'welcome'))
@@ -196,6 +205,7 @@ export default function AuthScreen({
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
+  const [appleSubmitting, setAppleSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
@@ -478,7 +488,7 @@ export default function AuthScreen({
   }
 
   const handleGoogleContinue = async () => {
-    if (googleSubmitting || submitting) return
+    if (googleSubmitting || appleSubmitting || submitting) return
     setGoogleSubmitting(true)
     if (mode === 'signup' && typeof window !== 'undefined') {
       writePersistedSignupStep(currentStep)
@@ -505,12 +515,40 @@ export default function AuthScreen({
     }
   }
 
+  const handleAppleContinue = async () => {
+    if (appleSubmitting || googleSubmitting || submitting) return
+    setAppleSubmitting(true)
+    if (mode === 'signup' && typeof window !== 'undefined') {
+      writePersistedSignupStep(currentStep)
+      window.sessionStorage.setItem(
+        'regli:onboarding-wow',
+        role === 'walker' ? 'provider' : 'customer',
+      )
+    }
+
+    const result = await onAppleSignIn({
+      role,
+      primaryService: isProvider ? selectedServiceMeta.label : undefined,
+      locationAddress: mode === 'signup' ? locationLabel : undefined,
+      shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
+      serviceTypes: onboardingServiceTypes,
+      serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
+    })
+
+    if (!result.ok && typeof window !== 'undefined' && mode === 'signup') {
+      window.sessionStorage.removeItem('regli:onboarding-wow')
+    }
+    if (!result.ok) {
+      setAppleSubmitting(false)
+    }
+  }
+
   const renderSocialAuthButtons = () => (
     <div style={socialStackStyle}>
       <button
         type="button"
         onClick={() => {
-          if (googleSubmitting || submitting) return
+          if (googleSubmitting || appleSubmitting || submitting) return
           void handleGoogleContinue()
         }}
         aria-busy={googleSubmitting}
@@ -526,10 +564,22 @@ export default function AuthScreen({
         </span>
       </button>
 
-      <button type="button" disabled style={{ ...socialButtonStyle, ...socialButtonDisabledStyle }}>
+      <button
+        type="button"
+        onClick={() => {
+          if (appleSubmitting || googleSubmitting || submitting) return
+          void handleAppleContinue()
+        }}
+        aria-busy={appleSubmitting}
+        style={{
+          ...socialButtonStyle,
+          ...(appleSubmitting ? socialButtonLoadingStyle : null),
+        }}
+      >
         <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
-        <span style={socialLabelStyle}>Continue with Apple</span>
-        <span style={comingSoonPillStyle}>Coming soon</span>
+        <span style={socialLabelStyle}>
+          {appleSubmitting ? 'Connecting to Apple...' : 'Continue with Apple'}
+        </span>
       </button>
     </div>
   )
@@ -1523,11 +1573,6 @@ const googleSocialButtonStyle: CSSProperties = {
   boxShadow: '0 8px 20px rgba(91, 124, 250, 0.08)',
 }
 
-const socialButtonDisabledStyle: CSSProperties = {
-  opacity: 1,
-  cursor: 'not-allowed',
-}
-
 const socialButtonLoadingStyle: CSSProperties = {
   opacity: 0.72,
   cursor: 'wait',
@@ -1556,16 +1601,6 @@ const socialLabelStyle: CSSProperties = {
   color: '#0F172A',
   fontSize: 14,
   fontWeight: 800,
-}
-
-const comingSoonPillStyle: CSSProperties = {
-  padding: '6px 9px',
-  borderRadius: 999,
-  background: 'rgba(91, 124, 250, 0.10)',
-  color: '#5B7CFA',
-  fontSize: 10,
-  fontWeight: 800,
-  whiteSpace: 'nowrap',
 }
 
 const featurePillStyle: CSSProperties = {

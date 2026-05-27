@@ -104,6 +104,7 @@ export default function App() {
     signIn,
     signUp,
     signInWithGoogle,
+    signInWithApple,
     signOut,
   } = useAuth()
 
@@ -326,6 +327,7 @@ export default function App() {
           onSignIn={signIn}
           onSignUp={signUp}
           onGoogleSignIn={signInWithGoogle}
+          onAppleSignIn={signInWithApple}
           authError={authError}
         />
       )}
