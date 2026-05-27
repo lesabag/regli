@@ -642,7 +642,9 @@ export function useAuth() {
     try {
       const redirectTo = Capacitor.isNativePlatform()
         ? 'regli://auth/callback'
-        : `${window.location.origin}/auth/callback`
+        : `${window.location.origin}/`
+
+      console.log('[auth-oauth] using redirectTo:', window.location.origin)
 
       console.log('[useAuth] signInWithGoogle:start', {
         role: safeRole,
