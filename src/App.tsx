@@ -97,6 +97,7 @@ function isWebOAuthCallbackInProgress() {
 export default function App() {
   const {
     session,
+    user,
     profile,
     loading,
     authError,
@@ -281,19 +282,49 @@ export default function App() {
       splashDone,
       loading,
       hasSession: !!session,
+      hasUser: !!user,
       hasSessionUser: !!session?.user,
       sessionUserId: session?.user?.id ?? null,
       sessionUserEmail: session?.user?.email ?? null,
+      userId: user?.id ?? null,
+      userEmail: user?.email ?? null,
       hasProfile: !!profile,
       authError: authError ?? null,
       oauthRoutePending,
       routeRole: profile?.role ?? null,
     })
-  }, [authError, loading, oauthRoutePending, profile, session, splashDone])
+  }, [authError, loading, oauthRoutePending, profile, session, splashDone, user])
 
-  const shouldShowAuthScreen = splashDone && !session?.user && !loading && !oauthRoutePending
-  const shouldShowProfileBootstrap = splashDone && !!session?.user && !profile && !authError
-  const shouldShowProfileError = splashDone && !!session?.user && !profile && authError
+  const hasAuthenticatedUser = !!(session?.user ?? user)
+  const shouldShowAuthScreen = splashDone && !hasAuthenticatedUser && !loading && !oauthRoutePending
+  const shouldShowProfileBootstrap = splashDone && hasAuthenticatedUser && !profile && !authError
+  const shouldShowProfileError = splashDone && hasAuthenticatedUser && !profile && authError
+
+  useEffect(() => {
+    console.log('[App] authenticated route decision:', {
+      splashDone,
+      loading,
+      oauthRoutePending,
+      hasAuthenticatedUser,
+      hasSession: !!session,
+      hasUser: !!user,
+      hasProfile: !!profile,
+      shouldShowAuthScreen,
+      shouldShowProfileBootstrap,
+      shouldShowProfileError,
+    })
+  }, [
+    hasAuthenticatedUser,
+    loading,
+    oauthRoutePending,
+    profile,
+    session,
+    shouldShowAuthScreen,
+    shouldShowProfileBootstrap,
+    shouldShowProfileError,
+    splashDone,
+    user,
+  ])
 
   useEffect(() => {
     if (shouldShowAuthScreen) {
@@ -303,13 +334,14 @@ export default function App() {
           loading,
           oauthRoutePending,
           hasSession: !!session,
+          hasUser: !!user,
           hasSessionUser: !!session?.user,
           hasProfile: !!profile,
           authError: authError ?? null,
         },
       })
     }
-  }, [authError, loading, oauthRoutePending, profile, session, shouldShowAuthScreen, splashDone])
+  }, [authError, loading, oauthRoutePending, profile, session, shouldShowAuthScreen, splashDone, user])
 
   return (
     <>

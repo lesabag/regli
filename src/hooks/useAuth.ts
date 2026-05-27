@@ -316,8 +316,10 @@ export function useAuth() {
         const url = typeof window !== 'undefined' ? new URL(window.location.href) : null
         const hasOAuthCode = !!url?.searchParams.has('code')
         const oauthError = url?.searchParams.get('error') || url?.searchParams.get('error_description')
+        let sessionFromExchange: Session | null = null
 
         if (hasOAuthCode && url) {
+          console.log('[auth-oauth-callback] returned origin:', window.location.origin)
           console.log('[useAuth] session before exchange', {
             currentHref: window.location.href,
           })
@@ -327,8 +329,8 @@ export function useAuth() {
             SESSION_INIT_TIMEOUT_MS,
             'OAuth session exchange timed out',
           )
-          const exchangedUserId =
-            ((exchangeData as { session?: { user?: { id?: string | null } } } | null)?.session?.user?.id ?? null)
+          sessionFromExchange = exchangeData.session ?? null
+          const exchangedUserId = sessionFromExchange?.user?.id ?? null
 
           if (exchangeError) {
             console.error('[auth-oauth-callback] exchangeCodeForSession failed', {
@@ -337,13 +339,17 @@ export function useAuth() {
             })
             setAuthError(exchangeError.message)
           } else {
-            console.log('[auth-oauth-callback] exchangeCodeForSession success', {
+            console.log('[auth-oauth-callback] exchange success', {
               userId: exchangedUserId,
+            })
+            console.log('[auth-oauth-callback] exchange session user:', {
+              userId: sessionFromExchange?.user?.id ?? null,
+              email: sessionFromExchange?.user?.email ?? null,
             })
           }
 
           window.history.replaceState({}, document.title, window.location.pathname)
-          console.log('[auth-oauth-callback] cleaned callback URL')
+          console.log('[auth-oauth-callback] cleaned URL')
         } else {
           console.log('[auth-oauth-callback] no code in URL')
         }
@@ -373,8 +379,14 @@ export function useAuth() {
           return
         }
 
-        const currentSession = data.session
+        const currentSession = data.session ?? sessionFromExchange
         const currentUser = currentSession?.user ?? null
+
+        console.log('[auth-oauth-callback] getSession after exchange:', {
+          hasSession: !!data.session,
+          userId: data.session?.user?.id ?? sessionFromExchange?.user?.id ?? null,
+          email: data.session?.user?.email ?? sessionFromExchange?.user?.email ?? null,
+        })
 
         console.log('[useAuth] init:getSession', {
           hasSession: !!currentSession,
