@@ -1,3 +1,5 @@
+import { Browser } from '@capacitor/browser'
+import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
@@ -13,6 +15,7 @@ interface Profile {
   id: string
   email: string | null
   full_name: string | null
+  avatar_url?: string | null
   role: ProfileRole
   short_bio?: string | null
   whatsapp_number?: string | null
@@ -25,6 +28,17 @@ interface Profile {
 
 const SESSION_INIT_TIMEOUT_MS = 8000
 const PROFILE_LOAD_TIMEOUT_MS = 8000
+const OAUTH_ONBOARDING_CONTEXT_KEY = 'regli:oauth-onboarding-context'
+const SIGNUP_STEP_STORAGE_KEY = 'regli_signup_step'
+
+type OAuthOnboardingContext = {
+  role: AppRole
+  primaryService?: string
+  locationAddress?: string
+  shortBio?: string
+  serviceTypes?: ProfileServiceType[]
+  serviceAttributes?: ServiceAttributes | null
+}
 
 function getErrorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback
@@ -42,17 +56,77 @@ function withTimeout<T>(promise: PromiseLike<T>, timeoutMs: number, message: str
   })
 }
 
+function readOAuthOnboardingContext(): OAuthOnboardingContext | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.sessionStorage.getItem(OAUTH_ONBOARDING_CONTEXT_KEY)
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as OAuthOnboardingContext
+    return {
+      ...parsed,
+      role: parsed.role === 'admin' ? 'client' : parsed.role,
+      serviceTypes: normalizeProfileServiceTypes(parsed.serviceTypes),
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeOAuthOnboardingContext(context: OAuthOnboardingContext) {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.setItem(OAUTH_ONBOARDING_CONTEXT_KEY, JSON.stringify({
+    ...context,
+    role: context.role === 'admin' ? 'client' : context.role,
+    serviceTypes: normalizeProfileServiceTypes(context.serviceTypes),
+  }))
+}
+
+function clearOAuthOnboardingContext() {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.removeItem(OAUTH_ONBOARDING_CONTEXT_KEY)
+}
+
+function getUserDisplayName(currentUser: User): string | null {
+  const metadataName = currentUser.user_metadata?.full_name
+    ?? currentUser.user_metadata?.name
+    ?? currentUser.user_metadata?.user_name
+
+  return typeof metadataName === 'string' && metadataName.trim().length > 0
+    ? metadataName.trim()
+    : null
+}
+
+function getUserAvatarUrl(currentUser: User): string | null {
+  const metadataAvatar = currentUser.user_metadata?.avatar_url
+    ?? currentUser.user_metadata?.picture
+
+  return typeof metadataAvatar === 'string' && metadataAvatar.trim().length > 0
+    ? metadataAvatar
+    : null
+}
+
 function getFallbackProfile(currentUser: User): Profile {
-  const fallbackServiceTypes = normalizeProfileServiceTypes(currentUser.user_metadata?.service_types)
+  const pendingContext = readOAuthOnboardingContext()
+  const fallbackServiceTypes = normalizeProfileServiceTypes(
+    currentUser.user_metadata?.service_types ?? pendingContext?.serviceTypes,
+  )
+  const fallbackRole = (currentUser.user_metadata?.role as ProfileRole | undefined)
+    ?? pendingContext?.role
+    ?? 'client'
   return {
     id: currentUser.id,
     email: currentUser.email ?? null,
-    full_name:
-      (currentUser.user_metadata?.full_name as string | undefined) ?? null,
-    role:
-      (currentUser.user_metadata?.role as ProfileRole | undefined) ?? 'client',
+    full_name: getUserDisplayName(currentUser),
+    avatar_url: getUserAvatarUrl(currentUser),
+    role: fallbackRole,
     short_bio:
-      (currentUser.user_metadata?.short_bio as string | undefined) ?? null,
+      (currentUser.user_metadata?.short_bio as string | undefined) ?? pendingContext?.shortBio ?? null,
+    primary_service:
+      (currentUser.user_metadata?.primary_service as string | undefined) ?? pendingContext?.primaryService ?? null,
+    location_address:
+      (currentUser.user_metadata?.location_address as string | undefined) ?? pendingContext?.locationAddress ?? null,
+    service_attributes: pendingContext?.serviceAttributes ?? null,
     service_types: fallbackServiceTypes,
     service_type:
       fallbackServiceTypes[0] ??
@@ -66,6 +140,7 @@ function normalizeLoadedProfile(profile: Partial<Profile> & { id: string }): Pro
     ...profile,
     email: profile.email ?? null,
     full_name: profile.full_name ?? null,
+    avatar_url: profile.avatar_url ?? null,
     role: profile.role ?? 'client',
     service_type: normalizedServiceTypes[0] ?? normalizeProfileServiceTypeFallback(profile.service_type),
     service_types: normalizedServiceTypes,
@@ -95,6 +170,11 @@ export function useAuth() {
       mountedRef.current && profileRequestRef.current === requestId
 
     try {
+      console.log('[useAuth] loadProfile:start', {
+        requestId,
+        userId: currentUser.id,
+        email: currentUser.email ?? null,
+      })
       const { data, error } = await withTimeout(
         supabase
           .from('profiles')
@@ -108,7 +188,48 @@ export function useAuth() {
       if (!isCurrentRequest()) return null
 
       if (!error && data) {
-        const normalizedProfile = normalizeLoadedProfile(data as Profile)
+        const patchPayload: Partial<Profile> = {}
+        const currentName = getUserDisplayName(currentUser)
+        const currentAvatarUrl = getUserAvatarUrl(currentUser)
+
+        if ((data.email ?? null) !== (currentUser.email ?? null) && currentUser.email) {
+          patchPayload.email = currentUser.email
+        }
+        if (!(typeof data.full_name === 'string' && data.full_name.trim()) && currentName) {
+          patchPayload.full_name = currentName
+        }
+        if (!(typeof data.avatar_url === 'string' && data.avatar_url.trim()) && currentAvatarUrl) {
+          patchPayload.avatar_url = currentAvatarUrl
+        }
+
+        let nextProfileData = data as Profile
+        if (Object.keys(patchPayload).length > 0) {
+          const { data: updatedProfile, error: updateError } = await withTimeout(
+            supabase
+              .from('profiles')
+              .update(patchPayload)
+              .eq('id', currentUser.id)
+              .select('*')
+              .single(),
+            PROFILE_LOAD_TIMEOUT_MS,
+            'Profile refresh timed out',
+          )
+
+          if (!isCurrentRequest()) return null
+
+          if (!updateError && updatedProfile) {
+            nextProfileData = updatedProfile as Profile
+          }
+        }
+
+        clearOAuthOnboardingContext()
+        const normalizedProfile = normalizeLoadedProfile(nextProfileData)
+        console.log('[useAuth] loadProfile:existing-profile', {
+          requestId,
+          userId: currentUser.id,
+          role: normalizedProfile.role,
+          serviceType: normalizedProfile.service_type ?? null,
+        })
         setProfile(normalizedProfile)
         setAuthError(null)
         return normalizedProfile
@@ -135,13 +256,52 @@ export function useAuth() {
         throw insertError
       }
 
+      const pendingContext = readOAuthOnboardingContext()
+      if ((fallbackProfile.role === 'walker' || pendingContext?.role === 'walker') && pendingContext?.serviceAttributes) {
+        const normalizedProviderCapabilities = buildProviderSignupCapabilities({
+          serviceAttributes: pendingContext.serviceAttributes,
+          shortBio: pendingContext.shortBio ?? null,
+        })
+        const providerCapabilityRows = buildProviderCapabilityRows(currentUser.id, normalizedProviderCapabilities)
+          .map((row) => ({
+            ...row,
+            updated_at: new Date().toISOString(),
+          }))
+
+        if (providerCapabilityRows.length > 0) {
+          const { error: capabilityError } = await withTimeout(
+            supabase
+              .from('provider_capabilities')
+              .upsert(providerCapabilityRows, { onConflict: 'provider_id,capability_scope' }),
+            PROFILE_LOAD_TIMEOUT_MS,
+            'Provider capabilities setup timed out',
+          )
+
+          if (capabilityError) {
+            console.warn('[useAuth] provider_capabilities upsert failed during oauth signup:', capabilityError.message)
+          }
+        }
+      }
+
+      clearOAuthOnboardingContext()
       const normalizedProfile = normalizeLoadedProfile(insertedProfile as Profile)
+      console.log('[useAuth] loadProfile:created-profile', {
+        requestId,
+        userId: currentUser.id,
+        role: normalizedProfile.role,
+        serviceType: normalizedProfile.service_type ?? null,
+      })
       setProfile(normalizedProfile)
       setAuthError(null)
       return normalizedProfile
     } catch (err) {
       if (!isCurrentRequest()) return null
 
+      console.warn('[useAuth] loadProfile:error', {
+        requestId,
+        userId: currentUser.id,
+        message: getErrorMessage(err, 'Failed to load profile'),
+      })
       setAuthError(getErrorMessage(err, 'Failed to load profile'))
       setProfile(fallbackProfile)
       return fallbackProfile
@@ -153,6 +313,50 @@ export function useAuth() {
 
     const init = async () => {
       try {
+        const url = typeof window !== 'undefined' ? new URL(window.location.href) : null
+        const hasOAuthCode = !!url?.searchParams.has('code')
+        const oauthError = url?.searchParams.get('error') || url?.searchParams.get('error_description')
+
+        if (hasOAuthCode && url) {
+          console.log('[useAuth] session before exchange', {
+            currentHref: window.location.href,
+          })
+          console.log('[auth-oauth-callback] code detected before getSession')
+          const { data: exchangeData, error: exchangeError } = await withTimeout(
+            supabase.auth.exchangeCodeForSession(window.location.href),
+            SESSION_INIT_TIMEOUT_MS,
+            'OAuth session exchange timed out',
+          )
+          const exchangedUserId =
+            ((exchangeData as { session?: { user?: { id?: string | null } } } | null)?.session?.user?.id ?? null)
+
+          if (exchangeError) {
+            console.error('[auth-oauth-callback] exchangeCodeForSession failed', {
+              message: exchangeError.message,
+              userId: exchangedUserId,
+            })
+            setAuthError(exchangeError.message)
+          } else {
+            console.log('[auth-oauth-callback] exchangeCodeForSession success', {
+              userId: exchangedUserId,
+            })
+          }
+
+          window.history.replaceState({}, document.title, window.location.pathname)
+          console.log('[auth-oauth-callback] cleaned callback URL')
+        } else {
+          console.log('[auth-oauth-callback] no code in URL')
+        }
+
+        if (oauthError) {
+          console.error('[auth-oauth-callback] OAuth error detected', oauthError)
+          setAuthError(oauthError)
+          if (typeof window !== 'undefined') {
+            window.history.replaceState({}, document.title, window.location.pathname)
+            console.log('[auth-oauth-callback] cleaned callback URL')
+          }
+        }
+
         const { data, error } = await withTimeout(
           supabase.auth.getSession(),
           SESSION_INIT_TIMEOUT_MS,
@@ -171,6 +375,28 @@ export function useAuth() {
 
         const currentSession = data.session
         const currentUser = currentSession?.user ?? null
+
+        console.log('[useAuth] init:getSession', {
+          hasSession: !!currentSession,
+          userId: currentUser?.id ?? null,
+          email: currentUser?.email ?? null,
+        })
+
+        console.log('[useAuth] current user after initialization', {
+          userId: currentUser?.id ?? null,
+          email: currentUser?.email ?? null,
+          hasSession: !!currentSession,
+        })
+
+        if (currentUser) {
+          console.log('[auth-oauth-callback] session user found', {
+            userId: currentUser.id,
+            email: currentUser.email ?? null,
+          })
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+          }
+        }
 
         setSession(currentSession)
         setUser(currentUser)
@@ -198,8 +424,16 @@ export function useAuth() {
     // ✅ FIX: בלי await
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    } = supabase.auth.onAuthStateChange((event, newSession) => {
       const currentUser = newSession?.user ?? null
+
+      console.log('[useAuth] onAuthStateChange', {
+        event,
+        hasSession: !!newSession,
+        userId: currentUser?.id ?? null,
+        email: currentUser?.email ?? null,
+        currentProfileRequest: profileRequestRef.current,
+      })
 
       setSession(newSession)
       setUser(currentUser)
@@ -207,6 +441,9 @@ export function useAuth() {
 
       if (currentUser) {
         loadProfile(currentUser) // ❗ בלי await
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+        }
       } else {
         profileRequestRef.current += 1
         setProfile(null)
@@ -374,6 +611,86 @@ export function useAuth() {
     []
   )
 
+  const signInWithGoogle = useCallback(async ({
+    role,
+    primaryService,
+    locationAddress,
+    shortBio,
+    serviceTypes,
+    serviceAttributes,
+  }: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => {
+    setAuthError(null)
+
+    const safeRole: AppRole = role === 'admin' ? 'client' : role
+    const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
+    writeOAuthOnboardingContext({
+      role: safeRole,
+      primaryService,
+      locationAddress,
+      shortBio,
+      serviceTypes: normalizedServiceTypes,
+      serviceAttributes: serviceAttributes ?? null,
+    })
+
+    try {
+      const redirectTo = Capacitor.isNativePlatform()
+        ? 'regli://auth/callback'
+        : `${window.location.origin}/auth/callback`
+
+      console.log('[useAuth] signInWithGoogle:start', {
+        role: safeRole,
+        redirectTo,
+        serviceType: normalizedServiceTypes[0] ?? null,
+        native: Capacitor.isNativePlatform(),
+      })
+
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo,
+            skipBrowserRedirect: Capacitor.isNativePlatform(),
+            queryParams: {
+              access_type: 'offline',
+              prompt: 'select_account',
+            },
+          },
+        }),
+        SESSION_INIT_TIMEOUT_MS,
+        'Google sign in timed out',
+      )
+
+      if (error) {
+        clearOAuthOnboardingContext()
+        setAuthError(error.message)
+        return { ok: false }
+      }
+
+      if (Capacitor.isNativePlatform()) {
+        if (!data?.url) {
+          clearOAuthOnboardingContext()
+          setAuthError('Could not start Google sign in')
+          return { ok: false }
+        }
+
+        await Browser.open({ url: data.url, windowName: '_self' })
+      }
+
+      return { ok: true }
+    } catch (err) {
+      clearOAuthOnboardingContext()
+      setAuthError(getErrorMessage(err, 'Failed to sign in with Google'))
+      return { ok: false }
+    }
+  }, [])
+
   const signOut = useCallback(async () => {
     profileRequestRef.current += 1
 
@@ -406,6 +723,7 @@ export function useAuth() {
     authError,
     signUp,
     signIn,
+    signInWithGoogle,
     signOut,
   }
 }

@@ -1,9 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Browser } from '@capacitor/browser'
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
+import { supabase } from './services/supabaseClient'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
 
@@ -81,6 +83,17 @@ function toDashboardRole(role: string | null | undefined): AppRole {
   return 'client'
 }
 
+function isWebOAuthCallbackInProgress() {
+  if (typeof window === 'undefined') return false
+  const url = new URL(window.location.href)
+  return (
+    url.pathname === '/auth/callback' ||
+    url.searchParams.has('code') ||
+    url.searchParams.has('error') ||
+    url.searchParams.has('error_description')
+  )
+}
+
 export default function App() {
   const {
     session,
@@ -89,6 +102,7 @@ export default function App() {
     authError,
     signIn,
     signUp,
+    signInWithGoogle,
     signOut,
   } = useAuth()
 
@@ -96,7 +110,12 @@ export default function App() {
   const [providerWowToken, setProviderWowToken] = useState(0)
   const [customerWowToken, setCustomerWowToken] = useState(0)
   const [stripeReturnToken, setStripeReturnToken] = useState(0)
+  const [oauthRoutePending, setOauthRoutePending] = useState(() => isWebOAuthCallbackInProgress())
   const handleSplashDone = useCallback(() => setSplashDone(true), [])
+
+  useEffect(() => {
+    console.log('[auth-build-check] App mounted BUILD_20260527')
+  }, [])
 
   // ── Analytics: identify + session ───────────────────────────
   const identifiedRef = useRef(false)
@@ -161,21 +180,39 @@ export default function App() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
 
-    const handleNativeUrl = (url: string | null | undefined) => {
+    const handleNativeUrl = async (url: string | null | undefined) => {
       const value = String(url ?? '')
       const isStripeReturn =
         value.startsWith('regli://stripe-connect-return') || value.includes('stripe_connect=return')
 
-      if (!isStripeReturn) return
+      if (value.startsWith('regli://auth/callback')) {
+        try {
+          const callbackUrl = new URL(value)
+          const authCode = callbackUrl.searchParams.get('code')
+          if (authCode) {
+            const { error } = await supabase.auth.exchangeCodeForSession(authCode)
+            if (error) {
+              console.warn('[App] OAuth code exchange failed', error.message)
+            }
+          }
+        } catch (error) {
+          console.warn('[App] OAuth callback handling failed', error)
+        } finally {
+          void Browser.close().catch(() => undefined)
+        }
+        return
+      }
 
-      console.log('[App] Native Stripe deep link received', { url: value })
-      setStripeReturnToken((current) => current + 1)
+      if (isStripeReturn) {
+        console.log('[App] Native Stripe deep link received', { url: value })
+        setStripeReturnToken((current) => current + 1)
+      }
     }
 
     let listener: PluginListenerHandle | null = null
 
     void NativeApp.addListener('appUrlOpen', ({ url }) => {
-      handleNativeUrl(url)
+      void handleNativeUrl(url)
     }).then((handle) => {
       listener = handle
     }).catch((error) => {
@@ -184,7 +221,7 @@ export default function App() {
 
     void NativeApp.getLaunchUrl()
       .then((result) => {
-        handleNativeUrl(result?.url)
+        void handleNativeUrl(result?.url)
       })
       .catch((error) => {
         console.warn('[App] getLaunchUrl unavailable', error)
@@ -231,6 +268,49 @@ export default function App() {
     }
   }, [profile])
 
+  useEffect(() => {
+    if (!oauthRoutePending) return
+    if (loading) return
+    if (session || authError || !isWebOAuthCallbackInProgress()) {
+      setOauthRoutePending(false)
+    }
+  }, [authError, loading, oauthRoutePending, session])
+
+  useEffect(() => {
+    console.log('[App] auth-routing-state', {
+      splashDone,
+      loading,
+      hasSession: !!session,
+      hasSessionUser: !!session?.user,
+      sessionUserId: session?.user?.id ?? null,
+      sessionUserEmail: session?.user?.email ?? null,
+      hasProfile: !!profile,
+      authError: authError ?? null,
+      oauthRoutePending,
+      routeRole: profile?.role ?? null,
+    })
+  }, [authError, loading, oauthRoutePending, profile, session, splashDone])
+
+  const shouldShowAuthScreen = splashDone && !session?.user && !loading && !oauthRoutePending
+  const shouldShowProfileBootstrap = splashDone && !!session?.user && !profile && !authError
+  const shouldShowProfileError = splashDone && !!session?.user && !profile && authError
+
+  useEffect(() => {
+    if (shouldShowAuthScreen) {
+      console.log('[auth-render] App -> AuthScreen path', {
+        reason: {
+          splashDone,
+          loading,
+          oauthRoutePending,
+          hasSession: !!session,
+          hasSessionUser: !!session?.user,
+          hasProfile: !!profile,
+          authError: authError ?? null,
+        },
+      })
+    }
+  }, [authError, loading, oauthRoutePending, profile, session, shouldShowAuthScreen, splashDone])
+
   return (
     <>
       {/* ── Layer 1: Main content (renders behind splash) ──────── */}
@@ -274,16 +354,17 @@ export default function App() {
       )}
 
       {/* Auth screen — only after splash (no map to morph into) */}
-      {splashDone && !session && (
+      {shouldShowAuthScreen && (
         <AuthScreen
           onSignIn={signIn}
           onSignUp={signUp}
+          onGoogleSignIn={signInWithGoogle}
           authError={authError}
         />
       )}
 
       {/* Session but no profile yet — bounded fallback for delayed/failed bootstrap */}
-      {splashDone && session && !profile && !authError && (
+      {shouldShowProfileBootstrap && (
         <div
           style={{
             minHeight: '100svh',
@@ -305,7 +386,7 @@ export default function App() {
         </div>
       )}
 
-      {splashDone && session && !profile && authError && (
+      {shouldShowProfileError && (
         <div
           style={{
             minHeight: '100svh',
