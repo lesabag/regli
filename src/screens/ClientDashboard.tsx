@@ -32,6 +32,11 @@ import {
   getInitialSuggestedBudgetILS,
   type ProviderPricingPreferenceInput,
 } from '../lib/pricing'
+import {
+  getProviderCapabilitySummary,
+  mergeProviderCapabilitiesSources,
+  type ProviderCapabilityRow,
+} from '../lib/providerCapabilities'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
 import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
@@ -96,13 +101,6 @@ function parseBudgetBelowMinimumError(
 
 function getNowPlus15LocalInput(): string {
   return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
-}
-
-function parseStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-    .filter(Boolean)
 }
 
 function resolveProviderServiceLabel(params: {
@@ -310,7 +308,11 @@ type ProviderHeroMeta = {
   experienceRange: string | null
   experienceYears: number | null
   languages: string[]
+  specialties: string[]
+  servicePreferences: string[]
   shortBio: string | null
+  preferredCustomerCount: number
+  repeatClientIndicator: boolean
   whatsappNumber: string | null
   whatsappNumberRaw: string | null
 }
@@ -319,6 +321,14 @@ type ProviderProfileSheetState = {
   providerId: string
   fallbackName: string
   requestedServiceType: string | null
+}
+
+function truncateCodePoints(value: string | null | undefined, maxChars: number): string | null {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return null
+  const chars = Array.from(trimmed)
+  if (chars.length <= maxChars) return trimmed
+  return `${chars.slice(0, maxChars).join('').trimEnd()}…`
 }
 
 interface RecurringBookingRow {
@@ -572,7 +582,11 @@ export default function ClientDashboard({
     experienceRange: null,
     experienceYears: null,
     languages: [],
+    specialties: [],
+    servicePreferences: [],
     shortBio: null,
+    preferredCustomerCount: 0,
+    repeatClientIndicator: false,
     whatsappNumber: null,
     whatsappNumberRaw: null,
   })
@@ -2254,7 +2268,11 @@ export default function ClientDashboard({
               experienceRange: null,
               experienceYears: null,
               languages: [],
+              specialties: [],
+              servicePreferences: [],
               shortBio: null,
+              preferredCustomerCount: 0,
+              repeatClientIndicator: false,
               whatsappNumber: null,
               whatsappNumberRaw: null,
             })
@@ -2263,7 +2281,7 @@ export default function ClientDashboard({
         }
 
       try {
-        const [profileResult, ratingsResult, completedResult] = await Promise.all([
+        const [profileResult, ratingsResult, completedResult, providerCapabilitiesResult, preferredCustomersResult] = await Promise.all([
           supabase
             .from('profiles')
             .select('*')
@@ -2278,6 +2296,14 @@ export default function ClientDashboard({
             .select('id', { count: 'exact', head: true })
             .eq('walker_id', activeProviderId)
             .eq('status', 'completed'),
+          supabase
+            .from('provider_capabilities')
+            .select('provider_id, capability_scope, capabilities, updated_at')
+            .eq('provider_id', activeProviderId),
+          supabase
+            .from('favorite_customers')
+            .select('client_id', { count: 'exact', head: true })
+            .eq('walker_id', activeProviderId),
         ])
 
         if (cancelled) return
@@ -2307,10 +2333,14 @@ export default function ClientDashboard({
           profileResult.error == null && profileResult.data && 'service_attributes' in profileResult.data
             ? (profileResult.data.service_attributes as Record<string, unknown> | null) ?? null
             : null
-        const providerProfileAttributes =
-          providerServiceAttributes && typeof providerServiceAttributes.provider_profile === 'object'
-            ? (providerServiceAttributes.provider_profile as Record<string, unknown>)
-            : null
+        const mergedProviderCapabilities = mergeProviderCapabilitiesSources({
+          rows: (providerCapabilitiesResult.data as ProviderCapabilityRow[] | null) ?? null,
+          fallbackServiceAttributes: providerServiceAttributes,
+          shortBio:
+            profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
+              ? (profileResult.data.short_bio as string | null) ?? null
+              : null,
+        })
         const providerFullName =
           profileResult.error == null && profileResult.data && 'full_name' in profileResult.data
             ? (profileResult.data.full_name as string | null) ?? null
@@ -2331,6 +2361,14 @@ export default function ClientDashboard({
               : null,
           isHebrew: isRtl,
         })
+        const capabilitySummary = getProviderCapabilitySummary({
+          capabilities: mergedProviderCapabilities,
+          serviceType: flow.activeJob?.service_type ?? null,
+          fallbackShortBio:
+            profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
+              ? (profileResult.data.short_bio as string | null) ?? null
+              : null,
+        })
 
         setProviderHeroMeta({
           fullName: providerFullName,
@@ -2341,24 +2379,14 @@ export default function ClientDashboard({
           rating: averageRating,
           completedCount: completedResult.count ?? 0,
           serviceLabel: providerServiceLabel,
-          experienceRange:
-            providerProfileAttributes && typeof providerProfileAttributes.experienceRange === 'string'
-              ? providerProfileAttributes.experienceRange
-              : null,
-          experienceYears:
-            providerProfileAttributes && typeof providerProfileAttributes.experienceYears === 'number'
-              ? providerProfileAttributes.experienceYears
-              : null,
-          languages:
-            providerProfileAttributes
-              ? parseStringArray(
-                  providerProfileAttributes.languagesSpoken ?? providerProfileAttributes.languages,
-                )
-              : [],
-          shortBio:
-            profileResult.error == null && profileResult.data && 'short_bio' in profileResult.data
-              ? (profileResult.data.short_bio as string | null) ?? null
-              : null,
+          experienceRange: capabilitySummary.experienceRange,
+          experienceYears: capabilitySummary.experienceYears,
+          languages: capabilitySummary.languages,
+          specialties: capabilitySummary.specialties,
+          servicePreferences: capabilitySummary.servicePreferences,
+          shortBio: capabilitySummary.shortBio,
+          preferredCustomerCount: preferredCustomersResult.count ?? 0,
+          repeatClientIndicator: (preferredCustomersResult.count ?? 0) > 0,
           whatsappNumber: providerWhatsAppRaw,
           whatsappNumberRaw: providerWhatsAppRaw,
         })
@@ -2377,7 +2405,11 @@ export default function ClientDashboard({
             experienceRange: null,
             experienceYears: null,
             languages: [],
+            specialties: [],
+            servicePreferences: [],
             shortBio: null,
+            preferredCustomerCount: 0,
+            repeatClientIndicator: false,
             whatsappNumber: null,
             whatsappNumberRaw: null,
           })
@@ -2421,7 +2453,7 @@ export default function ClientDashboard({
       setProviderProfileError(null)
 
       try {
-        const [profileResult, ratingsResult, completedResult] = await Promise.all([
+        const [profileResult, ratingsResult, completedResult, providerCapabilitiesResult, preferredCustomersResult] = await Promise.all([
           supabase
             .from('profiles')
             .select('*')
@@ -2436,6 +2468,14 @@ export default function ClientDashboard({
             .select('id', { count: 'exact', head: true })
             .eq('walker_id', providerProfileSheet.providerId)
             .eq('status', 'completed'),
+          supabase
+            .from('provider_capabilities')
+            .select('provider_id, capability_scope, capabilities, updated_at')
+            .eq('provider_id', providerProfileSheet.providerId),
+          supabase
+            .from('favorite_customers')
+            .select('client_id', { count: 'exact', head: true })
+            .eq('walker_id', providerProfileSheet.providerId),
         ])
 
         if (cancelled) return
@@ -2453,10 +2493,22 @@ export default function ClientDashboard({
         const serviceAttributes = rawProfile && 'service_attributes' in rawProfile
           ? (rawProfile.service_attributes as Record<string, unknown> | null) ?? null
           : null
-        const providerProfileAttributes =
-          serviceAttributes && typeof serviceAttributes.provider_profile === 'object'
-            ? (serviceAttributes.provider_profile as Record<string, unknown>)
-            : null
+        const mergedProviderCapabilities = mergeProviderCapabilitiesSources({
+          rows: (providerCapabilitiesResult.data as ProviderCapabilityRow[] | null) ?? null,
+          fallbackServiceAttributes: serviceAttributes,
+          shortBio:
+            rawProfile && 'short_bio' in rawProfile
+              ? (rawProfile.short_bio as string | null) ?? null
+              : null,
+        })
+        const capabilitySummary = getProviderCapabilitySummary({
+          capabilities: mergedProviderCapabilities,
+          serviceType: providerProfileSheet.requestedServiceType,
+          fallbackShortBio:
+            rawProfile && 'short_bio' in rawProfile
+              ? (rawProfile.short_bio as string | null) ?? null
+              : null,
+        })
 
         setProviderProfileData({
           fullName:
@@ -2485,24 +2537,14 @@ export default function ClientDashboard({
                 : null,
             isHebrew: isRtl,
           }),
-          experienceRange:
-            providerProfileAttributes && typeof providerProfileAttributes.experienceRange === 'string'
-              ? providerProfileAttributes.experienceRange
-              : null,
-          experienceYears:
-            providerProfileAttributes && typeof providerProfileAttributes.experienceYears === 'number'
-              ? providerProfileAttributes.experienceYears
-              : null,
-          languages:
-            providerProfileAttributes
-              ? parseStringArray(
-                  providerProfileAttributes.languagesSpoken ?? providerProfileAttributes.languages,
-                )
-              : [],
-          shortBio:
-            rawProfile && 'short_bio' in rawProfile
-              ? (rawProfile.short_bio as string | null) ?? null
-              : null,
+          experienceRange: capabilitySummary.experienceRange,
+          experienceYears: capabilitySummary.experienceYears,
+          languages: capabilitySummary.languages,
+          specialties: capabilitySummary.specialties,
+          servicePreferences: capabilitySummary.servicePreferences,
+          shortBio: capabilitySummary.shortBio,
+          preferredCustomerCount: preferredCustomersResult.count ?? 0,
+          repeatClientIndicator: (preferredCustomersResult.count ?? 0) > 0,
           whatsappNumber:
             rawProfile && 'whatsapp_number' in rawProfile
               ? (rawProfile.whatsapp_number as string | null) ?? null
@@ -4776,7 +4818,7 @@ export default function ClientDashboard({
                     walkerAvatarUrl={providerHeroMeta.avatarUrl}
                     walkerRating={providerHeroMeta.rating}
                     completedCount={providerHeroMeta.completedCount}
-                    walkerBio={providerHeroMeta.shortBio}
+                    walkerBio={truncateCodePoints(providerHeroMeta.shortBio, 56)}
                     whatsappAvailable={!!activeProviderWhatsAppPhone}
                     onOpenProfile={
                       flow.activeJob?.walker_id
@@ -5335,8 +5377,12 @@ export default function ClientDashboard({
                 experienceRange={providerProfileData.experienceRange}
                 experienceYears={providerProfileData.experienceYears}
                 languages={providerProfileData.languages}
+                specialties={providerProfileData.specialties}
+                servicePreferences={providerProfileData.servicePreferences}
                 shortBio={providerProfileData.shortBio}
                 completedCount={providerProfileData.completedCount}
+                preferredCustomerCount={providerProfileData.preferredCustomerCount}
+                repeatClientIndicator={providerProfileData.repeatClientIndicator}
                 whatsappAvailable={!!providerProfileData.whatsappNumber}
                 onClose={() => {
                   setProviderProfileSheet(null)

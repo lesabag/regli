@@ -223,7 +223,7 @@ const resources = {
         whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'About me saved.',
         bioSaveError: 'Could not save your bio.',
-        bioHint: '{{count}} / 240',
+        bioHint: '{{count}} / 160',
       },
       providerPublicProfile: {
         viewProfile: 'View profile',
@@ -234,9 +234,14 @@ const resources = {
         services: 'Services',
         completedCount_one: '{{count}} completed',
         completedCount_other: '{{count}} completed',
+        preferredCustomers_one: '{{count}} repeat client',
+        preferredCustomers_other: '{{count}} repeat clients',
+        repeatClientIndicator: 'Preferred by repeat clients',
         whatsappAvailable: 'WhatsApp',
         loading: 'Loading profile...',
         unavailable: 'Could not load this provider profile right now.',
+        specialtiesLabel: 'Specialties',
+        servicePreferencesLabel: 'Service preferences',
         experienceYears_one: '{{count}} year',
         experienceYears_other: '{{count}} years',
         experienceRanges: {
@@ -252,6 +257,16 @@ const resources = {
           russian: 'Russian',
           arabic: 'Arabic',
           french: 'French',
+        },
+        specialties: {
+          dogSizes: 'Comfortable with multiple dog sizes',
+          highEnergyDogs: 'High-energy dogs',
+          ageRangeCare: 'Wide age-range care',
+        },
+        servicePreferences: {
+          dogSizes: 'Dog sizes: {{value}}',
+          energyLevels: 'Energy levels: {{value}}',
+          ageRanges: 'Age ranges: {{value}}',
         },
       },
       tracking: {
@@ -635,7 +650,7 @@ const resources = {
         whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'הטקסט נשמר.',
         bioSaveError: 'לא הצלחנו לשמור את הטקסט.',
-        bioHint: '{{count}} / 240',
+        bioHint: '{{count}} / 160',
       },
       providerPublicProfile: {
         viewProfile: 'צפייה בפרופיל',
@@ -646,9 +661,14 @@ const resources = {
         services: 'שירותים',
         completedCount_one: '{{count}} הושלם',
         completedCount_other: '{{count}} הושלמו',
+        preferredCustomers_one: '{{count}} לקוח חוזר',
+        preferredCustomers_other: '{{count}} לקוחות חוזרים',
+        repeatClientIndicator: 'מועדף על לקוחות חוזרים',
         whatsappAvailable: 'וואטסאפ',
         loading: 'טוענים פרופיל...',
         unavailable: 'לא הצלחנו לטעון את פרופיל הספק כרגע.',
+        specialtiesLabel: 'התמחויות',
+        servicePreferencesLabel: 'העדפות שירות',
         experienceYears_one: '{{count}} שנה',
         experienceYears_other: '{{count}} שנים',
         experienceRanges: {
@@ -664,6 +684,16 @@ const resources = {
           russian: 'רוסית',
           arabic: 'ערבית',
           french: 'צרפתית',
+        },
+        specialties: {
+          dogSizes: 'נוח עם כמה גדלי כלבים',
+          highEnergyDogs: 'כלבים עתירי אנרגיה',
+          ageRangeCare: 'טיפול בטווח גילאים רחב',
+        },
+        servicePreferences: {
+          dogSizes: 'גדלי כלבים: {{value}}',
+          energyLevels: 'רמות אנרגיה: {{value}}',
+          ageRanges: 'טווחי גילאים: {{value}}',
         },
       },
       tracking: {

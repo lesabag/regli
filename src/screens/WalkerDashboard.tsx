@@ -42,7 +42,7 @@ import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 import { hasProviderIssue } from '../utils/completionReview'
 
 const REQUEST_TIMEOUT_SECONDS = 20
-type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings'
+type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings' | 'preferredCustomers'
 type EarningsPeriod = 'today' | 'week' | 'month'
 
 type AppRole = 'client' | 'walker' | 'admin'
@@ -59,7 +59,19 @@ type AvailabilityFormRow = {
 
 type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
 type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'about' | 'capabilities' | 'preferredCustomers'
-const PROVIDER_BIO_MAX_CHARS = 80
+type ProviderPricingSummaryPreferenceRow = {
+  service_type: ProfileServiceType
+  booking_type: 'asap' | 'scheduled'
+  is_enabled: boolean
+  pricing_model: 'time_based' | 'fixed_visit' | 'visit_based' | 'hybrid' | null
+  hourly_rate_min: number | null
+  hourly_rate_preferred: number | null
+  visit_fee_min: number | null
+  visit_fee_preferred: number | null
+  service_radius_km: number | null
+}
+const PROVIDER_BIO_MAX_CHARS = 160
+const PROVIDER_BIO_MENU_PREVIEW_MAX_CHARS = 60
 
 const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
 const DEFAULT_AVAILABILITY_START = '09:00'
@@ -365,6 +377,35 @@ function trimToCodePoints(value: string, maxChars: number): string {
   return Array.from(value).slice(0, maxChars).join('')
 }
 
+function truncateCodePoints(value: string | null | undefined, maxChars: number): string | null {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return null
+  const chars = Array.from(trimmed)
+  if (chars.length <= maxChars) return trimmed
+  return `${chars.slice(0, maxChars).join('').trimEnd()}…`
+}
+
+function formatProviderPricingRange(params: {
+  isHebrew: boolean
+  min: number | null
+  preferred: number | null
+}): string {
+  const { isHebrew, min, preferred } = params
+  if (min != null && preferred != null) return `₪${Math.round(min)}–₪${Math.round(preferred)}`
+  if (min != null) return isHebrew ? `החל מ־₪${Math.round(min)}` : `From ₪${Math.round(min)}`
+  if (preferred != null) return isHebrew ? `סביב ₪${Math.round(preferred)}` : `Around ₪${Math.round(preferred)}`
+  return isHebrew ? 'לא הוגדר' : 'Not set'
+}
+
+function formatProviderServiceRangeLabel(params: {
+  isHebrew: boolean
+  radiusKm: number | null
+}): string {
+  const { isHebrew, radiusKm } = params
+  if (radiusKm == null) return isHebrew ? 'ללא הגבלה' : 'Unlimited'
+  return isHebrew ? `${Math.round(radiusKm)} ק״מ` : `${Math.round(radiusKm)} km`
+}
+
 export default function WalkerDashboard({
   profile,
   onSignOut,
@@ -380,10 +421,6 @@ export default function WalkerDashboard({
   const isHebrew = i18n.resolvedLanguage === 'he'
   const greetingLabel = isRtl ? `היי, ${walkerName}` : `Hey, ${walkerName}`
   const preferredCustomersLabel = isRtl ? 'לקוחות מועדפים' : 'Preferred customers'
-  const preferredCustomersSubtitle = isRtl
-    ? 'לקוחות ששמרת לגישה מהירה.'
-    : 'Saved customers for quick reference.'
-  const noPreferredCustomersLabel = isRtl ? 'אין עדיין לקוחות מועדפים.' : 'No preferred customers yet.'
   const profileServiceOptions = useMemo(() => getProfileServiceOptions(isHebrew), [isHebrew])
   const profileServiceIconByType = useMemo(
     () => new Map(profileServiceOptions.map((option) => [option.value, option.icon])),
@@ -490,7 +527,10 @@ export default function WalkerDashboard({
   const [providerBioSaving, setProviderBioSaving] = useState(false)
   const [providerBioSavedAt, setProviderBioSavedAt] = useState(0)
   const [providerBioError, setProviderBioError] = useState<string | null>(null)
+  const [pricingSummaryRows, setPricingSummaryRows] = useState<ProviderPricingSummaryPreferenceRow[]>([])
+  const [openPricingSummaryTooltip, setOpenPricingSummaryTooltip] = useState<'asap' | 'scheduled' | null>(null)
   const availabilityRowsRef = useRef(availabilityRows)
+  const pricingSummaryTooltipRef = useRef<HTMLSpanElement | null>(null)
   const [expandedAvailabilityKey, setExpandedAvailabilityKey] = useState<string | null>(null)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<SettingsSectionKey, boolean>>({
     language: false,
@@ -554,6 +594,10 @@ export default function WalkerDashboard({
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
   const providerBioCharCount = useMemo(() => countCodePoints(providerBio), [providerBio])
+  const providerBioMenuPreview = useMemo(
+    () => truncateCodePoints(providerBio, PROVIDER_BIO_MENU_PREVIEW_MAX_CHARS),
+    [providerBio],
+  )
   const capDirty = useMemo(() => {
     const providerProfileSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {}
     const dogSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'dog_walker') ?? {}
@@ -727,6 +771,57 @@ export default function WalkerDashboard({
   useEffect(() => {
     availabilityRowsRef.current = availabilityRows
   }, [availabilityRows])
+
+  useEffect(() => {
+    if (openPricingSummaryTooltip == null) return undefined
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (pricingSummaryTooltipRef.current?.contains(target)) return
+      setOpenPricingSummaryTooltip(null)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenPricingSummaryTooltip(null)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openPricingSummaryTooltip])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadPricingSummary = async () => {
+      const { data, error } = await supabase
+        .from('provider_service_preferences')
+        .select('service_type, booking_type, is_enabled, pricing_model, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, service_radius_km')
+        .eq('provider_id', profile.id)
+
+      if (cancelled) return
+      if (error) {
+        console.warn('[WalkerDashboard] failed to load provider pricing summary:', error.message)
+        setPricingSummaryRows([])
+        return
+      }
+
+      setPricingSummaryRows((data as ProviderPricingSummaryPreferenceRow[] | null) ?? [])
+    }
+
+    void loadPricingSummary()
+
+    return () => {
+      cancelled = true
+    }
+  }, [profile.id])
 
   const loadAvailability = useCallback(async (): Promise<ProviderAvailabilityRow[] | null> => {
     try {
@@ -1787,28 +1882,6 @@ export default function WalkerDashboard({
     profile.id,
   ])
 
-  const preferredCustomers = useMemo(() => {
-    return Array.from(preferredCustomerIds).map((key) => ({
-      key,
-      name:
-        preferredCustomerNames.get(key) ||
-        (key === completionClientKey ? completionClientName : isHebrew ? 'לקוח' : 'Customer'),
-      avatarUrl:
-        preferredCustomerAvatars.get(key) ??
-        (key === completionClientKey ? completionClientAvatarUrl : null),
-    }))
-  }, [
-    completionClientAvatarUrl,
-    completionClientKey,
-    completionClientName,
-    isHebrew,
-    completionClientMapAvatar,
-    completionClientMapName,
-    preferredCustomerAvatars,
-    preferredCustomerIds,
-    preferredCustomerNames,
-  ])
-
   const handleOnlineToggle = useCallback(async () => {
     if (!hasSelectedProfileService) {
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
@@ -2013,9 +2086,54 @@ export default function WalkerDashboard({
     todayAvailabilityTitle,
   ])
 
+  const pricingSummaryCardRows = useMemo(() => {
+    const primaryServiceType = profileServiceTypes[0] ?? null
+    const scopedRows = primaryServiceType
+      ? pricingSummaryRows.filter((row) => row.service_type === primaryServiceType)
+      : pricingSummaryRows
+
+    const sourceRows = scopedRows.length > 0 ? scopedRows : pricingSummaryRows
+    const rowsByBookingType = new Map(
+      sourceRows
+        .filter((row) => row.is_enabled)
+        .map((row) => [row.booking_type, row] as const),
+    )
+
+    return (['asap', 'scheduled'] as const)
+      .map((bookingType) => {
+        const row = rowsByBookingType.get(bookingType)
+        if (!row) return null
+        const normalizedPricingModel =
+          row.pricing_model === 'fixed_visit' || row.pricing_model === 'visit_based' ? 'fixed_visit' : 'time_based'
+        const min = normalizedPricingModel === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min
+        const preferred = normalizedPricingModel === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred
+        const isUnlimited = row.service_radius_km == null
+        return {
+          bookingType,
+          label: bookingType === 'asap' ? 'ASAP' : (isHebrew ? 'מתוזמן' : 'Scheduled'),
+          priceLabel: formatProviderPricingRange({ isHebrew, min, preferred }),
+          rangeLabel: formatProviderServiceRangeLabel({ isHebrew, radiusKm: row.service_radius_km }),
+          tooltipLabel: isUnlimited
+            ? (isHebrew ? 'מומלץ לספקים חדשים.' : 'Recommended for new providers.')
+            : (isHebrew ? 'לקוחות מחוץ לאזור הזה לא יראו אתכם.' : 'Customers outside this area will not see you.'),
+        }
+      })
+      .filter((row): row is NonNullable<typeof row> => row != null)
+  }, [isHebrew, pricingSummaryRows, profileServiceTypes])
+
+  const isHomeDashboard = flow.screenState === 'offline' || flow.screenState === 'waiting'
+  const preferredCustomerItems = useMemo(
+    () => Array.from(preferredCustomerIds).map((clientId) => ({
+      id: clientId,
+      name: preferredCustomerNames.get(clientId)?.trim() || (isHebrew ? 'לקוח' : 'Customer'),
+      avatarUrl: preferredCustomerAvatars.get(clientId) ?? null,
+    })),
+    [isHebrew, preferredCustomerAvatars, preferredCustomerIds, preferredCustomerNames],
+  )
+
   const renderHomeDashboard = useCallback((connected: boolean) => (
-    <div className="sheet-state-enter">
-      <div style={homeDashboardTopStackStyle}>
+    <div className="sheet-state-enter" style={homeDashboardShellStyle}>
+      <div style={homeDashboardStatusSectionStyle}>
         <div style={{ ...homeStatusCardStyle, ...(connected ? homeStatusCardOnlineStyle : null) }}>
           <div style={homeStatusContentStyle}>
             <div style={homeStatusBadgeStyle}>
@@ -2044,72 +2162,117 @@ export default function WalkerDashboard({
             </button>
           </div>
         </div>
-
-        {renderTodayAvailabilityCard()}
-
-        <button
-          type="button"
-          onClick={() => openSettingsSection('pricing')}
-          style={todayAvailabilityPricingCardStyle}
-        >
-          <div style={todayAvailabilityPricingCardTextStyle}>
-            <div style={todayAvailabilityTitleStyle}>{todayAvailabilityPricingLabel}</div>
-            <div style={todayAvailabilityPricingSubtitleStyle}>
-              {isHebrew
-                ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
-                : 'Manage pricing ranges and service preferences for each booking type.'}
-            </div>
-          </div>
-          <span style={todayAvailabilityManageChevronStyle}>›</span>
-        </button>
       </div>
 
-      <div style={{ ...dashboardSectionStyle, ...walletSectionStyle }}>
-        <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
-        <div style={walletDashboardGridStyle}>
-          <div style={walletDashboardMetricCardStyle}>
-            <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
-            <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
-          </div>
-          <div style={walletDashboardMetricCardStyle}>
-            <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending balance'}</div>
-            <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
-          </div>
-        </div>
-        <div style={walletDashboardStatusRowStyle}>
-          {flow.connectLoading ? (
-            <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
-          ) : walletPayoutReady ? (
-            <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
-          ) : (
-            <>
-              <span style={walletStatusWarningStyle}>
-                {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
-              </span>
+      <div style={homeDashboardSummaryStackStyle}>
+        <div style={homeDashboardMiddleGroupStyle}>
+          {renderTodayAvailabilityCard()}
+
+          <div style={todayAvailabilityPricingCardStyle}>
+            <div style={todayAvailabilityHeaderStyle}>
+              <div style={todayAvailabilityTitleStyle}>{todayAvailabilityPricingLabel}</div>
               <button
                 type="button"
-                onClick={() => {
-                  setPayoutCtaAnimationStopped(true)
-                  void handleStripeSetup(false)
-                }}
-                disabled={isCheckingPayout}
-                style={{
-                  ...walletSetupButtonStyle,
-                  ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
-                  ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
-                  ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
-                }}
+                onClick={() => openSettingsSection('pricing')}
+                style={todayAvailabilityManageButtonStyle}
               >
-                {isCheckingPayout
-                  ? isHebrew
-                    ? 'בודק...'
-                    : 'Checking...'
-                  : isHebrew
-                    ? 'הגדר תשלומים'
-                    : 'Set up payouts'}
+                <span>{isHebrew ? 'נהל תמחור' : 'Manage pricing'}</span>
+                <span style={todayAvailabilityManageChevronStyle}>›</span>
               </button>
-            </>
-          )}
+            </div>
+            <div style={todayAvailabilityListStyle}>
+              {pricingSummaryCardRows.length > 0 ? pricingSummaryCardRows.map((item, index) => (
+                <div
+                  key={item.bookingType}
+                  style={{
+                    ...todayAvailabilityRowStyle,
+                    ...pricingSummaryRowStyle,
+                    ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+                  }}
+                >
+                  <span style={pricingSummaryBookingTypeStyle}>{item.label}</span>
+                  <span style={pricingSummaryPriceStyle}>{item.priceLabel}</span>
+                  <span
+                    ref={openPricingSummaryTooltip === item.bookingType ? pricingSummaryTooltipRef : null}
+                    style={pricingSummaryRangeWrapStyle}
+                  >
+                    <span style={pricingSummaryRangeLabelStyle}>{item.rangeLabel}</span>
+                    <button
+                      type="button"
+                      aria-label={item.tooltipLabel}
+                      aria-expanded={openPricingSummaryTooltip === item.bookingType}
+                      onClick={() => setOpenPricingSummaryTooltip((current) => (
+                        current === item.bookingType ? null : item.bookingType
+                      ))}
+                      style={pricingSummaryInfoButtonStyle}
+                    >
+                      <span style={pricingSummaryInfoIconStyle}>ⓘ</span>
+                    </button>
+                    {openPricingSummaryTooltip === item.bookingType ? (
+                      <span role="tooltip" style={pricingSummaryTooltipBubbleStyle}>
+                        {item.tooltipLabel}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              )) : (
+                <div style={todayAvailabilityPricingSubtitleStyle}>
+                  {isHebrew
+                    ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
+                    : 'Manage pricing ranges and service preferences for each booking type.'}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ ...dashboardSectionStyle, ...walletSectionStyle, ...homeDashboardWalletSectionStyle }}>
+          <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
+          <div style={walletDashboardGridStyle}>
+            <div style={walletDashboardMetricCardStyle}>
+              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
+              <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
+            </div>
+            <div style={walletDashboardMetricCardStyle}>
+              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending balance'}</div>
+              <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
+            </div>
+          </div>
+          <div style={walletDashboardStatusRowStyle}>
+            {flow.connectLoading ? (
+              <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
+            ) : walletPayoutReady ? (
+              <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
+            ) : (
+              <>
+                <span style={walletStatusWarningStyle}>
+                  {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPayoutCtaAnimationStopped(true)
+                    void handleStripeSetup(false)
+                  }}
+                  disabled={isCheckingPayout}
+                  style={{
+                    ...walletSetupButtonStyle,
+                    ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
+                    ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
+                    ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
+                  }}
+                >
+                  {isCheckingPayout
+                    ? isHebrew
+                      ? 'בודק...'
+                      : 'Checking...'
+                    : isHebrew
+                      ? 'הגדר תשלומים'
+                      : 'Set up payouts'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -2134,6 +2297,7 @@ export default function WalkerDashboard({
     walletPayoutReady,
     walletTitle,
     todayAvailabilityPricingLabel,
+    pricingSummaryCardRows,
   ])
 
   return (
@@ -2192,9 +2356,25 @@ export default function WalkerDashboard({
           }
         }
       `}</style>
-      <div className="walker-dashboard-screen" style={screenStyle}>
-        <div style={dashboardBackgroundStyle}>
-          <div style={headerStyle}>
+      <div
+        className="walker-dashboard-screen"
+        style={{
+          ...screenStyle,
+          ...(isHomeDashboard ? homeScreenStyle : null),
+        }}
+      >
+        <div
+          style={{
+            ...dashboardBackgroundStyle,
+            ...(isHomeDashboard ? homeDashboardBackgroundStyle : null),
+          }}
+        >
+          <div
+            style={{
+              ...headerStyle,
+              ...(isHomeDashboard ? homeHeaderStyle : null),
+            }}
+          >
             <div style={headerTopRowStyle}>
               <div style={headerIdentityRowStyle}>
                 <ProfileAvatar
@@ -2370,7 +2550,9 @@ export default function WalkerDashboard({
                             ? t('menu.futureOrders')
                             : menuPage === 'earnings'
                               ? (isHebrew ? 'רווחים' : 'Earnings')
-                            : t('menu.menu')}
+                              : menuPage === 'preferredCustomers'
+                                ? preferredCustomersLabel
+                              : t('menu.menu')}
                     </span>
                   </div>
                 </div>
@@ -2534,6 +2716,36 @@ export default function WalkerDashboard({
                       </div>
                     )}
                   </BurgerSection>
+                ) : menuPage === 'preferredCustomers' ? (
+                  <BurgerSection
+                    title={preferredCustomersLabel}
+                    subtitle={isHebrew ? 'לקוחות שמורים לעיון מהיר.' : 'Saved customers for quick reference'}
+                  >
+                    {preferredCustomerItems.length === 0 ? (
+                      <div style={emptyMenuCardStyle}>
+                        {isHebrew ? 'אין לקוחות מועדפים עדיין' : 'No preferred customers yet'}
+                      </div>
+                    ) : (
+                      <div style={preferredCustomerListStyle}>
+                        {preferredCustomerItems.map((item) => (
+                          <div key={item.id} style={preferredCustomerCardStyle}>
+                            <div style={preferredCustomerIdentityStyle}>
+                              <ProfileAvatar
+                                url={item.avatarUrl}
+                                name={item.name}
+                                size={44}
+                                borderRadius={16}
+                              />
+                              <div style={preferredCustomerTextStyle}>
+                                <div style={preferredCustomerNameStyle}>{item.name}</div>
+                                <div style={preferredCustomerMetaStyle}>{preferredCustomersLabel}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </BurgerSection>
                 ) : menuPage === 'settings' ? (
                   <>
                     <SettingsCollapsibleSection
@@ -2567,6 +2779,64 @@ export default function WalkerDashboard({
                         >
                           עברית
                         </button>
+                      </div>
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
+                      title={t('providerProfile.aboutMe')}
+                      subtitle={t('providerProfile.aboutMeSubtitle')}
+                      open={settingsSectionsOpen.about}
+                      onToggle={() => toggleSettingsSection('about')}
+                    >
+                      <div style={providerBioSectionStyle}>
+                        <div style={providerBioFieldStyle}>
+                          <div style={providerBioFieldLabelStyle}>{t('providerProfile.whatsappNumber')}</div>
+                          <input
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
+                            value={providerWhatsAppNumber}
+                            onChange={(event) => {
+                              setProviderWhatsAppNumber(event.target.value)
+                              setProviderBioSavedAt(0)
+                              setProviderBioError(null)
+                            }}
+                            placeholder={t('providerProfile.whatsappNumberPlaceholder')}
+                            style={providerBioInputStyle}
+                          />
+                        </div>
+                        <textarea
+                          value={providerBio}
+                          onChange={(event) => {
+                            setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
+                            setProviderBioSavedAt(0)
+                            setProviderBioError(null)
+                          }}
+                          placeholder={t('providerProfile.aboutMePlaceholder')}
+                          style={providerBioTextareaStyle}
+                          rows={3}
+                        />
+                        <div style={providerBioFooterStyle}>
+                          <div style={providerBioCounterStyle}>
+                            {t('providerProfile.bioHint', { count: providerBioCharCount })}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveProviderBio()}
+                            disabled={providerBioSaving}
+                            style={{
+                              ...providerBioSaveButtonStyle,
+                              ...(providerBioSaving ? providerBioSaveButtonDisabledStyle : null),
+                            }}
+                          >
+                            {providerBioSaving ? t('providerPricing.saving') : t('common.save')}
+                          </button>
+                        </div>
+                        {providerBioError ? (
+                          <div style={serviceTypeStatusErrorStyle}>{providerBioError}</div>
+                        ) : providerBioSavedAt > 0 ? (
+                          <div style={serviceTypeStatusSuccessStyle}>{t('providerProfile.bioSaved')}</div>
+                        ) : null}
                       </div>
                     </SettingsCollapsibleSection>
 
@@ -2619,241 +2889,6 @@ export default function WalkerDashboard({
                       ) : !serviceTypeSaving && serviceTypeSavedAt > 0 ? (
                         <div style={serviceTypeStatusSuccessStyle}>{serviceTypeSavedLabel}</div>
                       ) : null}
-                    </SettingsCollapsibleSection>
-
-                    <SettingsCollapsibleSection
-                      title={availabilitySectionTitle}
-                      subtitle={availabilitySectionSubtitle}
-                      open={settingsSectionsOpen.availability}
-                      onToggle={() => toggleSettingsSection('availability')}
-                    >
-                      <div style={availabilityIntroStyle}>{availabilityUnsetLabel}</div>
-                      <div style={availabilityTimezonePillStyle}>{availabilityTimezoneLabel}</div>
-
-                      {availabilityLoading ? (
-                        <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
-                      ) : availabilityError ? (
-                        <div style={availabilityEmptyStyle}>{availabilityError}</div>
-                      ) : profileServiceTypes.length === 0 ? (
-                        <div style={availabilityEmptyStyle}>{availabilitySelectServiceLabel}</div>
-                      ) : (
-                        <>
-                          {profileServiceTypes.map((serviceType) => (
-                            <div key={serviceType} style={availabilityServiceCardStyle}>
-                              <div style={availabilityServiceHeaderStyle}>
-                                <div style={availabilityServiceTitleStyle}>
-                                  {getProfileServiceTypeLabel(serviceType, isHebrew)}
-                                </div>
-                              </div>
-
-                              <div style={availabilityGridStyle}>
-                                {availabilityRows[serviceType].map((row, index) => {
-                                  const rowKey = getAvailabilityRowKey(serviceType, row.dayOfWeek)
-                                  const isExpanded = expandedAvailabilityKey === rowKey
-                                  return (
-                                    <div
-                                      key={rowKey}
-                                      style={{
-                                        ...availabilityDayBlockStyle,
-                                        ...(row.isActive ? availabilityDayBlockActiveStyle : null),
-                                        ...(index > 0 ? availabilityDayBlockWithDividerStyle : null),
-                                      }}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => handleAvailabilityRowPress(serviceType, row)}
-                                        style={availabilityRowButtonStyle}
-                                      >
-                                        <div style={availabilityRowDayWrapStyle}>
-                                          <span style={availabilityDayLabelStyle}>{availabilityDayLabels[row.dayOfWeek]}</span>
-                                        </div>
-
-                                        <div style={availabilityRowMetaStyle}>
-                                          <span style={row.isActive ? availabilityTimePillStyle : availabilityUnavailableTextStyle}>
-                                            {row.isActive
-                                              ? `${row.startTime} → ${row.endTime}`
-                                              : availabilityUnavailableLabel}
-                                          </span>
-                                          <span
-                                            style={{
-                                              ...availabilityChevronStyle,
-                                              ...(isExpanded ? availabilityChevronExpandedStyle : null),
-                                            }}
-                                          >
-                                            ›
-                                          </span>
-                                        </div>
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        style={availabilityToggleShellStyle}
-                                        aria-label={`${availabilityDayLabels[row.dayOfWeek]} ${availabilityEnabledLabel}`}
-                                        aria-pressed={row.isActive}
-                                        role="switch"
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          handleAvailabilityToggle(serviceType, row.dayOfWeek, !row.isActive)
-                                        }}
-                                      >
-                                        <span
-                                          style={{
-                                            ...availabilityToggleTrackStyle,
-                                            ...(row.isActive ? availabilityToggleTrackActiveStyle : null),
-                                          }}
-                                        >
-                                          <span
-                                            style={{
-                                              ...availabilityToggleThumbStyle,
-                                              ...(row.isActive ? availabilityToggleThumbActiveStyle : null),
-                                            }}
-                                          />
-                                        </span>
-                                      </button>
-
-                                      <div
-                                        style={{
-                                          ...availabilityEditorWrapStyle,
-                                          ...(isExpanded ? availabilityEditorWrapExpandedStyle : null),
-                                        }}
-                                      >
-                                        <div style={availabilityEditorStyle}>
-                                          {row.isActive ? (
-                                            <>
-                                              <div style={availabilityEditorHeaderStyle}>{availabilityEditLabel}</div>
-                                              <div style={availabilityTimeInputsStyle}>
-                                                <label style={availabilityTimeFieldStyle}>
-                                                  <span style={availabilityTimeLabelStyle}>{availabilityStartLabel}</span>
-                                                  <input
-                                                    type="time"
-                                                    value={row.startTime}
-                                                    onChange={(event) => {
-                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
-                                                        startTime: event.target.value,
-                                                      })
-                                                    }}
-                                                    style={availabilityTimeInputStyle}
-                                                  />
-                                                </label>
-
-                                                <label style={availabilityTimeFieldStyle}>
-                                                  <span style={availabilityTimeLabelStyle}>{availabilityEndLabel}</span>
-                                                  <input
-                                                    type="time"
-                                                    value={row.endTime}
-                                                    onChange={(event) => {
-                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
-                                                        endTime: event.target.value,
-                                                      })
-                                                    }}
-                                                    style={availabilityTimeInputStyle}
-                                                  />
-                                                </label>
-                                              </div>
-                                            </>
-                                          ) : (
-                                            <div style={availabilityEditorHintStyle}>{availabilityAutoEnableLabel}</div>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          ))}
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleSaveAvailability()
-                            }}
-                            disabled={availabilitySaving}
-                            style={{
-                              ...availabilitySaveButtonStyle,
-                              opacity: availabilitySaving ? 0.72 : 1,
-                            }}
-                          >
-                            {availabilitySaving ? availabilitySavingLabel : availabilitySaveLabel}
-                          </button>
-                        </>
-                      )}
-
-                      {availabilityError && !availabilityLoading ? (
-                        <div style={serviceTypeStatusErrorStyle}>{availabilityError}</div>
-                      ) : !availabilitySaving && availabilitySavedAt > 0 ? (
-                        <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
-                      ) : null}
-                    </SettingsCollapsibleSection>
-
-                    <SettingsCollapsibleSection
-                      title={t('providerPricing.title')}
-                      subtitle={t('providerPricing.subtitle')}
-                      open={settingsSectionsOpen.pricing}
-                      onToggle={() => toggleSettingsSection('pricing')}
-                    >
-                      <ProviderPricingPreferences
-                        providerId={profile.id}
-                        serviceTypes={profileServiceTypes}
-                      />
-                    </SettingsCollapsibleSection>
-
-                    <SettingsCollapsibleSection
-                      title={t('providerProfile.aboutMe')}
-                      subtitle={t('providerProfile.aboutMeSubtitle')}
-                      open={settingsSectionsOpen.about}
-                      onToggle={() => toggleSettingsSection('about')}
-                    >
-                      <div style={providerBioSectionStyle}>
-                        <div style={providerBioFieldStyle}>
-                          <div style={providerBioFieldLabelStyle}>{t('providerProfile.whatsappNumber')}</div>
-                          <input
-                            type="tel"
-                            inputMode="tel"
-                            autoComplete="tel"
-                            value={providerWhatsAppNumber}
-                            onChange={(event) => {
-                              setProviderWhatsAppNumber(event.target.value)
-                              setProviderBioSavedAt(0)
-                              setProviderBioError(null)
-                            }}
-                            placeholder={t('providerProfile.whatsappNumberPlaceholder')}
-                            style={providerBioInputStyle}
-                          />
-                        </div>
-                        <textarea
-                          value={providerBio}
-                          onChange={(event) => {
-                            setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
-                            setProviderBioSavedAt(0)
-                            setProviderBioError(null)
-                          }}
-                          placeholder={t('providerProfile.aboutMePlaceholder')}
-                          style={providerBioTextareaStyle}
-                          rows={4}
-                        />
-                        <div style={providerBioFooterStyle}>
-                          <div style={providerBioCounterStyle}>
-                            {t('providerProfile.bioHint', { count: providerBioCharCount })}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleSaveProviderBio()}
-                            disabled={providerBioSaving}
-                            style={{
-                              ...providerBioSaveButtonStyle,
-                              ...(providerBioSaving ? providerBioSaveButtonDisabledStyle : null),
-                            }}
-                          >
-                            {providerBioSaving ? t('providerPricing.saving') : t('common.save')}
-                          </button>
-                        </div>
-                        {providerBioError ? (
-                          <div style={serviceTypeStatusErrorStyle}>{providerBioError}</div>
-                        ) : providerBioSavedAt > 0 ? (
-                          <div style={serviceTypeStatusSuccessStyle}>{t('providerProfile.bioSaved')}</div>
-                        ) : null}
-                      </div>
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
@@ -3078,32 +3113,180 @@ export default function WalkerDashboard({
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
-                      title={preferredCustomersLabel}
-                      subtitle={preferredCustomersSubtitle}
-                      open={settingsSectionsOpen.preferredCustomers}
-                      onToggle={() => toggleSettingsSection('preferredCustomers')}
+                      title={availabilitySectionTitle}
+                      subtitle={availabilitySectionSubtitle}
+                      open={settingsSectionsOpen.availability}
+                      onToggle={() => toggleSettingsSection('availability')}
                     >
-                      {preferredCustomers.length === 0 ? (
-                        <div style={emptyMenuCardStyle}>{noPreferredCustomersLabel}</div>
+                      <div style={availabilityIntroStyle}>{availabilityUnsetLabel}</div>
+                      <div style={availabilityTimezonePillStyle}>{availabilityTimezoneLabel}</div>
+
+                      {availabilityLoading ? (
+                        <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
+                      ) : availabilityError ? (
+                        <div style={availabilityEmptyStyle}>{availabilityError}</div>
+                      ) : profileServiceTypes.length === 0 ? (
+                        <div style={availabilityEmptyStyle}>{availabilitySelectServiceLabel}</div>
                       ) : (
-                        <div style={preferredCustomerListStyle}>
-                          {preferredCustomers.map((customer) => (
-                            <div key={customer.key} style={preferredCustomerRowStyle}>
-                              {customer.avatarUrl ? (
-                                <ProfileAvatar
-                                  url={customer.avatarUrl}
-                                  name={customer.name}
-                                  size={30}
-                                  borderRadius={999}
-                                />
-                              ) : (
-                                <div style={preferredCustomerHeartStyle}>♥</div>
-                              )}
-                              <div style={preferredCustomerNameStyle}>{customer.name}</div>
+                        <>
+                          {profileServiceTypes.map((serviceType) => (
+                            <div key={serviceType} style={availabilityServiceCardStyle}>
+                              <div style={availabilityServiceHeaderStyle}>
+                                <div style={availabilityServiceTitleStyle}>
+                                  {getProfileServiceTypeLabel(serviceType, isHebrew)}
+                                </div>
+                              </div>
+
+                              <div style={availabilityGridStyle}>
+                                {availabilityRows[serviceType].map((row, index) => {
+                                  const rowKey = getAvailabilityRowKey(serviceType, row.dayOfWeek)
+                                  const isExpanded = expandedAvailabilityKey === rowKey
+                                  return (
+                                    <div
+                                      key={rowKey}
+                                      style={{
+                                        ...availabilityDayBlockStyle,
+                                        ...(row.isActive ? availabilityDayBlockActiveStyle : null),
+                                        ...(index > 0 ? availabilityDayBlockWithDividerStyle : null),
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAvailabilityRowPress(serviceType, row)}
+                                        style={availabilityRowButtonStyle}
+                                      >
+                                        <div style={availabilityRowDayWrapStyle}>
+                                          <span style={availabilityDayLabelStyle}>{availabilityDayLabels[row.dayOfWeek]}</span>
+                                        </div>
+
+                                        <div style={availabilityRowMetaStyle}>
+                                          <span style={row.isActive ? availabilityTimePillStyle : availabilityUnavailableTextStyle}>
+                                            {row.isActive
+                                              ? `${row.startTime} → ${row.endTime}`
+                                              : availabilityUnavailableLabel}
+                                          </span>
+                                          <span
+                                            style={{
+                                              ...availabilityChevronStyle,
+                                              ...(isExpanded ? availabilityChevronExpandedStyle : null),
+                                            }}
+                                          >
+                                            ›
+                                          </span>
+                                        </div>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        style={availabilityToggleShellStyle}
+                                        aria-label={`${availabilityDayLabels[row.dayOfWeek]} ${availabilityEnabledLabel}`}
+                                        aria-pressed={row.isActive}
+                                        role="switch"
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          handleAvailabilityToggle(serviceType, row.dayOfWeek, !row.isActive)
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            ...availabilityToggleTrackStyle,
+                                            ...(row.isActive ? availabilityToggleTrackActiveStyle : null),
+                                          }}
+                                        >
+                                          <span
+                                            style={{
+                                              ...availabilityToggleThumbStyle,
+                                              ...(row.isActive ? availabilityToggleThumbActiveStyle : null),
+                                            }}
+                                          />
+                                        </span>
+                                      </button>
+
+                                      <div
+                                        style={{
+                                          ...availabilityEditorWrapStyle,
+                                          ...(isExpanded ? availabilityEditorWrapExpandedStyle : null),
+                                        }}
+                                      >
+                                        <div style={availabilityEditorStyle}>
+                                          {row.isActive ? (
+                                            <>
+                                              <div style={availabilityEditorHeaderStyle}>{availabilityEditLabel}</div>
+                                              <div style={availabilityTimeInputsStyle}>
+                                                <label style={availabilityTimeFieldStyle}>
+                                                  <span style={availabilityTimeLabelStyle}>{availabilityStartLabel}</span>
+                                                  <input
+                                                    type="time"
+                                                    value={row.startTime}
+                                                    onChange={(event) => {
+                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                                        startTime: event.target.value,
+                                                      })
+                                                    }}
+                                                    style={availabilityTimeInputStyle}
+                                                  />
+                                                </label>
+
+                                                <label style={availabilityTimeFieldStyle}>
+                                                  <span style={availabilityTimeLabelStyle}>{availabilityEndLabel}</span>
+                                                  <input
+                                                    type="time"
+                                                    value={row.endTime}
+                                                    onChange={(event) => {
+                                                      handleAvailabilityRowChange(serviceType, row.dayOfWeek, {
+                                                        endTime: event.target.value,
+                                                      })
+                                                    }}
+                                                    style={availabilityTimeInputStyle}
+                                                  />
+                                                </label>
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <div style={availabilityEditorHintStyle}>{availabilityAutoEnableLabel}</div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
                             </div>
                           ))}
-                        </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleSaveAvailability()
+                            }}
+                            disabled={availabilitySaving}
+                            style={{
+                              ...availabilitySaveButtonStyle,
+                              opacity: availabilitySaving ? 0.72 : 1,
+                            }}
+                          >
+                            {availabilitySaving ? availabilitySavingLabel : availabilitySaveLabel}
+                          </button>
+                        </>
                       )}
+
+                      {availabilityError && !availabilityLoading ? (
+                        <div style={serviceTypeStatusErrorStyle}>{availabilityError}</div>
+                      ) : !availabilitySaving && availabilitySavedAt > 0 ? (
+                        <div style={serviceTypeStatusSuccessStyle}>{availabilitySavedLabel}</div>
+                      ) : null}
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
+                      title={t('providerPricing.title')}
+                      subtitle={t('providerPricing.subtitle')}
+                      open={settingsSectionsOpen.pricing}
+                      onToggle={() => toggleSettingsSection('pricing')}
+                    >
+                      <ProviderPricingPreferences
+                        providerId={profile.id}
+                        serviceTypes={profileServiceTypes}
+                      />
                     </SettingsCollapsibleSection>
 
                     <div style={menuFooterActionWrapStyle}>
@@ -3156,15 +3339,36 @@ export default function WalkerDashboard({
                 ) : (
                   <>
                     <div style={menuProfileButtonStyle}>
-                      <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={52} borderRadius={18} />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        style={menuProfileAvatarButtonStyle}
+                        aria-label={t('common.changePhoto')}
+                      >
+                        <ProfileAvatar url={photo.avatarUrl} name={walkerName} size={52} borderRadius={18} />
+                      </button>
                       <div style={menuProfileTextStyle}>
-                        <div style={profileNameStyle}>{walkerName}</div>
+                        <div style={profileHeaderTopRowStyle}>
+                          <div style={profileNameStyle}>{walkerName}</div>
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            style={menuChangePhotoButtonStyle}
+                          >
+                            {t('common.changePhoto')}
+                          </button>
+                        </div>
                         {profile.email && <div style={profileEmailStyle}>{profile.email}</div>}
+                        {providerBioMenuPreview ? (
+                          <div style={profileBioPreviewStyle}>{providerBioMenuPreview}</div>
+                        ) : null}
                         {flow.avgRating !== null && (
                           <div style={profileRatingStyle}>
                             <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} reviews
                           </div>
                         )}
+                        {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
+                        {photo.error ? <div style={uploadErrorStyle}>{photo.error}</div> : null}
                       </div>
                     </div>
 
@@ -3173,7 +3377,7 @@ export default function WalkerDashboard({
                       <MenuNavRow icon="₪" label={isHebrew ? 'רווחים' : 'Earnings'} onClick={() => setMenuPage('earnings')} />
                       <MenuNavRow icon="🕘" label={t('menu.tripHistory')} onClick={() => setMenuPage('history')} />
                       <MenuNavRow icon="📅" label={t('menu.futureOrders')} onClick={() => setMenuPage('futureOrders')} />
-                      <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => openSettingsSection('preferredCustomers')} />
+                      <MenuNavRow icon="♥" label={preferredCustomersLabel} onClick={() => setMenuPage('preferredCustomers')} />
                     </div>
 
                     <BurgerSection title={t('menu.latestTrips')} subtitle={t('menu.walkHistorySubtitle')}>
@@ -3195,7 +3399,12 @@ export default function WalkerDashboard({
             </>
           )}
 
-          <div style={contentStyle}>
+          <div
+            style={{
+              ...contentStyle,
+              ...(isHomeDashboard ? homeContentStyle : null),
+            }}
+          >
           {flow.error && (
             <div style={toastErrorStyle}>
               <span>{friendlyError(flow.error)}</span>
@@ -3834,9 +4043,20 @@ const screenStyle: React.CSSProperties = {
   WebkitOverflowScrolling: 'touch',
 }
 
+const homeScreenStyle: React.CSSProperties = {
+  overflowY: 'hidden',
+}
+
 const dashboardBackgroundStyle: React.CSSProperties = {
   minHeight: '100dvh',
   background: 'linear-gradient(180deg, #FAFBFD 0%, #F4F7FB 100%)',
+}
+
+const homeDashboardBackgroundStyle: React.CSSProperties = {
+  height: '100dvh',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
 }
 
 const headerStyle: React.CSSProperties = {
@@ -3852,6 +4072,12 @@ const headerStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(250,251,253,0.96) 0%, rgba(250,251,253,0.88) 72%, rgba(250,251,253,0) 100%)',
   backdropFilter: 'blur(10px)',
   WebkitBackdropFilter: 'blur(10px)',
+}
+
+const homeHeaderStyle: React.CSSProperties = {
+  position: 'relative',
+  flexShrink: 0,
+  marginBottom: 0,
 }
 
 const headerMenuBtnStyle: React.CSSProperties = {
@@ -4094,13 +4320,32 @@ const menuProfileButtonStyle: React.CSSProperties = {
   borderRadius: 24,
   padding: 16,
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   gap: 14,
   textAlign: 'left',
 }
 
+const menuProfileAvatarButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
 const menuProfileTextStyle: React.CSSProperties = {
   flex: 1,
+  minWidth: 0,
+  display: 'grid',
+  gap: 4,
+}
+
+const profileHeaderTopRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
   minWidth: 0,
 }
 
@@ -4379,6 +4624,48 @@ const earningsHistoryListStyle: React.CSSProperties = {
   gap: 12,
 }
 
+const preferredCustomerListStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const preferredCustomerCardStyle: React.CSSProperties = {
+  border: '1px solid #E2E8F0',
+  background: '#FFFFFF',
+  borderRadius: 22,
+  padding: '14px 16px',
+  boxShadow: '0 10px 24px rgba(15,23,42,0.04)',
+}
+
+const preferredCustomerIdentityStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minWidth: 0,
+}
+
+const preferredCustomerTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 3,
+}
+
+const preferredCustomerNameStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 800,
+  color: '#0F172A',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const preferredCustomerMetaStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: '#64748B',
+  fontWeight: 600,
+}
+
 const earningsHistoryCardStyle: React.CSSProperties = {
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
@@ -4457,19 +4744,40 @@ const profileNameStyle: React.CSSProperties = {
   fontSize: 16,
   fontWeight: 800,
   color: '#0F172A',
+  minWidth: 0,
 }
 
 const profileEmailStyle: React.CSSProperties = {
-  marginTop: 3,
   fontSize: 12,
   color: '#94A3B8',
 }
 
+const profileBioPreviewStyle: React.CSSProperties = {
+  fontSize: 12.5,
+  color: '#475569',
+  lineHeight: 1.35,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
 const profileRatingStyle: React.CSSProperties = {
-  marginTop: 6,
   fontSize: 12,
   color: '#64748B',
   fontWeight: 700,
+}
+
+const menuChangePhotoButtonStyle: React.CSSProperties = {
+  flexShrink: 0,
+  padding: '5px 9px',
+  borderRadius: 999,
+  border: '1px solid rgba(226,232,240,0.95)',
+  background: 'rgba(248,250,252,0.96)',
+  color: '#0F172A',
+  fontSize: 11,
+  fontWeight: 800,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
 const uploadStatusStyle: React.CSSProperties = {
@@ -4625,16 +4933,16 @@ const providerBioInputStyle: React.CSSProperties = {
 
 const providerBioTextareaStyle: React.CSSProperties = {
   width: '100%',
-  minHeight: 112,
+  minHeight: 84,
   borderRadius: 16,
   border: '1px solid rgba(226, 232, 240, 0.95)',
   background: 'rgba(255,255,255,0.96)',
-  padding: '12px 14px',
+  padding: '10px 14px',
   fontSize: 13.5,
-  lineHeight: 1.5,
+  lineHeight: 1.45,
   color: '#0F172A',
   boxSizing: 'border-box',
-  resize: 'vertical',
+  resize: 'none',
   outline: 'none',
   fontFamily: 'inherit',
 }
@@ -4954,44 +5262,6 @@ const emptyMenuCardStyle: React.CSSProperties = {
   fontWeight: 600,
 }
 
-const preferredCustomerListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-}
-
-const preferredCustomerRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  padding: '14px 16px',
-  borderRadius: 18,
-  border: '1px solid #E2E8F0',
-  background: 'linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)',
-}
-
-const preferredCustomerHeartStyle: React.CSSProperties = {
-  width: 30,
-  height: 30,
-  borderRadius: 999,
-  display: 'grid',
-  placeItems: 'center',
-  background: '#FEF3C7',
-  color: '#B45309',
-  fontSize: 15,
-  lineHeight: 1,
-  flexShrink: 0,
-}
-
-const preferredCustomerNameStyle: React.CSSProperties = {
-  minWidth: 0,
-  fontSize: 14,
-  fontWeight: 700,
-  color: '#0F172A',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-}
-
 const futureOrderListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 12,
@@ -5055,11 +5325,49 @@ const contentStyle: React.CSSProperties = {
   margin: '0 auto',
 }
 
-const homeDashboardTopStackStyle: React.CSSProperties = {
+const homeContentStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  overflow: 'hidden',
+  paddingTop: 10,
+  paddingBottom: 'calc(18px + env(safe-area-inset-bottom))',
+}
+
+const homeDashboardShellStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 0,
+}
+
+const homeDashboardStatusSectionStyle: React.CSSProperties = {
+  width: '100%',
+  flexShrink: 0,
+}
+
+const homeDashboardSummaryStackStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  gap: 10,
+  paddingTop: 18,
+}
+
+const homeDashboardMiddleGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 14,
-  marginBottom: 4,
-  justifyItems: 'center',
+  gap: 8,
+  marginTop: 'auto',
+  marginBottom: 'auto',
+}
+
+const homeDashboardWalletSectionStyle: React.CSSProperties = {
+  flexShrink: 0,
 }
 
 const toastErrorStyle: React.CSSProperties = {
@@ -5100,7 +5408,7 @@ const homeStatusCardStyle: React.CSSProperties = {
   position: 'relative',
   overflow: 'hidden',
   width: '100%',
-  padding: '15px 18px',
+  padding: '14px 16px',
   borderRadius: 28,
   background:
     'linear-gradient(180deg, #FFFFFF 0%, #F9FBFD 100%)',
@@ -5109,7 +5417,7 @@ const homeStatusCardStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 14,
+  gap: 12,
 }
 
 const homeStatusCardOnlineStyle: React.CSSProperties = {
@@ -5127,8 +5435,8 @@ const homeStatusContentStyle: React.CSSProperties = {
 
 const homeStatusRightStyle: React.CSSProperties = {
   position: 'relative',
-  width: 72,
-  height: 62,
+  width: 66,
+  height: 56,
   display: 'grid',
   placeItems: 'center',
   flexShrink: 0,
@@ -5138,8 +5446,8 @@ const homeStatusAccentOrbStyle: React.CSSProperties = {
   position: 'absolute',
   right: -8,
   top: -6,
-  width: 74,
-  height: 74,
+  width: 68,
+  height: 68,
   borderRadius: '50%',
   background: 'radial-gradient(circle, rgba(34,197,94,0.16) 0%, rgba(34,197,94,0.04) 52%, rgba(34,197,94,0) 74%)',
 }
@@ -5188,15 +5496,15 @@ const homeStatusToggleKnobStyle: React.CSSProperties = {
 }
 
 const homeStatusTitleStyle: React.CSSProperties = {
-  fontSize: 19,
+  fontSize: 18,
   lineHeight: 1.08,
   fontWeight: 900,
   color: '#0F172A',
 }
 
 const homeStatusBodyStyle: React.CSSProperties = {
-  fontSize: 11,
-  lineHeight: 1.35,
+  fontSize: 10.5,
+  lineHeight: 1.3,
   color: '#64748B',
 }
 
@@ -5206,9 +5514,9 @@ const todayAvailabilityCardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
   border: '1px solid #E7EDF4',
   boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
-  padding: '12px 14px 10px',
+  padding: '11px 13px 9px',
   display: 'grid',
-  gap: 7,
+  gap: 6,
 }
 
 const todayAvailabilityHeaderStyle: React.CSSProperties = {
@@ -5243,24 +5551,95 @@ const todayAvailabilityManageChevronStyle: React.CSSProperties = {
 }
 
 const todayAvailabilityPricingCardStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
   width: '100%',
   borderRadius: 24,
   background: 'linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%)',
   border: '1px solid #E7EDF4',
   boxShadow: '0 12px 24px rgba(15,23,42,0.04)',
-  padding: '14px 16px',
-  textAlign: 'start',
-  cursor: 'pointer',
+  padding: '11px 13px 9px',
+  display: 'grid',
+  gap: 6,
+  overflow: 'visible',
 }
 
-const todayAvailabilityPricingCardTextStyle: React.CSSProperties = {
+const pricingSummaryRowStyle: React.CSSProperties = {
+  gridTemplateColumns: 'minmax(0, 74px) minmax(0, 1fr) auto',
+  alignItems: 'center',
+  gap: 10,
+}
+
+const pricingSummaryBookingTypeStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: '#334155',
+}
+
+const pricingSummaryPriceStyle: React.CSSProperties = {
   minWidth: 0,
-  display: 'grid',
-  gap: 4,
+  fontSize: 13,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const pricingSummaryRangeWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  justifySelf: 'end',
+  maxWidth: '100%',
+  overflow: 'visible',
+}
+
+const pricingSummaryRangeLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#64748B',
+  whiteSpace: 'nowrap',
+}
+
+const pricingSummaryInfoButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 18,
+  height: 18,
+  borderRadius: 999,
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  cursor: 'pointer',
+  flexShrink: 0,
+  WebkitTapHighlightColor: 'transparent',
+}
+
+const pricingSummaryInfoIconStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1,
+  color: '#94A3B8',
+  flexShrink: 0,
+  pointerEvents: 'none',
+}
+
+const pricingSummaryTooltipBubbleStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 10px)',
+  right: 0,
+  zIndex: 40,
+  minWidth: 164,
+  maxWidth: 220,
+  borderRadius: 14,
+  padding: '10px 12px',
+  background: 'rgba(15, 23, 42, 0.96)',
+  color: '#F8FAFC',
+  fontSize: 12,
+  lineHeight: 1.45,
+  fontWeight: 600,
+  boxShadow: '0 16px 40px rgba(15, 23, 42, 0.22)',
+  backdropFilter: 'blur(16px)',
+  WebkitBackdropFilter: 'blur(16px)',
+  whiteSpace: 'normal',
+  textAlign: 'start',
 }
 
 const todayAvailabilityPricingSubtitleStyle: React.CSSProperties = {
@@ -5275,11 +5654,11 @@ const todayAvailabilityListStyle: React.CSSProperties = {
 }
 
 const todayAvailabilityRowStyle: React.CSSProperties = {
-  minHeight: 44,
+  minHeight: 40,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
+  gap: 8,
 }
 
 const todayAvailabilityRowWithDividerStyle: React.CSSProperties = {
@@ -5345,24 +5724,24 @@ const dashboardSectionTitleStyle: React.CSSProperties = {
 }
 
 const walletSectionStyle: React.CSSProperties = {
-  marginTop: 10,
+  marginTop: 6,
 }
 
 const walletDashboardGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 8,
+  gap: 7,
 }
 
 const walletDashboardMetricCardStyle: React.CSSProperties = {
-  padding: '11px 12px 10px',
+  padding: '10px 11px 9px',
   borderRadius: 20,
   background: '#FFFFFF',
   border: '1px solid #E7EDF4',
   boxShadow: '0 8px 16px rgba(15,23,42,0.035)',
   display: 'grid',
-  gap: 5,
-  minHeight: 72,
+  gap: 4,
+  minHeight: 66,
 }
 
 const walletDashboardMetricLabelStyle: React.CSSProperties = {
@@ -5373,17 +5752,17 @@ const walletDashboardMetricLabelStyle: React.CSSProperties = {
 }
 
 const walletDashboardMetricValueStyle: React.CSSProperties = {
-  fontSize: 19,
+  fontSize: 18,
   fontWeight: 900,
   color: '#0F172A',
 }
 
 const walletDashboardStatusRowStyle: React.CSSProperties = {
-  minHeight: 32,
+  minHeight: 28,
   padding: '0 2px',
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
+  gap: 8,
   flexWrap: 'wrap',
 }
 

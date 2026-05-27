@@ -1,6 +1,8 @@
 import type { ProfileServiceType } from './profileServiceTypes'
 
 export type ProviderCapabilitiesMap = Record<string, Record<string, unknown>>
+export type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
+export type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
 
 export type ProviderCapabilityRow = {
   provider_id: string
@@ -130,4 +132,128 @@ export function getCapabilityShortBio(
 
 export function getServiceCapabilityScope(serviceType: ProfileServiceType): string {
   return serviceType
+}
+
+function parseStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
+function parseProviderLanguages(value: unknown): ProviderLanguage[] {
+  return parseStringArray(value).filter((entry): entry is ProviderLanguage =>
+    entry === 'hebrew' || entry === 'english' || entry === 'russian' || entry === 'arabic' || entry === 'french',
+  )
+}
+
+function toTitleCaseLabel(value: string): string {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function getProviderExperienceRangeFromYears(years: number | null | undefined): ProviderExperienceRange | null {
+  if (typeof years !== 'number' || !Number.isFinite(years) || years <= 0) return null
+  if (years >= 10) return '10_plus'
+  if (years >= 7) return '5_10'
+  if (years >= 4) return '3_5'
+  if (years >= 2) return '1_3'
+  return '0_1'
+}
+
+export type ProviderCapabilitySummary = {
+  experienceRange: ProviderExperienceRange | null
+  experienceYears: number | null
+  languages: ProviderLanguage[]
+  shortBio: string | null
+  specialties: string[]
+  servicePreferences: string[]
+}
+
+export function getProviderCapabilitySummary(params: {
+  capabilities: ProviderCapabilitiesMap
+  serviceType?: string | null
+  fallbackShortBio?: string | null
+}): ProviderCapabilitySummary {
+  const providerProfile = getCapabilityScope<Record<string, unknown>>(params.capabilities, 'provider_profile') ?? {}
+  const scopeKey =
+    typeof params.serviceType === 'string' && params.serviceType.trim()
+      ? params.serviceType.trim()
+      : null
+  const serviceScope = scopeKey ? getCapabilityScope<Record<string, unknown>>(params.capabilities, scopeKey) ?? {} : {}
+
+  const experienceYearsRaw =
+    typeof providerProfile.experienceYears === 'number'
+      ? providerProfile.experienceYears
+      : typeof serviceScope.experienceYears === 'number'
+        ? serviceScope.experienceYears
+        : null
+  const experienceYears = typeof experienceYearsRaw === 'number' && Number.isFinite(experienceYearsRaw) ? experienceYearsRaw : null
+  const experienceRange =
+    typeof providerProfile.experienceRange === 'string'
+      ? providerProfile.experienceRange as ProviderExperienceRange
+      : getProviderExperienceRangeFromYears(experienceYears)
+  const languages = parseProviderLanguages(providerProfile.languagesSpoken ?? providerProfile.languages)
+  const shortBio = getCapabilityShortBio(params.capabilities, params.fallbackShortBio ?? null).trim() || null
+
+  const specialties = new Set<string>()
+  const servicePreferences = new Set<string>()
+
+  if (scopeKey === 'dog_walker') {
+    const dogSizes = parseStringArray(serviceScope.supportedDogSizes).map((size) => size.toUpperCase())
+    if (dogSizes.length > 0) {
+      specialties.add('dogSizes')
+      servicePreferences.add(`dog_sizes:${dogSizes.join(', ')}`)
+    }
+    const energyLevels = parseStringArray(serviceScope.supportedEnergyLevels)
+    if (energyLevels.includes('high')) specialties.add('highEnergyDogs')
+    if (energyLevels.length > 0) {
+      servicePreferences.add(`energy_levels:${energyLevels.map((level) => toTitleCaseLabel(level)).join(', ')}`)
+    }
+  }
+
+  if (scopeKey === 'baby_sitter') {
+    const ageRanges = parseStringArray(serviceScope.supportedAgeRanges)
+    if (ageRanges.length > 0) {
+      specialties.add('ageRangeCare')
+      servicePreferences.add(`age_ranges:${ageRanges.join(', ')}`)
+    }
+  }
+
+  if (typeof serviceScope.specialties === 'object' && Array.isArray(serviceScope.specialties)) {
+    parseStringArray(serviceScope.specialties).forEach((specialty) => specialties.add(specialty))
+  }
+
+  return {
+    experienceRange,
+    experienceYears,
+    languages,
+    shortBio,
+    specialties: Array.from(specialties),
+    servicePreferences: Array.from(servicePreferences),
+  }
+}
+
+export type ProviderMatchingSignals = {
+  experienceYears: number
+  languageCodes: ProviderLanguage[]
+  serviceSpecialties: string[]
+  servicePreferences: string[]
+}
+
+export function getProviderMatchingSignals(params: {
+  capabilities: ProviderCapabilitiesMap
+  serviceType?: string | null
+}): ProviderMatchingSignals {
+  const summary = getProviderCapabilitySummary({
+    capabilities: params.capabilities,
+    serviceType: params.serviceType ?? null,
+  })
+
+  return {
+    experienceYears: summary.experienceYears ?? 0,
+    languageCodes: summary.languages,
+    serviceSpecialties: summary.specialties,
+    servicePreferences: summary.servicePreferences,
+  }
 }

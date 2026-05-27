@@ -11,8 +11,12 @@ export interface ProviderProfileCardProps {
   experienceRange?: string | null
   experienceYears?: number | null
   languages?: string[] | null
+  specialties?: string[] | null
+  servicePreferences?: string[] | null
   shortBio?: string | null
   completedCount?: number | null
+  preferredCustomerCount?: number | null
+  repeatClientIndicator?: boolean
   whatsappAvailable?: boolean
   onClose?: () => void
 }
@@ -51,6 +55,33 @@ function getLanguageLabel(
   return null
 }
 
+function getSpecialtyLabel(
+  specialty: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const normalized = specialty.trim()
+  if (normalized === 'dogSizes') return t('providerPublicProfile.specialties.dogSizes')
+  if (normalized === 'highEnergyDogs') return t('providerPublicProfile.specialties.highEnergyDogs')
+  if (normalized === 'ageRangeCare') return t('providerPublicProfile.specialties.ageRangeCare')
+  return normalized
+}
+
+function getServicePreferenceLabel(
+  preference: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (preference.startsWith('dog_sizes:')) {
+    return t('providerPublicProfile.servicePreferences.dogSizes', { value: preference.replace('dog_sizes:', '').trim() })
+  }
+  if (preference.startsWith('energy_levels:')) {
+    return t('providerPublicProfile.servicePreferences.energyLevels', { value: preference.replace('energy_levels:', '').trim() })
+  }
+  if (preference.startsWith('age_ranges:')) {
+    return t('providerPublicProfile.servicePreferences.ageRanges', { value: preference.replace('age_ranges:', '').trim() })
+  }
+  return preference
+}
+
 export default function ProviderProfileCard({
   avatarUrl,
   fullName,
@@ -60,8 +91,12 @@ export default function ProviderProfileCard({
   experienceRange,
   experienceYears,
   languages,
+  specialties,
+  servicePreferences,
   shortBio,
   completedCount,
+  preferredCustomerCount,
+  repeatClientIndicator,
   whatsappAvailable,
   onClose,
 }: ProviderProfileCardProps) {
@@ -70,12 +105,22 @@ export default function ProviderProfileCard({
   const languageLabels = (languages ?? [])
     .map((value) => getLanguageLabel(value, t))
     .filter((value): value is string => !!value)
+  const specialtyLabels = (specialties ?? [])
+    .map((value) => getSpecialtyLabel(value, t))
+    .filter((value): value is string => !!value)
+  const servicePreferenceLabels = (servicePreferences ?? [])
+    .map((value) => getServicePreferenceLabel(value, t))
+    .filter((value): value is string => !!value)
   const trimmedBio = shortBio?.trim() || null
   const trustBadges = [
     rating != null ? `★ ${rating.toFixed(1)}` : null,
     completedCount != null && completedCount > 0
       ? t('providerPublicProfile.completedCount', { count: completedCount })
       : null,
+    preferredCustomerCount != null && preferredCustomerCount > 0
+      ? t('providerPublicProfile.preferredCustomers', { count: preferredCustomerCount })
+      : null,
+    repeatClientIndicator ? t('providerPublicProfile.repeatClientIndicator') : null,
     whatsappAvailable ? t('providerPublicProfile.whatsappAvailable') : null,
   ].filter((value): value is string => !!value)
 
@@ -129,6 +174,30 @@ export default function ProviderProfileCard({
                 <span key={label} style={languageChipStyle}>
                   {label}
                 </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {specialtyLabels.length > 0 ? (
+          <div style={sectionStyle}>
+            <div style={sectionLabelStyle}>{t('providerPublicProfile.specialtiesLabel')}</div>
+            <div style={languageRowStyle}>
+              {specialtyLabels.map((label) => (
+                <span key={label} style={languageChipStyle}>
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {servicePreferenceLabels.length > 0 ? (
+          <div style={sectionStyle}>
+            <div style={sectionLabelStyle}>{t('providerPublicProfile.servicePreferencesLabel')}</div>
+            <div style={infoGridStyle}>
+              {servicePreferenceLabels.map((label) => (
+                <div key={label} style={servicePreferencePillStyle}>
+                  {label}
+                </div>
               ))}
             </div>
           </div>
@@ -271,6 +340,11 @@ const languageRowStyle: CSSProperties = {
   gap: 8,
 }
 
+const infoGridStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
 const languageChipStyle: CSSProperties = {
   padding: '7px 10px',
   borderRadius: 999,
@@ -279,6 +353,17 @@ const languageChipStyle: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 700,
   lineHeight: 1.2,
+}
+
+const servicePreferencePillStyle: CSSProperties = {
+  padding: '9px 11px',
+  borderRadius: 14,
+  background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(148,163,184,0.14)',
+  color: '#E2E8F0',
+  fontSize: 12.5,
+  fontWeight: 700,
+  lineHeight: 1.35,
 }
 
 const bioStyle: CSSProperties = {
