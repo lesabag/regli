@@ -23,6 +23,14 @@ interface AuthScreenProps {
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
+  onGoogleSignIn: (args: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => Promise<{ ok: boolean }>
   authError?: string | null
 }
 
@@ -113,9 +121,18 @@ const PROVIDER_LANGUAGE_OPTIONS: {
 
 const PROVIDER_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
 const CLIENT_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'location', 'auth']
+const SIGNUP_STEP_STORAGE_KEY = 'regli_signup_step'
 
 function getSignupSteps(role: AppRole): SignupStep[] {
   return role === 'walker' ? PROVIDER_SIGNUP_STEPS : CLIENT_SIGNUP_STEPS
+}
+
+function normalizeSignupStepForRole(step: SignupStep, role: AppRole): SignupStep {
+  const steps = getSignupSteps(role)
+  if (steps.includes(step)) return step
+  if (step === 'service') return 'location'
+  if (step === 'details') return 'auth'
+  return steps[0] ?? 'welcome'
 }
 
 function getStepIndex(mode: OnboardingMode, step: SignupStep, signupSteps: SignupStep[]) {
@@ -146,13 +163,30 @@ function getNormalizedExperienceYears(range: ProviderExperienceRange | ''): numb
   return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.normalizedYears ?? 0
 }
 
+function readPersistedSignupStep(): SignupStep | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.sessionStorage.getItem(SIGNUP_STEP_STORAGE_KEY)
+  if (!raw) return null
+  if (raw === 'welcome' || raw === 'role' || raw === 'service' || raw === 'location' || raw === 'details' || raw === 'auth') {
+    return raw
+  }
+  return null
+}
+
+function writePersistedSignupStep(step: SignupStep) {
+  if (typeof window === 'undefined') return
+  console.log('[auth-oauth] saving signup step', step)
+  window.sessionStorage.setItem(SIGNUP_STEP_STORAGE_KEY, step)
+}
+
 export default function AuthScreen({
   onSignIn,
   onSignUp,
+  onGoogleSignIn,
   authError,
 }: AuthScreenProps) {
-  const [mode, setMode] = useState<OnboardingMode>('welcome')
-  const [signupStep, setSignupStep] = useState<SignupStep>('welcome')
+  const [mode, setMode] = useState<OnboardingMode>(() => (readPersistedSignupStep() ? 'signup' : 'welcome'))
+  const [signupStep, setSignupStep] = useState<SignupStep>(() => readPersistedSignupStep() ?? 'welcome')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
@@ -162,7 +196,15 @@ export default function AuthScreen({
   const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>('placeholder')
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [googleSubmitting, setGoogleSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
+
+  useEffect(() => {
+    console.log('[auth-build-check] AuthScreen mounted BUILD_20260527')
+    const restoredSignupStep = readPersistedSignupStep()
+    console.log('[auth-oauth] restoring signup step')
+    console.log('[auth-oauth] restored value:', restoredSignupStep)
+  }, [])
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
@@ -183,10 +225,36 @@ export default function AuthScreen({
     [],
   )
   const signupSteps = useMemo(() => getSignupSteps(role), [role])
+  const safeSignupStep = signupStep ?? (mode === 'signup' ? 'role' : 'welcome')
 
-  const currentStep = mode === 'signin' ? 'auth' : signupStep
-  const activeStepIndex = getStepIndex(mode, currentStep, signupSteps)
-  const signupStepNumber = mode === 'signup' ? Math.max(1, signupSteps.indexOf(currentStep)) : null
+  useEffect(() => {
+    if (mode !== 'signup') return
+    writePersistedSignupStep(safeSignupStep)
+  }, [mode, safeSignupStep])
+
+  useEffect(() => {
+    if (mode !== 'signup') return
+    const normalizedStep = normalizeSignupStepForRole(safeSignupStep, role)
+    if (normalizedStep !== signupStep) {
+      console.log('[auth-render] onboarding step reset', {
+        previousStep: signupStep,
+        normalizedStep,
+        role,
+        mode,
+      })
+      setSignupStep(normalizedStep)
+    }
+  }, [mode, role, safeSignupStep, signupStep])
+
+  const currentStep: SignupStep = mode === 'signin'
+    ? 'auth'
+    : mode === 'signup'
+      ? normalizeSignupStepForRole(safeSignupStep, role)
+      : 'welcome'
+  const activeStepIndex = Math.max(0, getStepIndex(mode, currentStep, signupSteps))
+  const signupStepNumber = Math.max(1, signupSteps.indexOf(currentStep) + 1)
+  const isCreateAccountStep = (mode === 'signin' || mode === 'signup') && currentStep === 'auth'
+  const authBranchLabel = 'REAL_STEP3_BRANCH_FIXED'
 
   const selectedServiceMeta = useMemo(
     () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
@@ -222,6 +290,33 @@ export default function AuthScreen({
   }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
+
+  useEffect(() => {
+    console.log('[auth-render] AuthScreen', {
+      mode,
+      currentStep,
+      signupStep,
+      safeSignupStep,
+      isCreateAccountStep,
+      role,
+      showEmailAuth,
+      authError: authError ?? null,
+    })
+  }, [authError, currentStep, isCreateAccountStep, mode, role, safeSignupStep, showEmailAuth, signupStep])
+
+  useEffect(() => {
+    if (currentStep === 'auth') {
+      console.log('[auth-render] AuthScreen create-account path')
+      console.log('[auth-render] Social button Google active', {
+        googleDisabled: false,
+        googleSubmitting,
+        submitting,
+        showEmailAuth,
+        mode,
+        currentStep,
+      })
+    }
+  }, [currentStep, googleSubmitting, mode, showEmailAuth, submitting])
 
   useEffect(() => {
     document.body.dataset.authOnboarding = 'true'
@@ -293,6 +388,7 @@ export default function AuthScreen({
   const goToSignup = () => {
     setMode('signup')
     setSignupStep('role')
+    writePersistedSignupStep('role')
     setShowEmailAuth(false)
   }
 
@@ -382,6 +478,105 @@ export default function AuthScreen({
       setSubmitting(false)
     }
   }
+
+  const buildServiceAttributes = (): ServiceAttributes | null => {
+    const attrs: ServiceAttributes = {}
+    if (isProvider) {
+      attrs.provider_profile = {
+        experienceRange: providerIdentity.experienceRange,
+        experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+        languagesSpoken: providerIdentity.languages,
+      }
+      if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
+        attrs.dog_walker = {
+          supportedDogSizes: provDogAttrs.supportedDogSizes,
+          supportedEnergyLevels: provDogAttrs.supportedEnergyLevels,
+          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+        }
+      }
+      if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
+        attrs.baby_sitter = {
+          supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
+          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+        }
+      }
+    } else {
+      if (hasDog) {
+        attrs.dog_walker = {
+          dog_name: dogAttrs.petName.trim(),
+          dog_size: dogAttrs.dogSize,
+          dog_energy: dogAttrs.energyLevel,
+        }
+      }
+      if (hasSitter) {
+        attrs.baby_sitter = {
+          number_of_kids: sitterAttrs.numberOfKids,
+          children_ages: sitterAttrs.childrenAges.map((value) => value.trim()).filter(Boolean),
+          notes: sitterAttrs.specialNotes.trim() || null,
+        }
+      }
+    }
+    return Object.keys(attrs).length > 0 ? attrs : null
+  }
+
+  const handleGoogleContinue = async () => {
+    if (googleSubmitting || submitting) return
+
+    console.log('[auth] visible google button clicked')
+    setGoogleSubmitting(true)
+    if (mode === 'signup' && typeof window !== 'undefined') {
+      writePersistedSignupStep(currentStep)
+      window.sessionStorage.setItem(
+        'regli:onboarding-wow',
+        role === 'walker' ? 'provider' : 'customer',
+      )
+    }
+
+    const result = await onGoogleSignIn({
+      role,
+      primaryService: isProvider ? selectedServiceMeta.label : undefined,
+      locationAddress: mode === 'signup' ? locationLabel : undefined,
+      shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
+      serviceTypes: onboardingServiceTypes,
+      serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
+    })
+
+    if (!result.ok && typeof window !== 'undefined' && mode === 'signup') {
+      window.sessionStorage.removeItem('regli:onboarding-wow')
+    }
+    if (!result.ok) {
+      setGoogleSubmitting(false)
+    }
+  }
+
+  const renderSocialAuthButtons = () => (
+    <div style={socialStackStyle} data-google-auth-enabled="true" data-auth-branch={authBranchLabel}>
+      <button
+        type="button"
+        onClick={() => {
+          if (googleSubmitting || submitting) return
+          void handleGoogleContinue()
+        }}
+        aria-busy={googleSubmitting}
+        style={{
+          ...socialButtonStyle,
+          ...googleSocialButtonStyle,
+          ...(googleSubmitting ? socialButtonLoadingStyle : null),
+        }}
+      >
+        <span style={socialIconStyle}>G</span>
+        <span style={socialLabelStyle}>
+          {googleSubmitting ? 'Connecting to Google...' : 'Continue with Google'}
+        </span>
+      </button>
+
+      <button type="button" disabled style={{ ...socialButtonStyle, ...socialButtonDisabledStyle }}>
+        <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
+        <span style={socialLabelStyle}>Continue with Apple</span>
+        <span style={comingSoonPillStyle}>Coming soon</span>
+      </button>
+    </div>
+  )
 
   const stepTitle = getStepTitle(mode, currentStep, role)
   const shouldShowEmailFields = currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
@@ -896,10 +1091,11 @@ export default function AuthScreen({
             </>
           )}
 
-          {currentStep === 'auth' && (
+          {isCreateAccountStep && (
             <>
               <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}</div>
               <h1 style={titleStyle}>{stepTitle}</h1>
+              <div style={authBranchMarkerStyle}>{authBranchLabel}</div>
               <p style={subtitleStyle}>
                 {mode === 'signin'
                   ? 'Log in to continue where you left off.'
@@ -920,19 +1116,7 @@ export default function AuthScreen({
                 </div>
               )}
 
-              <div style={socialStackStyle}>
-                <button type="button" disabled style={{ ...socialButtonStyle, ...socialButtonDisabledStyle }}>
-                  <span style={socialIconStyle}>G</span>
-                  <span style={socialLabelStyle}>Continue with Google</span>
-                  <span style={comingSoonPillStyle}>Coming soon</span>
-                </button>
-
-                <button type="button" disabled style={{ ...socialButtonStyle, ...socialButtonDisabledStyle }}>
-                  <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
-                  <span style={socialLabelStyle}>Continue with Apple</span>
-                  <span style={comingSoonPillStyle}>Coming soon</span>
-                </button>
-              </div>
+              {renderSocialAuthButtons()}
 
               {!shouldShowEmailFields ? (
                 <button
@@ -1334,6 +1518,15 @@ const subtitleStyle: CSSProperties = {
   color: '#5E6B83',
 }
 
+const authBranchMarkerStyle: CSSProperties = {
+  marginTop: 8,
+  fontSize: 11,
+  lineHeight: 1.35,
+  fontWeight: 900,
+  letterSpacing: 0.18,
+  color: '#2563EB',
+}
+
 const welcomeHeroWrapStyle: CSSProperties = {
   width: '100%',
   maxHeight: 156,
@@ -1376,11 +1569,22 @@ const socialButtonStyle: CSSProperties = {
   padding: '0 14px',
   boxSizing: 'border-box',
   textAlign: 'left',
+  cursor: 'pointer',
+}
+
+const googleSocialButtonStyle: CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.18)',
+  boxShadow: '0 8px 20px rgba(91, 124, 250, 0.08)',
 }
 
 const socialButtonDisabledStyle: CSSProperties = {
   opacity: 1,
   cursor: 'not-allowed',
+}
+
+const socialButtonLoadingStyle: CSSProperties = {
+  opacity: 0.72,
+  cursor: 'wait',
 }
 
 const socialIconStyle: CSSProperties = {
