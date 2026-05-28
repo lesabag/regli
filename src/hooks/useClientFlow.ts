@@ -661,6 +661,41 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [dismissedCompletionReviewIds, setDismissedCompletionReviewIds] = useState<Set<string>>(new Set())
 
+  const sendPushEvent = useCallback(async ({
+    type,
+    title,
+    body,
+    targetUserId,
+    relatedJobId,
+  }: {
+    type: string
+    title: string
+    body: string
+    targetUserId: string | null | undefined
+    relatedJobId: string
+  }) => {
+    if (!targetUserId) return
+
+    const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+      body: {
+        title,
+        body,
+        targetUserId,
+        notificationType: type,
+        relatedJobId,
+      },
+    })
+
+    if (pushError) {
+      console.error('[Push] Failed to send event', {
+        type,
+        targetUserId,
+        relatedJobId,
+        error: pushError,
+      })
+    }
+  }, [])
+
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
   const arriveNotifiedRef = useRef<Set<string>>(new Set())
   const startNotifiedRef = useRef<Set<string>>(new Set())
@@ -2810,9 +2845,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     setSuccessMessage('Arrival confirmed.')
+    if (currentJob?.walker_id) {
+      void sendPushEvent({
+        type: 'client_confirmation',
+        title: 'Client confirmed arrival',
+        body: 'The client confirmed arrival. You can start the service now.',
+        targetUserId: currentJob.walker_id,
+        relatedJobId: currentJobId,
+      })
+    }
     setArrivalConfirming(false)
     void fetchCurrentAndLists()
-  }, [currentJobId, fetchCurrentAndLists, profileId])
+  }, [currentJob, currentJobId, fetchCurrentAndLists, profileId, sendPushEvent])
 
   const confirmCompletion = useCallback(async () => {
     const pending =
@@ -2942,6 +2986,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
           dogCount: completedJob?.dog_count ?? fallbackJob?.dog_count ?? null,
           serviceType: completedJob?.service_type ?? fallbackJob?.service_type ?? null,
         })
+        void sendPushEvent({
+          type: 'payout_update',
+          title: 'Payment confirmed',
+          body: `${pending.walkerName}'s service completion was confirmed and payment is on the way.`,
+          targetUserId: pending.walkerId,
+          relatedJobId: pending.jobId,
+        })
       }
 
       void fetchCurrentAndLists()
@@ -2965,6 +3016,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     ratedJobIds,
     clearActiveState,
     fetchCurrentAndLists,
+    sendPushEvent,
   ])
 
   const rejectCompletion = useCallback(async () => {
@@ -3334,6 +3386,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
             message: `You received a ₪${amount} tip`,
             relatedJobId: tipJob.jobId,
           })
+          void sendPushEvent({
+            type: 'payout_update',
+            title: 'Tip received',
+            body: `You received a ₪${amount} tip.`,
+            targetUserId: tipJob.walkerId,
+            relatedJobId: tipJob.jobId,
+          })
         } catch {
           // noop
         }
@@ -3360,7 +3419,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setSuccessMessage('Tip saved')
       void fetchCurrentAndLists()
     },
-    [fetchCurrentAndLists, profileId, resetBookingComposerAfterCompletion, tipJob],
+    [fetchCurrentAndLists, profileId, resetBookingComposerAfterCompletion, sendPushEvent, tipJob],
   )
 
   const dismissTip = useCallback(() => {

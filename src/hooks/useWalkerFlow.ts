@@ -436,6 +436,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const dismissedCompletionIdsRef = useRef<Set<string>>(new Set())
   const flowCompletedJobIdsRef = useRef<Set<string>>(new Set())
   const shownStateMessagesRef = useRef<Set<string>>(new Set())
+  const notifiedDispatchOfferIdsRef = useRef<Set<string>>(new Set())
+  const notifiedDispatchExpiryIdsRef = useRef<Set<string>>(new Set())
   const lastAcceptedJobIdRef = useRef<string | null>(null)
   const candidateRequestIdsRef = useRef<Set<string>>(new Set())
   const assignedJobIdsRef = useRef<Set<string>>(new Set())
@@ -457,6 +459,44 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (shownStateMessagesRef.current.has(key)) return
     shownStateMessagesRef.current.add(key)
     setSuccessMessage(message)
+  }, [])
+
+  const sendPushEvent = useCallback(async ({
+    type,
+    title,
+    body,
+    targetUserId,
+    relatedJobId,
+    suppressWhenForeground = true,
+  }: {
+    type: string
+    title: string
+    body: string
+    targetUserId: string | null | undefined
+    relatedJobId: string
+    suppressWhenForeground?: boolean
+  }) => {
+    if (!targetUserId) return
+    if (suppressWhenForeground && isDocumentVisibleRef.current) return
+
+    const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+      body: {
+        title,
+        body,
+        targetUserId,
+        notificationType: type,
+        relatedJobId,
+      },
+    })
+
+    if (pushError) {
+      console.error('[Push] Failed to send event', {
+        type,
+        targetUserId,
+        relatedJobId,
+        error: pushError,
+      })
+    }
   }, [])
 
   const clearRetainedIncomingOffer = useCallback((requestId?: string | null) => {
@@ -720,14 +760,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         })
 
         if (data.client_id) {
-          invokeEdgeFunction('send-push-notification', {
-            body: {
-              title: 'Walker on the way',
-              body: `${profileName} is heading to you for ${dogLabel}.`,
-              targetUserId: data.client_id,
-              data: { jobId: job.id },
-            },
-          }).catch((err) => console.error('[Push] Failed to notify client (dispatch):', err))
+          void sendPushEvent({
+            type: 'provider_on_the_way',
+            title: 'Walker on the way',
+            body: `${profileName} is heading to you for ${dogLabel}.`,
+            targetUserId: data.client_id,
+            relatedJobId: job.id,
+          })
           void createNotification({
             userId: data.client_id,
             type: 'job_accepted',
@@ -737,14 +776,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           })
         }
 
-        invokeEdgeFunction('send-push-notification', {
-          body: {
-              title: 'Head to the client',
-              body: `Head to ${dogLabel}'s pickup.`,
-            targetUserId: profileId,
-            data: { jobId: job.id },
-          },
-        }).catch((err) => console.error('[Push] Failed to notify walker (dispatch):', err))
+        void sendPushEvent({
+          type: 'scheduled_booking_reminder',
+          title: 'Head to the client',
+          body: `Head to ${dogLabel}'s pickup.`,
+          targetUserId: profileId,
+          relatedJobId: job.id,
+        })
 
         return true
       } finally {
@@ -1517,6 +1555,57 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const refreshOffersRef = useRef(fetchAll)
 
   useEffect(() => {
+    const nextOfferIds = new Set(activeOffers.map((offer) => offer.id))
+
+    for (const offer of activeOffers) {
+      if (notifiedDispatchOfferIdsRef.current.has(offer.id)) continue
+      notifiedDispatchOfferIdsRef.current.add(offer.id)
+      const subjectLabel = getRequestSubjectLabel(offer)
+      void sendPushEvent({
+        type: 'new_dispatch_offer',
+        title: 'New dispatch offer',
+        body: `You have a new offer for ${subjectLabel}.`,
+        targetUserId: profileId,
+        relatedJobId: offer.request_id,
+      })
+    }
+
+    notifiedDispatchOfferIdsRef.current.forEach((offerId) => {
+      if (!nextOfferIds.has(offerId)) {
+        notifiedDispatchOfferIdsRef.current.delete(offerId)
+        notifiedDispatchExpiryIdsRef.current.delete(offerId)
+      }
+    })
+  }, [activeOffers, profileId, sendPushEvent])
+
+  useEffect(() => {
+    if (activeOffers.length === 0) return undefined
+
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      activeOffers.forEach((offer) => {
+        if (notifiedDispatchExpiryIdsRef.current.has(offer.id)) return
+        const expiresAt = new Date(offer.expires_at).getTime()
+        if (Number.isNaN(expiresAt)) return
+        const msLeft = expiresAt - now
+        if (msLeft > 0 && msLeft <= 15_000) {
+          notifiedDispatchExpiryIdsRef.current.add(offer.id)
+          const subjectLabel = getRequestSubjectLabel(offer)
+          void sendPushEvent({
+            type: 'dispatch_expiring_soon',
+            title: 'Dispatch offer expiring soon',
+            body: `Respond soon to the offer for ${subjectLabel}.`,
+            targetUserId: profileId,
+            relatedJobId: offer.request_id,
+          })
+        }
+      })
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [activeOffers, profileId, sendPushEvent])
+
+  useEffect(() => {
     fetchAllRef.current = fetchAll
     refreshOffersRef.current = fetchAll
   }, [fetchAll])
@@ -2183,14 +2272,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           : isScheduled
             ? `${profileName} confirmed ${dogLabel}'s scheduled walk.`
             : `${profileName} is on the way for ${dogLabel}'s walk!`
-        invokeEdgeFunction('send-push-notification', {
-          body: {
-            title: clientNotifTitle,
-            body: clientNotifMessage,
-            targetUserId: job.client_id,
-            data: { jobId: requestId },
-          },
-        }).catch((err) => console.error('[Push] Failed to notify client (accepted):', err))
+        void sendPushEvent({
+          type: dispatchNow ? 'provider_on_the_way' : 'provider_accepted',
+          title: clientNotifTitle,
+          body: clientNotifMessage,
+          targetUserId: job.client_id,
+          relatedJobId: requestId,
+        })
         void createNotification({
           userId: job.client_id,
           type: 'job_accepted',
@@ -2212,7 +2300,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: requestId,
       })
     },
-    [activeOffers, openJobs, profileId, profileName, fetchAll, walkerPosition, showStateMessage, clearRetainedIncomingOffer],
+    [activeOffers, openJobs, profileId, profileName, fetchAll, sendPushEvent, walkerPosition, showStateMessage, clearRetainedIncomingOffer],
   )
 
   const unassignFutureJob = useCallback(
@@ -2369,14 +2457,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       if (job.client_id) {
         const dogLabel = getRequestSubjectLabel(job)
-        invokeEdgeFunction('send-push-notification', {
-          body: {
-            title: 'Walker has arrived',
-            body: `${profileName} has arrived for ${dogLabel}.`,
-            targetUserId: job.client_id,
-            data: { jobId },
-          },
-        }).catch((err) => console.error('[Push] Failed to notify client (arrived):', err))
+        void sendPushEvent({
+          type: 'provider_arrived',
+          title: 'Walker has arrived',
+          body: `${profileName} has arrived for ${dogLabel}.`,
+          targetUserId: job.client_id,
+          relatedJobId: jobId,
+        })
         void createNotification({
           userId: job.client_id,
           type: 'walker_arrived',
@@ -2388,7 +2475,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       await fetchAll()
     },
-    [fetchAll, myJobs, profileId, profileName, showStateMessage, walkerPosition],
+    [fetchAll, myJobs, profileId, profileName, sendPushEvent, showStateMessage, walkerPosition],
   )
 
   const startService = useCallback(
@@ -2452,14 +2539,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       if (job.client_id) {
         const dogLabel = getRequestSubjectLabel(job)
-        invokeEdgeFunction('send-push-notification', {
-          body: {
-            title: labels.activeTitle,
-            body: `${profileName} has started the service for ${dogLabel}.`,
-            targetUserId: job.client_id,
-            data: { jobId },
-          },
-        }).catch((err) => console.error('[Push] Failed to notify client (service_started):', err))
+        void sendPushEvent({
+          type: 'service_started',
+          title: labels.activeTitle,
+          body: `${profileName} has started the service for ${dogLabel}.`,
+          targetUserId: job.client_id,
+          relatedJobId: jobId,
+        })
         void createNotification({
           userId: job.client_id,
           type: 'job_accepted',
@@ -2471,7 +2557,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       await fetchAll()
     },
-    [fetchAll, myJobs, profileId, profileName, showStateMessage],
+    [fetchAll, myJobs, profileId, profileName, sendPushEvent, showStateMessage],
   )
 
   const handleComplete = useCallback(
@@ -2526,14 +2612,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             walkerName: profileName,
           })
 
-          invokeEdgeFunction('send-push-notification', {
-            body: {
-              title: 'Confirm Service Completion',
-              body: `${profileName} marked the service as complete. Please confirm.`,
-              targetUserId: job.client_id,
-              data: { jobId: id },
-            },
-          }).catch((err) => console.error('[Push] Failed to notify client (completion_pending):', err))
+          void sendPushEvent({
+            type: 'service_completed',
+            title: 'Confirm Service Completion',
+            body: `${profileName} marked the service as complete. Please confirm.`,
+            targetUserId: job.client_id,
+            relatedJobId: id,
+          })
           void createNotification({
             userId: job.client_id,
             type: 'job_completed',
@@ -2565,7 +2650,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         setCompletingJobId(null)
       }
     },
-    [myJobs, completionBlockedJob, pendingClientConfirmation, profileId, profileName, fetchAll],
+    [myJobs, completionBlockedJob, pendingClientConfirmation, profileId, profileName, fetchAll, sendPushEvent],
   )
 
   const reportIssue = useCallback(
@@ -2612,6 +2697,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           message: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
           relatedJobId: jobId,
         })
+        void sendPushEvent({
+          type: 'dispute_update',
+          title: 'Issue Reported',
+          body: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
+          targetUserId: jobRow.client_id,
+          relatedJobId: jobId,
+        })
       }
 
       if (jobRow.walker_id) {
@@ -2628,7 +2720,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       await fetchAll()
       return true
     },
-    [fetchAll],
+    [fetchAll, sendPushEvent],
   )
 
   const handleRelease = useCallback(
@@ -2703,23 +2795,22 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: ratingJobId,
       })
 
-      invokeEdgeFunction('send-push-notification', {
-        body: {
-          title: 'New Rating Received',
-          body: trimmedReview
-            ? `You received a ${rating}-star rating: "${trimmedReview}"`
-            : `You received a ${rating}-star rating!`,
-          targetUserId: job.client_id,
-          data: { jobId: ratingJobId },
-        },
-      }).catch((err) => console.error('[Push] Failed to notify client (rating):', err))
+      void sendPushEvent({
+        type: 'dispute_update',
+        title: 'New Rating Received',
+        body: trimmedReview
+          ? `You received a ${rating}-star rating: "${trimmedReview}"`
+          : `You received a ${rating}-star rating!`,
+        targetUserId: job.client_id,
+        relatedJobId: ratingJobId,
+      })
 
       setRatingSubmitting(false)
       setRatingJobId(null)
       setSuccessMessage('Rating submitted!')
       await fetchRatings()
     },
-    [ratingJobId, myJobs, profileId, fetchRatings],
+    [ratingJobId, myJobs, profileId, fetchRatings, sendPushEvent],
   )
 
   const submitCompletionRating = useCallback(
@@ -2760,16 +2851,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           relatedJobId: completionSuccess.jobId,
         }).catch(() => {})
 
-        invokeEdgeFunction('send-push-notification', {
-          body: {
-            title: 'New Rating Received',
-            body: trimmedReview
-              ? `You received a ${rating}-star rating: "${trimmedReview}"`
-              : `You received a ${rating}-star rating!`,
-            targetUserId: completionSuccess.clientId,
-            data: { jobId: completionSuccess.jobId },
-          },
-        }).catch((err) => console.error('[Push] Failed to notify client (rating):', err))
+        void sendPushEvent({
+          type: 'dispute_update',
+          title: 'New Rating Received',
+          body: trimmedReview
+            ? `You received a ${rating}-star rating: "${trimmedReview}"`
+            : `You received a ${rating}-star rating!`,
+          targetUserId: completionSuccess.clientId,
+          relatedJobId: completionSuccess.jobId,
+        })
       }
 
       setCompletionRatingSubmitting(false)
@@ -2777,7 +2867,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       setCompletionSuccess(null)
       await fetchRatings()
     },
-    [completionSuccess, profileId, fetchRatings],
+    [completionSuccess, profileId, fetchRatings, sendPushEvent],
   )
 
   const openRatingModal = useCallback((jobId: string) => setRatingJobId(jobId), [])
