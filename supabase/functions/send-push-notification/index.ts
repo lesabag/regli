@@ -284,12 +284,12 @@ async function createApnsJwt(privateKeyPem: string, keyId: string, teamId: strin
   }
 
   const signingInput = `${base64UrlEncodeJson(header)}.${base64UrlEncodeJson(claims)}`
-  const derSignature = new Uint8Array(await crypto.subtle.sign(
+  const signature = new Uint8Array(await crypto.subtle.sign(
     { name: 'ECDSA', hash: 'SHA-256' },
     cryptoKey,
     new TextEncoder().encode(signingInput),
   ))
-  const joseSignature = derToJose(derSignature, 64)
+  const joseSignature = normalizeEs256Signature(signature)
 
   return `${signingInput}.${base64UrlEncodeBytes(joseSignature)}`
 }
@@ -397,6 +397,18 @@ function base64UrlEncodeBytes(bytes: Uint8Array): string {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
+}
+
+function normalizeEs256Signature(signature: Uint8Array): Uint8Array {
+  if (signature[0] === 0x30) {
+    return derToJose(signature, 64)
+  }
+
+  if (signature.length === 64) {
+    return signature
+  }
+
+  throw new Error(`Unsupported ECDSA signature length: ${signature.length}`)
 }
 
 function derToJose(signature: Uint8Array, outputLength: number): Uint8Array {
