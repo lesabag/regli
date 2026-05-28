@@ -7,6 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const APNS_HOSTS = {
+  sandbox: 'https://api.sandbox.push.apple.com',
+  production: 'https://api.push.apple.com',
+} as const
+
+type ApnsEnvironment = keyof typeof APNS_HOSTS
+
 /**
  * send-push-notification
  *
@@ -15,7 +22,7 @@ const corsHeaders = {
  * (new job requests sent to all online walkers).
  *
  * Request body:
- *   { title, body, targetUserId?, data?, createInAppNotification? }
+ *   { title, body, targetUserId?, data?, createInAppNotification?, badge? }
  *
  * If targetUserId is omitted, sends to ALL online walker push tokens
  * AND creates in-app notifications for all online walkers.
@@ -28,18 +35,22 @@ serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    const apnsPrivateKey = Deno.env.get('APNS_PRIVATE_KEY')
     const apnsKeyId = Deno.env.get('APNS_KEY_ID')
     const apnsTeamId = Deno.env.get('APNS_TEAM_ID')
-    const apnsKeyP8 = Deno.env.get('APNS_KEY_P8')
-    const appBundleId = Deno.env.get('APP_BUNDLE_ID')
-    const apnsEnv = Deno.env.get('APNS_ENVIRONMENT') || 'development'
-    const hasApnsConfig = !!(apnsKeyId && apnsTeamId && apnsKeyP8 && appBundleId)
+    const apnsBundleId = Deno.env.get('APNS_BUNDLE_ID')
+    const apnsEnvironment = getApnsEnvironment(Deno.env.get('APNS_ENVIRONMENT'))
+    const hasApnsConfig = !!(
+      apnsPrivateKey &&
+      apnsKeyId &&
+      apnsTeamId &&
+      apnsBundleId
+    )
 
     if (!supabaseUrl || !serviceRoleKey) {
       return jsonResp({ error: 'Server misconfigured (supabase)' }, 500)
     }
 
-    // Auth: verify caller is authenticated
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       return jsonResp({ error: 'Missing authorization' }, 401)
@@ -54,12 +65,12 @@ serve(async (req: Request) => {
       return jsonResp({ error: 'Invalid token' }, 401)
     }
 
-    // Parse body
     let body: {
       title?: string
       body?: string
       targetUserId?: string
-      data?: Record<string, string>
+      data?: Record<string, string | number | boolean | null | undefined>
+      badge?: number
       createInAppNotification?: boolean
       inAppType?: string
       inAppTitle?: string
@@ -80,30 +91,27 @@ serve(async (req: Request) => {
     }
 
     const envelope = buildPushEnvelope({
-      type: body.notificationType ?? body.inAppType ?? notifData?.type ?? 'new_request',
+      type: body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
       title,
       body: notifBody,
-      relatedJobId: body.relatedJobId ?? notifData?.jobId ?? notifData?.related_job_id ?? null,
-      deepLink: body.deepLink ?? notifData?.deepLink ?? null,
+      relatedJobId: body.relatedJobId ?? readString(notifData?.jobId) ?? readString(notifData?.related_job_id) ?? null,
+      deepLink: body.deepLink ?? readString(notifData?.deepLink) ?? null,
     })
     const dedupKey = buildPushDedupKey(envelope)
     const dedupWindowMs = getPushDedupWindowMs(envelope.type)
 
-    // Fetch push tokens
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
 
     let walkerIds: string[] = []
 
     let query = supabaseAdmin
       .from('push_tokens')
-      .select('token, user_id')
+      .select('token, user_id, platform')
       .eq('enabled', true)
 
     if (targetUserId) {
-      // Send to specific user
       query = query.eq('user_id', targetUserId)
     } else {
-      // Send to all online walkers
       const { data: walkers } = await supabaseAdmin
         .from('profiles')
         .select('id')
@@ -117,7 +125,6 @@ serve(async (req: Request) => {
       walkerIds = walkers.map((w: { id: string }) => w.id)
       query = query.in('user_id', walkerIds)
 
-      // Create in-app notifications for all online walkers (new request broadcast)
       const jobId = envelope.related_job_id
       const inAppType = body.inAppType || envelope.type || 'new_request'
       const inAppTitle = body.inAppTitle || title
@@ -161,73 +168,85 @@ serve(async (req: Request) => {
       }, 200)
     }
 
+    const iosTokens = tokens.filter(({ platform }) => platform === 'ios')
+
+    if (iosTokens.length === 0) {
+      return jsonResp({
+        ok: true,
+        sent: 0,
+        total: tokens.length,
+        iosTotal: 0,
+        notified: walkerIds.length,
+        skipped: 'no_ios_tokens',
+      }, 200)
+    }
+
     if (!hasApnsConfig) {
       console.warn('[Push] APNs not configured; skipping remote push delivery')
       return jsonResp({
         ok: true,
         sent: 0,
         total: tokens.length,
+        iosTotal: iosTokens.length,
         notified: walkerIds.length,
         skipped: 'apns_not_configured',
       }, 200)
     }
 
-    // Generate APNs JWT
-    const jwt = await createApnsJwt(apnsKeyP8, apnsKeyId, apnsTeamId)
-
-    const apnsHost = apnsEnv === 'production'
-      ? 'https://api.push.apple.com'
-      : 'https://api.sandbox.push.apple.com'
-
-    // Send push to each token
+    const apnsJwt = await createApnsJwt(apnsPrivateKey, apnsKeyId, apnsTeamId)
+    const apnsHost = APNS_HOSTS[apnsEnvironment]
     const staleTokens: string[] = []
     let sentCount = 0
+    const badge = Number.isFinite(body.badge) ? Number(body.badge) : undefined
 
-    for (const { token, user_id } of tokens) {
+    const normalizedData = buildNormalizedPushData({
+      envelope,
+      dedupKey,
+      dedupWindowMs,
+      data: notifData,
+    })
+
+    for (const { token, user_id } of iosTokens) {
       try {
+        const payload: Record<string, unknown> = {
+          aps: {
+            alert: { title, body: notifBody },
+            sound: 'default',
+            ...(badge !== undefined ? { badge } : {}),
+          },
+          data: normalizedData,
+        }
+
         const res = await fetch(`${apnsHost}/3/device/${token}`, {
           method: 'POST',
           headers: {
-            'authorization': `bearer ${jwt}`,
-            'apns-topic': appBundleId,
+            authorization: `bearer ${apnsJwt}`,
+            'apns-topic': apnsBundleId,
             'apns-push-type': 'alert',
             'apns-priority': '10',
-            'apns-expiration': '0',
             'content-type': 'application/json',
           },
-          body: JSON.stringify({
-            aps: {
-              alert: { title, body: notifBody },
-              sound: 'default',
-              badge: 1,
-            },
-            ...((notifData || {}) as Record<string, string>),
-            type: envelope.type,
-            related_job_id: envelope.related_job_id ?? '',
-            deepLink: envelope.deepLink ?? '',
-            created_at: envelope.created_at,
-            dedupKey,
-            dedupWindowMs: String(dedupWindowMs),
-          }),
+          body: JSON.stringify(payload),
         })
 
         if (res.ok) {
           sentCount++
-          console.log(`[Push] Sent to ${user_id} (${token.slice(0, 8)}...)`)
-        } else {
-          const errBody = await res.text()
-          console.error(`[Push] APNs error ${res.status} for ${token.slice(0, 8)}...: ${errBody}`)
+          console.log(`[Push] Sent to ${user_id} (${tokenPrefix(token)})`)
+          continue
+        }
 
-          if (res.status === 410 || res.status === 400) {
-            staleTokens.push(token)
-          }
+        const errBody = await safeResponseText(res)
+        console.error(`[Push] APNS failed status=${res.status} token=${tokenPrefix(token)} body=${errBody}`)
+
+        if (shouldDeleteToken(res.status, errBody)) {
+          staleTokens.push(token)
         }
       } catch (err) {
-        console.error(`[Push] Failed to send to ${token.slice(0, 8)}...:`, err)
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[Push] APNS failed status=network token=${tokenPrefix(token)} body=${message}`)
       }
     }
 
-    // Clean up stale tokens
     if (staleTokens.length > 0) {
       const { error: delErr } = await supabaseAdmin
         .from('push_tokens')
@@ -235,7 +254,7 @@ serve(async (req: Request) => {
         .in('token', staleTokens)
 
       if (delErr) {
-        console.error('[Push] Failed to delete stale tokens:', delErr)
+        console.error('[Push] Failed to delete stale tokens:', delErr.message)
       } else {
         console.log(`[Push] Cleaned up ${staleTokens.length} stale token(s)`)
       }
@@ -245,51 +264,114 @@ serve(async (req: Request) => {
       ok: true,
       sent: sentCount,
       total: tokens.length,
+      iosTotal: iosTokens.length,
       notified: walkerIds.length,
       staleRemoved: staleTokens.length,
     }, 200)
   } catch (err) {
-    console.error('send-push-notification error:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('send-push-notification error:', message)
     return jsonResp({ error: 'Internal server error' }, 500)
   }
 })
 
-// ─── APNs JWT generation ──────────────────────────────────────
+async function createApnsJwt(privateKeyPem: string, keyId: string, teamId: string): Promise<string> {
+  const cryptoKey = await importPkcs8PrivateKey(privateKeyPem)
+  const header = { alg: 'ES256', kid: keyId }
+  const claims = {
+    iss: teamId,
+    iat: Math.floor(Date.now() / 1000),
+  }
 
-async function createApnsJwt(p8Key: string, keyId: string, teamId: string): Promise<string> {
-  const cleanKey = p8Key
+  const signingInput = `${base64UrlEncodeJson(header)}.${base64UrlEncodeJson(claims)}`
+  const derSignature = new Uint8Array(await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    cryptoKey,
+    new TextEncoder().encode(signingInput),
+  ))
+  const joseSignature = derToJose(derSignature, 64)
+
+  return `${signingInput}.${base64UrlEncodeBytes(joseSignature)}`
+}
+
+async function importPkcs8PrivateKey(privateKeyPem: string): Promise<CryptoKey> {
+  const normalizedPem = privateKeyPem.replace(/\\n/g, '\n').trim()
+  const cleanKey = normalizedPem
     .replace(/-----BEGIN PRIVATE KEY-----/g, '')
     .replace(/-----END PRIVATE KEY-----/g, '')
-    .replace(/\s/g, '')
+    .replace(/\s+/g, '')
 
   const keyData = base64Decode(cleanKey)
 
-  const cryptoKey = await crypto.subtle.importKey(
+  return await crypto.subtle.importKey(
     'pkcs8',
     keyData,
     { name: 'ECDSA', namedCurve: 'P-256' },
     false,
-    ['sign']
+    ['sign'],
   )
+}
 
-  const header = { alg: 'ES256', kid: keyId }
-  const now = Math.floor(Date.now() / 1000)
-  const claims = { iss: teamId, iat: now }
+function buildNormalizedPushData(params: {
+  envelope: ReturnType<typeof buildPushEnvelope>
+  dedupKey: string
+  dedupWindowMs: number
+  data?: Record<string, string | number | boolean | null | undefined>
+}): Record<string, string> {
+  const extras = normalizeDataRecord(params.data)
 
-  const headerB64 = base64UrlEncode(JSON.stringify(header))
-  const claimsB64 = base64UrlEncode(JSON.stringify(claims))
-  const signingInput = `${headerB64}.${claimsB64}`
+  return {
+    ...extras,
+    type: params.envelope.type,
+    title: params.envelope.title,
+    body: params.envelope.body,
+    related_job_id: params.envelope.related_job_id ?? '',
+    deep_link: params.envelope.deepLink ?? '',
+    created_at: params.envelope.created_at,
+    dedup_key: params.dedupKey,
+    dedup_window_ms: String(params.dedupWindowMs),
+    source: 'regli',
+  }
+}
 
-  const signature = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    cryptoKey,
-    new TextEncoder().encode(signingInput)
-  )
+function normalizeDataRecord(
+  data?: Record<string, string | number | boolean | null | undefined>,
+): Record<string, string> {
+  if (!data) return {}
 
-  const sigBytes = new Uint8Array(signature)
-  const signatureB64 = base64UrlEncodeBytes(sigBytes)
+  const normalized: Record<string, string> = {}
+  for (const [key, value] of Object.entries(data)) {
+    if (value === null || value === undefined) continue
+    normalized[key] = String(value)
+  }
 
-  return `${signingInput}.${signatureB64}`
+  return normalized
+}
+
+function getApnsEnvironment(value: string | undefined): ApnsEnvironment {
+  return value?.toLowerCase() === 'production' ? 'production' : 'sandbox'
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function shouldDeleteToken(status: number, body: string): boolean {
+  if (status === 410) return true
+  if (status !== 400) return false
+  return body.includes('BadDeviceToken') || body.includes('Unregistered') || body.includes('DeviceTokenNotForTopic')
+}
+
+async function safeResponseText(response: Response): Promise<string> {
+  try {
+    return await response.text()
+  } catch {
+    return '<unreadable>'
+  }
+}
+
+function tokenPrefix(token: string): string {
+  return `${token.slice(0, 8)}...`
 }
 
 function base64Decode(str: string): ArrayBuffer {
@@ -301,11 +383,8 @@ function base64Decode(str: string): ArrayBuffer {
   return bytes.buffer
 }
 
-function base64UrlEncode(str: string): string {
-  return btoa(str)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
+function base64UrlEncodeJson(value: unknown): string {
+  return base64UrlEncodeBytes(new TextEncoder().encode(JSON.stringify(value)))
 }
 
 function base64UrlEncodeBytes(bytes: Uint8Array): string {
@@ -313,10 +392,82 @@ function base64UrlEncodeBytes(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i])
   }
+
   return btoa(binary)
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
+}
+
+function derToJose(signature: Uint8Array, outputLength: number): Uint8Array {
+  if (signature.length < 8 || signature[0] !== 0x30) {
+    throw new Error('Invalid DER signature format')
+  }
+
+  let offset = 1
+  const sequence = readDerLength(signature, offset)
+  offset = sequence.offset
+
+  if (sequence.length !== signature.length - offset) {
+    throw new Error('Invalid DER sequence length')
+  }
+
+  if (signature[offset++] !== 0x02) {
+    throw new Error('Invalid DER signature integer for r')
+  }
+  const rLength = readDerLength(signature, offset)
+  offset = rLength.offset
+  const r = signature.slice(offset, offset + rLength.length)
+  offset += rLength.length
+
+  if (signature[offset++] !== 0x02) {
+    throw new Error('Invalid DER signature integer for s')
+  }
+  const sLength = readDerLength(signature, offset)
+  offset = sLength.offset
+  const s = signature.slice(offset, offset + sLength.length)
+
+  const componentLength = outputLength / 2
+  const jose = new Uint8Array(outputLength)
+  jose.set(trimAndPadDerInteger(r, componentLength), 0)
+  jose.set(trimAndPadDerInteger(s, componentLength), componentLength)
+
+  return jose
+}
+
+function readDerLength(bytes: Uint8Array, offset: number): { length: number; offset: number } {
+  const first = bytes[offset]
+  if ((first & 0x80) === 0) {
+    return { length: first, offset: offset + 1 }
+  }
+
+  const byteCount = first & 0x7f
+  if (byteCount === 0 || byteCount > 4) {
+    throw new Error('Invalid DER length encoding')
+  }
+
+  let length = 0
+  for (let i = 0; i < byteCount; i++) {
+    length = (length << 8) | bytes[offset + 1 + i]
+  }
+
+  return { length, offset: offset + 1 + byteCount }
+}
+
+function trimAndPadDerInteger(value: Uint8Array, size: number): Uint8Array {
+  let start = 0
+  while (start < value.length - 1 && value[start] === 0) {
+    start++
+  }
+
+  const normalized = value.slice(start)
+  if (normalized.length > size) {
+    throw new Error('DER integer too large')
+  }
+
+  const output = new Uint8Array(size)
+  output.set(normalized, size - normalized.length)
+  return output
 }
 
 function jsonResp(data: unknown, status: number): Response {
