@@ -83,6 +83,7 @@ serve(async (req: Request) => {
     let query = supabaseAdmin
       .from('push_tokens')
       .select('token, user_id')
+      .eq('enabled', true)
 
     if (targetUserId) {
       // Send to specific user

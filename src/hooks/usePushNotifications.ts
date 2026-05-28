@@ -3,10 +3,147 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
 import { supabase } from '../services/supabaseClient'
 
+const PUSH_DEVICE_ID_STORAGE_KEY = 'regli:push-device-id'
+const PUSH_REGISTRATION_STORAGE_KEY = 'regli:push-registration'
+export const FOREGROUND_PUSH_EVENT = 'regli:foreground-push'
+
+type PushPlatform = 'ios' | 'android' | 'web'
+
+type StoredPushRegistration = {
+  userId: string
+  token: string
+  platform: PushPlatform
+  deviceId: string | null
+}
+
+function isSupportedNativePushPlatform(platform: string): platform is PushPlatform {
+  return platform === 'ios' || platform === 'android'
+}
+
+function getStoredPushRegistration(): StoredPushRegistration | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.localStorage.getItem(PUSH_REGISTRATION_STORAGE_KEY)
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as StoredPushRegistration
+    if (!parsed?.userId || !parsed?.token) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function setStoredPushRegistration(registration: StoredPushRegistration | null) {
+  if (typeof window === 'undefined') return
+  if (!registration) {
+    window.localStorage.removeItem(PUSH_REGISTRATION_STORAGE_KEY)
+    return
+  }
+  window.localStorage.setItem(PUSH_REGISTRATION_STORAGE_KEY, JSON.stringify(registration))
+}
+
+function getOrCreatePushDeviceId(): string | null {
+  if (typeof window === 'undefined') return null
+
+  const existing = window.localStorage.getItem(PUSH_DEVICE_ID_STORAGE_KEY)
+  if (existing) return existing
+
+  const nextValue = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `push-device-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+  window.localStorage.setItem(PUSH_DEVICE_ID_STORAGE_KEY, nextValue)
+  return nextValue
+}
+
+function emitForegroundPushEvent(notification: {
+  title?: string
+  body?: string
+  data?: Record<string, unknown>
+}) {
+  if (typeof window === 'undefined') return
+  const title = typeof notification.title === 'string' ? notification.title : ''
+  const message = typeof notification.body === 'string' ? notification.body : ''
+  if (!title && !message) return
+
+  window.dispatchEvent(new CustomEvent(FOREGROUND_PUSH_EVENT, {
+    detail: {
+      title,
+      message,
+      type: typeof notification.data?.type === 'string'
+        ? notification.data.type
+        : 'new_request',
+    },
+  }))
+}
+
+async function upsertPushToken({
+  userId,
+  token,
+  platform,
+  deviceId,
+  enabled,
+}: {
+  userId: string
+  token: string
+  platform: PushPlatform
+  deviceId: string | null
+  enabled: boolean
+}) {
+  const now = new Date().toISOString()
+  const payload = {
+    user_id: userId,
+    token,
+    platform,
+    device_id: deviceId,
+    enabled,
+    updated_at: now,
+    last_seen_at: now,
+  }
+
+  const { error } = await supabase
+    .from('push_tokens')
+    .upsert(payload, { onConflict: 'user_id,token' })
+
+  if (error) {
+    console.error('[Push] push token upsert failed', {
+      userId,
+      platform,
+      enabled,
+      message: error.message,
+    })
+    return false
+  }
+
+  if (enabled) {
+    setStoredPushRegistration({ userId, token, platform, deviceId })
+  }
+
+  return true
+}
+
+export async function disableCurrentPushTokenForUser(userId: string | null) {
+  if (!userId) return
+
+  const stored = getStoredPushRegistration()
+  if (!stored || stored.userId !== userId) return
+
+  const success = await upsertPushToken({
+    userId,
+    token: stored.token,
+    platform: stored.platform,
+    deviceId: stored.deviceId,
+    enabled: false,
+  })
+
+  if (success) {
+    setStoredPushRegistration(null)
+  }
+}
+
 /**
  * Registers for native push notifications and stores the device token in Supabase.
- * Call this hook once from authenticated app surfaces that should receive pushes.
- *
  * On web/non-native platforms this is a no-op.
  */
 export function usePushNotifications(userId: string | null) {
@@ -15,94 +152,52 @@ export function usePushNotifications(userId: string | null) {
   useEffect(() => {
     const platform = Capacitor.getPlatform()
     const isNativePlatform = Capacitor.isNativePlatform()
-    const registrationKey = userId ? `${platform}:${userId}` : null
-    const listenerHandles: PluginListenerHandle[] = []
-    let isActive = true
-
-    console.log('[Push] Hook mounted', {
-      userId,
-      platform,
-      isNativePlatform,
-    })
-
-    if (!isNativePlatform) {
-      console.log('[Push] Web/non-native platform detected; skipping native push registration safely', {
-        userId,
-        platform,
-      })
+    if (!isNativePlatform || !isSupportedNativePushPlatform(platform)) {
       return undefined
     }
 
     if (!userId) {
-      console.log('[Push] Native platform detected but no userId is available yet; waiting to register')
       return undefined
     }
 
+    const registrationKey = `${platform}:${userId}`
+    const listenerHandles: PluginListenerHandle[] = []
+    let isActive = true
+
     if (activeRegistrationKeyRef.current === registrationKey) {
-      console.log('[Push] Registration already active for this user/platform; skipping duplicate setup', {
-        registrationKey,
-      })
       return undefined
     }
 
     activeRegistrationKeyRef.current = registrationKey
-
-    const uid = userId // capture narrowed value for closures
+    const pushPlatform: PushPlatform = platform
+    const deviceId = getOrCreatePushDeviceId()
+    const uid = userId
 
     async function setup() {
       try {
-        let permStatus = await PushNotifications.checkPermissions()
-        console.log('[Push] Permission check result', {
-          userId: uid,
-          platform,
-          permission: permStatus,
-        })
+        let permission = await PushNotifications.checkPermissions()
 
-        if (permStatus.receive === 'prompt') {
-          permStatus = await PushNotifications.requestPermissions()
-          console.log('[Push] Permission request result', {
-            userId: uid,
-            platform,
-            permission: permStatus,
-          })
-        } else {
-          console.log('[Push] Permission request not needed', {
-            userId: uid,
-            platform,
-            permission: permStatus,
-          })
+        if (permission.receive === 'prompt') {
+          permission = await PushNotifications.requestPermissions()
         }
 
-        if (permStatus.receive !== 'granted') {
-          console.log('[Push] Permission not granted; registration skipped on native platform', {
-            userId: uid,
-            platform,
-            receive: permStatus.receive,
-          })
+        if (permission.receive !== 'granted') {
           return
         }
 
         listenerHandles.push(await PushNotifications.addListener('registration', async (token) => {
-          const value = token.value
-          console.log('[Push] Registration success token', {
+          if (!token.value || !isActive) return
+          await upsertPushToken({
             userId: uid,
-            platform,
-            token: value,
+            token: token.value,
+            platform: pushPlatform,
+            deviceId,
+            enabled: true,
           })
-
-          if (!value) {
-            console.log('[Push] Registration succeeded without a token value; skipping upsert', {
-              userId: uid,
-              platform,
-            })
-            return
-          }
-
-          await saveToken(uid, value, platform)
         }))
 
         listenerHandles.push(await PushNotifications.addListener('registrationError', (error) => {
-          console.error('[Push] Registration error', {
+          console.error('[Push] native registration failed', {
             userId: uid,
             platform,
             error,
@@ -110,24 +205,15 @@ export function usePushNotifications(userId: string | null) {
         }))
 
         listenerHandles.push(await PushNotifications.addListener('pushNotificationReceived', (notification) => {
-          console.log('[Push] Received push event', {
-            userId: uid,
-            platform,
-            notification,
+          emitForegroundPushEvent({
+            title: notification.title,
+            body: notification.body,
+            data: notification.data,
           })
-          // In-app notifications are already handled by NotificationsBell realtime
-          // so we don't need to show anything extra here
         }))
 
-        listenerHandles.push(await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-          console.log('[Push] Push action performed event', {
-            userId: uid,
-            platform,
-            action,
-          })
-          // The app will open to the walker dashboard naturally via App.tsx routing.
-          // The walk_requests realtime subscription in useWalkerFlow will pick up
-          // the new request and transition to incoming_request state automatically.
+        listenerHandles.push(await PushNotifications.addListener('pushNotificationActionPerformed', () => {
+          // Future deep-link / navigation handling can be added here when remote pushes go live.
         }))
 
         if (!isActive) {
@@ -135,80 +221,36 @@ export function usePushNotifications(userId: string | null) {
           return
         }
 
-        console.log('[Push] Calling PushNotifications.register()', {
-          userId: uid,
-          platform,
-        })
         await PushNotifications.register()
-      } catch (err) {
-        console.error('[Push] Setup error', {
+      } catch (error) {
+        console.error('[Push] native push setup failed', {
           userId: uid,
           platform,
-          error: err,
+          error,
         })
       }
     }
 
-    setup()
+    void setup()
 
     return () => {
       isActive = false
       if (activeRegistrationKeyRef.current === registrationKey) {
         activeRegistrationKeyRef.current = null
       }
-
       cleanupListeners(listenerHandles)
     }
   }, [userId])
 }
 
-/**
- * Upsert the push token into Supabase.
- * Uses ON CONFLICT to avoid duplicate rows.
- */
-async function saveToken(userId: string, token: string, platform: string): Promise<void> {
-  const payload = {
-    user_id: userId,
-    token,
-    platform,
-    updated_at: new Date().toISOString(),
-  }
-
-  console.log('[Push] push_tokens upsert payload', payload)
-
-  const { data, error } = await supabase
-    .from('push_tokens')
-    .upsert(
-      payload,
-      { onConflict: 'user_id,token' }
-    )
-    .select('id,user_id,token,platform,updated_at')
-
-  if (error) {
-    console.error('[Push] push_tokens upsert result', {
-      ok: false,
-      userId,
-      platform,
-      error,
-    })
-  } else {
-    console.log('[Push] push_tokens upsert result', {
-      ok: true,
-      userId,
-      platform,
-      data,
-    })
-  }
-}
-
 function cleanupListeners(handles: PluginListenerHandle[]) {
   for (const handle of handles.splice(0)) {
     try {
-      void handle.remove().catch((err) => {
-        console.error('[Push] Failed to remove listener', err)
+      void handle.remove().catch((error) => {
+        console.error('[Push] listener cleanup failed', error)
       })
-    } catch (err) {
-      console.error('[Push] Failed to remove listener', err)
+    } catch (error) {
+      console.error('[Push] listener cleanup failed', error)
     }
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../services/supabaseClient'
+import { FOREGROUND_PUSH_EVENT } from '../hooks/usePushNotifications'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -238,6 +239,24 @@ export default function NotificationsBell({
       supabase.removeChannel(channel)
     }
   }, [authUserId, fetchNotifications, addToast])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const handleForegroundPush = (event: Event) => {
+      const detail = (event as CustomEvent<{ title?: string; message?: string; type?: string }>).detail
+      const title = detail?.title?.trim()
+      const message = detail?.message?.trim()
+      if (!title && !message) return
+
+      addToast(title || 'Notification', message || '', detail?.type || 'new_request')
+    }
+
+    window.addEventListener(FOREGROUND_PUSH_EVENT, handleForegroundPush as EventListener)
+    return () => {
+      window.removeEventListener(FOREGROUND_PUSH_EVENT, handleForegroundPush as EventListener)
+    }
+  }, [addToast])
 
 
   const handleToggle = useCallback(() => {

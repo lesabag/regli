@@ -5,6 +5,7 @@ import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 import { buildProviderCapabilityRows, buildProviderSignupCapabilities } from '../lib/providerCapabilities'
+import { disableCurrentPushTokenForUser } from './usePushNotifications'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -636,6 +637,8 @@ export function useAuth() {
     profileRequestRef.current += 1
 
     try {
+      await disableCurrentPushTokenForUser(user?.id ?? session?.user?.id ?? null)
+
       const { error } = await withTimeout(
         supabase.auth.signOut(),
         SESSION_INIT_TIMEOUT_MS,
@@ -654,7 +657,7 @@ export function useAuth() {
       setSession(null)
       setUser(null)
     }
-  }, [])
+  }, [session?.user?.id, user?.id])
 
   return {
     session,
