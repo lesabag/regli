@@ -5,6 +5,7 @@ import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
+import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedPushDeepLink } from './lib/pushNotifications'
 import { supabase } from './services/supabaseClient'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
@@ -112,6 +113,7 @@ export default function App() {
   const [customerWowToken, setCustomerWowToken] = useState(0)
   const [stripeReturnToken, setStripeReturnToken] = useState(0)
   const [oauthRoutePending, setOauthRoutePending] = useState(() => isWebOAuthCallbackInProgress())
+  const [, setPendingPushRoute] = useState<ParsedPushDeepLink | null>(null)
   const handleSplashDone = useCallback(() => setSplashDone(true), [])
 
   // ── Analytics: identify + session ───────────────────────────
@@ -200,6 +202,13 @@ export default function App() {
         return
       }
 
+      const pushRoute = parsePushDeepLink(value)
+      if (pushRoute) {
+        emitPushDeepLink(pushRoute)
+        void Browser.close().catch(() => undefined)
+        return
+      }
+
       if (isStripeReturn) {
         console.log('[App] Native Stripe deep link received', { url: value })
         setStripeReturnToken((current) => current + 1)
@@ -226,6 +235,24 @@ export default function App() {
 
     return () => {
       void listener?.remove()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const handlePushDeepLink = (event: Event) => {
+      const route = (event as CustomEvent<ParsedPushDeepLink>).detail
+      if (!route) return
+
+      // Placeholder routing handoff for future push-driven navigation.
+      // Real screen-level navigation can subscribe here later without changing push payloads.
+      setPendingPushRoute(route)
+    }
+
+    window.addEventListener(PUSH_DEEP_LINK_EVENT, handlePushDeepLink as EventListener)
+    return () => {
+      window.removeEventListener(PUSH_DEEP_LINK_EVENT, handlePushDeepLink as EventListener)
     }
   }, [])
 

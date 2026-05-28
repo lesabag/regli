@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../services/supabaseClient'
-import { FOREGROUND_PUSH_EVENT } from '../hooks/usePushNotifications'
+import {
+  buildPushDedupKey,
+  FOREGROUND_PUSH_EVENT,
+  getPushDedupWindowMs,
+  normalizePushPayload,
+  type PushNotificationPayload,
+} from '../lib/pushNotifications'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -22,8 +28,8 @@ interface Toast {
   message: string
   type: string
   createdAt: number
+  dedupKey: string
 }
-
 const TOAST_DURATION = 4000
 // ─── Notification type config ───────────────────────────────────
 
@@ -36,6 +42,55 @@ interface TypeConfig {
 }
 
 const TYPE_CONFIG: Record<string, TypeConfig> = {
+  provider_accepted: {
+    bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
+    iconPath: 'M20 6L9 17l-5-5',
+  },
+  provider_on_the_way: {
+    bg: '#DBEAFE', color: '#1D4ED8', border: '#BFDBFE',
+    iconPath: 'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z M12 7a3 3 0 100 6 3 3 0 000-6z',
+  },
+  provider_arrived: {
+    bg: '#DBEAFE', color: '#1D4ED8', border: '#BFDBFE',
+    iconPath: 'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z M12 7a3 3 0 100 6 3 3 0 000-6z',
+  },
+  service_started: {
+    bg: '#EDE9FE', color: '#6D28D9', border: '#DDD6FE',
+    iconPath: 'M12 6v6l4 2',
+  },
+  service_completed: {
+    bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
+    iconPath: 'M22 11.08V12a10 10 0 11-5.93-9.14 M22 4L12 14.01l-3-3',
+  },
+  payment_update: {
+    bg: '#EDE9FE', color: '#6D28D9', border: '#DDD6FE',
+    iconPath: 'M1 4h22v16H1z M1 10h22',
+    iconViewBox: '0 0 24 24',
+  },
+  dispute_update: {
+    bg: '#FEF3C7', color: '#B45309', border: '#FCD34D',
+    iconPath: 'M12 9v4 M12 17h.01 M10.29 3.86l-8.08 14A2 2 0 003.95 21h16.1a2 2 0 001.74-3.14l-8.08-14a2 2 0 00-3.42 0z',
+  },
+  new_dispatch_offer: {
+    bg: '#FFF7ED', color: '#C2410C', border: '#FED7AA',
+    iconPath: 'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 01-3.46 0',
+  },
+  dispatch_expiring_soon: {
+    bg: '#FEF3C7', color: '#B45309', border: '#FCD34D',
+    iconPath: 'M12 6v6l4 2',
+  },
+  scheduled_booking_reminder: {
+    bg: '#E0F2FE', color: '#0369A1', border: '#BAE6FD',
+    iconPath: 'M8 2v4 M16 2v4 M3 10h18 M5 6h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2z',
+  },
+  client_confirmation: {
+    bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
+    iconPath: 'M20 6L9 17l-5-5',
+  },
+  payout_update: {
+    bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
+    iconPath: 'M12 1v22 M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6',
+  },
   job_accepted: {
     bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
     iconPath: 'M20 6L9 17l-5-5',
@@ -149,21 +204,28 @@ export default function NotificationsBell({
     return groups
   }, [notifications])
 
-  const addToast = useCallback((title: string, message: string, type: string) => {
-    // Deduplicate: don't show toast if similar one exists in last 2 seconds
+  const addToast = useCallback((payload: PushNotificationPayload) => {
     setToasts((prev) => {
-      const key = `${type}:${title}:${message}`.toLowerCase()
+      const dedupKey = buildPushDedupKey(payload)
+      const dedupWindowMs = getPushDedupWindowMs(payload.type)
       const recentDupe = prev.find(t => {
-        const tKey = `${t.type}:${t.title}:${t.message}`.toLowerCase()
-        return tKey === key && (Date.now() - t.createdAt) < 2000
+        return t.dedupKey === dedupKey && (Date.now() - t.createdAt) < dedupWindowMs
       })
-      if (recentDupe) return prev // Don't add duplicate
+      if (recentDupe) return prev
 
       const id = crypto.randomUUID()
-      const newToasts = [...prev, { id, title, message, type, createdAt: Date.now() }]
+      const newToast = {
+        id,
+        title: payload.title,
+        message: payload.body,
+        type: payload.type,
+        createdAt: Date.now(),
+        dedupKey,
+      }
+      const newToasts = [...prev, newToast]
       setTimeout(() => {
         setToasts((current) => current.filter((t) => t.id !== id))
-      }, TOAST_DURATION)
+      }, Math.max(4000, dedupWindowMs))
       return newToasts
     })
   }, [])
@@ -229,7 +291,13 @@ export default function NotificationsBell({
           fetchNotifications(authUserId)
           const row = payload.new as Notification | undefined
           if (row && isBellVisibleNotification(row)) {
-            addToast(row.title, row.message, row.type)
+            addToast(normalizePushPayload({
+              type: row.type,
+              title: row.title,
+              body: row.message,
+              related_job_id: row.related_job_id,
+              created_at: row.created_at,
+            }))
           }
         }
       )
@@ -244,12 +312,9 @@ export default function NotificationsBell({
     if (typeof window === 'undefined') return undefined
 
     const handleForegroundPush = (event: Event) => {
-      const detail = (event as CustomEvent<{ title?: string; message?: string; type?: string }>).detail
-      const title = detail?.title?.trim()
-      const message = detail?.message?.trim()
-      if (!title && !message) return
-
-      addToast(title || 'Notification', message || '', detail?.type || 'new_request')
+      const detail = (event as CustomEvent<PushNotificationPayload>).detail
+      if (!detail) return
+      addToast(normalizePushPayload(detail))
     }
 
     window.addEventListener(FOREGROUND_PUSH_EVENT, handleForegroundPush as EventListener)

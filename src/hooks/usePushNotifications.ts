@@ -2,10 +2,17 @@ import { useEffect, useRef } from 'react'
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
 import { supabase } from '../services/supabaseClient'
+import {
+  buildPushDeepLink,
+  emitPushDeepLink,
+  FOREGROUND_PUSH_EVENT,
+  normalizePushPayload,
+  parsePushDeepLink,
+  shouldSuppressForegroundPush,
+} from '../lib/pushNotifications'
 
 const PUSH_DEVICE_ID_STORAGE_KEY = 'regli:push-device-id'
 const PUSH_REGISTRATION_STORAGE_KEY = 'regli:push-registration'
-export const FOREGROUND_PUSH_EVENT = 'regli:foreground-push'
 
 type PushPlatform = 'ios' | 'android' | 'web'
 
@@ -63,19 +70,27 @@ function emitForegroundPushEvent(notification: {
   data?: Record<string, unknown>
 }) {
   if (typeof window === 'undefined') return
-  const title = typeof notification.title === 'string' ? notification.title : ''
-  const message = typeof notification.body === 'string' ? notification.body : ''
-  if (!title && !message) return
+  const payload = normalizePushPayload({
+    type: typeof notification.data?.type === 'string' ? notification.data.type : 'new_request',
+    title: notification.title,
+    body: notification.body,
+    deepLink: typeof notification.data?.deepLink === 'string'
+      ? notification.data.deepLink
+      : buildPushDeepLink(
+          typeof notification.data?.type === 'string' ? notification.data.type : 'new_request',
+          typeof notification.data?.related_job_id === 'string' ? notification.data.related_job_id : null,
+        ),
+    related_job_id: typeof notification.data?.related_job_id === 'string'
+      ? notification.data.related_job_id
+      : null,
+    created_at: typeof notification.data?.created_at === 'string'
+      ? notification.data.created_at
+      : undefined,
+  })
 
-  window.dispatchEvent(new CustomEvent(FOREGROUND_PUSH_EVENT, {
-    detail: {
-      title,
-      message,
-      type: typeof notification.data?.type === 'string'
-        ? notification.data.type
-        : 'new_request',
-    },
-  }))
+  if (shouldSuppressForegroundPush(payload)) return
+
+  window.dispatchEvent(new CustomEvent(FOREGROUND_PUSH_EVENT, { detail: payload }))
 }
 
 async function upsertPushToken({
@@ -212,8 +227,14 @@ export function usePushNotifications(userId: string | null) {
           })
         }))
 
-        listenerHandles.push(await PushNotifications.addListener('pushNotificationActionPerformed', () => {
-          // Future deep-link / navigation handling can be added here when remote pushes go live.
+        listenerHandles.push(await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+          const deepLink = typeof action.notification.data?.deepLink === 'string'
+            ? action.notification.data.deepLink
+            : null
+          const parsed = deepLink ? parsePushDeepLink(deepLink) : null
+          if (parsed) {
+            emitPushDeepLink(parsed)
+          }
         }))
 
         if (!isActive) {

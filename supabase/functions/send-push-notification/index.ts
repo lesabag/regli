@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
+import { buildPushEnvelope, buildPushDedupKey, getPushDedupWindowMs } from '../_shared/pushNotifications.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -63,6 +64,9 @@ serve(async (req: Request) => {
       inAppType?: string
       inAppTitle?: string
       inAppMessage?: string
+      notificationType?: string
+      relatedJobId?: string
+      deepLink?: string
     }
     try {
       body = await req.json()
@@ -74,6 +78,16 @@ serve(async (req: Request) => {
     if (!title || !notifBody) {
       return jsonResp({ error: 'Missing title or body' }, 400)
     }
+
+    const envelope = buildPushEnvelope({
+      type: body.notificationType ?? body.inAppType ?? notifData?.type ?? 'new_request',
+      title,
+      body: notifBody,
+      relatedJobId: body.relatedJobId ?? notifData?.jobId ?? notifData?.related_job_id ?? null,
+      deepLink: body.deepLink ?? notifData?.deepLink ?? null,
+    })
+    const dedupKey = buildPushDedupKey(envelope)
+    const dedupWindowMs = getPushDedupWindowMs(envelope.type)
 
     // Fetch push tokens
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
@@ -104,8 +118,8 @@ serve(async (req: Request) => {
       query = query.in('user_id', walkerIds)
 
       // Create in-app notifications for all online walkers (new request broadcast)
-      const jobId = notifData?.jobId || null
-      const inAppType = body.inAppType || 'new_request'
+      const jobId = envelope.related_job_id
+      const inAppType = body.inAppType || envelope.type || 'new_request'
       const inAppTitle = body.inAppTitle || title
       const inAppMessage = body.inAppMessage || notifBody
 
@@ -187,7 +201,13 @@ serve(async (req: Request) => {
               sound: 'default',
               badge: 1,
             },
-            ...(notifData || {}),
+            ...((notifData || {}) as Record<string, string>),
+            type: envelope.type,
+            related_job_id: envelope.related_job_id ?? '',
+            deepLink: envelope.deepLink ?? '',
+            created_at: envelope.created_at,
+            dedupKey,
+            dedupWindowMs: String(dedupWindowMs),
           }),
         })
 
