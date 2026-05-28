@@ -661,7 +661,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [dismissedCompletionReviewIds, setDismissedCompletionReviewIds] = useState<Set<string>>(new Set())
 
-  const sendPushEvent = useCallback(async ({
+  const sendPushEvent = useCallback(({
     type,
     title,
     body,
@@ -676,24 +676,33 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }) => {
     if (!targetUserId) return
 
-    const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
-      body: {
-        title,
-        body,
-        targetUserId,
-        notificationType: type,
-        relatedJobId,
-      },
-    })
+    void (async () => {
+      try {
+        const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+          body: {
+            title,
+            body,
+            targetUserId,
+            notificationType: type,
+            relatedJobId,
+          },
+        })
 
-    if (pushError) {
-      console.error('[Push] Failed to send event', {
-        type,
-        targetUserId,
-        relatedJobId,
-        error: pushError,
-      })
-    }
+        if (pushError) {
+          console.warn('[push] failed to send lifecycle push', {
+            type,
+            relatedJobId,
+            error: pushError,
+          })
+        }
+      } catch (error) {
+        console.warn('[push] failed to send lifecycle push', {
+          type,
+          relatedJobId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    })()
   }, [])
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())

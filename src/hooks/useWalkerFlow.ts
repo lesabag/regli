@@ -461,7 +461,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setSuccessMessage(message)
   }, [])
 
-  const sendPushEvent = useCallback(async ({
+  const sendPushEvent = useCallback(({
     type,
     title,
     body,
@@ -479,24 +479,33 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (!targetUserId) return
     if (suppressWhenForeground && isDocumentVisibleRef.current) return
 
-    const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
-      body: {
-        title,
-        body,
-        targetUserId,
-        notificationType: type,
-        relatedJobId,
-      },
-    })
+    void (async () => {
+      try {
+        const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+          body: {
+            title,
+            body,
+            targetUserId,
+            notificationType: type,
+            relatedJobId,
+          },
+        })
 
-    if (pushError) {
-      console.error('[Push] Failed to send event', {
-        type,
-        targetUserId,
-        relatedJobId,
-        error: pushError,
-      })
-    }
+        if (pushError) {
+          console.warn('[push] failed to send lifecycle push', {
+            type,
+            relatedJobId,
+            error: pushError,
+          })
+        }
+      } catch (error) {
+        console.warn('[push] failed to send lifecycle push', {
+          type,
+          relatedJobId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    })()
   }, [])
 
   const clearRetainedIncomingOffer = useCallback((requestId?: string | null) => {
