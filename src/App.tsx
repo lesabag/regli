@@ -305,6 +305,15 @@ export default function App() {
   const shouldShowProfileBootstrap = splashDone && hasAuthenticatedUser && !profile && !authError
   const shouldShowProfileError = splashDone && hasAuthenticatedUser && !profile && authError
 
+  useEffect(() => {
+    if (!splashDone || !dashboardProfile?.id) return
+    console.log('[push-native] authenticated app flow mounted', {
+      role: dashboardProfile.role,
+      userId: dashboardProfile.id,
+      native: Capacitor.isNativePlatform(),
+    })
+  }, [dashboardProfile?.id, dashboardProfile?.role, splashDone])
+
   return (
     <>
       {/* ── Layer 1: Main content (renders behind splash) ──────── */}

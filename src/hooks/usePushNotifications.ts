@@ -163,10 +163,20 @@ export async function disableCurrentPushTokenForUser(userId: string | null) {
  */
 export function usePushNotifications(userId: string | null) {
   const activeRegistrationKeyRef = useRef<string | null>(null)
+  const lastLoggedRegistrationKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const platform = Capacitor.getPlatform()
     const isNativePlatform = Capacitor.isNativePlatform()
+    const registrationKey = userId ? `${platform}:${userId}` : null
+
+    if (lastLoggedRegistrationKeyRef.current !== registrationKey) {
+      lastLoggedRegistrationKeyRef.current = registrationKey
+      console.log('[push-native] hook mounted')
+      console.log('[push-native] platform:', platform)
+      console.log('[push-native] user id:', userId)
+    }
+
     if (!isNativePlatform || !isSupportedNativePushPlatform(platform)) {
       return undefined
     }
@@ -174,8 +184,6 @@ export function usePushNotifications(userId: string | null) {
     if (!userId) {
       return undefined
     }
-
-    const registrationKey = `${platform}:${userId}`
     const listenerHandles: PluginListenerHandle[] = []
     let isActive = true
 
@@ -191,9 +199,11 @@ export function usePushNotifications(userId: string | null) {
     async function setup() {
       try {
         let permission = await PushNotifications.checkPermissions()
+        console.log('[push-native] permission status before request:', permission.receive)
 
         if (permission.receive === 'prompt') {
           permission = await PushNotifications.requestPermissions()
+          console.log('[push-native] requestPermissions result:', permission.receive)
         }
 
         if (permission.receive !== 'granted') {
@@ -202,13 +212,15 @@ export function usePushNotifications(userId: string | null) {
 
         listenerHandles.push(await PushNotifications.addListener('registration', async (token) => {
           if (!token.value || !isActive) return
-          await upsertPushToken({
+          console.log('[push-native] registration token received')
+          const ok = await upsertPushToken({
             userId: uid,
             token: token.value,
             platform: pushPlatform,
             deviceId,
             enabled: true,
           })
+          console.log(`[push-native] token upsert ${ok ? 'success' : 'failure'}`)
         }))
 
         listenerHandles.push(await PushNotifications.addListener('registrationError', (error) => {
@@ -242,6 +254,7 @@ export function usePushNotifications(userId: string | null) {
           return
         }
 
+        console.log('[push-native] register called')
         await PushNotifications.register()
       } catch (error) {
         console.error('[Push] native push setup failed', {
