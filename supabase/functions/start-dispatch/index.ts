@@ -27,6 +27,7 @@ type DispatchAttemptPushParams = {
   requestId: string
   walkerId: string
   attemptId: string
+  serviceType?: string | null
 }
 
 function getScheduledDispatchLeadMinutes(): number {
@@ -199,7 +200,7 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
 
     const localizedCopy = getPushCopy('new_dispatch_offer', {
       language: 'en',
-      serviceType: requestServiceType,
+      serviceType: params.serviceType ?? null,
     })
     const response = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
       method: 'POST',
@@ -218,7 +219,7 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
         data: {
           dedupId: params.attemptId,
           dispatchAttemptId: params.attemptId,
-          serviceType: requestServiceType,
+          serviceType: params.serviceType ?? null,
         },
       }),
     })
@@ -1563,6 +1564,7 @@ serve(async (req) => {
         requestId,
         attemptId,
         walkerId: verifiedAttemptWalkerId,
+        serviceType: requestRow.service_type ?? null,
       })
     } else {
       console.warn('[start-dispatch] dispatch offer push skipped', {

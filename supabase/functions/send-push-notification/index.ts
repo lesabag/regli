@@ -13,6 +13,13 @@ const APNS_HOSTS = {
   production: 'https://api.push.apple.com',
 } as const
 
+const SAFE_PUSH_COPY_FALLBACKS: Record<string, { title: string; body: string }> = {
+  new_dispatch_offer: {
+    title: 'New request nearby',
+    body: 'A new customer is looking for help right now.',
+  },
+}
+
 type ApnsEnvironment = keyof typeof APNS_HOSTS
 
 /**
@@ -92,13 +99,12 @@ serve(async (req: Request) => {
     }
 
     const { title, body: notifBody, targetUserId, data: notifData } = body
-    if (!title || !notifBody) {
-      return jsonResp({ error: 'Missing title or body' }, 400)
-    }
 
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
     const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
     const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
+    const notificationType =
+      body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request'
     const languageResolution = targetUserId
       ? await resolveTargetUserLanguage({
           supabaseAdmin,
@@ -114,22 +120,44 @@ serve(async (req: Request) => {
     console.log(`[Push] targetUserId=${targetUserId ?? '<broadcast>'}`)
     console.log(`[Push] resolvedLanguage=${resolvedLanguage}`)
     console.log(`[Push] source=${languageResolution.source}`)
-    console.log(`[Push] notificationType=${body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request'}`)
-    const localizedCopy = getPushCopy(
-      body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
-      {
+    console.log(`[Push] notificationType=${notificationType}`)
+
+    const safeEnglishCopy = SAFE_PUSH_COPY_FALLBACKS[notificationType] ?? {
+      title: 'Notification',
+      body: 'Open Regli for details.',
+    }
+
+    let localizedCopy: ReturnType<typeof getPushCopy> = null
+    try {
+      localizedCopy = getPushCopy(notificationType, {
         language: resolvedLanguage,
         providerName: readString(notifData?.providerName) ?? readString(notifData?.provider_name) ?? null,
         walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
         amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
         serviceType: readString(notifData?.serviceType) ?? readString(notifData?.service_type) ?? null,
-      },
-    )
-    const effectiveTitle = localizedCopy?.title ?? title
-    const effectiveBody = localizedCopy?.body ?? notifBody
+      })
+    } catch {
+      localizedCopy = null
+    }
+
+    const hasLocalizedCopy = !!(localizedCopy?.title?.trim() && localizedCopy?.body?.trim())
+    if (hasLocalizedCopy) {
+      console.log('[Push] localized copy resolved')
+    } else {
+      console.log('[Push] localized copy fallback used')
+    }
+
+    const effectiveTitle =
+      readString(title) ??
+      readString(localizedCopy?.title) ??
+      safeEnglishCopy.title
+    const effectiveBody =
+      readString(notifBody) ??
+      readString(localizedCopy?.body) ??
+      safeEnglishCopy.body
 
     const envelope = buildPushEnvelope({
-      type: body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
+      type: notificationType,
       title: effectiveTitle,
       body: effectiveBody,
       relatedJobId: body.relatedJobId ?? readString(notifData?.jobId) ?? readString(notifData?.related_job_id) ?? null,
@@ -245,6 +273,7 @@ serve(async (req: Request) => {
 
     for (const { token, user_id } of iosTokens) {
       try {
+        console.log(`[Push] sending APNS to targetUserId=${user_id}`)
         const payload: Record<string, unknown> = {
           aps: {
             alert: { title: effectiveTitle, body: effectiveBody },
