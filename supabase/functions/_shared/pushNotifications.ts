@@ -5,6 +5,7 @@ export type PushNotificationType =
   | 'service_started'
   | 'service_completed'
   | 'rating_reminder'
+  | 'five_star_rating'
   | 'future_booking_reminder'
   | 'weekly_recurring_booking_reminder'
   | 'payment_update'
@@ -41,6 +42,7 @@ const PUSH_DEDUP_WINDOWS_MS: Record<string, number> = {
   new_request: 20_000,
   dispatch_expiring_soon: 15_000,
   rating_reminder: 30_000,
+  five_star_rating: 30_000,
   future_booking_reminder: 60_000,
   weekly_recurring_booking_reminder: 60_000,
 }
@@ -50,7 +52,12 @@ export function buildPushDeepLink(type: string, relatedJobId?: string | null): s
   if (type === 'new_dispatch_offer' || type === 'dispatch_started' || type === 'dispatch_expiring_soon' || type === 'new_request' || type === 'scheduled_booking_reminder') {
     return `regli://dispatch/${relatedJobId}`
   }
-  if (type === 'future_booking_reminder' || type === 'weekly_recurring_booking_reminder' || type === 'rating_reminder') {
+  if (
+    type === 'future_booking_reminder' ||
+    type === 'weekly_recurring_booking_reminder' ||
+    type === 'rating_reminder' ||
+    type === 'five_star_rating'
+  ) {
     return `regli://booking/${relatedJobId}`
   }
   if (type === 'payment_update' || type === 'payout_update' || type === 'payment_success' || type === 'payment_received') {

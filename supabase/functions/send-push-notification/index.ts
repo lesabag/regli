@@ -437,19 +437,19 @@ async function resolveTargetUserLanguage(params: {
   payloadProfileLanguage: string | null
   appLanguage: string | null
 }): Promise<LanguageResolutionResult> {
-  const metadataLanguage = await getTargetUserPreferredLanguage(params.supabaseAdmin, params.targetUserId)
-  if (metadataLanguage) {
-    return {
-      resolvedLanguage: resolvePushCopyLanguage(metadataLanguage),
-      source: 'user_metadata',
-    }
-  }
-
   const profileLanguage = await getTargetUserProfileLanguage(params.supabaseAdmin, params.targetUserId)
   if (profileLanguage) {
     return {
       resolvedLanguage: resolvePushCopyLanguage(profileLanguage),
       source: 'profile',
+    }
+  }
+
+  const metadataLanguage = await getTargetUserPreferredLanguage(params.supabaseAdmin, params.targetUserId)
+  if (metadataLanguage) {
+    return {
+      resolvedLanguage: resolvePushCopyLanguage(metadataLanguage),
+      source: 'user_metadata',
     }
   }
 

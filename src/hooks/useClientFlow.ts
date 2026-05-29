@@ -3021,13 +3021,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
           dogCount: completedJob?.dog_count ?? fallbackJob?.dog_count ?? null,
           serviceType: completedJob?.service_type ?? fallbackJob?.service_type ?? null,
         })
-        void sendPushEvent({
-          type: 'payout_update',
-          targetUserId: pending.walkerId,
-          relatedJobId: pending.jobId,
-          deepLink: 'regli://wallet',
-          copyContext: { walkerName: pending.walkerName },
-        })
       }
 
       void fetchCurrentAndLists()
@@ -3326,23 +3319,48 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       const walkerLabel = walkerNameById.get(walkerId) || completionJob.walkerName || 'Walker'
+      const didCreateRating = !insertError
+      const ratingPushType = rating === 5 ? 'five_star_rating' : 'rating_reminder'
+      const ratingPushDedupId = `${completionJob.jobId}:${ratingPushType}`
       try {
-        await createNotification({
-          userId: profileId,
-          type: 'rating_submitted',
-          title: 'Thanks for rating',
-          message: `You rated ${walkerLabel} ${rating} stars.`,
-          relatedJobId: completionJob.jobId,
-        })
-        await createNotification({
-          userId: walkerId,
-          type: 'new_rating',
-          title: 'New Rating Received',
-          message: trimmedReview
-            ? `You received a ${rating}-star rating: "${trimmedReview}"`
-            : `You received a ${rating}-star rating!`,
-          relatedJobId: completionJob.jobId,
-        })
+        if (didCreateRating) {
+          await createNotification({
+            userId: profileId,
+            type: 'rating_submitted',
+            title: 'Thanks for rating',
+            message: `You rated ${walkerLabel} ${rating} stars.`,
+            relatedJobId: completionJob.jobId,
+          })
+          await createNotification({
+            userId: walkerId,
+            type: 'new_rating',
+            title: 'New Rating Received',
+            message: trimmedReview
+              ? `You received a ${rating}-star rating: "${trimmedReview}"`
+              : `You received a ${rating}-star rating!`,
+            relatedJobId: completionJob.jobId,
+          })
+          const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+            body: {
+              targetUserId: walkerId,
+              notificationType: ratingPushType,
+              relatedJobId: completionJob.jobId,
+              deepLink: buildPushDeepLink(ratingPushType, completionJob.jobId),
+              data: {
+                dedupId: ratingPushDedupId,
+                appLanguage: i18n.resolvedLanguage || 'en',
+              },
+            },
+          })
+
+          if (pushError) {
+            console.warn('[push] failed to send rating push', {
+              type: ratingPushType,
+              relatedJobId: completionJob.jobId,
+              error: pushError,
+            })
+          }
+        }
       } catch {
         // noop
       }
