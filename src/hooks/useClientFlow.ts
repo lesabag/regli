@@ -21,7 +21,7 @@ import {
   isCompletionReviewRequired,
 } from '../utils/completionReview'
 import i18n from '../i18n'
-import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
+import type { PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 
@@ -681,12 +681,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (!targetUserId) return
     const eventDedupId = dedupId?.trim() || relatedJobId
     const appLanguage = i18n.resolvedLanguage || 'en'
-    const localizedCopy = getPushCopy(type, {
-      language: appLanguage,
-      ...copyContext,
-    })
-    const title = localizedCopy?.title ?? 'Notification'
-    const body = localizedCopy?.body ?? ''
     const eventKey = `${type}:${eventDedupId}:${targetUserId}`
     const dedupWindowMs = getPushDedupWindowMs(type)
     const now = Date.now()
@@ -698,8 +692,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
       try {
         const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
           body: {
-            title,
-            body,
             targetUserId,
             notificationType: type,
             relatedJobId,
@@ -3020,6 +3012,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
           paymentStatus: completedJob?.payment_status ?? fallbackJob?.payment_status ?? null,
           dogCount: completedJob?.dog_count ?? fallbackJob?.dog_count ?? null,
           serviceType: completedJob?.service_type ?? fallbackJob?.service_type ?? null,
+        })
+        void sendPushEvent({
+          type: 'service_completed',
+          targetUserId: pending.walkerId,
+          relatedJobId: pending.jobId,
         })
       }
 

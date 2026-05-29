@@ -5,7 +5,7 @@ import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { buildPushDeepLink, getPushDedupWindowMs } from '../lib/pushNotifications'
-import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
+import type { PushCopyContext } from '../lib/pushCopy'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
   isCompletionReviewRequired,
@@ -485,12 +485,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (suppressWhenForeground && targetUserId === profileId && isDocumentVisibleRef.current) return
     const eventDedupId = dedupId?.trim() || relatedJobId
     const appLanguage = i18n.resolvedLanguage || 'en'
-    const localizedCopy = getPushCopy(type, {
-      language: appLanguage,
-      ...copyContext,
-    })
-    const title = localizedCopy?.title ?? 'Notification'
-    const body = localizedCopy?.body ?? ''
     const eventKey = `${type}:${eventDedupId}:${targetUserId}`
     const dedupWindowMs = getPushDedupWindowMs(type)
     const now = Date.now()
@@ -502,8 +496,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       try {
         const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
           body: {
-            title,
-            body,
             targetUserId,
             notificationType: type,
             relatedJobId,
