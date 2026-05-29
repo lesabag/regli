@@ -96,12 +96,25 @@ serve(async (req: Request) => {
       return jsonResp({ error: 'Missing title or body' }, 400)
     }
 
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
     const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
-    const profileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
-    const preferredLanguage = targetUserId
-      ? await getTargetUserPreferredLanguage(supabaseAdminAuthClient(supabaseUrl, serviceRoleKey), targetUserId)
-      : null
-    const resolvedLanguage = resolvePushCopyLanguage(preferredLanguage, profileLanguage, appLanguage)
+    const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
+    const languageResolution = targetUserId
+      ? await resolveTargetUserLanguage({
+          supabaseAdmin,
+          targetUserId,
+          payloadProfileLanguage,
+          appLanguage,
+        })
+      : {
+          resolvedLanguage: resolvePushCopyLanguage(payloadProfileLanguage, appLanguage),
+          source: payloadProfileLanguage ? 'profile' : appLanguage ? 'fallback' : 'fallback',
+        }
+    const resolvedLanguage = languageResolution.resolvedLanguage
+    console.log(`[Push] targetUserId=${targetUserId ?? '<broadcast>'}`)
+    console.log(`[Push] resolvedLanguage=${resolvedLanguage}`)
+    console.log(`[Push] source=${languageResolution.source}`)
+    console.log(`[Push] notificationType=${body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request'}`)
     const localizedCopy = getPushCopy(
       body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
       {
@@ -124,8 +137,6 @@ serve(async (req: Request) => {
     })
     const dedupKey = buildPushDedupKey(envelope)
     const dedupWindowMs = getPushDedupWindowMs(envelope.type)
-
-    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
 
     let walkerIds: string[] = []
 
@@ -385,8 +396,37 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null
 }
 
-function supabaseAdminAuthClient(url: string, serviceRoleKey: string) {
-  return createClient(url, serviceRoleKey)
+type LanguageResolutionResult = {
+  resolvedLanguage: 'en' | 'he'
+  source: 'user_metadata' | 'profile' | 'fallback'
+}
+
+async function resolveTargetUserLanguage(params: {
+  supabaseAdmin: ReturnType<typeof createClient>
+  targetUserId: string
+  payloadProfileLanguage: string | null
+  appLanguage: string | null
+}): Promise<LanguageResolutionResult> {
+  const metadataLanguage = await getTargetUserPreferredLanguage(params.supabaseAdmin, params.targetUserId)
+  if (metadataLanguage) {
+    return {
+      resolvedLanguage: resolvePushCopyLanguage(metadataLanguage),
+      source: 'user_metadata',
+    }
+  }
+
+  const profileLanguage = await getTargetUserProfileLanguage(params.supabaseAdmin, params.targetUserId)
+  if (profileLanguage) {
+    return {
+      resolvedLanguage: resolvePushCopyLanguage(profileLanguage),
+      source: 'profile',
+    }
+  }
+
+  return {
+    resolvedLanguage: resolvePushCopyLanguage(params.payloadProfileLanguage, params.appLanguage),
+    source: 'fallback',
+  }
 }
 
 async function getTargetUserPreferredLanguage(
@@ -402,6 +442,24 @@ async function getTargetUserPreferredLanguage(
       readLanguageFromMetadata(data.user.app_metadata) ??
       null
     )
+  } catch {
+    return null
+  }
+}
+
+async function getTargetUserProfileLanguage(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle()
+
+    if (error || !data || typeof data !== 'object') return null
+    return readLanguageFromMetadata(data)
   } catch {
     return null
   }
