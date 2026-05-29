@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import { buildPushEnvelope, buildPushDedupKey, getPushDedupWindowMs } from '../_shared/pushNotifications.ts'
+import { getPushCopy, resolvePushCopyLanguage } from '../_shared/pushCopy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -95,10 +96,28 @@ serve(async (req: Request) => {
       return jsonResp({ error: 'Missing title or body' }, 400)
     }
 
+    const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
+    const profileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
+    const preferredLanguage = targetUserId
+      ? await getTargetUserPreferredLanguage(supabaseAdminAuthClient(supabaseUrl, serviceRoleKey), targetUserId)
+      : null
+    const resolvedLanguage = resolvePushCopyLanguage(preferredLanguage, profileLanguage, appLanguage)
+    const localizedCopy = getPushCopy(
+      body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
+      {
+        language: resolvedLanguage,
+        providerName: readString(notifData?.providerName) ?? readString(notifData?.provider_name) ?? null,
+        walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
+        amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
+      },
+    )
+    const effectiveTitle = localizedCopy?.title ?? title
+    const effectiveBody = localizedCopy?.body ?? notifBody
+
     const envelope = buildPushEnvelope({
       type: body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request',
-      title,
-      body: notifBody,
+      title: effectiveTitle,
+      body: effectiveBody,
       relatedJobId: body.relatedJobId ?? readString(notifData?.jobId) ?? readString(notifData?.related_job_id) ?? null,
       deepLink: body.deepLink ?? readString(notifData?.deepLink) ?? readString(notifData?.deep_link) ?? null,
       dedupId: readString(notifData?.dedupId) ?? readString(notifData?.dedup_id) ?? null,
@@ -133,8 +152,8 @@ serve(async (req: Request) => {
 
       const jobId = envelope.related_job_id
       const inAppType = body.inAppType || envelope.type || 'new_request'
-      const inAppTitle = body.inAppTitle || title
-      const inAppMessage = body.inAppMessage || notifBody
+      const inAppTitle = body.inAppTitle || effectiveTitle
+      const inAppMessage = body.inAppMessage || effectiveBody
 
       const notifRows = walkerIds.map((wId) => ({
         user_id: wId,
@@ -216,7 +235,7 @@ serve(async (req: Request) => {
       try {
         const payload: Record<string, unknown> = {
           aps: {
-            alert: { title, body: notifBody },
+            alert: { title: effectiveTitle, body: effectiveBody },
             sound: 'default',
             ...(badge !== undefined ? { badge } : {}),
           },
@@ -364,6 +383,40 @@ function getApnsEnvironment(value: string | undefined): ApnsEnvironment {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null
+}
+
+function supabaseAdminAuthClient(url: string, serviceRoleKey: string) {
+  return createClient(url, serviceRoleKey)
+}
+
+async function getTargetUserPreferredLanguage(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId)
+    if (error || !data?.user) return null
+
+    return (
+      readLanguageFromMetadata(data.user.user_metadata) ??
+      readLanguageFromMetadata(data.user.app_metadata) ??
+      null
+    )
+  } catch {
+    return null
+  }
+}
+
+function readLanguageFromMetadata(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object') return null
+  const record = metadata as Record<string, unknown>
+  return (
+    readString(record.preferred_language) ??
+    readString(record.language) ??
+    readString(record.locale) ??
+    readString(record.app_language) ??
+    null
+  )
 }
 
 function shouldDeleteToken(status: number, body: string): boolean {

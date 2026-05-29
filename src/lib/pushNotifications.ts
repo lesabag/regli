@@ -7,6 +7,9 @@ export type PushNotificationType =
   | 'provider_arrived'
   | 'service_started'
   | 'service_completed'
+  | 'rating_reminder'
+  | 'future_booking_reminder'
+  | 'weekly_recurring_booking_reminder'
   | 'payment_update'
   | 'dispute_update'
   | 'new_dispatch_offer'
@@ -57,6 +60,9 @@ const PUSH_DEFINITIONS: Record<string, PushDefinition> = {
   provider_arrived: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 12_000, suppressForegroundWhenBellActive: true },
   service_started: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 8_000, suppressForegroundWhenBellActive: true },
   service_completed: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
+  rating_reminder: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 30_000, suppressForegroundWhenBellActive: true },
+  future_booking_reminder: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 60_000, suppressForegroundWhenBellActive: true },
+  weekly_recurring_booking_reminder: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 60_000, suppressForegroundWhenBellActive: true },
   payment_update: { audience: 'client', deepLinkKind: 'wallet', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
   dispute_update: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
   new_dispatch_offer: { audience: 'provider', deepLinkKind: 'dispatch', dedupWindowMs: 20_000, suppressForegroundWhenBellActive: true },

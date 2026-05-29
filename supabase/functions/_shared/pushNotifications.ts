@@ -4,6 +4,9 @@ export type PushNotificationType =
   | 'provider_arrived'
   | 'service_started'
   | 'service_completed'
+  | 'rating_reminder'
+  | 'future_booking_reminder'
+  | 'weekly_recurring_booking_reminder'
   | 'payment_update'
   | 'dispute_update'
   | 'new_dispatch_offer'
@@ -37,12 +40,18 @@ const PUSH_DEDUP_WINDOWS_MS: Record<string, number> = {
   dispatch_started: 20_000,
   new_request: 20_000,
   dispatch_expiring_soon: 15_000,
+  rating_reminder: 30_000,
+  future_booking_reminder: 60_000,
+  weekly_recurring_booking_reminder: 60_000,
 }
 
 export function buildPushDeepLink(type: string, relatedJobId?: string | null): string | null {
   if (!relatedJobId) return null
   if (type === 'new_dispatch_offer' || type === 'dispatch_started' || type === 'dispatch_expiring_soon' || type === 'new_request' || type === 'scheduled_booking_reminder') {
     return `regli://dispatch/${relatedJobId}`
+  }
+  if (type === 'future_booking_reminder' || type === 'weekly_recurring_booking_reminder' || type === 'rating_reminder') {
+    return `regli://booking/${relatedJobId}`
   }
   if (type === 'payment_update' || type === 'payout_update' || type === 'payment_success' || type === 'payment_received') {
     return 'regli://wallet'

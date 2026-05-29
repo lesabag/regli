@@ -14,6 +14,7 @@ import {
   normalizeProviderServiceType,
   providerSupportsRequestedService,
 } from '../_shared/providerServiceTypes.ts'
+import { getPushCopy } from '../_shared/pushCopy.ts'
 
 type StartDispatchBody = {
   requestId?: string
@@ -196,6 +197,7 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
       return
     }
 
+    const localizedCopy = getPushCopy('new_dispatch_offer', { language: 'en' })
     const response = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
       method: 'POST',
       headers: {
@@ -204,8 +206,8 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        title: 'New request nearby',
-        body: 'A new request is waiting for your response.',
+        title: localizedCopy?.title ?? 'New request nearby',
+        body: localizedCopy?.body ?? 'A new request is waiting for your response.',
         targetUserId: params.walkerId,
         notificationType: 'new_dispatch_offer',
         relatedJobId: params.requestId,

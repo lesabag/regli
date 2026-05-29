@@ -21,6 +21,7 @@ import {
   isCompletionReviewRequired,
 } from '../utils/completionReview'
 import i18n from '../i18n'
+import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 
@@ -664,23 +665,28 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
   const sendPushEvent = useCallback(({
     type,
-    title,
-    body,
     targetUserId,
     relatedJobId,
     deepLink,
     dedupId,
+    copyContext,
   }: {
     type: string
-    title: string
-    body: string
     targetUserId: string | null | undefined
     relatedJobId: string
     deepLink?: string | null
     dedupId?: string | null
+    copyContext?: PushCopyContext
   }) => {
     if (!targetUserId) return
     const eventDedupId = dedupId?.trim() || relatedJobId
+    const appLanguage = i18n.resolvedLanguage || 'en'
+    const localizedCopy = getPushCopy(type, {
+      language: appLanguage,
+      ...copyContext,
+    })
+    const title = localizedCopy?.title ?? 'Notification'
+    const body = localizedCopy?.body ?? ''
     const eventKey = `${type}:${eventDedupId}:${targetUserId}`
     const dedupWindowMs = getPushDedupWindowMs(type)
     const now = Date.now()
@@ -700,6 +706,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
             deepLink: deepLink ?? buildPushDeepLink(type, relatedJobId),
             data: {
               dedupId: eventDedupId,
+              appLanguage,
+              ...(copyContext?.providerName ? { providerName: copyContext.providerName } : {}),
+              ...(copyContext?.walkerName ? { walkerName: copyContext.walkerName } : {}),
+              ...(copyContext?.amountText ? { amountText: copyContext.amountText } : {}),
             },
           },
         })
@@ -2874,8 +2884,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
     if (currentJob?.walker_id) {
       void sendPushEvent({
         type: 'client_confirmation',
-        title: 'Client confirmed arrival',
-        body: 'The client confirmed arrival. You can start the service now.',
         targetUserId: currentJob.walker_id,
         relatedJobId: currentJobId,
         deepLink: buildPushDeepLink('client_confirmation', currentJobId),
@@ -3015,11 +3023,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
         })
         void sendPushEvent({
           type: 'payout_update',
-          title: 'Payout confirmed',
-          body: `Payment for ${pending.walkerName}'s completed service is on the way to your wallet.`,
           targetUserId: pending.walkerId,
           relatedJobId: pending.jobId,
           deepLink: 'regli://wallet',
+          copyContext: { walkerName: pending.walkerName },
         })
       }
 
@@ -3416,11 +3423,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
           })
           void sendPushEvent({
             type: 'payout_update',
-            title: 'Tip received',
-            body: `You received a ₪${amount} tip.`,
             targetUserId: tipJob.walkerId,
             relatedJobId: tipJob.jobId,
             deepLink: 'regli://wallet',
+            copyContext: { amountText: `₪${amount}` },
           })
         } catch {
           // noop
