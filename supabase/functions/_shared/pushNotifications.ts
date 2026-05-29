@@ -29,6 +29,7 @@ export interface PushNotificationEnvelope {
   deepLink: string | null
   related_job_id: string | null
   created_at: string
+  dedup_id?: string | null
 }
 
 const PUSH_DEDUP_WINDOWS_MS: Record<string, number> = {
@@ -40,8 +41,11 @@ const PUSH_DEDUP_WINDOWS_MS: Record<string, number> = {
 
 export function buildPushDeepLink(type: string, relatedJobId?: string | null): string | null {
   if (!relatedJobId) return null
-  if (type === 'new_dispatch_offer' || type === 'dispatch_started' || type === 'dispatch_expiring_soon' || type === 'new_request') {
+  if (type === 'new_dispatch_offer' || type === 'dispatch_started' || type === 'dispatch_expiring_soon' || type === 'new_request' || type === 'scheduled_booking_reminder') {
     return `regli://dispatch/${relatedJobId}`
+  }
+  if (type === 'payment_update' || type === 'payout_update' || type === 'payment_success' || type === 'payment_received') {
+    return 'regli://wallet'
   }
   return `regli://booking/${relatedJobId}`
 }
@@ -53,6 +57,7 @@ export function buildPushEnvelope(params: {
   relatedJobId?: string | null
   deepLink?: string | null
   createdAt?: string | null
+  dedupId?: string | null
 }): PushNotificationEnvelope {
   const type = params.type?.trim() || 'new_request'
   return {
@@ -62,10 +67,15 @@ export function buildPushEnvelope(params: {
     deepLink: params.deepLink?.trim() || buildPushDeepLink(type, params.relatedJobId ?? null),
     related_job_id: params.relatedJobId ?? null,
     created_at: params.createdAt || new Date().toISOString(),
+    dedup_id: params.dedupId?.trim() || null,
   }
 }
 
 export function buildPushDedupKey(envelope: PushNotificationEnvelope): string {
+  if (envelope.dedup_id?.trim()) {
+    return [envelope.type, envelope.dedup_id.trim()].join('::')
+  }
+
   return [
     envelope.type,
     envelope.related_job_id ?? '',

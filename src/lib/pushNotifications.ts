@@ -34,6 +34,8 @@ export interface PushNotificationPayload {
   deepLink: string | null
   related_job_id: string | null
   created_at: string
+  dedup_id?: string | null
+  dispatch_attempt_id?: string | null
 }
 
 export interface ParsedPushDeepLink {
@@ -98,7 +100,7 @@ export function buildPushDeepLink(type: string, relatedJobId?: string | null): s
     return `regli://booking/${relatedJobId}`
   }
   if (definition.deepLinkKind === 'wallet') {
-    return `regli://wallet/${relatedJobId}`
+    return 'regli://wallet'
   }
   return `regli://notifications/${relatedJobId}`
 }
@@ -109,22 +111,35 @@ export function normalizePushPayload(input: Partial<PushNotificationPayload> & {
   body?: string | null
   message?: string | null
   related_job_id?: string | null
+  relatedJobId?: string | null
   deepLink?: string | null
+  deep_link?: string | null
   created_at?: string | null
+  dedup_id?: string | null
+  dedupId?: string | null
+  dispatch_attempt_id?: string | null
+  dispatchAttemptId?: string | null
 }): PushNotificationPayload {
   const type = input.type?.trim() || 'new_request'
-  const relatedJobId = input.related_job_id ?? null
+  const relatedJobId = input.related_job_id ?? input.relatedJobId ?? null
   return {
     type,
     title: input.title?.trim() || 'Notification',
     body: input.body?.trim() || input.message?.trim() || '',
-    deepLink: input.deepLink?.trim() || buildPushDeepLink(type, relatedJobId),
+    deepLink: input.deepLink?.trim() || input.deep_link?.trim() || buildPushDeepLink(type, relatedJobId),
     related_job_id: relatedJobId,
     created_at: input.created_at || new Date().toISOString(),
+    dedup_id: input.dedup_id?.trim() || input.dedupId?.trim() || null,
+    dispatch_attempt_id: input.dispatch_attempt_id?.trim() || input.dispatchAttemptId?.trim() || null,
   }
 }
 
 export function buildPushDedupKey(payload: PushNotificationPayload): string {
+  const explicitDedupId = payload.dedup_id?.trim()
+  if (explicitDedupId) {
+    return [payload.type, explicitDedupId].join('::')
+  }
+
   return [
     payload.type,
     payload.related_job_id ?? '',

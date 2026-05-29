@@ -13,6 +13,7 @@ import {
   groupProviderAvailabilityRows,
   isProviderAvailableAt,
 } from '../utils/providerAvailability'
+import { buildPushDeepLink, getPushDedupWindowMs } from '../lib/pushNotifications'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
@@ -667,14 +668,25 @@ export function useClientFlow(profileId: string, _profileName: string) {
     body,
     targetUserId,
     relatedJobId,
+    deepLink,
+    dedupId,
   }: {
     type: string
     title: string
     body: string
     targetUserId: string | null | undefined
     relatedJobId: string
+    deepLink?: string | null
+    dedupId?: string | null
   }) => {
     if (!targetUserId) return
+    const eventDedupId = dedupId?.trim() || relatedJobId
+    const eventKey = `${type}:${eventDedupId}:${targetUserId}`
+    const dedupWindowMs = getPushDedupWindowMs(type)
+    const now = Date.now()
+    const lastSentAt = sentPushEventAtRef.current.get(eventKey) ?? 0
+    if (now - lastSentAt < dedupWindowMs) return
+    sentPushEventAtRef.current.set(eventKey, now)
 
     void (async () => {
       try {
@@ -685,6 +697,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
             targetUserId,
             notificationType: type,
             relatedJobId,
+            deepLink: deepLink ?? buildPushDeepLink(type, relatedJobId),
+            data: {
+              dedupId: eventDedupId,
+            },
           },
         })
 
@@ -735,6 +751,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const searchTimerAttemptIdRef = useRef<string | null>(null)
   const searchTimerAttemptExpiresAtRef = useRef<string | null>(null)
   const currentJobIdRef = useRef<string | null>(null)
+  const sentPushEventAtRef = useRef<Map<string, number>>(new Map())
   const currentJobRef = useRef<WalkRequestRow | null>(null)
   const screenStateRef = useRef<ScreenState>('idle')
   const previousScreenStateRef = useRef<ScreenState>('idle')
@@ -2861,6 +2878,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         body: 'The client confirmed arrival. You can start the service now.',
         targetUserId: currentJob.walker_id,
         relatedJobId: currentJobId,
+        deepLink: buildPushDeepLink('client_confirmation', currentJobId),
       })
     }
     setArrivalConfirming(false)
@@ -2997,10 +3015,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
         })
         void sendPushEvent({
           type: 'payout_update',
-          title: 'Payment confirmed',
-          body: `${pending.walkerName}'s service completion was confirmed and payment is on the way.`,
+          title: 'Payout confirmed',
+          body: `Payment for ${pending.walkerName}'s completed service is on the way to your wallet.`,
           targetUserId: pending.walkerId,
           relatedJobId: pending.jobId,
+          deepLink: 'regli://wallet',
         })
       }
 
@@ -3401,6 +3420,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             body: `You received a ₪${amount} tip.`,
             targetUserId: tipJob.walkerId,
             relatedJobId: tipJob.jobId,
+            deepLink: 'regli://wallet',
           })
         } catch {
           // noop

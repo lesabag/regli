@@ -95,7 +95,8 @@ serve(async (req: Request) => {
       title,
       body: notifBody,
       relatedJobId: body.relatedJobId ?? readString(notifData?.jobId) ?? readString(notifData?.related_job_id) ?? null,
-      deepLink: body.deepLink ?? readString(notifData?.deepLink) ?? null,
+      deepLink: body.deepLink ?? readString(notifData?.deepLink) ?? readString(notifData?.deep_link) ?? null,
+      dedupId: readString(notifData?.dedupId) ?? readString(notifData?.dedup_id) ?? null,
     })
     const dedupKey = buildPushDedupKey(envelope)
     const dedupWindowMs = getPushDedupWindowMs(envelope.type)
@@ -326,9 +327,13 @@ function buildNormalizedPushData(params: {
     title: params.envelope.title,
     body: params.envelope.body,
     related_job_id: params.envelope.related_job_id ?? '',
+    relatedJobId: params.envelope.related_job_id ?? '',
     deep_link: params.envelope.deepLink ?? '',
+    deepLink: params.envelope.deepLink ?? '',
     created_at: params.envelope.created_at,
     dedup_key: params.dedupKey,
+    dedup_id: params.envelope.dedup_id ?? '',
+    dedupId: params.envelope.dedup_id ?? '',
     dedup_window_ms: String(params.dedupWindowMs),
     source: 'regli',
   }

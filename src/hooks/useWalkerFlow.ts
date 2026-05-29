@@ -4,6 +4,7 @@ import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
+import { buildPushDeepLink, getPushDedupWindowMs } from '../lib/pushNotifications'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
   isCompletionReviewRequired,
@@ -459,7 +460,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (shownStateMessagesRef.current.has(key)) return
     shownStateMessagesRef.current.add(key)
     setSuccessMessage(message)
-  }, [])
+  }, [profileId])
 
   const sendPushEvent = useCallback(({
     type,
@@ -467,6 +468,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     body,
     targetUserId,
     relatedJobId,
+    deepLink,
+    dedupId,
     suppressWhenForeground = true,
   }: {
     type: string
@@ -474,10 +477,19 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     body: string
     targetUserId: string | null | undefined
     relatedJobId: string
+    deepLink?: string | null
+    dedupId?: string | null
     suppressWhenForeground?: boolean
   }) => {
     if (!targetUserId) return
-    if (suppressWhenForeground && isDocumentVisibleRef.current) return
+    if (suppressWhenForeground && targetUserId === profileId && isDocumentVisibleRef.current) return
+    const eventDedupId = dedupId?.trim() || relatedJobId
+    const eventKey = `${type}:${eventDedupId}:${targetUserId}`
+    const dedupWindowMs = getPushDedupWindowMs(type)
+    const now = Date.now()
+    const lastSentAt = sentPushEventAtRef.current.get(eventKey) ?? 0
+    if (now - lastSentAt < dedupWindowMs) return
+    sentPushEventAtRef.current.set(eventKey, now)
 
     void (async () => {
       try {
@@ -488,6 +500,10 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             targetUserId,
             notificationType: type,
             relatedJobId,
+            deepLink: deepLink ?? buildPushDeepLink(type, relatedJobId),
+            data: {
+              dedupId: eventDedupId,
+            },
           },
         })
 
@@ -771,10 +787,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         if (data.client_id) {
           void sendPushEvent({
             type: 'provider_on_the_way',
-            title: 'Walker on the way',
+            title: 'Your provider is on the way',
             body: `${profileName} is heading to you for ${dogLabel}.`,
             targetUserId: data.client_id,
             relatedJobId: job.id,
+            deepLink: buildPushDeepLink('provider_on_the_way', job.id),
           })
           void createNotification({
             userId: data.client_id,
@@ -791,6 +808,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           body: `Head to ${dogLabel}'s pickup.`,
           targetUserId: profileId,
           relatedJobId: job.id,
+          deepLink: buildPushDeepLink('scheduled_booking_reminder', job.id),
         })
 
         return true
@@ -1562,6 +1580,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const fetchAllRef = useRef(fetchAll)
   const isDocumentVisibleRef = useRef(isDocumentVisible)
   const refreshOffersRef = useRef(fetchAll)
+  const sentPushEventAtRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     const nextOfferIds = new Set(activeOffers.map((offer) => offer.id))
@@ -1572,10 +1591,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       const subjectLabel = getRequestSubjectLabel(offer)
       void sendPushEvent({
         type: 'new_dispatch_offer',
-        title: 'New dispatch offer',
-        body: `You have a new offer for ${subjectLabel}.`,
+        title: 'New request nearby',
+        body: `A new request for ${subjectLabel} is waiting for your response.`,
         targetUserId: profileId,
         relatedJobId: offer.request_id,
+        deepLink: `regli://dispatch/${offer.id}`,
+        dedupId: offer.id,
       })
     }
 
@@ -1606,6 +1627,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             body: `Respond soon to the offer for ${subjectLabel}.`,
             targetUserId: profileId,
             relatedJobId: offer.request_id,
+            deepLink: `regli://dispatch/${offer.id}`,
+            dedupId: offer.id,
           })
         }
       })
@@ -2276,6 +2299,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (job.client_id) {
         const isScheduled = job.booking_timing === 'scheduled'
         const clientNotifTitle = dispatchNow ? 'Walker on the way' : 'Walker Accepted'
+        const clientPushTitle = dispatchNow ? 'Your provider is on the way' : 'Your provider accepted'
         const clientNotifMessage = dispatchNow
           ? `${profileName} is heading to you for ${dogLabel}.`
           : isScheduled
@@ -2283,10 +2307,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             : `${profileName} is on the way for ${dogLabel}'s walk!`
         void sendPushEvent({
           type: dispatchNow ? 'provider_on_the_way' : 'provider_accepted',
-          title: clientNotifTitle,
+          title: clientPushTitle,
           body: clientNotifMessage,
           targetUserId: job.client_id,
           relatedJobId: requestId,
+          deepLink: buildPushDeepLink(dispatchNow ? 'provider_on_the_way' : 'provider_accepted', requestId),
         })
         void createNotification({
           userId: job.client_id,
@@ -2468,10 +2493,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         const dogLabel = getRequestSubjectLabel(job)
         void sendPushEvent({
           type: 'provider_arrived',
-          title: 'Walker has arrived',
+          title: 'Your provider has arrived',
           body: `${profileName} has arrived for ${dogLabel}.`,
           targetUserId: job.client_id,
           relatedJobId: jobId,
+          deepLink: buildPushDeepLink('provider_arrived', jobId),
         })
         void createNotification({
           userId: job.client_id,
@@ -2550,10 +2576,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         const dogLabel = getRequestSubjectLabel(job)
         void sendPushEvent({
           type: 'service_started',
-          title: labels.activeTitle,
+          title: 'Your service has started',
           body: `${profileName} has started the service for ${dogLabel}.`,
           targetUserId: job.client_id,
           relatedJobId: jobId,
+          deepLink: buildPushDeepLink('service_started', jobId),
         })
         void createNotification({
           userId: job.client_id,
@@ -2623,10 +2650,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
           void sendPushEvent({
             type: 'service_completed',
-            title: 'Confirm Service Completion',
+            title: 'Confirm service completion',
             body: `${profileName} marked the service as complete. Please confirm.`,
             targetUserId: job.client_id,
             relatedJobId: id,
+            deepLink: buildPushDeepLink('service_completed', id),
           })
           void createNotification({
             userId: job.client_id,
@@ -2708,10 +2736,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         })
         void sendPushEvent({
           type: 'dispute_update',
-          title: 'Issue Reported',
+          title: 'Update on your booking',
           body: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
           targetUserId: jobRow.client_id,
           relatedJobId: jobId,
+          deepLink: buildPushDeepLink('dispute_update', jobId),
         })
       }
 
@@ -2806,12 +2835,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       void sendPushEvent({
         type: 'dispute_update',
-        title: 'New Rating Received',
+        title: 'New rating received',
         body: trimmedReview
           ? `You received a ${rating}-star rating: "${trimmedReview}"`
           : `You received a ${rating}-star rating!`,
         targetUserId: job.client_id,
         relatedJobId: ratingJobId,
+        deepLink: buildPushDeepLink('dispute_update', ratingJobId),
       })
 
       setRatingSubmitting(false)
@@ -2862,12 +2892,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
         void sendPushEvent({
           type: 'dispute_update',
-          title: 'New Rating Received',
+          title: 'New rating received',
           body: trimmedReview
             ? `You received a ${rating}-star rating: "${trimmedReview}"`
             : `You received a ${rating}-star rating!`,
           targetUserId: completionSuccess.clientId,
           relatedJobId: completionSuccess.jobId,
+          deepLink: buildPushDeepLink('dispute_update', completionSuccess.jobId),
         })
       }
 
