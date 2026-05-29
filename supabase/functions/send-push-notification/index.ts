@@ -52,17 +52,22 @@ serve(async (req: Request) => {
     }
 
     const authHeader = req.headers.get('Authorization')
+    const internalAuthHeader = `Bearer ${serviceRoleKey}`
+    const isInternalServiceCall = authHeader === internalAuthHeader
+
     if (!authHeader) {
       return jsonResp({ error: 'Missing authorization' }, 401)
     }
 
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') || ''
-    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    })
-    const { data: { user }, error: authError } = await supabaseUser.auth.getUser()
-    if (authError || !user) {
-      return jsonResp({ error: 'Invalid token' }, 401)
+    if (!isInternalServiceCall) {
+      const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') || ''
+      const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
+      })
+      const { data: { user }, error: authError } = await supabaseUser.auth.getUser()
+      if (authError || !user) {
+        return jsonResp({ error: 'Invalid token' }, 401)
+      }
     }
 
     let body: {

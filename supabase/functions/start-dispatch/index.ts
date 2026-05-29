@@ -22,6 +22,12 @@ type StartDispatchBody = {
   resetExisting?: boolean
 }
 
+type DispatchAttemptPushParams = {
+  requestId: string
+  walkerId: string
+  attemptId: string
+}
+
 function getScheduledDispatchLeadMinutes(): number {
   const raw = Deno.env.get('SCHEDULED_DISPATCH_LEAD_MINUTES')
   const parsed = raw ? Number(raw) : NaN
@@ -173,6 +179,62 @@ function buildBudgetBelowMinimumError(params: {
   recommendedPreferredBudget: number | null
 }): string {
   return `${BUDGET_BELOW_MINIMUM_ERROR_PREFIX}:${params.recommendedMinBudget ?? ''}:${params.recommendedPreferredBudget ?? ''}`
+}
+
+async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise<void> {
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      console.warn('[start-dispatch] dispatch offer push skipped', {
+        requestId: params.requestId,
+        attemptId: params.attemptId,
+        walkerId: params.walkerId,
+        reason: 'missing_supabase_env',
+      })
+      return
+    }
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'New request nearby',
+        body: 'A new request is waiting for your response.',
+        targetUserId: params.walkerId,
+        notificationType: 'new_dispatch_offer',
+        relatedJobId: params.requestId,
+        deepLink: `regli://dispatch/${params.attemptId}`,
+        data: {
+          dedupId: params.attemptId,
+          dispatchAttemptId: params.attemptId,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '<unreadable>')
+      console.warn('[start-dispatch] dispatch offer push failed', {
+        requestId: params.requestId,
+        attemptId: params.attemptId,
+        walkerId: params.walkerId,
+        status: response.status,
+        body: errorText,
+      })
+    }
+  } catch (error) {
+    console.warn('[start-dispatch] dispatch offer push failed', {
+      requestId: params.requestId,
+      attemptId: params.attemptId,
+      walkerId: params.walkerId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 serve(async (req) => {
@@ -1331,7 +1393,6 @@ serve(async (req) => {
     const firstAdvanceRow = Array.isArray(advanceResult) ? advanceResult[0] : advanceResult
     const createdAttemptId = typeof firstAdvanceRow?.attempt_id === 'string' ? firstAdvanceRow.attempt_id : null
     const createdAttemptStatus = typeof firstAdvanceRow?.status === 'string' ? firstAdvanceRow.status : null
-
     if (!firstAdvanceRow?.ok || !firstAdvanceRow?.attempt_id) {
       const message =
         typeof firstAdvanceRow?.message === 'string'
@@ -1404,7 +1465,7 @@ serve(async (req) => {
         .eq('request_id', requestId),
       supabase
         .from('dispatch_attempts')
-        .select('id, status, expires_at')
+        .select('id, walker_id, status, expires_at')
         .eq('id', attemptId)
         .eq('request_id', requestId)
         .eq('status', 'pending')
@@ -1431,6 +1492,11 @@ serve(async (req) => {
       pendingAttemptCountAfterAdvance,
       pendingAttemptCountError: pendingAttemptCountError?.message ?? null,
     })
+
+    const verifiedAttemptWalkerId =
+      attemptAfterAdvance && typeof attemptAfterAdvance.walker_id === 'string'
+        ? attemptAfterAdvance.walker_id
+        : null
 
     if (
       candidateCheckError ||
@@ -1484,6 +1550,21 @@ serve(async (req) => {
         },
         corsHeaders,
       )
+    }
+
+    if (verifiedAttemptWalkerId) {
+      await sendDispatchOfferPush({
+        requestId,
+        attemptId,
+        walkerId: verifiedAttemptWalkerId,
+      })
+    } else {
+      console.warn('[start-dispatch] dispatch offer push skipped', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        attemptId,
+        reason: 'missing_attempt_walker_id',
+      })
     }
 
     console.warn('[start-dispatch] final dispatch transition', {

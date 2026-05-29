@@ -524,6 +524,47 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     })()
   }, [])
 
+  const queueClientLifecyclePush = useCallback(({
+    type,
+    title,
+    body,
+    requestId,
+    clientId,
+    deepLink,
+  }: {
+    type: string
+    title: string
+    body: string
+    requestId: string
+    clientId: string | null | undefined
+    deepLink?: string | null
+  }) => {
+    if (!clientId) {
+      console.warn('[push] missing client target user id', {
+        type,
+        requestId,
+      })
+      return
+    }
+
+    if (import.meta.env.DEV) {
+      console.log('[push] client target resolved', {
+        type,
+        requestId,
+        clientId,
+      })
+    }
+
+    void sendPushEvent({
+      type,
+      title,
+      body,
+      targetUserId: clientId,
+      relatedJobId: requestId,
+      deepLink,
+    })
+  }, [sendPushEvent])
+
   const clearRetainedIncomingOffer = useCallback((requestId?: string | null) => {
     if (!requestId) {
       retainedIncomingOfferRef.current = null
@@ -784,15 +825,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           relatedJobId: job.id,
         })
 
+        queueClientLifecyclePush({
+          type: 'provider_on_the_way',
+          title: 'Your provider is on the way',
+          body: `${profileName} is heading to you for ${dogLabel}.`,
+          clientId: data.client_id,
+          requestId: job.id,
+          deepLink: buildPushDeepLink('provider_on_the_way', job.id),
+        })
         if (data.client_id) {
-          void sendPushEvent({
-            type: 'provider_on_the_way',
-            title: 'Your provider is on the way',
-            body: `${profileName} is heading to you for ${dogLabel}.`,
-            targetUserId: data.client_id,
-            relatedJobId: job.id,
-            deepLink: buildPushDeepLink('provider_on_the_way', job.id),
-          })
           void createNotification({
             userId: data.client_id,
             type: 'job_accepted',
@@ -2305,12 +2346,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           : isScheduled
             ? `${profileName} confirmed ${dogLabel}'s scheduled walk.`
             : `${profileName} is on the way for ${dogLabel}'s walk!`
-        void sendPushEvent({
+        queueClientLifecyclePush({
           type: dispatchNow ? 'provider_on_the_way' : 'provider_accepted',
           title: clientPushTitle,
           body: clientNotifMessage,
-          targetUserId: job.client_id,
-          relatedJobId: requestId,
+          clientId: job.client_id,
+          requestId,
           deepLink: buildPushDeepLink(dispatchNow ? 'provider_on_the_way' : 'provider_accepted', requestId),
         })
         void createNotification({
@@ -2489,16 +2530,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: jobId,
       }).catch(() => {})
 
+      const dogLabel = getRequestSubjectLabel(job)
+      queueClientLifecyclePush({
+        type: 'provider_arrived',
+        title: 'Your provider has arrived',
+        body: `${profileName} has arrived for ${dogLabel}.`,
+        clientId: job.client_id,
+        requestId: jobId,
+        deepLink: buildPushDeepLink('provider_arrived', jobId),
+      })
       if (job.client_id) {
-        const dogLabel = getRequestSubjectLabel(job)
-        void sendPushEvent({
-          type: 'provider_arrived',
-          title: 'Your provider has arrived',
-          body: `${profileName} has arrived for ${dogLabel}.`,
-          targetUserId: job.client_id,
-          relatedJobId: jobId,
-          deepLink: buildPushDeepLink('provider_arrived', jobId),
-        })
         void createNotification({
           userId: job.client_id,
           type: 'walker_arrived',
@@ -2572,16 +2613,16 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: jobId,
       })
 
+      const dogLabel = getRequestSubjectLabel(job)
+      queueClientLifecyclePush({
+        type: 'service_started',
+        title: 'Your service has started',
+        body: `${profileName} has started the service for ${dogLabel}.`,
+        clientId: job.client_id,
+        requestId: jobId,
+        deepLink: buildPushDeepLink('service_started', jobId),
+      })
       if (job.client_id) {
-        const dogLabel = getRequestSubjectLabel(job)
-        void sendPushEvent({
-          type: 'service_started',
-          title: 'Your service has started',
-          body: `${profileName} has started the service for ${dogLabel}.`,
-          targetUserId: job.client_id,
-          relatedJobId: jobId,
-          deepLink: buildPushDeepLink('service_started', jobId),
-        })
         void createNotification({
           userId: job.client_id,
           type: 'job_accepted',
@@ -2638,6 +2679,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
         const labels = getServiceLabels(job?.service_type)
 
+        queueClientLifecyclePush({
+          type: 'service_completed',
+          title: 'Confirm service completion',
+          body: `${profileName} marked the service as complete. Please confirm.`,
+          clientId: job?.client_id,
+          requestId: id,
+          deepLink: buildPushDeepLink('service_completed', id),
+        })
         if (job?.client_id) {
           sendClientLiveOrderEvent({
             clientId: job.client_id,
@@ -2648,14 +2697,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             walkerName: profileName,
           })
 
-          void sendPushEvent({
-            type: 'service_completed',
-            title: 'Confirm service completion',
-            body: `${profileName} marked the service as complete. Please confirm.`,
-            targetUserId: job.client_id,
-            relatedJobId: id,
-            deepLink: buildPushDeepLink('service_completed', id),
-          })
           void createNotification({
             userId: job.client_id,
             type: 'job_completed',
