@@ -20,6 +20,7 @@ import {
   type ProviderAvailabilityRow,
 } from '../utils/providerAvailability'
 import i18n from '../i18n'
+import { normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 import {
   PROFILE_SERVICE_TYPES,
   getProfileServiceOptions,
@@ -97,6 +98,7 @@ interface WalkerDashboardProps {
     email: string | null
     full_name: string | null
     role: AppRole
+    preferred_language?: SupportedLanguage | null
     short_bio?: string | null
     whatsapp_number?: string | null
     service_type?: string | null
@@ -413,6 +415,24 @@ export default function WalkerDashboard({
   stripeReturnToken = 0,
 }: WalkerDashboardProps) {
   const { t } = useTranslation()
+  const handleLanguageChange = useCallback((language: SupportedLanguage) => {
+    const nextLanguage = normalizeSupportedLanguage(language) ?? 'en'
+    void i18n.changeLanguage(nextLanguage)
+    void supabase
+      .from('profiles')
+      .update({ preferred_language: nextLanguage })
+      .eq('id', profile.id)
+      .then(({ error }) => {
+        if (error) {
+          console.warn('[language] failed to persist preferred language', {
+            userId: profile.id,
+            language: nextLanguage,
+            error: error.message,
+          })
+        }
+      })
+  }, [profile.id])
+
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
   const photo = useProfilePhoto(profile.id)
@@ -2758,7 +2778,7 @@ export default function WalkerDashboard({
                         <button
                           type="button"
                           onClick={() => {
-                            void i18n.changeLanguage('en')
+                            handleLanguageChange('en')
                           }}
                           style={{
                             ...languageButtonStyle,
@@ -2770,7 +2790,7 @@ export default function WalkerDashboard({
                         <button
                           type="button"
                           onClick={() => {
-                            void i18n.changeLanguage('he')
+                            handleLanguageChange('he')
                           }}
                           style={{
                             ...languageButtonStyle,

@@ -3,12 +3,18 @@ import { initReactI18next } from 'react-i18next'
 
 export const LANGUAGE_STORAGE_KEY = 'regli_language'
 
-type SupportedLanguage = 'en' | 'he'
+export type SupportedLanguage = 'en' | 'he'
+
+export function normalizeSupportedLanguage(language: string | null | undefined): SupportedLanguage | null {
+  if (language === 'he') return 'he'
+  if (language === 'en') return 'en'
+  return null
+}
 
 function getInitialLanguage(): SupportedLanguage {
   if (typeof window !== 'undefined') {
-    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
-    if (stored === 'en' || stored === 'he') return stored
+    const stored = normalizeSupportedLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY))
+    if (stored) return stored
   }
 
   if (typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('he')) {
@@ -20,7 +26,7 @@ function getInitialLanguage(): SupportedLanguage {
 
 function applyDocumentLanguage(language: string) {
   if (typeof document === 'undefined') return
-  const normalized: SupportedLanguage = language === 'he' ? 'he' : 'en'
+  const normalized: SupportedLanguage = normalizeSupportedLanguage(language) ?? 'en'
   document.documentElement.lang = normalized
   document.documentElement.dir = normalized === 'he' ? 'rtl' : 'ltr'
 }
@@ -894,7 +900,7 @@ void i18n
 applyDocumentLanguage(initialLanguage)
 
 i18n.on('languageChanged', (language) => {
-  const normalized: SupportedLanguage = language === 'he' ? 'he' : 'en'
+  const normalized: SupportedLanguage = normalizeSupportedLanguage(language) ?? 'en'
   applyDocumentLanguage(normalized)
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, normalized)

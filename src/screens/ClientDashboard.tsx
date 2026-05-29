@@ -57,6 +57,7 @@ import {
   normalizeProfileServiceTypes,
 } from '../lib/profileServiceTypes'
 import { supabase } from '../services/supabaseClient'
+import { normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -267,6 +268,7 @@ interface ClientDashboardProps {
     email: string | null
     full_name: string | null
     role: AppRole
+    preferred_language?: SupportedLanguage | null
     service_type?: string | null
     service_types?: string[] | null
   }
@@ -528,6 +530,24 @@ export default function ClientDashboard({
   }, [])
 
   const { t, i18n } = useTranslation()
+  const handleLanguageChange = useCallback((language: SupportedLanguage) => {
+    const nextLanguage = normalizeSupportedLanguage(language) ?? 'en'
+    void i18n.changeLanguage(nextLanguage)
+    void supabase
+      .from('profiles')
+      .update({ preferred_language: nextLanguage })
+      .eq('id', profile.id)
+      .then(({ error }) => {
+        if (error) {
+          console.warn('[language] failed to persist preferred language', {
+            userId: profile.id,
+            language: nextLanguage,
+            error: error.message,
+          })
+        }
+      })
+  }, [i18n, profile.id])
+
   const isRtl = i18n.resolvedLanguage === 'he'
   const clientName = profile.full_name || profile.email || t('common.client')
   const flow = useClientFlow(profile.id, clientName)
@@ -4160,7 +4180,7 @@ export default function ClientDashboard({
                       <button
                         type="button"
                         onClick={() => {
-                          void i18n.changeLanguage('he')
+                          handleLanguageChange('he')
                         }}
                         style={{
                           ...clientSettingsLanguageButtonStyle,
@@ -4172,7 +4192,7 @@ export default function ClientDashboard({
                       <button
                         type="button"
                         onClick={() => {
-                          void i18n.changeLanguage('en')
+                          handleLanguageChange('en')
                         }}
                         style={{
                           ...clientSettingsLanguageButtonStyle,

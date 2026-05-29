@@ -6,6 +6,7 @@ import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 import { buildProviderCapabilityRows, buildProviderSignupCapabilities } from '../lib/providerCapabilities'
 import { disableCurrentPushTokenForUser } from './usePushNotifications'
+import { normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -18,6 +19,7 @@ interface Profile {
   full_name: string | null
   avatar_url?: string | null
   role: ProfileRole
+  preferred_language?: SupportedLanguage | null
   short_bio?: string | null
   whatsapp_number?: string | null
   primary_service?: string | null
@@ -121,6 +123,10 @@ function getFallbackProfile(currentUser: User): Profile {
     full_name: getUserDisplayName(currentUser),
     avatar_url: getUserAvatarUrl(currentUser),
     role: fallbackRole,
+    preferred_language:
+      normalizeSupportedLanguage(currentUser.user_metadata?.preferred_language as string | undefined) ??
+      normalizeSupportedLanguage(currentUser.user_metadata?.language as string | undefined) ??
+      null,
     short_bio:
       (currentUser.user_metadata?.short_bio as string | undefined) ?? pendingContext?.shortBio ?? null,
     primary_service:
@@ -143,6 +149,7 @@ function normalizeLoadedProfile(profile: Partial<Profile> & { id: string }): Pro
     full_name: profile.full_name ?? null,
     avatar_url: profile.avatar_url ?? null,
     role: profile.role ?? 'client',
+    preferred_language: normalizeSupportedLanguage(profile.preferred_language ?? null),
     service_type: normalizedServiceTypes[0] ?? normalizeProfileServiceTypeFallback(profile.service_type),
     service_types: normalizedServiceTypes,
   }

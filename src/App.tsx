@@ -9,6 +9,7 @@ import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedP
 import { supabase } from './services/supabaseClient'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
+import i18n from './i18n'
 
 const isStripeReturn =
   typeof window !== 'undefined' &&
@@ -175,6 +176,13 @@ export default function App() {
       resetIdentity()
     }
   }, [profile, session])
+
+  useEffect(() => {
+    const preferredLanguage = profile?.preferred_language
+    if (!preferredLanguage) return
+    if (i18n.resolvedLanguage === preferredLanguage) return
+    void i18n.changeLanguage(preferredLanguage)
+  }, [profile?.preferred_language])
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
