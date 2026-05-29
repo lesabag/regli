@@ -9,6 +9,8 @@ export type SupportedPushCopyType =
   | 'service_started'
   | 'service_completed'
   | 'client_confirmation'
+  | 'five_star_rating'
+  | 'tip_received'
   | 'payout_update'
   | 'rating_reminder'
   | 'future_booking_reminder'
@@ -20,6 +22,7 @@ export type PushCopyContext = {
   providerName?: string | null
   walkerName?: string | null
   amountText?: string | null
+  serviceType?: string | null
 }
 
 export type PushCopy = {
@@ -60,21 +63,33 @@ function getProviderName(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
+function getServiceEmoji(serviceType: string | null | undefined): string {
+  switch (serviceType?.trim()) {
+    case 'dog_walker':
+      return '🐾'
+    case 'baby_sitter':
+      return '👶'
+    default:
+      return '🤝'
+  }
+}
+
 export function getPushCopy(
   type: SupportedPushCopyType | string,
   context: PushCopyContext = {},
 ): PushCopy | null {
   const language = resolvePushCopyLanguage(context.language)
-  const providerName = getProviderName(context.providerName ?? context.walkerName)
+  getProviderName(context.providerName ?? context.walkerName)
   const amountText = typeof context.amountText === 'string' ? context.amountText.trim() : ''
+  const serviceEmoji = getServiceEmoji(context.serviceType)
 
   if (language === 'he') {
     switch (type) {
       case 'new_dispatch_offer':
         return {
           language,
-          title: 'בקשה חדשה באזור',
-          body: 'בקשה חדשה מחכה לתגובה שלך.',
+          title: `${serviceEmoji} בקשה חדשה בקרבתך`,
+          body: 'לקוח חדש מחפש עזרה עכשיו.',
         }
       case 'dispatch_expiring_soon':
         return {
@@ -85,32 +100,32 @@ export function getPushCopy(
       case 'provider_accepted':
         return {
           language,
-          title: 'ההזמנה אושרה',
-          body: providerName ? `${providerName} אישר את ההזמנה.` : 'הספק שלך אישר את ההזמנה.',
+          title: '🎉 קיבלת את הבקשה',
+          body: 'הלקוח בחר בך לביצוע השירות.',
         }
       case 'provider_on_the_way':
         return {
           language,
-          title: 'הספק בדרך אליך',
-          body: providerName ? `${providerName} בדרך אליך.` : 'הספק שלך כבר בדרך.',
+          title: '🚗 בדרך ללקוח',
+          body: 'הלקוח עודכן שאתה בדרך.',
         }
       case 'provider_arrived':
         return {
           language,
-          title: 'הספק הגיע',
-          body: providerName ? `${providerName} כבר הגיע.` : 'הספק שלך כבר הגיע.',
+          title: '👋 הלקוח אישר שהגעת',
+          body: 'אפשר להתחיל את השירות.',
         }
       case 'service_started':
         return {
           language,
-          title: 'השירות התחיל',
-          body: providerName ? `${providerName} התחיל את השירות.` : 'השירות שלך התחיל.',
+          title: '▶️ השירות התחיל',
+          body: 'בהצלחה! אנחנו נעדכן את הלקוח בסיום השירות.',
         }
       case 'service_completed':
         return {
           language,
-          title: 'אפשר לאשר סיום',
-          body: providerName ? `${providerName} סימן שהשירות הסתיים.` : 'הספק סימן שהשירות הסתיים.',
+          title: '🎉 שירות הושלם',
+          body: 'העבודה הסתיימה בהצלחה, הלקוח עודכן.',
         }
       case 'client_confirmation':
         return {
@@ -118,29 +133,36 @@ export function getPushCopy(
           title: 'הלקוח אישר הגעה',
           body: 'אפשר להתחיל עכשיו.',
         }
+      case 'five_star_rating':
+        return {
+          language,
+          title: '🌟 קיבלת 5 כוכבים!',
+          body: 'עבודה מצוינת! המשך כך.',
+        }
+      case 'tip_received':
       case 'payout_update':
         return {
           language,
-          title: amountText ? 'קיבלת תשלום' : 'התשלום אושר',
-          body: amountText ? `${amountText} נוספו לארנק שלך.` : 'התשלום בדרך לארנק שלך.',
+          title: '🎁 קיבלת טיפ',
+          body: amountText ? `${amountText} נוספו לארנק שלך.` : 'נוסף טיפ לארנק שלך.',
         }
       case 'rating_reminder':
         return {
           language,
-          title: 'איך היה?',
-          body: 'נשמח אם תדרג את החוויה.',
+          title: '⭐ קיבלת דירוג חדש',
+          body: 'הלקוח דירג את השירות שלך.',
         }
       case 'future_booking_reminder':
         return {
           language,
-          title: 'יש לך הזמנה קרובה',
-          body: 'כדאי לפתוח את האפליקציה ולהתכונן.',
+          title: '📅 הזמנה עתידית מתקרבת',
+          body: 'אל תשכח, יש לך שירות מתוכנן בקרוב.',
         }
       case 'weekly_recurring_booking_reminder':
         return {
           language,
-          title: 'התזכורת השבועית כאן',
-          body: 'יש לך הזמנה קבועה שמתחילה בקרוב.',
+          title: '🔁 תזכורת לשירות קבוע',
+          body: 'השירות השבועי שלך יתחיל בקרוב.',
         }
       case 'scheduled_booking_reminder':
         return {
@@ -157,8 +179,8 @@ export function getPushCopy(
     case 'new_dispatch_offer':
       return {
         language,
-        title: 'New request nearby',
-        body: 'A new request is waiting for your response.',
+        title: `${serviceEmoji} New request nearby`,
+        body: 'A new customer is looking for help right now.',
       }
     case 'dispatch_expiring_soon':
       return {
@@ -169,32 +191,32 @@ export function getPushCopy(
     case 'provider_accepted':
       return {
         language,
-        title: 'Your provider accepted',
-        body: providerName ? `${providerName} accepted your request.` : 'Your request was accepted.',
+        title: '🎉 You got the request',
+        body: 'The customer chose you for this service.',
       }
     case 'provider_on_the_way':
       return {
         language,
-        title: 'Your provider is on the way',
-        body: providerName ? `${providerName} is heading to you now.` : 'Your provider is heading to you now.',
+        title: '🚗 On your way',
+        body: "The customer has been notified that you're on the way.",
       }
     case 'provider_arrived':
       return {
         language,
-        title: 'Your provider has arrived',
-        body: providerName ? `${providerName} has arrived.` : 'Your provider has arrived.',
+        title: '👋 Arrival confirmed',
+        body: 'You can start the service now.',
       }
     case 'service_started':
       return {
         language,
-        title: 'Your service has started',
-        body: providerName ? `${providerName} just got started.` : 'Your service just got started.',
+        title: '▶️ Service started',
+        body: "Good luck! We'll notify the customer when it's completed.",
       }
     case 'service_completed':
       return {
         language,
-        title: 'Confirm service completion',
-        body: providerName ? `${providerName} marked the service complete.` : 'Your provider marked the service complete.',
+        title: '🎉 Service completed',
+        body: 'The service was completed successfully and the customer was updated.',
       }
     case 'client_confirmation':
       return {
@@ -202,29 +224,36 @@ export function getPushCopy(
         title: 'Client confirmed arrival',
         body: 'You can start the service now.',
       }
+    case 'five_star_rating':
+      return {
+        language,
+        title: '🌟 You received 5 stars!',
+        body: 'Excellent work. Keep it up.',
+      }
+    case 'tip_received':
     case 'payout_update':
       return {
         language,
-        title: amountText ? 'Payment received' : 'Payout confirmed',
-        body: amountText ? `${amountText} was added to your wallet.` : 'Payment is on the way to your wallet.',
+        title: '🎁 You received a tip',
+        body: amountText ? `${amountText} was added to your wallet.` : 'A tip was added to your wallet.',
       }
     case 'rating_reminder':
       return {
         language,
-        title: 'Rate your experience',
-        body: 'A quick rating helps the community.',
+        title: '⭐ You received a new rating',
+        body: 'The customer rated your service.',
       }
     case 'future_booking_reminder':
       return {
         language,
-        title: 'Upcoming booking',
-        body: 'Open the app to get ready.',
+        title: '📅 Upcoming booking reminder',
+        body: "Don't forget, you have a scheduled service coming up soon.",
       }
     case 'weekly_recurring_booking_reminder':
       return {
         language,
-        title: 'Weekly booking reminder',
-        body: 'Your recurring booking is coming up soon.',
+        title: '🔁 Weekly service reminder',
+        body: 'Your recurring weekly service starts soon.',
       }
     case 'scheduled_booking_reminder':
       return {

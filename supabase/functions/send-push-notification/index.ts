@@ -122,6 +122,7 @@ serve(async (req: Request) => {
         providerName: readString(notifData?.providerName) ?? readString(notifData?.provider_name) ?? null,
         walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
         amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
+        serviceType: readString(notifData?.serviceType) ?? readString(notifData?.service_type) ?? null,
       },
     )
     const effectiveTitle = localizedCopy?.title ?? title

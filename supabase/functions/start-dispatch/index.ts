@@ -197,7 +197,10 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
       return
     }
 
-    const localizedCopy = getPushCopy('new_dispatch_offer', { language: 'en' })
+    const localizedCopy = getPushCopy('new_dispatch_offer', {
+      language: 'en',
+      serviceType: requestServiceType,
+    })
     const response = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
       method: 'POST',
       headers: {
@@ -215,6 +218,7 @@ async function sendDispatchOfferPush(params: DispatchAttemptPushParams): Promise
         data: {
           dedupId: params.attemptId,
           dispatchAttemptId: params.attemptId,
+          serviceType: requestServiceType,
         },
       }),
     })
