@@ -250,6 +250,15 @@ serve(async (req: Request) => {
       paymentFlow = 'saved_card',
     } = body
 
+    console.log(`[create-payment-intent][${FUNCTION_VERSION}] paymentFlow route`, {
+      paymentFlow,
+      clientId: user.id,
+      hasCustomerId: !!customerId,
+      hasPaymentMethodId: !!paymentMethodId,
+      hasPaymentIntentId: !!paymentIntentId,
+      bookingTiming,
+    })
+
     if (!serviceType || !SERVICE_PRICES[serviceType]) {
       return new Response(
         JSON.stringify({
@@ -507,9 +516,44 @@ serve(async (req: Request) => {
       requestPricingModel,
     })
 
+    const metadata: Record<string, string> = {
+      client_id: user.id,
+      service_type: persistedRequestServiceType ?? '',
+      pricing_service_type: serviceType,
+      issue_type: normalizedIssueType,
+      issue_description: normalizedIssueDescription,
+      booking_timing: bookingTiming,
+      currency: jobCurrency,
+    }
+
+    if (normalizedDogName) {
+      metadata.dog_name = normalizedDogName
+    }
+
+    if (normalizedScheduledFor) {
+      metadata.scheduled_for = normalizedScheduledFor
+      metadata.schedule_timezone = SCHEDULE_TIMEZONE
+    }
+
+    if (walkerId) {
+      metadata.walker_id = walkerId
+    }
+
+    console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet metadata created`, {
+      paymentFlow,
+      metadata,
+    })
+
     const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
 
     if (paymentFlow === 'native_payment_sheet') {
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet prepare start`, {
+        clientId: user.id,
+        customerId,
+        bookingTiming,
+        amount,
+        currency: jobCurrency,
+      })
       if (!customerId) {
         return new Response(
           JSON.stringify({
@@ -524,7 +568,7 @@ serve(async (req: Request) => {
       try {
         await stripe.customers.retrieve(customerId)
       } catch (err) {
-        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet customer lookup failed:`, err)
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet prepare error`, err)
         return new Response(
           JSON.stringify({
             error: 'Customer unavailable',
@@ -556,7 +600,7 @@ serve(async (req: Request) => {
         )
         ephemeralKeySecret = ephemeralKey.secret
       } catch (stripeErr: unknown) {
-        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet preparation failed:`, stripeErr)
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet prepare error`, stripeErr)
         const msg = stripeErr instanceof Error ? stripeErr.message : 'Unknown error'
         return new Response(
           JSON.stringify({
@@ -567,6 +611,25 @@ serve(async (req: Request) => {
           { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         )
       }
+
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet payment intent created`, {
+        paymentIntentId: paymentIntent.id,
+        customerId,
+        paymentStatus: paymentIntent.status,
+        currency: paymentIntent.currency,
+      })
+
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet prepare success`, {
+        paymentIntentId: paymentIntent.id,
+        customerId,
+        paymentStatus: paymentIntent.status,
+        currency: paymentIntent.currency,
+      })
+
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet response ready`, {
+        paymentIntentId: paymentIntent.id,
+        customerId,
+      })
 
       return new Response(
         JSON.stringify({
@@ -591,6 +654,12 @@ serve(async (req: Request) => {
     }
 
     if (paymentFlow === 'native_payment_sheet_finalize') {
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize start`, {
+        clientId: user.id,
+        customerId,
+        paymentIntentId,
+        bookingTiming,
+      })
       if (!customerId || !paymentIntentId) {
         return new Response(
           JSON.stringify({
@@ -606,7 +675,7 @@ serve(async (req: Request) => {
       try {
         paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId)
       } catch (err) {
-        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet PI lookup failed:`, err)
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize error`, err)
         return new Response(
           JSON.stringify({
             error: 'Payment unavailable',
@@ -623,6 +692,12 @@ serve(async (req: Request) => {
           : paymentIntent.customer?.id ?? null
 
       if (attachedCustomer !== customerId) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize error`, {
+          reason: 'customer_mismatch',
+          paymentIntentId,
+          attachedCustomer,
+          customerId,
+        })
         return new Response(
           JSON.stringify({
             error: 'Payment does not belong to customer',
@@ -633,6 +708,11 @@ serve(async (req: Request) => {
       }
 
       if (paymentIntent.status !== 'requires_capture' && paymentIntent.status !== 'succeeded') {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize error`, {
+          reason: 'invalid_payment_intent_status',
+          paymentIntentId,
+          paymentIntentStatus: paymentIntent.status,
+        })
         return new Response(
           JSON.stringify({
             error: 'Payment confirmation incomplete',
@@ -651,7 +731,7 @@ serve(async (req: Request) => {
         .maybeSingle()
 
       if (existingNativeJobError) {
-        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native finalize existing job lookup failed:`, existingNativeJobError)
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize error`, existingNativeJobError)
         return new Response(
           JSON.stringify({ error: 'Failed to finalize native payment', _v: FUNCTION_VERSION }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -726,7 +806,7 @@ serve(async (req: Request) => {
         .single()
 
       if (jobError || !job) {
-        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Failed to create native finalized walk_request row`, {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize error`, {
           error: jobError,
           paymentIntentId: paymentIntent.id,
         })
@@ -756,6 +836,12 @@ serve(async (req: Request) => {
       } catch (updateErr) {
         console.error('Failed to update native PI with job ID (non-blocking):', updateErr)
       }
+
+      console.log(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet_finalize success`, {
+        paymentIntentId: paymentIntent.id,
+        jobId: job.id,
+        paymentStatus: paymentIntent.status,
+      })
 
       return new Response(
         JSON.stringify({
@@ -914,29 +1000,6 @@ serve(async (req: Request) => {
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         )
       }
-    }
-
-    const metadata: Record<string, string> = {
-      client_id: user.id,
-      service_type: persistedRequestServiceType ?? '',
-      pricing_service_type: serviceType,
-      issue_type: normalizedIssueType,
-      issue_description: normalizedIssueDescription,
-      booking_timing: bookingTiming,
-      currency: jobCurrency,
-    }
-
-    if (normalizedDogName) {
-      metadata.dog_name = normalizedDogName
-    }
-
-    if (normalizedScheduledFor) {
-      metadata.scheduled_for = normalizedScheduledFor
-      metadata.schedule_timezone = SCHEDULE_TIMEZONE
-    }
-
-    if (walkerId) {
-      metadata.walker_id = walkerId
     }
 
     const piParams: Record<string, unknown> = {

@@ -30,6 +30,13 @@ export function toSavedCardPaymentMethod(card: SavedCard | null): SavedCardPayme
   }
 }
 
+export function toApplePayPaymentMethod(): ApplePayPaymentMethod {
+  return {
+    type: 'apple_pay',
+    card: null,
+  }
+}
+
 export function getPaymentMethodLabel(method: ActivePaymentMethod): string {
   if (method.type === 'apple_pay') return 'Apple Pay'
   if (method.card) {

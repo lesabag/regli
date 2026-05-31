@@ -34,6 +34,8 @@ import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import {
   type SavedCard as StoredSavedCard,
   type ActivePaymentMethod,
+  type PaymentMethodType,
+  toApplePayPaymentMethod,
   toSavedCardPaymentMethod,
 } from '../lib/paymentMethods'
 
@@ -623,7 +625,16 @@ function isAuthoritativeRecoveryReason(reason: string): boolean {
 export function useClientFlow(profileId: string, _profileName: string) {
   const expressCheckout = useExpressCheckout()
   const nativePaymentSheet = useNativePaymentSheet()
-  const applePayBookingEnabled = false
+  const applePayFeatureEnabled = import.meta.env.VITE_ENABLE_APPLE_PAY === 'true'
+  const applePayBookingEnabled =
+    applePayFeatureEnabled &&
+    Capacitor.isNativePlatform() &&
+    Capacitor.getPlatform() === 'ios' &&
+    nativePaymentSheet.initialized &&
+    nativePaymentSheet.applePayEligible &&
+    nativePaymentSheet.paymentSheetBackendReady &&
+    nativePaymentSheet.canPresentPaymentSheet &&
+    !nativePaymentSheet.blockerReason
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -1589,10 +1600,22 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null)
   const [cardLoading, setCardLoading] = useState(true)
   const [cardError, setCardError] = useState(false)
+  const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState<PaymentMethodType>('saved_card')
   const activePaymentMethod = useMemo<ActivePaymentMethod | null>(
-    () => toSavedCardPaymentMethod(savedCard),
-    [savedCard],
+    () => {
+      if (selectedPaymentMethodType === 'apple_pay' && applePayBookingEnabled) {
+        return toApplePayPaymentMethod()
+      }
+      return toSavedCardPaymentMethod(savedCard)
+    },
+    [applePayBookingEnabled, savedCard, selectedPaymentMethodType],
   )
+
+  useEffect(() => {
+    if (!applePayBookingEnabled && selectedPaymentMethodType === 'apple_pay') {
+      setSelectedPaymentMethodType('saved_card')
+    }
+  }, [applePayBookingEnabled, selectedPaymentMethodType])
 
   const hasUserLocationBase = !!userLocationBase
   const avgRating = useMemo(() => {
@@ -1716,6 +1739,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
         if (!current) return firstCard
         return cards.find((card) => card.id === current.id) ?? firstCard
       })
+      setSelectedPaymentMethodType((current) => {
+        if (current === 'apple_pay' && applePayBookingEnabled) return current
+        return 'saved_card'
+      })
     } catch (err) {
       console.warn('[useClientFlow] payment method load failed:', err instanceof Error ? err.message : err)
       setCardError(true)
@@ -1724,7 +1751,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     } finally {
       setCardLoading(false)
     }
-  }, [])
+  }, [applePayBookingEnabled])
 
   useEffect(() => {
     void loadPaymentMethods()
@@ -3362,7 +3389,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
       if (current?.id === paymentMethodId) return current
       return savedCards.find((card) => card.id === paymentMethodId) ?? current
     })
+    setSelectedPaymentMethodType('saved_card')
   }, [savedCards])
+
+  const selectApplePay = useCallback(() => {
+    if (!applePayBookingEnabled) return
+    console.log('[ApplePay] selected')
+    setSelectedPaymentMethodType('apple_pay')
+  }, [applePayBookingEnabled])
 
   const submitCompletionRating = useCallback(
     async (rating?: number, review?: string) => {
@@ -3633,7 +3667,11 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setError('Choose price')
       return
     }
-    if (!savedCard || !stripeCustomerId) {
+    if (!stripeCustomerId) {
+      setError('Add a valid payment method before booking')
+      return
+    }
+    if (selectedPaymentMethodType === 'saved_card' && !savedCard) {
       setError('Add a valid payment method before booking')
       return
     }
@@ -3697,6 +3735,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     try {
       console.log('[useClientFlow] booking payment path decision', {
         activePaymentMethod: activePaymentMethod?.type ?? null,
+        selectedPaymentMethodType,
         selectedSavedCardId: savedCard?.id ?? null,
         shouldUseNativePaymentSheet,
         nativePaymentSheet: {
@@ -3776,7 +3815,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         issueType: effectiveIssueType ?? undefined,
         issueDescription: effectiveIssueDescription ?? undefined,
         customerId: stripeCustomerId,
-        paymentMethodId: savedCard.id,
+        paymentMethodId: savedCard?.id,
         scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
         priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
         durationMinutes: effectiveDurationMinutes ?? undefined,
@@ -3797,6 +3836,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       if (shouldUseNativePaymentSheet) {
+        console.log('[ApplePay] available', {
+          eligible: applePayBookingEnabled,
+          featureFlag: applePayFeatureEnabled,
+        })
         console.log('[useClientFlow] native_payment_sheet create-payment-intent request payload', {
           bookingTiming: effectiveBookingTiming,
           serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
@@ -3824,6 +3867,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
           paymentFlow: 'native_payment_sheet',
         })
         console.log('[useClientFlow] native session response', prepared)
+        console.log('[ApplePay] present start', {
+          paymentIntentId: prepared.paymentIntentId,
+        })
 
         const paymentSheetResult = await presentNativePaymentSheet({
           paymentIntentClientSecret: prepared.paymentIntentClientSecret,
@@ -3836,6 +3882,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         console.log('[useClientFlow] presentPaymentSheet result', paymentSheetResult)
 
         if (paymentSheetResult.status === 'canceled') {
+          console.log('[ApplePay] cancel')
           console.log('[useClientFlow] native finalize skipped because payment sheet was canceled')
           setError(null)
           setAvailabilityNotice(null)
@@ -3844,9 +3891,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
         }
 
         if (paymentSheetResult.status === 'failed') {
+          console.log('[ApplePay] error', {
+            error: paymentSheetResult.error,
+          })
           throw new Error(paymentSheetResult.error || 'Payment was not completed. Please try again.')
         }
 
+        console.log('[ApplePay] success')
         console.log('[useClientFlow] finalize/create booking start', {
           paymentIntentId: prepared.paymentIntentId,
           bookingTiming: effectiveBookingTiming,
@@ -4328,6 +4379,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     persistBookingDraft,
     profileId,
     savedCard,
+    selectedPaymentMethodType,
     scheduledFor,
     stripeCustomerId,
     saveReusableServiceName,
@@ -4380,6 +4432,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearExhaustedRequestForRetry,
 
     activePaymentMethod,
+    selectedPaymentMethodType,
     savedCard,
     savedCards,
     upcomingJobs,
@@ -4446,6 +4499,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     cancelCardSetup,
     retryLoadCard,
     selectSavedCard,
+    selectApplePay,
     toggleFavoriteWalker,
     submitCompletionRating,
     dismissCompletion,

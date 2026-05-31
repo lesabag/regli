@@ -145,6 +145,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
   try {
     await mod.Stripe.isApplePayAvailable()
     applePayEligible = true
+    console.log('[ApplePay] available')
   } catch {
     applePayEligible = false
   }

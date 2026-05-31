@@ -5352,11 +5352,10 @@ export default function ClientDashboard({
               <div style={paymentSheetActionsStyle}>
                 {flow.savedCards.length > 0 ? (
                   <div style={paymentSheetCardsListStyle}>
-                    {/* TODO: Apple Pay support
-                        A future native-eligible Apple Pay row should live in this
-                        same list without reworking the payment picker layout. */}
                     {flow.savedCards.map((card) => {
-                      const selected = flow.savedCard?.id === card.id
+                      const selected =
+                        flow.selectedPaymentMethodType === 'saved_card' &&
+                        flow.savedCard?.id === card.id
                       return (
                         <div
                           key={card.id}
@@ -5427,18 +5426,42 @@ export default function ClientDashboard({
                   <div style={paymentSheetCardsListStyle}>
                     <button
                       type="button"
+                      onClick={() => {
+                        flow.selectApplePay()
+                        setPaymentSheetOpen(false)
+                      }}
                       style={paymentSheetCardSelectButtonStyle}
                     >
                       <div style={paymentSheetCardLeftStyle}>
                         <div style={paymentSheetRadioWrapStyle}>
-                          <span style={paymentSheetRadioStyle} />
+                          <span
+                            style={{
+                              ...paymentSheetRadioStyle,
+                              ...(flow.selectedPaymentMethodType === 'apple_pay'
+                                ? paymentSheetRadioSelectedStyle
+                                : null),
+                            }}
+                          />
                         </div>
-                        <CreditCard size={20} color="#64748B" />
+                        <div style={{
+                          fontSize: 18,
+                          lineHeight: 1,
+                          color: flow.selectedPaymentMethodType === 'apple_pay' ? '#111827' : '#64748B',
+                          fontWeight: 700,
+                          width: 20,
+                          textAlign: 'center',
+                          flexShrink: 0,
+                        }}></div>
                         <div>
                           <div style={paymentSheetCardBrandStyle}>Apple Pay</div>
                           <div style={paymentSheetCardExpStyle}>Available on this device</div>
                         </div>
                       </div>
+                      {flow.selectedPaymentMethodType === 'apple_pay' && (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
                     </button>
                   </div>
                 ) : null}
