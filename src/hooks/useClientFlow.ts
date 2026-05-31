@@ -615,6 +615,10 @@ function isAuthoritativeRecoveryReason(reason: string): boolean {
 
 export function useClientFlow(profileId: string, _profileName: string) {
   const expressCheckout = useExpressCheckout()
+  const applePayBookingEnabled =
+    expressCheckout.applePayAvailable &&
+    expressCheckout.nativeApplePayReady &&
+    !expressCheckout.applePayBlockedReason
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -4282,6 +4286,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     cardLoading,
     cardError,
     expressCheckout,
+    applePayBookingEnabled,
 
     elapsedSeconds,
     adjustedPriceILS,

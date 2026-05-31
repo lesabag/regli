@@ -5423,6 +5423,26 @@ export default function ClientDashboard({
                   </div>
                 ) : null}
 
+                {flow.applePayBookingEnabled ? (
+                  <div style={paymentSheetCardsListStyle}>
+                    <button
+                      type="button"
+                      style={paymentSheetCardSelectButtonStyle}
+                    >
+                      <div style={paymentSheetCardLeftStyle}>
+                        <div style={paymentSheetRadioWrapStyle}>
+                          <span style={paymentSheetRadioStyle} />
+                        </div>
+                        <CreditCard size={20} color="#64748B" />
+                        <div>
+                          <div style={paymentSheetCardBrandStyle}>Apple Pay</div>
+                          <div style={paymentSheetCardExpStyle}>Available on this device</div>
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                ) : null}
+
                 <div style={paymentSheetDividerStyle} />
 
                 <button
