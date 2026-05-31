@@ -1,5 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
+import {
+  BiometricAuth,
+  BiometryError,
+  BiometryErrorType,
+} from '@aparajita/capacitor-biometric-auth'
 import { Browser } from '@capacitor/browser'
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { useAuth, type AppRole } from './hooks/useAuth'
@@ -111,6 +116,97 @@ if (isStripeReturn && typeof document !== 'undefined') {
 const AdminDashboard = lazy(() => import('./screens/AdminDashboard'))
 const ClientDashboard = lazy(() => import('./screens/ClientDashboard'))
 const WalkerDashboard = lazy(() => import('./screens/WalkerDashboard'))
+const LOCAL_UNLOCK_RELOCK_THRESHOLD_MS = 30_000
+const isNativeIos = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios'
+
+function LocalUnlockScreen(props: {
+  busy: boolean
+  errorMessage: string | null
+  subtitle: string
+  buttonLabel: string
+  onUnlock: () => void
+}) {
+  return (
+    <div
+      style={{
+        minHeight: '100svh',
+        display: 'grid',
+        placeItems: 'center',
+        background: 'linear-gradient(180deg, #F8FAFC 0%, #EEF2F6 100%)',
+        padding: 24,
+        fontFamily: 'Inter, system-ui, sans-serif',
+      }}
+    >
+      <div
+        style={{
+          width: 'min(100%, 360px)',
+          borderRadius: 28,
+          background: 'rgba(255,255,255,0.92)',
+          boxShadow: '0 24px 60px rgba(15, 23, 42, 0.12)',
+          padding: '32px 24px',
+          textAlign: 'center',
+        }}
+      >
+        <div style={{ fontSize: 42, marginBottom: 14 }}>🔒</div>
+        <div
+          style={{
+            fontSize: 28,
+            lineHeight: 1.1,
+            fontWeight: 800,
+            color: '#0F172A',
+            marginBottom: 10,
+          }}
+        >
+          Unlock Regli
+        </div>
+        <div
+          style={{
+            fontSize: 15,
+            lineHeight: 1.5,
+            color: '#475569',
+            marginBottom: 22,
+          }}
+        >
+          {props.subtitle}
+        </div>
+        {props.errorMessage && (
+          <div
+            style={{
+              marginBottom: 18,
+              padding: '10px 12px',
+              borderRadius: 14,
+              background: '#FFF7ED',
+              color: '#9A3412',
+              fontSize: 13,
+              lineHeight: 1.4,
+            }}
+          >
+            {props.errorMessage}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={props.onUnlock}
+          disabled={props.busy}
+          style={{
+            width: '100%',
+            minHeight: 52,
+            border: 0,
+            borderRadius: 16,
+            background: props.busy ? '#94A3B8' : '#0F172A',
+            color: '#FFFFFF',
+            fontSize: 16,
+            fontWeight: 800,
+            cursor: props.busy ? 'default' : 'pointer',
+            transition: 'background 160ms ease',
+          }}
+        >
+          {props.busy ? 'Unlocking...' : props.buttonLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function isProviderRole(role: string | null | undefined) {
   return role === 'walker' || role === 'provider'
@@ -168,7 +264,12 @@ export default function App() {
   const [stripeReturnToken, setStripeReturnToken] = useState(0)
   const [oauthRoutePending, setOauthRoutePending] = useState(() => isWebOAuthCallbackInProgress())
   const [, setPendingPushRoute] = useState<ParsedPushDeepLink | null>(null)
+  const [localUnlockState, setLocalUnlockState] = useState<'locked' | 'unlocking' | 'unlocked'>('locked')
+  const [localUnlockError, setLocalUnlockError] = useState<string | null>(null)
+  const [localUnlockSupportsPasscodeOnly, setLocalUnlockSupportsPasscodeOnly] = useState(false)
   const handleSplashDone = useCallback(() => setSplashDone(true), [])
+  const backgroundedAtRef = useRef<number | null>(null)
+  const lastUnlockedUserIdRef = useRef<string | null>(null)
 
   // ── Analytics: identify + session ───────────────────────────
   const identifiedRef = useRef(false)
@@ -380,14 +481,135 @@ export default function App() {
   const shouldShowAuthScreen = splashDone && !hasAuthenticatedUser && !loading && !oauthRoutePending
   const shouldShowProfileBootstrap = splashDone && hasAuthenticatedUser && !profile && !authError
   const shouldShowProfileError = splashDone && hasAuthenticatedUser && !profile && authError
+  const shouldRequireLocalUnlock = splashDone && isNativeIos && !!dashboardProfile && hasAuthenticatedUser
+  const shouldShowUnlockedDashboard = splashDone && Dashboard && (!shouldRequireLocalUnlock || localUnlockState === 'unlocked')
+  const localUnlockUserId = session?.user?.id ?? user?.id ?? null
+  const localUnlockActive = shouldRequireLocalUnlock && localUnlockState !== 'unlocked'
 
   usePushNotifications(splashDone ? dashboardProfile?.id ?? null : null)
+
+  const lockDashboard = useCallback((reason: 'initial' | 'resume') => {
+    if (!isNativeIos) return
+    setLocalUnlockState('locked')
+    setLocalUnlockError(null)
+    if (reason === 'resume') return
+  }, [])
+
+  const unlockDashboard = useCallback(async () => {
+    if (!shouldRequireLocalUnlock) return
+
+    setLocalUnlockState('unlocking')
+    setLocalUnlockError(null)
+
+    try {
+      const availability = await BiometricAuth.checkBiometry()
+      const shouldPreferPasscode = !availability.isAvailable && availability.deviceIsSecure
+      setLocalUnlockSupportsPasscodeOnly(shouldPreferPasscode)
+
+      if (!availability.isAvailable && !availability.deviceIsSecure) {
+        setLocalUnlockState('locked')
+        setLocalUnlockError('This device does not have Face ID or a device passcode enabled yet.')
+        return
+      }
+
+      const authenticateOptions = {
+        reason: 'Unlock Regli',
+        cancelTitle: 'Cancel',
+        allowDeviceCredential: true,
+        iosFallbackTitle: 'Use Passcode',
+      }
+      await BiometricAuth.authenticate(authenticateOptions)
+      setLocalUnlockState('unlocked')
+      setLocalUnlockError(null)
+      lastUnlockedUserIdRef.current = localUnlockUserId
+      backgroundedAtRef.current = null
+    } catch (error) {
+      const nextMessage = error instanceof BiometryError
+        ? mapBiometryErrorToMessage(error)
+        : 'Unable to verify your identity right now. Please try again.'
+      setLocalUnlockState('locked')
+      setLocalUnlockError(nextMessage)
+    }
+  }, [localUnlockUserId, shouldRequireLocalUnlock])
+
+  useEffect(() => {
+    if (!shouldRequireLocalUnlock) {
+      setLocalUnlockState('unlocked')
+      setLocalUnlockError(null)
+      setLocalUnlockSupportsPasscodeOnly(false)
+      return
+    }
+
+    if (localUnlockUserId && lastUnlockedUserIdRef.current !== localUnlockUserId) {
+      lastUnlockedUserIdRef.current = null
+      lockDashboard('initial')
+    }
+  }, [
+    localUnlockUserId,
+    lockDashboard,
+    shouldRequireLocalUnlock,
+  ])
+
+  useEffect(() => {
+    if (!shouldRequireLocalUnlock) return undefined
+
+    let listener: PluginListenerHandle | null = null
+
+    void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (!isActive) {
+        backgroundedAtRef.current = Date.now()
+        return
+      }
+
+      const backgroundedAt = backgroundedAtRef.current
+      backgroundedAtRef.current = null
+      if (!backgroundedAt) return
+      if (Date.now() - backgroundedAt < LOCAL_UNLOCK_RELOCK_THRESHOLD_MS) return
+      lockDashboard('resume')
+    }).then((handle) => {
+      listener = handle
+    }).catch(() => undefined)
+
+    return () => {
+      void listener?.remove()
+    }
+  }, [lockDashboard, shouldRequireLocalUnlock])
+
+  const dashboardContent = useMemo(() => {
+    if (!dashboardProfile) return null
+    if (dashboardProfile.role === 'admin') {
+      return <AdminDashboard />
+    }
+    if (dashboardProfile.role === 'walker') {
+      return (
+        <WalkerDashboard
+          profile={dashboardProfile}
+          onSignOut={signOut}
+          showOnboardingWowToken={providerWowToken}
+          stripeReturnToken={stripeReturnToken}
+        />
+      )
+    }
+    return (
+      <ClientDashboard
+        profile={dashboardProfile}
+        onSignOut={signOut}
+        showOnboardingWowToken={customerWowToken}
+      />
+    )
+  }, [
+    customerWowToken,
+    dashboardProfile,
+    providerWowToken,
+    signOut,
+    stripeReturnToken,
+  ])
 
   return (
     <>
       {/* ── Layer 1: Main content (renders behind splash) ──────── */}
 
-      {splashDone && Dashboard && (
+      {shouldShowUnlockedDashboard && (
         <Suspense
           fallback={
             <div
@@ -406,23 +628,20 @@ export default function App() {
             </div>
           }
         >
-          {dashboardProfile?.role === 'admin' ? (
-            <AdminDashboard />
-          ) : dashboardProfile?.role === 'walker' ? (
-            <WalkerDashboard
-              profile={dashboardProfile}
-              onSignOut={signOut}
-              showOnboardingWowToken={providerWowToken}
-              stripeReturnToken={stripeReturnToken}
-            />
-          ) : (
-            <ClientDashboard
-              profile={dashboardProfile!}
-              onSignOut={signOut}
-              showOnboardingWowToken={customerWowToken}
-            />
-          )}
+          {dashboardContent}
         </Suspense>
+      )}
+
+      {localUnlockActive && (
+        <LocalUnlockScreen
+          busy={localUnlockState === 'unlocking'}
+          errorMessage={localUnlockError}
+          subtitle={localUnlockSupportsPasscodeOnly ? 'Use your device passcode to continue' : 'Use Face ID to continue'}
+          buttonLabel={localUnlockSupportsPasscodeOnly ? 'Continue with passcode' : 'Unlock'}
+          onUnlock={() => {
+            void unlockDashboard()
+          }}
+        />
       )}
 
       {/* Auth screen — only after splash (no map to morph into) */}
@@ -508,4 +727,26 @@ export default function App() {
       )}
     </>
   )
+}
+
+function mapBiometryErrorToMessage(error: BiometryError): string {
+  switch (error.code) {
+    case BiometryErrorType.userCancel:
+    case BiometryErrorType.systemCancel:
+    case BiometryErrorType.appCancel:
+      return 'Unlock was cancelled. Try again when you are ready.'
+    case BiometryErrorType.biometryNotAvailable:
+      return 'Face ID is not available on this device. Try using your device passcode.'
+    case BiometryErrorType.biometryNotEnrolled:
+      return 'Face ID is not set up yet. Try using your device passcode.'
+    case BiometryErrorType.passcodeNotSet:
+    case BiometryErrorType.noDeviceCredential:
+      return 'Set up a device passcode to unlock Regli on this device.'
+    case BiometryErrorType.biometryLockout:
+      return 'Face ID is temporarily locked. Use your device passcode to continue.'
+    case BiometryErrorType.authenticationFailed:
+      return 'Face ID did not recognize you. Please try again.'
+    default:
+      return 'Unable to verify your identity right now. Please try again.'
+  }
 }

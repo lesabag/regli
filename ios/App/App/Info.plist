@@ -39,6 +39,8 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Regli needs your location to find walkers near you and show your position on the map.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Regli uses Face ID to unlock your app securely.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
