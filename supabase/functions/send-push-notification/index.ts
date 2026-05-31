@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
+import { planTargetedPushDelivery, resolvePushLanguage } from '../_shared/pushDelivery.ts'
 import { buildPushEnvelope, buildPushDedupKey, getPushDedupWindowMs } from '../_shared/pushNotifications.ts'
 import { getPushCopy, resolvePushCopyLanguage } from '../_shared/pushCopy.ts'
 
@@ -210,16 +211,16 @@ serve(async (req: Request) => {
     const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
     const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
     const languageResolution = targetUserId
-      ? await resolveTargetUserLanguage({
-          supabaseAdmin,
-          targetUserId,
+      ? resolvePushLanguage({
+          profileLanguage: await getTargetUserProfileLanguage(supabaseAdmin, targetUserId),
+          metadataLanguage: await getTargetUserPreferredLanguage(supabaseAdmin, targetUserId),
           payloadProfileLanguage,
           appLanguage,
         })
-      : {
-          resolvedLanguage: resolvePushCopyLanguage(payloadProfileLanguage, appLanguage),
-          source: payloadProfileLanguage ? 'profile' : appLanguage ? 'fallback' : 'fallback',
-        }
+      : resolvePushLanguage({
+          payloadProfileLanguage,
+          appLanguage,
+        })
     const resolvedLanguage = languageResolution.resolvedLanguage
     console.log(`[Push] targetUserId=${targetUserId ?? '<broadcast>'}`)
     console.log(`[Push] resolvedLanguage=${resolvedLanguage}`)
@@ -281,8 +282,12 @@ serve(async (req: Request) => {
       .eq('enabled', true)
 
     if (targetUserId) {
-      const shouldCreateTargetInAppNotification =
-        body.createInAppNotification === true || notificationType === 'dispute_update'
+      const deliveryPlan = planTargetedPushDelivery({
+        targetUserId,
+        notificationType,
+        createInAppNotification: body.createInAppNotification,
+      })
+      const shouldCreateTargetInAppNotification = deliveryPlan.shouldCreateBell
 
       if (shouldCreateTargetInAppNotification) {
         const inAppType = body.inAppType || envelope.type || notificationType
@@ -573,39 +578,6 @@ function readDisputeEventType(
   value: unknown,
 ): 'client_completion_dispute' | 'provider_issue' | null {
   return value === 'client_completion_dispute' || value === 'provider_issue' ? value : null
-}
-
-type LanguageResolutionResult = {
-  resolvedLanguage: 'en' | 'he'
-  source: 'user_metadata' | 'profile' | 'fallback'
-}
-
-async function resolveTargetUserLanguage(params: {
-  supabaseAdmin: ReturnType<typeof createClient>
-  targetUserId: string
-  payloadProfileLanguage: string | null
-  appLanguage: string | null
-}): Promise<LanguageResolutionResult> {
-  const profileLanguage = await getTargetUserProfileLanguage(params.supabaseAdmin, params.targetUserId)
-  if (profileLanguage) {
-    return {
-      resolvedLanguage: resolvePushCopyLanguage(profileLanguage),
-      source: 'profile',
-    }
-  }
-
-  const metadataLanguage = await getTargetUserPreferredLanguage(params.supabaseAdmin, params.targetUserId)
-  if (metadataLanguage) {
-    return {
-      resolvedLanguage: resolvePushCopyLanguage(metadataLanguage),
-      source: 'user_metadata',
-    }
-  }
-
-  return {
-    resolvedLanguage: resolvePushCopyLanguage(params.payloadProfileLanguage, params.appLanguage),
-    source: 'fallback',
-  }
 }
 
 async function getTargetUserPreferredLanguage(
