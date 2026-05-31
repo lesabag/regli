@@ -29,7 +29,7 @@ import i18n from '../i18n'
 import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import useNativePaymentSheet from './useNativePaymentSheet'
-import { presentNativePaymentSheet } from '../lib/nativeStripe'
+import { presentNativeApplePay, presentNativePaymentSheet } from '../lib/nativeStripe'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import {
   type SavedCard as StoredSavedCard,
@@ -3871,18 +3871,60 @@ export function useClientFlow(profileId: string, _profileName: string) {
           paymentIntentId: prepared.paymentIntentId,
         })
 
-        const paymentSheetResult = await presentNativePaymentSheet({
-          paymentIntentClientSecret: prepared.paymentIntentClientSecret,
-          customerId: prepared.customerId,
-          customerEphemeralKeySecret: prepared.customerEphemeralKeySecret,
-          merchantIdentifier: prepared.merchantIdentifier,
-          merchantDisplayName: prepared.merchantDisplayName,
-          returnURL: prepared.returnURL,
-        }, {
-          enableApplePay: activePaymentMethod?.type === 'apple_pay',
-          countryCode: 'IL',
-          currencyCode: 'ILS',
-        })
+        let paymentSheetResult: {
+          status: 'completed' | 'canceled' | 'failed'
+          error: string | null
+        }
+
+        if (activePaymentMethod?.type === 'apple_pay') {
+          const directApplePayResult = await presentNativeApplePay({
+            paymentIntentClientSecret: prepared.paymentIntentClientSecret,
+            customerId: prepared.customerId,
+            customerEphemeralKeySecret: prepared.customerEphemeralKeySecret,
+            merchantIdentifier: prepared.merchantIdentifier,
+            merchantDisplayName: prepared.merchantDisplayName,
+            returnURL: prepared.returnURL,
+          }, {
+            amount: effectivePriceILS,
+            label: prepared.merchantDisplayName,
+            countryCode: 'IL',
+            currency: 'ILS',
+          })
+
+          if (directApplePayResult.status === 'unsupported') {
+            console.log('[ApplePayDirect] fallback paymentsheet')
+            paymentSheetResult = await presentNativePaymentSheet({
+              paymentIntentClientSecret: prepared.paymentIntentClientSecret,
+              customerId: prepared.customerId,
+              customerEphemeralKeySecret: prepared.customerEphemeralKeySecret,
+              merchantIdentifier: prepared.merchantIdentifier,
+              merchantDisplayName: prepared.merchantDisplayName,
+              returnURL: prepared.returnURL,
+            }, {
+              enableApplePay: true,
+              countryCode: 'IL',
+              currencyCode: 'ILS',
+            })
+          } else {
+            paymentSheetResult = {
+              status: directApplePayResult.status,
+              error: directApplePayResult.error,
+            }
+          }
+        } else {
+          paymentSheetResult = await presentNativePaymentSheet({
+            paymentIntentClientSecret: prepared.paymentIntentClientSecret,
+            customerId: prepared.customerId,
+            customerEphemeralKeySecret: prepared.customerEphemeralKeySecret,
+            merchantIdentifier: prepared.merchantIdentifier,
+            merchantDisplayName: prepared.merchantDisplayName,
+            returnURL: prepared.returnURL,
+          }, {
+            enableApplePay: false,
+            countryCode: 'IL',
+            currencyCode: 'ILS',
+          })
+        }
         console.log('[useClientFlow] presentPaymentSheet result', paymentSheetResult)
 
         if (paymentSheetResult.status === 'canceled') {

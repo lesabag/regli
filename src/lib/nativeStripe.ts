@@ -42,8 +42,20 @@ export interface NativePaymentSheetOptions {
   currencyCode?: string
 }
 
+export interface NativeApplePayOptions {
+  amount: number
+  label?: string
+  countryCode?: string
+  currency?: string
+}
+
 export interface NativePaymentSheetResult {
   status: 'completed' | 'canceled' | 'failed'
+  error: string | null
+}
+
+export interface NativeApplePayResult {
+  status: 'completed' | 'canceled' | 'failed' | 'unsupported'
   error: string | null
 }
 
@@ -278,6 +290,122 @@ export async function presentNativePaymentSheet(
     return {
       status: 'failed',
       error: error instanceof Error ? error.message : 'Payment sheet failed.',
+    }
+  }
+}
+
+export async function presentNativeApplePay(
+  session: NativePaymentSheetSession,
+  options: NativeApplePayOptions,
+): Promise<NativeApplePayResult> {
+  if (!isNativeIos) {
+    console.log('[ApplePayDirect] unsupported', {
+      reason: 'unsupported_platform',
+    })
+    return {
+      status: 'unsupported',
+      error: 'Direct Apple Pay is only supported on iOS devices.',
+    }
+  }
+
+  const initialized = await initializeNativeStripe()
+  if (!initialized) {
+    console.log('[ApplePayDirect] error', {
+      error: nativeStripeInitError ?? 'Failed to initialize native Stripe.',
+    })
+    return {
+      status: 'failed',
+      error: nativeStripeInitError ?? 'Failed to initialize native Stripe.',
+    }
+  }
+
+  const mod = await loadNativeStripeModule()
+  if (!mod) {
+    console.log('[ApplePayDirect] error', {
+      error: nativeStripeInitError ?? 'Failed to load native Stripe module.',
+    })
+    return {
+      status: 'failed',
+      error: nativeStripeInitError ?? 'Failed to load native Stripe module.',
+    }
+  }
+
+  if (typeof mod.Stripe.createApplePay !== 'function' || typeof mod.Stripe.presentApplePay !== 'function') {
+    console.log('[ApplePayDirect] unsupported', {
+      reason: 'plugin_api_missing',
+    })
+    return {
+      status: 'unsupported',
+      error: 'Direct Apple Pay is not supported by the installed Stripe plugin.',
+    }
+  }
+
+  console.log('[ApplePayDirect] supported', {
+    merchantIdentifier: session.merchantIdentifier,
+    countryCode: options.countryCode ?? 'IL',
+    currency: options.currency ?? 'ILS',
+  })
+
+  try {
+    await mod.Stripe.createApplePay({
+      paymentIntentClientSecret: session.paymentIntentClientSecret,
+      paymentSummaryItems: [
+        {
+          label: options.label ?? session.merchantDisplayName,
+          amount: options.amount,
+        },
+      ],
+      merchantIdentifier: session.merchantIdentifier,
+      countryCode: options.countryCode ?? 'IL',
+      currency: options.currency ?? 'ILS',
+    })
+  } catch (error) {
+    console.log('[ApplePayDirect] error', {
+      stage: 'create',
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'Failed to prepare Apple Pay.',
+    }
+  }
+
+  try {
+    console.log('[ApplePayDirect] present start')
+    const { paymentResult } = await mod.Stripe.presentApplePay()
+
+    if (paymentResult === mod.ApplePayEventsEnum.Completed) {
+      console.log('[ApplePayDirect] success')
+      return {
+        status: 'completed',
+        error: null,
+      }
+    }
+
+    if (paymentResult === mod.ApplePayEventsEnum.Canceled) {
+      console.log('[ApplePayDirect] cancel')
+      return {
+        status: 'canceled',
+        error: null,
+      }
+    }
+
+    console.log('[ApplePayDirect] error', {
+      stage: 'present',
+      paymentResult,
+    })
+    return {
+      status: 'failed',
+      error: 'Apple Pay did not complete successfully.',
+    }
+  } catch (error) {
+    console.log('[ApplePayDirect] error', {
+      stage: 'present',
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'Apple Pay failed.',
     }
   }
 }
