@@ -18,6 +18,8 @@ const SERVICE_PRICES: Record<string, number> = {
 const PLATFORM_FEE_PERCENT = 20
 const SCHEDULE_TIMEZONE = 'Asia/Jerusalem'
 const DEFAULT_MARKET_CURRENCY = 'ils'
+const APPLE_PAY_MERCHANT_ID = 'merchant.com.regli.app'
+const NATIVE_STRIPE_RETURN_URL = 'regli://stripe-payment-callback'
 
 function normalizeCurrency(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
@@ -213,6 +215,8 @@ serve(async (req: Request) => {
       priceAgorot?: number
       durationMinutes?: number
       dogCount?: number
+      paymentIntentId?: string
+      paymentFlow?: 'saved_card' | 'native_payment_sheet' | 'native_payment_sheet_finalize'
     }
 
     try {
@@ -242,6 +246,8 @@ serve(async (req: Request) => {
       dogCount: rawDogCount,
       issueType,
       issueDescription,
+      paymentIntentId,
+      paymentFlow = 'saved_card',
     } = body
 
     if (!serviceType || !SERVICE_PRICES[serviceType]) {
@@ -501,6 +507,275 @@ serve(async (req: Request) => {
       requestPricingModel,
     })
 
+    const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
+
+    if (paymentFlow === 'native_payment_sheet') {
+      if (!customerId) {
+        return new Response(
+          JSON.stringify({
+            error: 'Customer required',
+            details: 'A Stripe customer is required to prepare native PaymentSheet.',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      try {
+        await stripe.customers.retrieve(customerId)
+      } catch (err) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet customer lookup failed:`, err)
+        return new Response(
+          JSON.stringify({
+            error: 'Customer unavailable',
+            details: err instanceof Error ? err.message : 'Could not verify Stripe customer',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      let paymentIntent: Stripe.PaymentIntent
+      let ephemeralKeySecret: string
+
+      try {
+        paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: jobCurrency,
+          capture_method: 'manual',
+          customer: customerId,
+          automatic_payment_methods: {
+            enabled: true,
+          },
+          metadata,
+        })
+
+        const ephemeralKey = await stripe.ephemeralKeys.create(
+          { customer: customerId },
+          { apiVersion: '2024-12-18.acacia' },
+        )
+        ephemeralKeySecret = ephemeralKey.secret
+      } catch (stripeErr: unknown) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet preparation failed:`, stripeErr)
+        const msg = stripeErr instanceof Error ? stripeErr.message : 'Unknown error'
+        return new Response(
+          JSON.stringify({
+            error: 'Failed to prepare native payment sheet',
+            details: msg,
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      return new Response(
+        JSON.stringify({
+          paymentFlow,
+          paymentIntentId: paymentIntent.id,
+          paymentIntentClientSecret: paymentIntent.client_secret,
+          customerId,
+          customerEphemeralKeySecret: ephemeralKeySecret,
+          merchantIdentifier: APPLE_PAY_MERCHANT_ID,
+          merchantDisplayName: 'Regli',
+          returnURL: NATIVE_STRIPE_RETURN_URL,
+          amount,
+          platformFee,
+          walkerAmount,
+          requestCurrency: jobCurrency,
+          currency: paymentIntent.currency,
+          paymentStatus: paymentIntent.status,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    if (paymentFlow === 'native_payment_sheet_finalize') {
+      if (!customerId || !paymentIntentId) {
+        return new Response(
+          JSON.stringify({
+            error: 'Missing native payment context',
+            details: 'customerId and paymentIntentId are required to finalize native PaymentSheet.',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      let paymentIntent: Stripe.PaymentIntent
+      try {
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId)
+      } catch (err) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native PaymentSheet PI lookup failed:`, err)
+        return new Response(
+          JSON.stringify({
+            error: 'Payment unavailable',
+            details: err instanceof Error ? err.message : 'Could not verify PaymentIntent',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const attachedCustomer =
+        typeof paymentIntent.customer === 'string'
+          ? paymentIntent.customer
+          : paymentIntent.customer?.id ?? null
+
+      if (attachedCustomer !== customerId) {
+        return new Response(
+          JSON.stringify({
+            error: 'Payment does not belong to customer',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (paymentIntent.status !== 'requires_capture' && paymentIntent.status !== 'succeeded') {
+        return new Response(
+          JSON.stringify({
+            error: 'Payment confirmation incomplete',
+            details: `PaymentIntent status is '${paymentIntent.status}'. Expected 'requires_capture' or 'succeeded'.`,
+            paymentIntentStatus: paymentIntent.status,
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const { data: existingNativeJob, error: existingNativeJobError } = await supabaseAdmin
+        .from('walk_requests')
+        .select('id, stripe_payment_intent_id, stripe_client_secret, currency, payment_status')
+        .eq('stripe_payment_intent_id', paymentIntent.id)
+        .maybeSingle()
+
+      if (existingNativeJobError) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Native finalize existing job lookup failed:`, existingNativeJobError)
+        return new Response(
+          JSON.stringify({ error: 'Failed to finalize native payment', _v: FUNCTION_VERSION }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      if (existingNativeJob?.id) {
+        return new Response(
+          JSON.stringify({
+            paymentFlow,
+            jobId: existingNativeJob.id,
+            paymentIntentId: paymentIntent.id,
+            clientSecret: paymentIntent.client_secret,
+            amount,
+            platformFee,
+            walkerAmount,
+            requestCurrency: jobCurrency,
+            currency: paymentIntent.currency,
+            stripeCurrencyUsed: paymentIntent.currency,
+            paymentStatus: paymentIntent.status,
+            duplicate: true,
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      const initialPaymentStatus = paymentStatusFromIntent(paymentIntent.status)
+      const paymentAuthorizedAt =
+        initialPaymentStatus === 'authorized' || initialPaymentStatus === 'paid'
+          ? new Date().toISOString()
+          : null
+      const paidAt = initialPaymentStatus === 'paid' ? new Date().toISOString() : null
+
+      const { data: job, error: jobError } = await supabaseAdmin
+        .from('walk_requests')
+        .insert({
+          client_id: user.id,
+          selected_walker_id: walkerId || null,
+          service_type: persistedRequestServiceType,
+          dog_name: normalizedDogName,
+          dog_count: dogCount,
+          location: location.trim(),
+          notes: notes?.trim() || null,
+          issue_type: normalizedIssueType,
+          issue_description: normalizedIssueDescription,
+          status: 'awaiting_payment',
+          dispatch_state: 'queued',
+          smart_dispatch_state: 'idle',
+          smart_dispatch_last_error: null,
+          booking_timing: bookingTiming,
+          scheduled_for: normalizedScheduledFor,
+          scheduled_fee_snapshot: amount / 100,
+          scheduled_pricing_multiplier: surgeMultiplier,
+          schedule_timezone: SCHEDULE_TIMEZONE,
+          duration_minutes: persistedDurationMinutes,
+          requested_window_minutes: persistedRequestedWindowMinutes,
+          amount,
+          price: amount / 100,
+          currency: jobCurrency,
+          platform_fee_percent: PLATFORM_FEE_PERCENT,
+          platform_fee: platformFee / 100,
+          walker_amount: walkerAmount / 100,
+          walker_earnings: walkerAmount / 100,
+          payment_status: initialPaymentStatus,
+          payment_authorized_at: paymentAuthorizedAt,
+          paid_at: paidAt,
+          stripe_payment_intent_id: paymentIntent.id,
+          stripe_client_secret: paymentIntent.client_secret,
+        })
+        .select('id')
+        .single()
+
+      if (jobError || !job) {
+        console.error(`[create-payment-intent][${FUNCTION_VERSION}] Failed to create native finalized walk_request row`, {
+          error: jobError,
+          paymentIntentId: paymentIntent.id,
+        })
+        return new Response(
+          JSON.stringify({
+            error: 'Failed to create job',
+            details: jobError?.message ?? 'unknown_insert_error',
+            _v: FUNCTION_VERSION,
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+
+      try {
+        const updatePayload: Stripe.PaymentIntentUpdateParams = {
+          metadata: {
+            ...paymentIntent.metadata,
+            job_id: job.id,
+          },
+        }
+
+        if (!paymentIntent.transfer_group) {
+          updatePayload.transfer_group = job.id
+        }
+
+        await stripe.paymentIntents.update(paymentIntent.id, updatePayload)
+      } catch (updateErr) {
+        console.error('Failed to update native PI with job ID (non-blocking):', updateErr)
+      }
+
+      return new Response(
+        JSON.stringify({
+          paymentFlow,
+          jobId: job.id,
+          paymentIntentId: paymentIntent.id,
+          clientSecret: paymentIntent.client_secret,
+          amount,
+          platformFee,
+          walkerAmount,
+          requestCurrency: jobCurrency,
+          currency: paymentIntent.currency,
+          stripeCurrencyUsed: paymentIntent.currency,
+          paymentStatus: paymentIntent.status,
+          _v: FUNCTION_VERSION,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
     if (!customerId || !paymentMethodId) {
       console.warn(`[create-payment-intent][${FUNCTION_VERSION}] Missing saved payment method`, {
         hasCustomerId: !!customerId,
@@ -516,8 +791,6 @@ serve(async (req: Request) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
-
-    const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
 
     try {
       const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId)

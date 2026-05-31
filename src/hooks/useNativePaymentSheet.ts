@@ -8,6 +8,7 @@ const FALLBACK_CAPABILITY: NativePaymentSheetCapability = {
   supported: false,
   initialized: false,
   applePayEligible: false,
+  paymentSheetBackendReady: false,
   canPresentPaymentSheet: false,
   merchantIdentifier: 'merchant.com.regli.app',
   returnURL: 'regli://stripe-payment-callback',

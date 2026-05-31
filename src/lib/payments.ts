@@ -56,6 +56,7 @@ export const DURATION_TO_SERVICE: Record<DurationType, ServiceType> = {
 export const PLATFORM_FEE_PERCENT = 20
 
 export type BookingTimingRequest = 'asap' | 'scheduled'
+export type BookingPaymentFlow = 'saved_card' | 'native_payment_sheet' | 'native_payment_sheet_finalize'
 
 // ─── Payment intent ──────────────────────────────────────────────
 export interface CreatePaymentIntentRequest {
@@ -63,18 +64,33 @@ export interface CreatePaymentIntentRequest {
   location: string
   notes?: string | null
   serviceType: ServiceType
+  requestServiceType?: string
   walkerId?: string
   customerId?: string
   paymentMethodId?: string
+  paymentIntentId?: string
   surgeMultiplier?: number
   bookingTiming?: BookingTimingRequest
   scheduledFor?: string | null
+  priceAgorot?: number
+  durationMinutes?: number
+  dogCount?: number
+  issueType?: string | null
+  issueDescription?: string | null
+  paymentFlow?: BookingPaymentFlow
 }
 
 export interface CreatePaymentIntentResponse {
-  jobId: string
+  jobId?: string
   paymentIntentId: string
-  clientSecret: string
+  clientSecret?: string
+  paymentIntentClientSecret?: string
+  customerId?: string
+  customerEphemeralKeySecret?: string
+  merchantIdentifier?: string
+  merchantDisplayName?: string
+  returnURL?: string
+  paymentFlow?: BookingPaymentFlow
   amount: number
   platformFee: number
   walkerAmount: number
@@ -100,4 +116,45 @@ export async function createPaymentIntent(
   }
 
   return data
+}
+
+export interface PrepareNativePaymentSheetResponse extends CreatePaymentIntentResponse {
+  paymentFlow: 'native_payment_sheet'
+  paymentIntentClientSecret: string
+  customerId: string
+  customerEphemeralKeySecret: string
+  merchantIdentifier: string
+  merchantDisplayName: string
+  returnURL: string
+}
+
+export async function prepareNativePaymentSheet(
+  params: Omit<CreatePaymentIntentRequest, 'paymentMethodId' | 'paymentIntentId'> & {
+    paymentFlow: 'native_payment_sheet'
+    customerId: string
+  },
+): Promise<PrepareNativePaymentSheetResponse> {
+  const data = await createPaymentIntent(params)
+  if (
+    data.paymentFlow !== 'native_payment_sheet' ||
+    !data.paymentIntentClientSecret ||
+    !data.customerId ||
+    !data.customerEphemeralKeySecret ||
+    !data.merchantIdentifier ||
+    !data.merchantDisplayName ||
+    !data.returnURL
+  ) {
+    throw new Error('Failed to prepare native payment sheet')
+  }
+  return data as PrepareNativePaymentSheetResponse
+}
+
+export async function finalizeNativePaymentSheet(
+  params: Omit<CreatePaymentIntentRequest, 'paymentMethodId'> & {
+    paymentFlow: 'native_payment_sheet_finalize'
+    paymentIntentId: string
+    customerId: string
+  },
+): Promise<CreatePaymentIntentResponse> {
+  return createPaymentIntent(params)
 }
