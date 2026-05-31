@@ -36,6 +36,12 @@ export interface NativePaymentSheetSession {
   returnURL: string
 }
 
+export interface NativePaymentSheetOptions {
+  enableApplePay?: boolean
+  countryCode?: string
+  currencyCode?: string
+}
+
 export interface NativePaymentSheetResult {
   status: 'completed' | 'canceled' | 'failed'
   error: string | null
@@ -165,6 +171,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
 
 export async function presentNativePaymentSheet(
   session: NativePaymentSheetSession,
+  options: NativePaymentSheetOptions = {},
 ): Promise<NativePaymentSheetResult> {
   if (!isNativeIos) {
     console.log('[native_payment_sheet] present blocked unsupported platform')
@@ -204,14 +211,32 @@ export async function presentNativePaymentSheet(
   }
 
   try {
+    const enableApplePay = options.enableApplePay === true
+    const countryCode = options.countryCode ?? 'IL'
+    const currencyCode = options.currencyCode ?? 'ILS'
+
+    if (enableApplePay) {
+      console.log('[native_payment_sheet] applePay config enabled', {
+        merchantIdentifier: session.merchantIdentifier,
+        countryCode,
+        currencyCode,
+      })
+    } else {
+      console.log('[native_payment_sheet] applePay config skipped', {
+        merchantIdentifier: session.merchantIdentifier,
+      })
+    }
+
     await mod.Stripe.createPaymentSheet({
       paymentIntentClientSecret: session.paymentIntentClientSecret,
       customerId: session.customerId,
       customerEphemeralKeySecret: session.customerEphemeralKeySecret,
       merchantDisplayName: session.merchantDisplayName,
       returnURL: session.returnURL,
-      enableApplePay: false,
+      enableApplePay,
       applePayMerchantId: session.merchantIdentifier,
+      countryCode,
+      currencyCode,
       paymentMethodLayout: 'automatic',
       style: 'alwaysLight',
     })

@@ -3878,6 +3878,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
           merchantIdentifier: prepared.merchantIdentifier,
           merchantDisplayName: prepared.merchantDisplayName,
           returnURL: prepared.returnURL,
+        }, {
+          enableApplePay: activePaymentMethod?.type === 'apple_pay',
+          countryCode: 'IL',
+          currencyCode: 'ILS',
         })
         console.log('[useClientFlow] presentPaymentSheet result', paymentSheetResult)
 
