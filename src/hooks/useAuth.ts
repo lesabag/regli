@@ -159,6 +159,14 @@ function normalizeProfileServiceTypeFallback(value: Profile['service_type']): Pr
   return typeof value === 'string' ? (normalizeProfileServiceTypes(value)[0] ?? null) : value ?? null
 }
 
+function getGoogleOAuthRedirectTo(): string {
+  if (Capacitor.isNativePlatform()) {
+    return 'regli://auth/callback'
+  }
+
+  return `${window.location.origin}/`
+}
+
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
@@ -596,9 +604,12 @@ export function useAuth() {
     })
 
     try {
-      const redirectTo = Capacitor.isNativePlatform()
-        ? 'regli://auth/callback'
-        : `${window.location.origin}/`
+      const redirectTo = getGoogleOAuthRedirectTo()
+      console.log('[auth-google] starting oauth', {
+        platform: Capacitor.getPlatform(),
+        native: Capacitor.isNativePlatform(),
+        redirectTo,
+      })
 
       const { data, error } = await withTimeout(
         supabase.auth.signInWithOAuth({
@@ -629,7 +640,7 @@ export function useAuth() {
           return { ok: false }
         }
 
-        await Browser.open({ url: data.url, windowName: '_self' })
+        await Browser.open({ url: data.url })
       }
 
       return { ok: true }

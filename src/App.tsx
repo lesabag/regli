@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
-import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
@@ -19,6 +20,55 @@ const isStripeReturn =
     window.location.href.includes('stripe_connect=refresh') ||
     window.location.pathname.includes('stripe-connect-return')
   )
+
+const isNativeOAuthReturn =
+  typeof window !== 'undefined' &&
+  Capacitor.isNativePlatform() &&
+  (() => {
+    const url = new URL(window.location.href)
+    return (
+      url.pathname === '/auth/callback' ||
+      url.searchParams.has('code') ||
+      url.searchParams.has('error') ||
+      url.searchParams.has('error_description')
+    )
+  })()
+
+if (isNativeOAuthReturn && typeof document !== 'undefined') {
+  const nativeCallbackUrl = `regli://auth/callback${window.location.search}${window.location.hash}`
+  document.body.innerHTML = `
+    <div style="
+      height:100vh;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      font-family:sans-serif;
+      text-align:center;
+      padding:24px;
+    ">
+      <h2>Returning to Regli</h2>
+      <p>Please wait while we reopen the app.</p>
+      <button style="
+        margin-top:20px;
+        padding:12px 20px;
+        font-size:16px;
+        border-radius:12px;
+        border:none;
+        background:#000;
+        color:#fff;
+      " onclick="window.location.href='${nativeCallbackUrl}'">
+        Open Regli app
+      </button>
+    </div>
+  `
+
+  window.setTimeout(() => {
+    window.location.href = nativeCallbackUrl
+  }, 100)
+
+  throw new Error('Native OAuth return redirected to app')
+}
 
 if (isStripeReturn && typeof document !== 'undefined') {
   document.body.innerHTML = `
@@ -62,20 +112,6 @@ const AdminDashboard = lazy(() => import('./screens/AdminDashboard'))
 const ClientDashboard = lazy(() => import('./screens/ClientDashboard'))
 const WalkerDashboard = lazy(() => import('./screens/WalkerDashboard'))
 
-interface CapacitorAppUrlOpen {
-  url: string
-}
-
-interface CapacitorAppPlugin {
-  addListener(
-    eventName: 'appUrlOpen',
-    listenerFunc: (event: CapacitorAppUrlOpen) => void,
-  ): Promise<PluginListenerHandle>
-  getLaunchUrl(): Promise<{ url: string } | undefined>
-}
-
-const NativeApp = registerPlugin<CapacitorAppPlugin>('App')
-
 function isProviderRole(role: string | null | undefined) {
   return role === 'walker' || role === 'provider'
 }
@@ -95,6 +131,22 @@ function isWebOAuthCallbackInProgress() {
     url.searchParams.has('error') ||
     url.searchParams.has('error_description')
   )
+}
+
+function isNativeAuthCallbackUrl(value: string | null | undefined): boolean {
+  const urlValue = String(value ?? '').trim()
+  if (!urlValue) return false
+
+  try {
+    const parsed = new URL(urlValue)
+    return (
+      parsed.protocol === 'regli:' &&
+      parsed.hostname === 'auth' &&
+      (parsed.pathname === '/callback' || parsed.pathname === '/callback/')
+    )
+  } catch {
+    return urlValue.startsWith('regli://auth/callback')
+  }
 }
 
 export default function App() {
@@ -190,17 +242,27 @@ export default function App() {
 
     const handleNativeUrl = async (url: string | null | undefined) => {
       const value = String(url ?? '')
+      console.log('[auth-google] appUrlOpen received URL', {
+        url: value,
+      })
       const isStripeReturn =
         value.startsWith('regli://stripe-connect-return') || value.includes('stripe_connect=return')
 
-      if (value.startsWith('regli://auth/callback')) {
+      if (isNativeAuthCallbackUrl(value)) {
         try {
           const callbackUrl = new URL(value)
           const authCode = callbackUrl.searchParams.get('code')
+          console.log('[auth-google] code found', {
+            hasCode: !!authCode,
+          })
           if (authCode) {
             const { error } = await supabase.auth.exchangeCodeForSession(authCode)
             if (error) {
-              console.warn('[App] OAuth code exchange failed', error.message)
+              console.warn('[auth-google] exchangeCodeForSession failure', {
+                message: error.message,
+              })
+            } else {
+              console.log('[auth-google] exchangeCodeForSession success')
             }
           }
         } catch (error) {
@@ -226,7 +288,7 @@ export default function App() {
 
     let listener: PluginListenerHandle | null = null
 
-    void NativeApp.addListener('appUrlOpen', ({ url }) => {
+    void CapacitorApp.addListener('appUrlOpen', ({ url }) => {
       void handleNativeUrl(url)
     }).then((handle) => {
       listener = handle
@@ -234,8 +296,13 @@ export default function App() {
       console.warn('[App] appUrlOpen listener unavailable', error)
     })
 
-    void NativeApp.getLaunchUrl()
+    void CapacitorApp.getLaunchUrl()
       .then((result) => {
+        if (result?.url) {
+          console.log('[auth-google] launch URL received', {
+            url: result.url,
+          })
+        }
         void handleNativeUrl(result?.url)
       })
       .catch((error) => {
