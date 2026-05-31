@@ -13,6 +13,7 @@ import type { GpsQuality } from '../hooks/useJobTracking'
 import { useClientFlow } from '../hooks/useClientFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
+import CardSetupForm from '../components/CardSetupForm'
 import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
@@ -3786,11 +3787,11 @@ export default function ClientDashboard({
         style={compactSavedCardRowStyle}
       >
         <div style={compactSavedCardMainStyle}>
-          <CreditCard size={13} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.9 }} />
+          <CreditCard size={15} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.95 }} />
           <span style={compactSavedCardBrandStyle}>
             {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
           </span>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </div>
@@ -3915,27 +3916,19 @@ export default function ClientDashboard({
       type="button"
       data-control="payment-row"
       onClick={() => {
-        if (flow.cardLoading) return
         markFirstInteractionHandler('client-dashboard:open-payment-row')
+        if (flow.cardLoading) return
         if (flow.cardError && !flow.savedCard) {
           flow.retryLoadCard?.()
-        } else if (flow.setupClientSecret) {
-          flow.cancelCardSetup()
-        } else if (flow.savedCard) {
-          flow.changeCard()
-        } else {
-          setPaymentSheetOpen(true)
-          if (!flow.setupClientSecret) {
-            flow.requestCardSetup()
-          }
         }
+        setPaymentSheetOpen(true)
         markFirstInteractionVisual('client-dashboard:open-payment-row')
       }}
       style={compactSavedCardRowStyle}
       disabled={flow.cardLoading}
     >
       <div style={compactSavedCardMainStyle}>
-        <CreditCard size={13} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.9 }} />
+        <CreditCard size={15} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.95 }} />
         <span style={compactSavedCardBrandStyle}>
           {flow.cardLoading
             ? isRtl
@@ -3953,7 +3946,7 @@ export default function ClientDashboard({
                   ? 'הוסף כרטיס'
                   : 'Add card'}
         </span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
       </div>
@@ -5263,11 +5256,24 @@ export default function ClientDashboard({
 
       {paymentSheetOpen && (
         <>
-          <div style={paymentSheetOverlayStyle} onClick={() => setPaymentSheetOpen(false)} />
+          <div
+            style={paymentSheetOverlayStyle}
+            onClick={() => {
+              setPaymentSheetOpen(false)
+              if (flow.setupClientSecret) flow.cancelCardSetup()
+            }}
+          />
           <div style={paymentSheetStyle}>
             <div style={paymentSheetHeaderStyle}>
               <span style={paymentSheetTitleStyle}>{t('paymentMethods.title')}</span>
-              <button type="button" onClick={() => setPaymentSheetOpen(false)} style={paymentSheetCloseStyle}>
+              <button
+                type="button"
+                onClick={() => {
+                  setPaymentSheetOpen(false)
+                  if (flow.setupClientSecret) flow.cancelCardSetup()
+                }}
+                style={paymentSheetCloseStyle}
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
@@ -5275,7 +5281,7 @@ export default function ClientDashboard({
               </button>
             </div>
 
-            {flow.savedCard && (
+            {!flow.setupClientSecret && flow.savedCard && (
               <div style={paymentSheetCardRowStyle}>
                 <div style={paymentSheetCardLeftStyle}>
                   <CreditCard size={20} color="#3B82F6" />
@@ -5294,7 +5300,7 @@ export default function ClientDashboard({
               </div>
             )}
 
-            {flow.expressCheckout.expressCheckoutSupported && (
+            {!flow.setupClientSecret && flow.expressCheckout.expressCheckoutSupported && (
               <div style={expressCheckoutSectionStyle}>
                 <div style={expressCheckoutLabelStyle}>Express checkout</div>
                 <div style={expressCheckoutButtonsStyle}>
@@ -5323,40 +5329,53 @@ export default function ClientDashboard({
               </div>
             )}
 
-            <div style={paymentSheetActionsStyle}>
-              <button
-                type="button"
-                onClick={() => { setPaymentSheetOpen(false); flow.changeCard() }}
-                style={paymentSheetActionBtnStyle}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                  <line x1="1" y1="10" x2="23" y2="10" />
-                </svg>
-                <span>{t('paymentMethods.addCard')}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => { setPaymentSheetOpen(false); flow.changeCard() }}
-                style={paymentSheetActionBtnStyle}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-                <span>{t('paymentMethods.manageCards')}</span>
-              </button>
-
-              <div style={paymentSheetActionDisabledStyle}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="1" x2="12" y2="23" />
-                  <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                </svg>
-                <span>{t('paymentMethods.cashPayment')}</span>
-                <span style={paymentSheetComingSoonStyle}>{t('paymentMethods.comingSoon')}</span>
+            {flow.setupClientSecret ? (
+              <div style={paymentSheetSetupWrapStyle}>
+                <CardSetupForm
+                  savedCard={flow.savedCard}
+                  setupClientSecret={flow.setupClientSecret}
+                  loadingCard={flow.cardLoading}
+                  loadError={flow.cardError}
+                  onRequestSetup={flow.requestCardSetup}
+                  onChangeCard={flow.changeCard}
+                  onSetupComplete={() => {
+                    setPaymentSheetOpen(false)
+                    flow.onCardSetupComplete()
+                  }}
+                  onCancelSetup={flow.cancelCardSetup}
+                  onRetry={flow.retryLoadCard}
+                />
               </div>
-            </div>
+            ) : (
+              <div style={paymentSheetActionsStyle}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (flow.savedCard) {
+                      flow.changeCard()
+                    } else {
+                      flow.requestCardSetup()
+                    }
+                  }}
+                  style={paymentSheetActionBtnStyle}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                  <span>{flow.savedCard ? t('paymentMethods.manageCards') : t('paymentMethods.addCard')}</span>
+                </button>
+
+                <div style={paymentSheetActionDisabledStyle}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="1" x2="12" y2="23" />
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                  </svg>
+                  <span>{t('paymentMethods.cashPayment')}</span>
+                  <span style={paymentSheetComingSoonStyle}>{t('paymentMethods.comingSoon')}</span>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -7572,30 +7591,32 @@ const compactPaymentWrapStyle: React.CSSProperties = {
 
 const compactSavedCardRowStyle: React.CSSProperties = {
   appearance: 'none',
-  border: 'none',
-  background: 'transparent',
+  border: '1px solid rgba(203, 213, 225, 0.7)',
+  background: 'rgba(255,255,255,0.92)',
+  borderRadius: 14,
   padding: 0,
   width: '100%',
   display: 'grid',
   gap: 0,
   cursor: 'pointer',
   fontFamily: 'inherit',
+  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.045)',
+  overflow: 'hidden',
 }
 
 const compactSavedCardMainStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 5,
+  gap: 8,
   minWidth: 0,
-  minHeight: 20,
-  padding: '0 1px',
-  opacity: 0.9,
+  minHeight: 42,
+  padding: '8px 12px',
 }
 
 const compactSavedCardBrandStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  fontWeight: 700,
-  color: '#334155',
+  fontSize: 12.25,
+  fontWeight: 800,
+  color: '#0F172A',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -7893,7 +7914,7 @@ const fixedVisitDisclaimerStyle: React.CSSProperties = {
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(226, 232, 240, 0.58)',
-  paddingTop: 7,
+  paddingTop: 8,
   marginTop: 8,
 }
 
@@ -9357,6 +9378,8 @@ const paymentSheetStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 16,
+  maxHeight: '72vh',
+  overflowY: 'auto',
 }
 
 const paymentSheetHeaderStyle: React.CSSProperties = {
@@ -9431,35 +9454,42 @@ const paymentSheetDefaultBadgeStyle: React.CSSProperties = {
 const paymentSheetActionsStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 10,
 }
 
 const paymentSheetActionBtnStyle: React.CSSProperties = {
   appearance: 'none',
-  border: 'none',
-  background: 'transparent',
+  border: '1px solid rgba(203, 213, 225, 0.72)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%)',
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '12px 16px',
-  borderRadius: 12,
+  padding: '14px 16px',
+  borderRadius: 16,
   fontSize: 15,
-  fontWeight: 700,
+  fontWeight: 800,
   color: '#0F172A',
   cursor: 'pointer',
   textAlign: 'start',
+  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.05)',
 }
 
 const paymentSheetActionDisabledStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '12px 16px',
-  borderRadius: 12,
+  padding: '14px 16px',
+  borderRadius: 16,
+  border: '1px solid rgba(226, 232, 240, 0.8)',
+  background: 'rgba(248,250,252,0.86)',
   fontSize: 15,
   fontWeight: 700,
   color: '#CBD5E1',
   opacity: 0.7,
+}
+
+const paymentSheetSetupWrapStyle: React.CSSProperties = {
+  paddingTop: 2,
 }
 
 const paymentSheetComingSoonStyle: React.CSSProperties = {

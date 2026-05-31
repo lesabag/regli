@@ -80,8 +80,8 @@ export default function CardSetupForm({
   // ── Setup in progress — show Stripe Elements ───────────────
   if (setupClientSecret) {
     return (
-      <div style={wrapperStyle}>
-        <div style={{ ...labelStyle, marginBottom: 12 }}>
+      <div style={setupWrapperStyle}>
+        <div style={{ ...labelStyle, marginBottom: 10 }}>
           {savedCard ? 'Change payment method' : 'Add payment method'}
         </div>
         <Elements stripe={stripePromise} options={{ clientSecret: setupClientSecret }}>
@@ -188,8 +188,10 @@ function SetupForm({
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <PaymentElement options={{ layout: 'tabs' }} />
+    <form onSubmit={handleSubmit} style={setupFormStyle}>
+      <div style={paymentElementWrapStyle}>
+        <PaymentElement options={{ layout: 'tabs' }} />
+      </div>
       {error && (
         <div style={{
           marginTop: 10,
@@ -262,6 +264,25 @@ const wrapperStyle: React.CSSProperties = {
   borderRadius: 14,
   padding: '11px 12px',
   border: '1px solid #F1F5F9',
+}
+
+const setupWrapperStyle: React.CSSProperties = {
+  background: 'linear-gradient(180deg, rgba(248,250,252,0.96) 0%, rgba(255,255,255,0.98) 100%)',
+  borderRadius: 18,
+  padding: '14px 14px 12px',
+  border: '1px solid rgba(226, 232, 240, 0.9)',
+  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.06)',
+}
+
+const setupFormStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+}
+
+const paymentElementWrapStyle: React.CSSProperties = {
+  maxHeight: '42vh',
+  overflowY: 'auto',
+  paddingRight: 2,
 }
 
 const cardRowStyle: React.CSSProperties = {
