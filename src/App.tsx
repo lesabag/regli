@@ -7,6 +7,7 @@ import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
 import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedPushDeepLink } from './lib/pushNotifications'
 import { supabase } from './services/supabaseClient'
+import { usePushNotifications } from './hooks/usePushNotifications'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
 import i18n from './i18n'
@@ -313,14 +314,7 @@ export default function App() {
   const shouldShowProfileBootstrap = splashDone && hasAuthenticatedUser && !profile && !authError
   const shouldShowProfileError = splashDone && hasAuthenticatedUser && !profile && authError
 
-  useEffect(() => {
-    if (!splashDone || !dashboardProfile?.id) return
-    console.log('[push-native] authenticated app flow mounted', {
-      role: dashboardProfile.role,
-      userId: dashboardProfile.id,
-      native: Capacitor.isNativePlatform(),
-    })
-  }, [dashboardProfile?.id, dashboardProfile?.role, splashDone])
+  usePushNotifications(splashDone ? dashboardProfile?.id ?? null : null)
 
   return (
     <>

@@ -9,7 +9,6 @@ import ProviderPricingPreferences from '../components/ProviderPricingPreferences
 import type { HistoryItem } from '../components/GroupedHistory'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
-import { usePushNotifications } from '../hooks/usePushNotifications'
 import { supabase } from '../services/supabaseClient'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDogCountLabel, isDogServiceType } from '../utils/dogCount'
@@ -436,7 +435,6 @@ export default function WalkerDashboard({
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
   const photo = useProfilePhoto(profile.id)
-  usePushNotifications(profile.id)
   const isRtl = i18n.resolvedLanguage === 'he'
   const isHebrew = i18n.resolvedLanguage === 'he'
   const greetingLabel = isRtl ? `היי, ${walkerName}` : `Hey, ${walkerName}`

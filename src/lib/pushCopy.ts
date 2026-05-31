@@ -3,6 +3,7 @@ export type PushCopyLanguage = 'en' | 'he'
 export type SupportedPushCopyType =
   | 'new_dispatch_offer'
   | 'dispatch_expiring_soon'
+  | 'dispute_update'
   | 'provider_accepted'
   | 'provider_on_the_way'
   | 'provider_arrived'
@@ -23,6 +24,7 @@ export type PushCopyContext = {
   walkerName?: string | null
   amountText?: string | null
   serviceType?: string | null
+  disputeEventType?: 'client_completion_dispute' | 'provider_issue' | null
 }
 
 export type PushCopy = {
@@ -82,6 +84,7 @@ export function getPushCopy(
   getProviderName(context.providerName ?? context.walkerName)
   const amountText = typeof context.amountText === 'string' ? context.amountText.trim() : ''
   const serviceEmoji = getServiceEmoji(context.serviceType)
+  const disputeEventType = context.disputeEventType ?? null
 
   if (language === 'he') {
     switch (type) {
@@ -96,6 +99,26 @@ export function getPushCopy(
           language,
           title: 'ההצעה עומדת לפוג',
           body: 'כדאי להגיב עכשיו כדי לא לפספס.',
+        }
+      case 'dispute_update':
+        if (disputeEventType === 'client_completion_dispute') {
+          return {
+            language,
+            title: 'דיווח חדש לבדיקה',
+            body: 'לקוח דיווח על בעיה לאחר סיום השירות.',
+          }
+        }
+        if (disputeEventType === 'provider_issue') {
+          return {
+            language,
+            title: 'דיווח חדש מספק',
+            body: 'ספק דיווח על בעיה שממתינה לבדיקה.',
+          }
+        }
+        return {
+          language,
+          title: 'עדכון על מחלוקת',
+          body: 'נדרש טיפול מצד הצוות.',
         }
       case 'provider_accepted':
         return {
@@ -187,6 +210,26 @@ export function getPushCopy(
         language,
         title: 'Offer expiring soon',
         body: 'Respond now so you do not miss it.',
+      }
+    case 'dispute_update':
+      if (disputeEventType === 'client_completion_dispute') {
+        return {
+          language,
+          title: 'New dispute to review',
+          body: 'A client reported an issue after service completion.',
+        }
+      }
+      if (disputeEventType === 'provider_issue') {
+        return {
+          language,
+          title: 'New provider issue',
+          body: 'A provider reported an issue that needs review.',
+        }
+      }
+      return {
+        language,
+        title: 'Dispute update',
+        body: 'A booking issue needs review.',
       }
     case 'provider_accepted':
       return {

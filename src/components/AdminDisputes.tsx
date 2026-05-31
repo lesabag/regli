@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import {
   cleanCompletionReviewNotes,
@@ -95,6 +95,9 @@ type RefundModalState = {
   validationError: string | null
 } | null
 
+const DISPUTES_FALLBACK_POLL_MS = 60_000
+const DISPUTES_REALTIME_DEBOUNCE_MS = 3_000
+
 function normalizeProfile(profile: DisputeRow['client'] | DisputeRow['walker']): ProfileRow | null {
   if (!profile) return null
   return Array.isArray(profile) ? profile[0] ?? null : profile
@@ -183,6 +186,39 @@ function paymentLabel(status: string | null, refundedAmount: number | null): str
   return status || 'unpaid'
 }
 
+function hasDisputeMarker(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return false
+  return value.includes(COMPLETION_REVIEW_MARKER) || value.includes(PROVIDER_ISSUE_MARKER)
+}
+
+function readComparableField(record: Record<string, unknown> | null, key: string): string {
+  const value = record?.[key]
+  if (value == null) return ''
+  return String(value)
+}
+
+function shouldRefreshForWalkRequestChange(payload: { old: Record<string, unknown> | null; new: Record<string, unknown> | null }): boolean {
+  const previous = payload.old
+  const next = payload.new
+  const previousNotes = readComparableField(previous, 'notes')
+  const nextNotes = readComparableField(next, 'notes')
+  const disputeRelatedRow = hasDisputeMarker(previousNotes) || hasDisputeMarker(nextNotes)
+
+  if (!disputeRelatedRow) return false
+
+  if (previousNotes !== nextNotes) return true
+
+  const relevantKeys = ['status', 'payment_status', 'refunded_amount', 'refund_currency', 'service_completed_at']
+  return relevantKeys.some((key) => readComparableField(previous, key) !== readComparableField(next, key))
+}
+
+function shouldRefreshForPayoutChange(payload: { old: Record<string, unknown> | null; new: Record<string, unknown> | null }): boolean {
+  const previous = payload.old
+  const next = payload.new
+  const relevantKeys = ['job_id', 'status', 'net_amount', 'reversed_amount', 'currency']
+  return relevantKeys.some((key) => readComparableField(previous, key) !== readComparableField(next, key))
+}
+
 export default function AdminDisputes() {
   const [rows, setRows] = useState<DisputeRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -190,54 +226,122 @@ export default function AdminDisputes() {
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string } | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [refundModal, setRefundModal] = useState<RefundModalState>(null)
+  const hasFetchedOnceRef = useRef(false)
+  const realtimeFetchTimeoutRef = useRef<number | null>(null)
+  const fetchInFlightRef = useRef<Promise<void> | null>(null)
 
-  const fetchDisputes = useCallback(async () => {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from('walk_requests')
-      .select(`
-        id,
-        client_id,
-        walker_id,
-        created_at,
-        service_completed_at,
-        payment_status,
-        price,
-        refunded_amount,
-        refund_currency,
-        notes,
-        payout:walker_payouts!walker_payouts_job_id_fkey ( id, net_amount, reversed_amount, currency, status ),
-        client:profiles!walk_requests_client_id_fkey ( id, full_name, email ),
-        walker:profiles!walk_requests_walker_id_fkey ( id, full_name, email )
-      `)
-      .or(`notes.ilike.%${COMPLETION_REVIEW_MARKER}%,notes.ilike.%${PROVIDER_ISSUE_MARKER}%`)
-      .order('service_completed_at', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('[AdminDisputes] fetch error:', error.message)
-      setFeedback({ ok: false, message: error.message })
-      setLoading(false)
+  const fetchDisputes = useCallback(async (reason: 'initial' | 'realtime' | 'poll' | 'manual' | 'action' = 'manual') => {
+    if (fetchInFlightRef.current) {
+      await fetchInFlightRef.current
       return
     }
 
-    setRows((data as DisputeRow[] | null) ?? [])
-    setLoading(false)
+    const run = (async () => {
+      if (!hasFetchedOnceRef.current) {
+        setLoading(true)
+      }
+
+      const { data, error } = await supabase
+        .from('walk_requests')
+        .select(`
+          id,
+          client_id,
+          walker_id,
+          created_at,
+          service_completed_at,
+          payment_status,
+          price,
+          refunded_amount,
+          refund_currency,
+          notes,
+          payout:walker_payouts!walker_payouts_job_id_fkey ( id, net_amount, reversed_amount, currency, status ),
+          client:profiles!walk_requests_client_id_fkey ( id, full_name, email ),
+          walker:profiles!walk_requests_walker_id_fkey ( id, full_name, email )
+        `)
+        .or(`notes.ilike.%${COMPLETION_REVIEW_MARKER}%,notes.ilike.%${PROVIDER_ISSUE_MARKER}%`)
+        .order('service_completed_at', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('[AdminDisputes] fetch error:', {
+          reason,
+          message: error.message,
+        })
+        setFeedback({ ok: false, message: error.message })
+        setLoading(false)
+        return
+      }
+
+      hasFetchedOnceRef.current = true
+      setRows((data as DisputeRow[] | null) ?? [])
+      setLoading(false)
+    })().finally(() => {
+      fetchInFlightRef.current = null
+    })
+
+    fetchInFlightRef.current = run
+    await run
   }, [])
 
+  const scheduleRealtimeFetch = useCallback(() => {
+    if (realtimeFetchTimeoutRef.current != null) return
+
+    realtimeFetchTimeoutRef.current = window.setTimeout(() => {
+      realtimeFetchTimeoutRef.current = null
+      void fetchDisputes('realtime')
+    }, DISPUTES_REALTIME_DEBOUNCE_MS)
+  }, [fetchDisputes])
+
   useEffect(() => {
-    void fetchDisputes()
-    const channel = supabase
+    void fetchDisputes('initial')
+    const walkRequestsChannel = supabase
       .channel('admin-disputes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'walk_requests' }, () => {
-        void fetchDisputes()
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walk_requests' }, (payload) => {
+        const previous =
+          payload.old && typeof payload.old === 'object'
+            ? (payload.old as Record<string, unknown>)
+            : null
+        const next =
+          payload.new && typeof payload.new === 'object'
+            ? (payload.new as Record<string, unknown>)
+            : null
+
+        if (!shouldRefreshForWalkRequestChange({ old: previous, new: next })) return
+        scheduleRealtimeFetch()
       })
       .subscribe()
 
+    const payoutsChannel = supabase
+      .channel('admin-disputes-payouts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walker_payouts' }, (payload) => {
+        const previous =
+          payload.old && typeof payload.old === 'object'
+            ? (payload.old as Record<string, unknown>)
+            : null
+        const next =
+          payload.new && typeof payload.new === 'object'
+            ? (payload.new as Record<string, unknown>)
+            : null
+
+        if (!shouldRefreshForPayoutChange({ old: previous, new: next })) return
+        scheduleRealtimeFetch()
+      })
+      .subscribe()
+
+    const fallbackPollId = window.setInterval(() => {
+      void fetchDisputes('poll')
+    }, DISPUTES_FALLBACK_POLL_MS)
+
     return () => {
-      void supabase.removeChannel(channel)
+      if (realtimeFetchTimeoutRef.current != null) {
+        window.clearTimeout(realtimeFetchTimeoutRef.current)
+        realtimeFetchTimeoutRef.current = null
+      }
+      window.clearInterval(fallbackPollId)
+      void supabase.removeChannel(walkRequestsChannel)
+      void supabase.removeChannel(payoutsChannel)
     }
-  }, [fetchDisputes])
+  }, [fetchDisputes, scheduleRealtimeFetch])
 
   useEffect(() => {
     if (!feedback) return
@@ -292,7 +396,7 @@ export default function AdminDisputes() {
           setFeedback({ ok: false, message: error })
         } else {
           setFeedback({ ok: true, message: successMessage })
-          await fetchDisputes()
+          await fetchDisputes('action')
         }
       } catch (err) {
         setFeedback({

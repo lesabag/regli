@@ -21,7 +21,7 @@ import {
   isCompletionReviewRequired,
 } from '../utils/completionReview'
 import i18n from '../i18n'
-import type { PushCopyContext } from '../lib/pushCopy'
+import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 
@@ -670,6 +670,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     deepLink,
     dedupId,
     copyContext,
+    preferServerLocalization = false,
   }: {
     type: string
     targetUserId: string | null | undefined
@@ -677,10 +678,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
     deepLink?: string | null
     dedupId?: string | null
     copyContext?: PushCopyContext
+    preferServerLocalization?: boolean
   }) => {
     if (!targetUserId) return
     const eventDedupId = dedupId?.trim() || relatedJobId
     const appLanguage = i18n.resolvedLanguage || 'en'
+    const localizedCopy = preferServerLocalization
+      ? null
+      : getPushCopy(type, {
+          language: appLanguage,
+          ...copyContext,
+        })
     const eventKey = `${type}:${eventDedupId}:${targetUserId}`
     const dedupWindowMs = getPushDedupWindowMs(type)
     const now = Date.now()
@@ -692,6 +700,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
       try {
         const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
           body: {
+            ...(localizedCopy?.title ? { title: localizedCopy.title } : {}),
+            ...(localizedCopy?.body ? { body: localizedCopy.body } : {}),
             targetUserId,
             notificationType: type,
             relatedJobId,
@@ -721,6 +731,45 @@ export function useClientFlow(profileId: string, _profileName: string) {
         })
       }
     })()
+  }, [])
+
+  const notifyAdminDisputeUsers = useCallback(async ({
+    jobId,
+    disputeEventType,
+  }: {
+    jobId: string
+    disputeEventType: 'client_completion_dispute' | 'provider_issue'
+  }) => {
+    try {
+      const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+        body: {
+          notificationType: 'dispute_update',
+          relatedJobId: jobId,
+          deepLink: buildPushDeepLink('dispute_update', jobId),
+          source: 'client_report_issue',
+          data: {
+            dedupId: `${jobId}:${disputeEventType}`,
+            disputeEventType,
+            source: 'client_report_issue',
+            appLanguage: i18n.resolvedLanguage || 'en',
+          },
+        },
+      })
+
+      if (pushError) {
+        console.warn('[dispute] admin push failed', {
+          jobId,
+          disputeEventType,
+          error: pushError,
+        })
+      }
+    } catch (error) {
+      console.warn('[dispute] admin notification failed', {
+        jobId,
+        disputeEventType,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }, [])
 
   const acceptNotifiedRef = useRef<Set<string>>(new Set())
@@ -2879,6 +2928,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         targetUserId: currentJob.walker_id,
         relatedJobId: currentJobId,
         deepLink: buildPushDeepLink('client_confirmation', currentJobId),
+        preferServerLocalization: true,
       })
     }
     setArrivalConfirming(false)
@@ -3017,6 +3067,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           type: 'service_completed',
           targetUserId: pending.walkerId,
           relatedJobId: pending.jobId,
+          preferServerLocalization: true,
         })
       }
 
@@ -3095,6 +3146,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
     setScreenPhase('idle')
     setScreenState('idle')
     clearSearchAttempt()
+    await notifyAdminDisputeUsers({
+      jobId: pending.jobId,
+      disputeEventType: 'client_completion_dispute',
+    })
     void fetchCurrentAndLists()
   }, [
     pendingCompletionConfirmation,
@@ -3107,6 +3162,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     persistDismissedCompletionReviewIds,
     walkerNameById,
     clearSearchAttempt,
+    notifyAdminDisputeUsers,
   ])
 
   const reportHistoryIssue = useCallback(async (jobId: string) => {
@@ -3158,8 +3214,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     setSuccessMessage('Issue reported. Support will review it.')
+    await notifyAdminDisputeUsers({
+      jobId: trimmedJobId,
+      disputeEventType: 'client_completion_dispute',
+    })
     void fetchCurrentAndLists()
-  }, [completedJobs, currentJob, fetchCurrentAndLists, fetchJobById, profileId])
+  }, [completedJobs, currentJob, fetchCurrentAndLists, fetchJobById, notifyAdminDisputeUsers, profileId])
 
   const dismissCompletionReview = useCallback(() => {
     if (!completionReviewJob) return
@@ -3442,6 +3502,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             relatedJobId: tipJob.jobId,
             deepLink: 'regli://wallet',
             copyContext: { amountText: `₪${amount}` },
+            preferServerLocalization: true,
           })
         } catch {
           // noop

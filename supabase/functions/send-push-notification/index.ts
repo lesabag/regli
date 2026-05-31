@@ -18,6 +18,10 @@ const SAFE_PUSH_COPY_FALLBACKS: Record<string, { title: string; body: string }> 
     title: 'New request nearby',
     body: 'A new customer is looking for help right now.',
   },
+  dispute_update: {
+    title: 'Dispute update',
+    body: 'A booking issue needs review.',
+  },
 }
 
 type ApnsEnvironment = keyof typeof APNS_HOSTS
@@ -82,6 +86,7 @@ serve(async (req: Request) => {
       title?: string
       body?: string
       targetUserId?: string
+      source?: string
       data?: Record<string, string | number | boolean | null | undefined>
       badge?: number
       createInAppNotification?: boolean
@@ -101,10 +106,109 @@ serve(async (req: Request) => {
     const { title, body: notifBody, targetUserId, data: notifData } = body
 
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
-    const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
-    const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
     const notificationType =
       body.notificationType ?? body.inAppType ?? readString(notifData?.type) ?? 'new_request'
+    const disputeEventType =
+      readDisputeEventType(notifData?.disputeEventType) ??
+      readDisputeEventType(notifData?.dispute_event_type)
+    const requestSource = readString(body.source) ?? readString(notifData?.source) ?? null
+
+    if (!targetUserId && notificationType === 'dispute_update') {
+      const { data: adminRows, error: adminError } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('is_admin', true)
+
+      if (adminError) {
+        console.warn('[dispute-notify] admin lookup failed', {
+          notificationType,
+          relatedJobId: body.relatedJobId ?? null,
+          disputeEventType,
+          source: requestSource,
+          error: adminError.message,
+        })
+        return jsonResp({ ok: false, error: adminError.message }, 500)
+      }
+
+      const adminIds = ((adminRows as Array<{ id: string }> | null) ?? [])
+        .map((row) => row.id)
+        .filter((value) => typeof value === 'string' && value.length > 0)
+
+      if (adminIds.length === 0) {
+        console.warn('[dispute-notify] no admin recipients found', {
+          notificationType,
+          relatedJobId: body.relatedJobId ?? null,
+          disputeEventType,
+          source: requestSource,
+          adminRows: adminRows ?? [],
+        })
+        return jsonResp({
+          ok: true,
+          sent: 0,
+          notified: 0,
+          message: 'No admin recipients found',
+        }, 200)
+      }
+
+      let sent = 0
+      let notified = 0
+
+      for (const adminId of adminIds) {
+        const response = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${serviceRoleKey}`,
+            apikey: serviceRoleKey,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            ...body,
+            targetUserId: adminId,
+            createInAppNotification: true,
+            inAppType: 'dispute_update',
+            notificationType: 'dispute_update',
+            data: {
+              ...(notifData ?? {}),
+              disputeEventType: disputeEventType ?? undefined,
+              source: requestSource ?? undefined,
+            },
+          }),
+        })
+
+        let responseBody: Record<string, unknown> | null = null
+        try {
+          responseBody = await response.json() as Record<string, unknown>
+        } catch {
+          responseBody = null
+        }
+
+        if (!response.ok) {
+          console.warn('[dispute-notify] admin dispute delivery failed', {
+            adminId,
+            notificationType,
+            relatedJobId: body.relatedJobId ?? null,
+            disputeEventType,
+            source: requestSource,
+            status: response.status,
+            responseBody,
+          })
+          continue
+        }
+
+        sent += typeof responseBody?.sent === 'number' ? responseBody.sent : 0
+        notified += typeof responseBody?.notified === 'number' ? responseBody.notified : 1
+      }
+
+      return jsonResp({
+        ok: true,
+        sent,
+        notified,
+        adminCount: adminIds.length,
+      }, 200)
+    }
+
+    const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
+    const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
     const languageResolution = targetUserId
       ? await resolveTargetUserLanguage({
           supabaseAdmin,
@@ -135,6 +239,7 @@ serve(async (req: Request) => {
         walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
         amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
         serviceType: readString(notifData?.serviceType) ?? readString(notifData?.service_type) ?? null,
+        disputeEventType,
       })
     } catch {
       localizedCopy = null
@@ -168,6 +273,7 @@ serve(async (req: Request) => {
     const dedupWindowMs = getPushDedupWindowMs(envelope.type)
 
     let walkerIds: string[] = []
+    let createdTargetInAppNotification = false
 
     let query = supabaseAdmin
       .from('push_tokens')
@@ -175,6 +281,40 @@ serve(async (req: Request) => {
       .eq('enabled', true)
 
     if (targetUserId) {
+      const shouldCreateTargetInAppNotification =
+        body.createInAppNotification === true || notificationType === 'dispute_update'
+
+      if (shouldCreateTargetInAppNotification) {
+        const inAppType = body.inAppType || envelope.type || notificationType
+        const inAppTitle = body.inAppTitle || effectiveTitle
+        const inAppMessage = body.inAppMessage || effectiveBody
+        console.log(`[Push] creating bell notification targetUserId=${targetUserId}`)
+
+        const { error: insertErr } = await supabaseAdmin
+          .from('notifications')
+          .insert({
+            user_id: targetUserId,
+            type: inAppType,
+            title: inAppTitle,
+            message: inAppMessage,
+            related_job_id: envelope.related_job_id,
+            is_read: false,
+          })
+
+        if (insertErr) {
+          console.error(`[Push] bell notification failed targetUserId=${targetUserId} error=${insertErr.message}`)
+          return jsonResp({
+            ok: false,
+            error: insertErr.message,
+            targetUserId,
+            notificationType: inAppType,
+          }, insertErr.code === '23505' ? 409 : 500)
+        }
+
+        createdTargetInAppNotification = true
+        console.log(`[Push] bell notification created targetUserId=${targetUserId}`)
+      }
+
       query = query.eq('user_id', targetUserId)
     } else {
       const { data: walkers } = await supabaseAdmin
@@ -224,10 +364,13 @@ serve(async (req: Request) => {
     }
 
     if (!tokens || tokens.length === 0) {
+      if (targetUserId) {
+        console.log(`[Push] no push tokens found targetUserId=${targetUserId}, bell already created`)
+      }
       return jsonResp({
         ok: true,
         sent: 0,
-        notified: walkerIds.length,
+        notified: createdTargetInAppNotification ? 1 : walkerIds.length,
         skipped: hasApnsConfig ? null : 'apns_not_configured',
         message: 'No push tokens found (in-app notifications still created)',
       }, 200)
@@ -424,6 +567,12 @@ function getApnsEnvironment(value: string | undefined): ApnsEnvironment {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null
+}
+
+function readDisputeEventType(
+  value: unknown,
+): 'client_completion_dispute' | 'provider_issue' | null {
+  return value === 'client_completion_dispute' || value === 'provider_issue' ? value : null
 }
 
 type LanguageResolutionResult = {

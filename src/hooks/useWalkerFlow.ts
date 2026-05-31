@@ -5,7 +5,7 @@ import { createNotification } from '../components/NotificationsBell'
 import { useWalkerTracking } from './useWalkerTracking'
 import { track, AnalyticsEvent } from '../lib/analytics'
 import { buildPushDeepLink, getPushDedupWindowMs } from '../lib/pushNotifications'
-import type { PushCopyContext } from '../lib/pushCopy'
+import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
 import {
   isCompletionReviewRequired,
@@ -249,6 +249,34 @@ function logRecovery(
   console.log(tag, message, details ?? {})
 }
 
+function readWalkerRealtimeValue(row: Record<string, unknown> | null, key: string): unknown {
+  if (!row) return undefined
+  return row[key]
+}
+
+function shouldHydrateWalkerRequestRealtime(
+  previous: Record<string, unknown> | null,
+  next: Record<string, unknown> | null,
+): boolean {
+  const relevantKeys = [
+    'status',
+    'dispatch_state',
+    'smart_dispatch_state',
+    'payment_status',
+    'provider_arrived_at',
+    'client_arrival_confirmed_at',
+    'service_started_at',
+    'service_completed_at',
+    'walker_id',
+    'selected_walker_id',
+    'booking_timing',
+    'scheduled_for',
+    'notes',
+  ]
+
+  return relevantKeys.some((key) => readWalkerRealtimeValue(previous, key) !== readWalkerRealtimeValue(next, key))
+}
+
 declare global {
   interface Window {
     __regliRefreshWalkerOffers?: (() => void) | undefined
@@ -472,6 +500,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     dedupId,
     copyContext,
     suppressWhenForeground = true,
+    preferServerLocalization = false,
   }: {
     type: string
     targetUserId: string | null | undefined
@@ -480,11 +509,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     dedupId?: string | null
     copyContext?: PushCopyContext
     suppressWhenForeground?: boolean
+    preferServerLocalization?: boolean
   }) => {
     if (!targetUserId) return
     if (suppressWhenForeground && targetUserId === profileId && isDocumentVisibleRef.current) return
     const eventDedupId = dedupId?.trim() || relatedJobId
     const appLanguage = i18n.resolvedLanguage || 'en'
+    const localizedCopy = preferServerLocalization
+      ? null
+      : getPushCopy(type, {
+          language: appLanguage,
+          ...copyContext,
+        })
     const eventKey = `${type}:${eventDedupId}:${targetUserId}`
     const dedupWindowMs = getPushDedupWindowMs(type)
     const now = Date.now()
@@ -496,6 +532,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       try {
         const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
           body: {
+            ...(localizedCopy?.title ? { title: localizedCopy.title } : {}),
+            ...(localizedCopy?.body ? { body: localizedCopy.body } : {}),
             targetUserId,
             notificationType: type,
             relatedJobId,
@@ -525,6 +563,45 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         })
       }
     })()
+  }, [])
+
+  const notifyAdminDisputeUsers = useCallback(async ({
+    jobId,
+    disputeEventType,
+  }: {
+    jobId: string
+    disputeEventType: 'client_completion_dispute' | 'provider_issue'
+  }) => {
+    try {
+      const { error: pushError } = await invokeEdgeFunction('send-push-notification', {
+        body: {
+          notificationType: 'dispute_update',
+          relatedJobId: jobId,
+          deepLink: buildPushDeepLink('dispute_update', jobId),
+          source: 'walker_report_issue',
+          data: {
+            dedupId: `${jobId}:${disputeEventType}`,
+            disputeEventType,
+            source: 'walker_report_issue',
+            appLanguage: i18n.resolvedLanguage || 'en',
+          },
+        },
+      })
+
+      if (pushError) {
+        console.warn('[dispute] admin push failed', {
+          jobId,
+          disputeEventType,
+          error: pushError,
+        })
+      }
+    } catch (error) {
+      console.warn('[dispute] admin notification failed', {
+        jobId,
+        disputeEventType,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }, [])
 
   const queueClientLifecyclePush = useCallback(({
@@ -562,6 +639,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       relatedJobId: requestId,
       deepLink,
       copyContext,
+      preferServerLocalization: true,
     })
   }, [sendPushEvent])
 
@@ -847,6 +925,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           targetUserId: profileId,
           relatedJobId: job.id,
           deepLink: buildPushDeepLink('scheduled_booking_reminder', job.id),
+          preferServerLocalization: true,
         })
 
         return true
@@ -873,7 +952,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   }, [isOnline, myJobs, autoDispatchScheduledJob])
 
   useEffect(() => {
-    if (!walkerPosition || onTheWayJobs.length === 0) return
+    if (onTheWayJobs.length === 0) return
 
     let cancelled = false
 
@@ -913,7 +992,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       cancelled = true
       clearInterval(id)
     }
-  }, [onTheWayJobs, profileId, walkerPosition])
+  }, [onTheWayJobs, profileId])
 
   const pendingFromJobs = useMemo(() => {
     return myJobs
@@ -1632,6 +1711,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         relatedJobId: offer.request_id,
         deepLink: `regli://dispatch/${offer.id}`,
         dedupId: offer.id,
+        preferServerLocalization: true,
       })
     }
 
@@ -1661,6 +1741,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
             relatedJobId: offer.request_id,
             deepLink: `regli://dispatch/${offer.id}`,
             dedupId: offer.id,
+            preferServerLocalization: true,
           })
         }
       })
@@ -1929,8 +2010,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'walk_requests', filter: `walker_id=eq.${profileId}` },
-          () => {
+          (payload) => {
             if (!isDocumentVisibleRef.current) return
+            const nextRecord =
+              typeof payload?.new === 'object' && payload.new ? (payload.new as Record<string, unknown>) : null
+            const previousRecord =
+              typeof payload?.old === 'object' && payload.old ? (payload.old as Record<string, unknown>) : null
+            if (!shouldHydrateWalkerRequestRealtime(previousRecord, nextRecord)) {
+              return
+            }
             void fetchAllRef.current('realtime_walker_request_change')
             void fetchWallet()
           },
@@ -2754,36 +2842,50 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }
 
       if (jobRow.client_id) {
-        await createNotification({
-          userId: jobRow.client_id,
-          type: 'provider_reported_issue',
-          title: 'Issue Reported',
-          message: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
-          relatedJobId: jobId,
-        })
-        void sendPushEvent({
-          type: 'dispute_update',
-          targetUserId: jobRow.client_id,
-          relatedJobId: jobId,
-          deepLink: buildPushDeepLink('dispute_update', jobId),
-        })
+        try {
+          await createNotification({
+            userId: jobRow.client_id,
+            type: 'provider_reported_issue',
+            title: 'Issue Reported',
+            message: 'Your provider reported an issue and cannot start the service yet. Our support team will follow up.',
+            relatedJobId: jobId,
+          })
+        } catch (error) {
+          console.warn('[dispute] client issue notification failed', {
+            jobId,
+            clientId: jobRow.client_id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
 
       if (jobRow.walker_id) {
-        await createNotification({
-          userId: jobRow.walker_id,
-          type: 'provider_reported_issue',
-          title: 'Issue Reported',
-          message: 'Service is paused until support reviews the request.',
-          relatedJobId: jobId,
-        })
+        try {
+          await createNotification({
+            userId: jobRow.walker_id,
+            type: 'provider_reported_issue',
+            title: 'Issue Reported',
+            message: 'Service is paused until support reviews the request.',
+            relatedJobId: jobId,
+          })
+        } catch (error) {
+          console.warn('[dispute] walker self issue notification failed', {
+            jobId,
+            walkerId: jobRow.walker_id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
 
       setSuccessMessage('Issue reported. Support will review.')
+      await notifyAdminDisputeUsers({
+        jobId,
+        disputeEventType: 'provider_issue',
+      })
       await fetchAll()
       return true
     },
-    [fetchAll, sendPushEvent],
+    [fetchAll, notifyAdminDisputeUsers, sendPushEvent],
   )
 
   const handleRelease = useCallback(

@@ -13,7 +13,6 @@ import type { GpsQuality } from '../hooks/useJobTracking'
 import { useClientFlow } from '../hooks/useClientFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { useNearbyWalkers } from '../hooks/useNearbyWalkers'
-import { usePushNotifications } from '../hooks/usePushNotifications'
 import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
@@ -552,8 +551,6 @@ export default function ClientDashboard({
   const clientName = profile.full_name || profile.email || t('common.client')
   const flow = useClientFlow(profile.id, clientName)
   const photo = useProfilePhoto(profile.id)
-  usePushNotifications(profile.id)
-
   const [burgerOpen, setBurgerOpen] = useState(false)
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
   const [showSchedulePage, setShowSchedulePage] = useState(false)
