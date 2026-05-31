@@ -31,6 +31,29 @@ interface AuthScreenProps {
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
+  onAppleSignIn: (args: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => Promise<{ ok: boolean }>
+  onCompleteOnboarding?: (args: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => Promise<{ ok: boolean }>
+  appleSignInEnabled: boolean
+  authenticatedOnboarding?: boolean
+  initialRole?: AppRole
+  initialLocationAddress?: string | null
+  initialShortBio?: string | null
+  initialServiceTypes?: ProfileServiceType[] | null
+  initialServiceAttributes?: ServiceAttributes | null
   authError?: string | null
 }
 
@@ -182,20 +205,40 @@ export default function AuthScreen({
   onSignIn,
   onSignUp,
   onGoogleSignIn,
+  onAppleSignIn,
+  onCompleteOnboarding,
+  appleSignInEnabled,
+  authenticatedOnboarding = false,
+  initialRole = 'client',
+  initialLocationAddress = null,
+  initialShortBio = null,
+  initialServiceTypes = null,
+  initialServiceAttributes = null,
   authError,
 }: AuthScreenProps) {
-  const [mode, setMode] = useState<OnboardingMode>(() => (readPersistedSignupStep() ? 'signup' : 'welcome'))
-  const [signupStep, setSignupStep] = useState<SignupStep>(() => readPersistedSignupStep() ?? 'welcome')
+  const [mode, setMode] = useState<OnboardingMode>(() => (
+    authenticatedOnboarding ? 'signup' : (readPersistedSignupStep() ? 'signup' : 'welcome')
+  ))
+  const [signupStep, setSignupStep] = useState<SignupStep>(() => (
+    authenticatedOnboarding ? (readPersistedSignupStep() ?? 'role') : (readPersistedSignupStep() ?? 'welcome')
+  ))
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
-  const [role, setRole] = useState<AppRole>('client')
-  const [selectedServices, setSelectedServices] = useState<ProfileServiceType[]>(['dog_walker'])
-  const [locationLabel, setLocationLabel] = useState('Your area')
-  const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>('placeholder')
+  const [role, setRole] = useState<AppRole>(initialRole)
+  const [selectedServices, setSelectedServices] = useState<ProfileServiceType[]>(
+    () => initialRole === 'walker'
+      ? (initialServiceTypes && initialServiceTypes.length > 0 ? initialServiceTypes : ['dog_walker'])
+      : ['dog_walker'],
+  )
+  const [locationLabel, setLocationLabel] = useState(initialLocationAddress || 'Your area')
+  const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>(
+    initialLocationAddress ? 'live' : 'placeholder',
+  )
   const [showEmailAuth, setShowEmailAuth] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
+  const [appleSubmitting, setAppleSubmitting] = useState(false)
   const locationAutoRequestedRef = useRef(false)
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
@@ -203,9 +246,24 @@ export default function AuthScreen({
   const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [] })
   const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [] })
   const [providerIdentity, setProviderIdentity] = useState<ProviderIdentityAttrs>({
-    experienceRange: '',
-    shortBio: '',
-    languages: [],
+    experienceRange:
+      typeof initialServiceAttributes?.provider_profile === 'object' &&
+      initialServiceAttributes.provider_profile &&
+      'experienceRange' in initialServiceAttributes.provider_profile &&
+      typeof initialServiceAttributes.provider_profile.experienceRange === 'string'
+        ? initialServiceAttributes.provider_profile.experienceRange as ProviderExperienceRange
+        : '',
+    shortBio: initialShortBio ?? '',
+    languages:
+      typeof initialServiceAttributes?.provider_profile === 'object' &&
+      initialServiceAttributes.provider_profile &&
+      'languagesSpoken' in initialServiceAttributes.provider_profile &&
+      Array.isArray(initialServiceAttributes.provider_profile.languagesSpoken)
+        ? initialServiceAttributes.provider_profile.languagesSpoken.filter(
+            (value): value is ProviderLanguage =>
+              value === 'hebrew' || value === 'english' || value === 'russian' || value === 'arabic' || value === 'french',
+          )
+        : [],
   })
   const serviceOptions = useMemo<ServiceOption[]>(
     () => getProfileServiceOptions(false).map((option) => ({
@@ -237,6 +295,8 @@ export default function AuthScreen({
     : mode === 'signup'
       ? normalizeSignupStepForRole(safeSignupStep, role)
       : 'welcome'
+  const hasNextSignupStep =
+    mode === 'signup' && signupSteps.indexOf(currentStep) >= 0 && signupSteps.indexOf(currentStep) < signupSteps.length - 1
   const activeStepIndex = Math.max(0, getStepIndex(mode, currentStep, signupSteps))
   const signupStepNumber = Math.max(1, signupSteps.indexOf(currentStep) + 1)
   const isCreateAccountStep = (mode === 'signin' || mode === 'signup') && currentStep === 'auth'
@@ -265,6 +325,7 @@ export default function AuthScreen({
   const providerIdentityValid = !isProvider || providerIdentity.experienceRange !== ''
 
   const canContinue = useMemo(() => {
+    if (authenticatedOnboarding && currentStep === 'auth') return true
     if (mode === 'signin') return !!email && !!password
     if (currentStep === 'role') return !!role
     if (currentStep === 'service') return selectedServices.length > 0
@@ -272,7 +333,7 @@ export default function AuthScreen({
     if (currentStep === 'details') return dogValid && sitterValid && providerIdentityValid
     if (currentStep === 'auth') return !!email && !!password && !!fullName.trim()
     return true
-  }, [currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
+  }, [authenticatedOnboarding, currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
   const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
 
@@ -338,12 +399,14 @@ export default function AuthScreen({
   }
 
   const goToSignIn = () => {
+    if (authenticatedOnboarding) return
     setMode('signin')
     setSignupStep('auth')
     setShowEmailAuth(false)
   }
 
   const goToSignup = () => {
+    if (authenticatedOnboarding) return
     setMode('signup')
     setSignupStep('role')
     writePersistedSignupStep('role')
@@ -351,6 +414,13 @@ export default function AuthScreen({
   }
 
   const handleBack = () => {
+    if (authenticatedOnboarding) {
+      const currentIndex = signupSteps.indexOf(signupStep)
+      if (currentIndex <= 0) return
+      setSignupStep(signupSteps[currentIndex - 1])
+      return
+    }
+
     if (mode === 'signin') {
       setMode('welcome')
       return
@@ -394,6 +464,26 @@ export default function AuthScreen({
     }
 
     if (signupStep === 'auth') {
+      if (authenticatedOnboarding) {
+        setSubmitting(true)
+        const result = await onCompleteOnboarding?.({
+          role,
+          primaryService: isProvider ? selectedServiceMeta.label : undefined,
+          locationAddress: locationLabel,
+          shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
+          serviceTypes: onboardingServiceTypes,
+          serviceAttributes: buildServiceAttributes(),
+        })
+        if (result?.ok && typeof window !== 'undefined') {
+          window.sessionStorage.setItem(
+            'regli:onboarding-wow',
+            role === 'walker' ? 'provider' : 'customer',
+          )
+        }
+        setSubmitting(false)
+        return
+      }
+
       setSubmitting(true)
       const attrs: ServiceAttributes = {}
       if (isProvider) {
@@ -505,6 +595,34 @@ export default function AuthScreen({
     }
   }
 
+  const handleAppleContinue = async () => {
+    if (!appleSignInEnabled || appleSubmitting || submitting) return
+    setAppleSubmitting(true)
+    if (mode === 'signup' && typeof window !== 'undefined') {
+      writePersistedSignupStep(currentStep)
+      window.sessionStorage.setItem(
+        'regli:onboarding-wow',
+        role === 'walker' ? 'provider' : 'customer',
+      )
+    }
+
+    const result = await onAppleSignIn({
+      role,
+      primaryService: isProvider ? selectedServiceMeta.label : undefined,
+      locationAddress: mode === 'signup' ? locationLabel : undefined,
+      shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
+      serviceTypes: onboardingServiceTypes,
+      serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
+    })
+
+    if (!result.ok && typeof window !== 'undefined' && mode === 'signup') {
+      window.sessionStorage.removeItem('regli:onboarding-wow')
+    }
+    if (!result.ok) {
+      setAppleSubmitting(false)
+    }
+  }
+
   const renderSocialAuthButtons = () => (
     <div style={socialStackStyle}>
       <button
@@ -526,16 +644,31 @@ export default function AuthScreen({
         </span>
       </button>
 
-      <button type="button" disabled style={{ ...socialButtonStyle, ...socialButtonDisabledStyle }}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!appleSignInEnabled || appleSubmitting || googleSubmitting || submitting) return
+          void handleAppleContinue()
+        }}
+        disabled={!appleSignInEnabled || appleSubmitting}
+        aria-busy={appleSubmitting}
+        style={{
+          ...socialButtonStyle,
+          ...(!appleSignInEnabled ? socialButtonDisabledStyle : null),
+          ...(appleSubmitting ? socialButtonLoadingStyle : null),
+        }}
+      >
         <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
-        <span style={socialLabelStyle}>Continue with Apple</span>
-        <span style={comingSoonPillStyle}>Coming soon</span>
+        <span style={socialLabelStyle}>
+          {appleSubmitting ? 'Connecting to Apple...' : 'Continue with Apple'}
+        </span>
+        {!appleSignInEnabled && <span style={comingSoonPillStyle}>Coming soon</span>}
       </button>
     </div>
   )
 
   const stepTitle = getStepTitle(mode, currentStep, role)
-  const shouldShowEmailFields = currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
+  const shouldShowEmailFields = !authenticatedOnboarding && currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
   const cardIsScrollable = (currentStep === 'auth' && shouldShowEmailFields) || currentStep === 'details'
 
   return (
@@ -605,7 +738,7 @@ export default function AuthScreen({
               ...(cardIsScrollable ? cardContentScrollableStyle : null),
             }}
           >
-          {mode === 'welcome' && (
+          {!authenticatedOnboarding && mode === 'welcome' && (
             <>
               <div style={welcomeHeroWrapStyle}>
                 <img
@@ -1049,10 +1182,14 @@ export default function AuthScreen({
 
           {isCreateAccountStep && (
             <>
-              <div style={eyebrowStyle}>{mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}</div>
+              <div style={eyebrowStyle}>
+                {authenticatedOnboarding ? `Step ${signupStepNumber}` : mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}
+              </div>
               <h1 style={titleStyle}>{stepTitle}</h1>
               <p style={subtitleStyle}>
-                {mode === 'signin'
+                {authenticatedOnboarding
+                  ? 'Finish your Regli setup to continue.'
+                  : mode === 'signin'
                   ? 'Log in to continue where you left off.'
                   : 'Finish setting up your account to start with Regli.'}
               </p>
@@ -1071,9 +1208,9 @@ export default function AuthScreen({
                 </div>
               )}
 
-              {renderSocialAuthButtons()}
+              {!authenticatedOnboarding && renderSocialAuthButtons()}
 
-              {!shouldShowEmailFields ? (
+              {!authenticatedOnboarding && !shouldShowEmailFields ? (
                 <button
                   type="button"
                   onClick={() => setShowEmailAuth(true)}
@@ -1081,7 +1218,7 @@ export default function AuthScreen({
                 >
                   Use email instead
                 </button>
-              ) : (
+              ) : !authenticatedOnboarding ? (
                 <>
                   {mode === 'signup' && (
                     <div style={fieldBlockStyle}>
@@ -1119,7 +1256,7 @@ export default function AuthScreen({
                     />
                   </div>
                 </>
-              )}
+              ) : null}
 
               {authError && <div style={authErrorStyle}>{authError}</div>}
             </>
@@ -1129,13 +1266,13 @@ export default function AuthScreen({
 
         <div style={footerStyle}>
           <div style={buttonRowStyle}>
-            {mode !== 'welcome' && (
+            {(mode !== 'welcome' || authenticatedOnboarding) && (
               <button type="button" onClick={handleBack} style={secondaryButtonStyle}>
                 Back
               </button>
             )}
 
-            {mode === 'welcome' ? (
+            {!authenticatedOnboarding && mode === 'welcome' ? (
               <>
                 <button type="button" onClick={goToSignIn} style={secondaryButtonStyle}>
                   Log in
@@ -1148,16 +1285,22 @@ export default function AuthScreen({
               <button
                 type="button"
                 onClick={handleContinue}
-                disabled={currentStep === 'auth' ? (!showEmailAuth || !canContinue || submitting) : (!canContinue || submitting)}
+                disabled={currentStep === 'auth'
+                  ? (authenticatedOnboarding ? (!canContinue || submitting) : (!showEmailAuth || !canContinue || submitting))
+                  : (!canContinue || submitting)}
                 style={{
                   ...primaryButtonStyle,
-                  ...((currentStep === 'auth' ? (!showEmailAuth || !canContinue || submitting) : (!canContinue || submitting))
+                  ...((currentStep === 'auth'
+                    ? (authenticatedOnboarding ? (!canContinue || submitting) : (!showEmailAuth || !canContinue || submitting))
+                    : (!canContinue || submitting))
                     ? primaryButtonDisabledStyle
                     : null),
                 }}
               >
                 {submitting
                   ? 'Please wait...'
+                  : authenticatedOnboarding
+                    ? (hasNextSignupStep ? 'Next' : 'Finish Setup')
                   : mode === 'signin'
                     ? 'Log in'
                     : currentStep === 'auth'
@@ -1172,7 +1315,9 @@ export default function AuthScreen({
           </div>
 
           <div style={bottomHintStyle}>
-            {mode === 'signin' ? (
+            {authenticatedOnboarding ? (
+              'Complete your profile to unlock the Regli app.'
+            ) : mode === 'signin' ? (
               <>
                 New to Regli?{' '}
                 <button type="button" onClick={goToSignup} style={textLinkStyle}>

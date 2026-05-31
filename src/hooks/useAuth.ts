@@ -6,7 +6,7 @@ import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 import { buildProviderCapabilityRows, buildProviderSignupCapabilities } from '../lib/providerCapabilities'
 import { disableCurrentPushTokenForUser } from './usePushNotifications'
-import { normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
+import { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 
 export type AppRole = 'client' | 'walker' | 'admin'
 export type ProfileRole = AppRole | 'provider' | 'customer'
@@ -32,6 +32,7 @@ interface Profile {
 const SESSION_INIT_TIMEOUT_MS = 8000
 const PROFILE_LOAD_TIMEOUT_MS = 8000
 const OAUTH_ONBOARDING_CONTEXT_KEY = 'regli:oauth-onboarding-context'
+const OAUTH_PROVIDER_STORAGE_KEY = 'regli:oauth-provider'
 const SIGNUP_STEP_STORAGE_KEY = 'regli_signup_step'
 
 type OAuthOnboardingContext = {
@@ -90,6 +91,22 @@ function clearOAuthOnboardingContext() {
   window.sessionStorage.removeItem(OAUTH_ONBOARDING_CONTEXT_KEY)
 }
 
+function readPendingOAuthProvider(): 'google' | 'apple' | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.sessionStorage.getItem(OAUTH_PROVIDER_STORAGE_KEY)
+  return raw === 'google' || raw === 'apple' ? raw : null
+}
+
+function writePendingOAuthProvider(provider: 'google' | 'apple') {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.setItem(OAUTH_PROVIDER_STORAGE_KEY, provider)
+}
+
+function clearPendingOAuthProvider() {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.removeItem(OAUTH_PROVIDER_STORAGE_KEY)
+}
+
 function getUserDisplayName(currentUser: User): string | null {
   const metadataName = currentUser.user_metadata?.full_name
     ?? currentUser.user_metadata?.name
@@ -109,6 +126,21 @@ function getUserAvatarUrl(currentUser: User): string | null {
     : null
 }
 
+function getDefaultPreferredLanguage(currentUser: User): SupportedLanguage {
+  const fromUserMetadata =
+    normalizeSupportedLanguage(currentUser.user_metadata?.preferred_language as string | undefined) ??
+    normalizeSupportedLanguage(currentUser.user_metadata?.language as string | undefined)
+
+  if (fromUserMetadata) return fromUserMetadata
+
+  if (typeof window !== 'undefined') {
+    const fromStorage = normalizeSupportedLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY))
+    if (fromStorage) return fromStorage
+  }
+
+  return 'en'
+}
+
 function getFallbackProfile(currentUser: User): Profile {
   const pendingContext = readOAuthOnboardingContext()
   const fallbackServiceTypes = normalizeProfileServiceTypes(
@@ -123,10 +155,7 @@ function getFallbackProfile(currentUser: User): Profile {
     full_name: getUserDisplayName(currentUser),
     avatar_url: getUserAvatarUrl(currentUser),
     role: fallbackRole,
-    preferred_language:
-      normalizeSupportedLanguage(currentUser.user_metadata?.preferred_language as string | undefined) ??
-      normalizeSupportedLanguage(currentUser.user_metadata?.language as string | undefined) ??
-      null,
+    preferred_language: getDefaultPreferredLanguage(currentUser),
     short_bio:
       (currentUser.user_metadata?.short_bio as string | undefined) ?? pendingContext?.shortBio ?? null,
     primary_service:
@@ -159,6 +188,32 @@ function normalizeProfileServiceTypeFallback(value: Profile['service_type']): Pr
   return typeof value === 'string' ? (normalizeProfileServiceTypes(value)[0] ?? null) : value ?? null
 }
 
+function hasText(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasProviderProfileDetails(serviceAttributes: ServiceAttributes | null | undefined): boolean {
+  if (!serviceAttributes || typeof serviceAttributes !== 'object') return false
+  const providerProfile = serviceAttributes.provider_profile
+  return !!providerProfile && typeof providerProfile === 'object'
+}
+
+function isProfileOnboardingComplete(profile: Profile): boolean {
+  if (profile.role === 'admin') return true
+
+  if (profile.role === 'walker' || profile.role === 'provider') {
+    const normalizedServiceTypes = normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
+    return (
+      hasText(profile.location_address) &&
+      hasText(profile.short_bio) &&
+      normalizedServiceTypes.length > 0 &&
+      hasProviderProfileDetails(profile.service_attributes)
+    )
+  }
+
+  return hasText(profile.location_address)
+}
+
 function getGoogleOAuthRedirectTo(): string {
   if (Capacitor.isNativePlatform()) {
     return 'regli://auth/callback'
@@ -167,14 +222,31 @@ function getGoogleOAuthRedirectTo(): string {
   return `${window.location.origin}/`
 }
 
+function isAppleAuthEnabled(): boolean {
+  return String(import.meta.env.VITE_APPLE_AUTH_ENABLED ?? '').toLowerCase() === 'true'
+}
+
+function isAppleAuthSupportedOnCurrentPlatform(): boolean {
+  if (!isAppleAuthEnabled()) return false
+  if (Capacitor.isNativePlatform()) {
+    return Capacitor.getPlatform() === 'ios'
+  }
+  return true
+}
+
 export function useAuth() {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [profileReady, setProfileReady] = useState(false)
+  const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const profileRequestRef = useRef(0)
+  const appleBootstrapPromiseRef = useRef<Promise<Profile | null> | null>(null)
+  const appleBootstrapUserIdRef = useRef<string | null>(null)
+  const pendingOAuthProviderRef = useRef<'google' | 'apple' | null>(readPendingOAuthProvider())
 
   // ✅ יצירה/טעינה של פרופיל
   const loadProfile = useCallback(async (currentUser: User) => {
@@ -186,15 +258,40 @@ export function useAuth() {
       mountedRef.current && profileRequestRef.current === requestId
 
     try {
-      const { data, error } = await withTimeout(
-        supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', currentUser.id)
-          .maybeSingle(),
-        PROFILE_LOAD_TIMEOUT_MS,
-        'Profile loading timed out'
-      )
+      let data: Profile | null = null
+      let error: {
+        code?: string | null
+        message?: string | null
+        details?: string | null
+        hint?: string | null
+        status?: number | null
+      } | null = null
+
+      try {
+        const lookupResult = await withTimeout(
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', currentUser.id)
+            .maybeSingle(),
+          PROFILE_LOAD_TIMEOUT_MS,
+          'Profile loading timed out',
+        )
+        data = (lookupResult.data as Profile | null) ?? null
+        error = lookupResult.error
+          ? {
+              code: lookupResult.error.code ?? null,
+              message: lookupResult.error.message ?? null,
+              details: lookupResult.error.details ?? null,
+              hint: lookupResult.error.hint ?? null,
+              status: 'status' in lookupResult.error && typeof lookupResult.error.status === 'number'
+                ? lookupResult.error.status
+                : null,
+            }
+          : null
+      } catch (lookupError) {
+        throw lookupError
+      }
 
       if (!isCurrentRequest()) return null
 
@@ -234,8 +331,13 @@ export function useAuth() {
         }
 
         clearOAuthOnboardingContext()
+        clearPendingOAuthProvider()
+        pendingOAuthProviderRef.current = null
         const normalizedProfile = normalizeLoadedProfile(nextProfileData)
+        const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
         setProfile(normalizedProfile)
+        setProfileReady(onboardingComplete)
+        setNeedsOnboarding(!onboardingComplete)
         setAuthError(null)
         return normalizedProfile
       }
@@ -245,15 +347,53 @@ export function useAuth() {
       }
 
       // 🔥 יצירה אוטומטית אם לא קיים
-      const { data: insertedProfile, error: insertError } = await withTimeout(
-        supabase
-          .from('profiles')
-          .upsert(fallbackProfile, { onConflict: 'id' })
-          .select()
-          .single(),
-        PROFILE_LOAD_TIMEOUT_MS,
-        'Profile setup timed out'
-      )
+      let insertedProfile: Profile | null = null
+      let insertError: {
+        code?: string | null
+        message?: string | null
+        details?: string | null
+        hint?: string | null
+        status?: number | null
+      } | null = null
+
+      try {
+        const insertResult = await withTimeout(
+          supabase
+            .from('profiles')
+            .upsert({
+              id: fallbackProfile.id,
+              email: fallbackProfile.email,
+              full_name: fallbackProfile.full_name,
+              avatar_url: fallbackProfile.avatar_url ?? null,
+              role: fallbackProfile.role,
+              preferred_language: fallbackProfile.preferred_language ?? null,
+              short_bio: fallbackProfile.short_bio ?? null,
+              primary_service: fallbackProfile.primary_service ?? null,
+              location_address: fallbackProfile.location_address ?? null,
+              service_type: fallbackProfile.service_type ?? null,
+              service_types: fallbackProfile.service_types ?? null,
+              service_attributes: fallbackProfile.service_attributes ?? null,
+            }, { onConflict: 'id' })
+            .select()
+            .single(),
+          PROFILE_LOAD_TIMEOUT_MS,
+          'Profile setup timed out',
+        )
+        insertedProfile = (insertResult.data as Profile | null) ?? null
+        insertError = insertResult.error
+          ? {
+              code: insertResult.error.code ?? null,
+              message: insertResult.error.message ?? null,
+              details: insertResult.error.details ?? null,
+              hint: insertResult.error.hint ?? null,
+              status: 'status' in insertResult.error && typeof insertResult.error.status === 'number'
+                ? insertResult.error.status
+                : null,
+            }
+          : null
+      } catch (profileInsertError) {
+        throw profileInsertError
+      }
 
       if (!isCurrentRequest()) return null
 
@@ -289,8 +429,13 @@ export function useAuth() {
       }
 
       clearOAuthOnboardingContext()
+      clearPendingOAuthProvider()
+      pendingOAuthProviderRef.current = null
       const normalizedProfile = normalizeLoadedProfile(insertedProfile as Profile)
+      const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
       setProfile(normalizedProfile)
+      setProfileReady(onboardingComplete)
+      setNeedsOnboarding(!onboardingComplete)
       setAuthError(null)
       return normalizedProfile
     } catch (err) {
@@ -301,11 +446,78 @@ export function useAuth() {
         userId: currentUser.id,
         message: getErrorMessage(err, 'Failed to load profile'),
       })
+      clearPendingOAuthProvider()
+      pendingOAuthProviderRef.current = null
       setAuthError(getErrorMessage(err, 'Failed to load profile'))
-      setProfile(fallbackProfile)
-      return fallbackProfile
+      setProfile(null)
+      setProfileReady(false)
+      setNeedsOnboarding(false)
+      return null
     }
   }, [])
+
+  const bootstrapProfileForOAuth = useCallback(async (
+    currentUser: User,
+    provider: 'google' | 'apple' | null,
+  ) => {
+    if (provider !== 'apple') {
+      return loadProfile(currentUser)
+    }
+
+    if (
+      appleBootstrapPromiseRef.current &&
+      appleBootstrapUserIdRef.current === currentUser.id
+    ) {
+      return appleBootstrapPromiseRef.current
+    }
+
+    const bootstrapPromise = loadProfile(currentUser)
+      .catch(() => null)
+      .finally(() => {
+        if (appleBootstrapUserIdRef.current === currentUser.id) {
+          appleBootstrapPromiseRef.current = null
+          appleBootstrapUserIdRef.current = null
+        }
+      })
+
+    appleBootstrapUserIdRef.current = currentUser.id
+    appleBootstrapPromiseRef.current = bootstrapPromise
+    return bootstrapPromise
+  }, [loadProfile])
+
+  const handleNativeOAuthCallback = useCallback(async (urlValue: string) => {
+    const provider = pendingOAuthProviderRef.current ?? readPendingOAuthProvider()
+    if (!provider) return
+
+    const callbackUrl = new URL(urlValue)
+    const authCode = callbackUrl.searchParams.get('code')
+    const oauthError = callbackUrl.searchParams.get('error') || callbackUrl.searchParams.get('error_description')
+
+    if (oauthError) {
+      console.error('[useAuth] native OAuth callback failed', { provider, message: oauthError })
+      setAuthError(oauthError)
+      return
+    }
+
+    if (!authCode) {
+      return
+    }
+
+    const { data, error } = await supabase.auth.exchangeCodeForSession(authCode)
+
+    if (error) {
+      console.error('[useAuth] native OAuth session exchange failed', { provider, message: error.message })
+      setAuthError(error.message)
+      return
+    }
+
+    if (provider === 'apple' && data.session?.user) {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem(OAUTH_PROVIDER_STORAGE_KEY, 'apple')
+      }
+      pendingOAuthProviderRef.current = 'apple'
+    }
+  }, [bootstrapProfileForOAuth])
 
   useEffect(() => {
     mountedRef.current = true
@@ -315,6 +527,7 @@ export function useAuth() {
         const url = typeof window !== 'undefined' ? new URL(window.location.href) : null
         const hasOAuthCode = !!url?.searchParams.has('code')
         const oauthError = url?.searchParams.get('error') || url?.searchParams.get('error_description')
+        const pendingOAuthProvider = readPendingOAuthProvider()
         let sessionFromExchange: Session | null = null
 
         if (hasOAuthCode && url) {
@@ -327,7 +540,8 @@ export function useAuth() {
           const exchangedUserId = sessionFromExchange?.user?.id ?? null
 
           if (exchangeError) {
-            console.error('[auth-oauth-callback] exchangeCodeForSession failed', {
+            console.error('[useAuth] web OAuth session exchange failed', {
+              provider: pendingOAuthProvider,
               message: exchangeError.message,
               userId: exchangedUserId,
             })
@@ -338,11 +552,15 @@ export function useAuth() {
         }
 
         if (oauthError) {
-          console.error('[auth-oauth-callback] OAuth error detected', oauthError)
+          console.error('[useAuth] OAuth callback failed', {
+            provider: pendingOAuthProvider,
+            message: oauthError,
+          })
           setAuthError(oauthError)
           if (typeof window !== 'undefined') {
             window.history.replaceState({}, document.title, window.location.pathname)
           }
+          clearPendingOAuthProvider()
         }
 
         const { data, error } = await withTimeout(
@@ -358,6 +576,8 @@ export function useAuth() {
           setSession(null)
           setUser(null)
           setProfile(null)
+          setProfileReady(false)
+          setNeedsOnboarding(false)
           return
         }
 
@@ -370,14 +590,27 @@ export function useAuth() {
           }
         }
 
-        setSession(currentSession)
-        setUser(currentUser)
-
         if (currentUser) {
-          await loadProfile(currentUser) // פה מותר await
+          const bootstrappedProfile = pendingOAuthProvider === 'apple'
+            ? await bootstrapProfileForOAuth(currentUser, pendingOAuthProvider)
+            : await loadProfile(currentUser)
+          setSession(currentSession)
+          setUser(currentUser)
+          if (pendingOAuthProvider === 'apple' && !bootstrappedProfile) {
+            console.error('[useAuth] OAuth profile bootstrap failed', {
+              provider: pendingOAuthProvider,
+              userId: currentUser.id,
+            })
+          }
         } else {
+          setSession(currentSession)
+          setUser(currentUser)
           profileRequestRef.current += 1
           setProfile(null)
+          setProfileReady(false)
+          setNeedsOnboarding(false)
+          clearPendingOAuthProvider()
+          pendingOAuthProviderRef.current = null
         }
       } catch (err) {
         if (!mountedRef.current) return
@@ -386,8 +619,12 @@ export function useAuth() {
         setSession(null)
         setUser(null)
         setProfile(null)
+        setProfileReady(false)
+        setNeedsOnboarding(false)
       } finally {
-        if (mountedRef.current) setLoading(false)
+        if (mountedRef.current) {
+          setLoading(false)
+        }
       }
     }
 
@@ -398,19 +635,38 @@ export function useAuth() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
       const currentUser = newSession?.user ?? null
-
-      setSession(newSession)
-      setUser(currentUser)
+      const oauthProvider = readPendingOAuthProvider()
       setAuthError(null)
 
       if (currentUser) {
-        loadProfile(currentUser) // ❗ בלי await
+        if (oauthProvider === 'apple') {
+          void (async () => {
+            await bootstrapProfileForOAuth(currentUser, oauthProvider)
+            if (!mountedRef.current) return
+            setSession(newSession)
+            setUser(currentUser)
+            if (typeof window !== 'undefined') {
+              window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+            }
+            setLoading(false)
+          })()
+          return
+        }
+
+        setSession(newSession)
+        setUser(currentUser)
+        void loadProfile(currentUser) // ❗ בלי await
         if (typeof window !== 'undefined') {
           window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
         }
       } else {
+        setSession(newSession)
+        setUser(currentUser)
         profileRequestRef.current += 1
         setProfile(null)
+        setProfileReady(false)
+        clearPendingOAuthProvider()
+        pendingOAuthProviderRef.current = null
       }
 
       setLoading(false)
@@ -509,8 +765,9 @@ export function useAuth() {
           'Profile setup timed out'
         )
 
-        if (profileError) {
+      if (profileError) {
           setProfile(profilePayload)
+          setNeedsOnboarding(false)
           return { ok: true }
         }
 
@@ -605,11 +862,8 @@ export function useAuth() {
 
     try {
       const redirectTo = getGoogleOAuthRedirectTo()
-      console.log('[auth-google] starting oauth', {
-        platform: Capacitor.getPlatform(),
-        native: Capacitor.isNativePlatform(),
-        redirectTo,
-      })
+      writePendingOAuthProvider('google')
+      pendingOAuthProviderRef.current = 'google'
 
       const { data, error } = await withTimeout(
         supabase.auth.signInWithOAuth({
@@ -628,6 +882,8 @@ export function useAuth() {
       )
 
       if (error) {
+        pendingOAuthProviderRef.current = null
+        clearPendingOAuthProvider()
         clearOAuthOnboardingContext()
         setAuthError(error.message)
         return { ok: false }
@@ -635,6 +891,8 @@ export function useAuth() {
 
       if (Capacitor.isNativePlatform()) {
         if (!data?.url) {
+          pendingOAuthProviderRef.current = null
+          clearPendingOAuthProvider()
           clearOAuthOnboardingContext()
           setAuthError('Could not start Google sign in')
           return { ok: false }
@@ -645,8 +903,90 @@ export function useAuth() {
 
       return { ok: true }
     } catch (err) {
+      pendingOAuthProviderRef.current = null
+      clearPendingOAuthProvider()
       clearOAuthOnboardingContext()
       setAuthError(getErrorMessage(err, 'Failed to sign in with Google'))
+      return { ok: false }
+    }
+  }, [])
+
+  const signInWithApple = useCallback(async ({
+    role,
+    primaryService,
+    locationAddress,
+    shortBio,
+    serviceTypes,
+    serviceAttributes,
+  }: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => {
+    if (!isAppleAuthSupportedOnCurrentPlatform()) {
+      setAuthError('Apple sign in is not available on this platform yet')
+      return { ok: false }
+    }
+
+    setAuthError(null)
+
+    const safeRole: AppRole = role === 'admin' ? 'client' : role
+    const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
+    writeOAuthOnboardingContext({
+      role: safeRole,
+      primaryService,
+      locationAddress,
+      shortBio,
+      serviceTypes: normalizedServiceTypes,
+      serviceAttributes: serviceAttributes ?? null,
+    })
+
+    try {
+      const redirectTo = getGoogleOAuthRedirectTo()
+      writePendingOAuthProvider('apple')
+      pendingOAuthProviderRef.current = 'apple'
+
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithOAuth({
+          provider: 'apple',
+          options: {
+            redirectTo,
+            skipBrowserRedirect: Capacitor.isNativePlatform(),
+          },
+        }),
+        SESSION_INIT_TIMEOUT_MS,
+        'Apple sign in timed out',
+      )
+
+      if (error) {
+        pendingOAuthProviderRef.current = null
+        clearPendingOAuthProvider()
+        clearOAuthOnboardingContext()
+        setAuthError(error.message)
+        return { ok: false }
+      }
+
+      if (Capacitor.isNativePlatform()) {
+        if (!data?.url) {
+          pendingOAuthProviderRef.current = null
+          clearPendingOAuthProvider()
+          clearOAuthOnboardingContext()
+          setAuthError('Could not start Apple sign in')
+          return { ok: false }
+        }
+
+        await Browser.open({ url: data.url })
+      }
+
+      return { ok: true }
+    } catch (err) {
+      pendingOAuthProviderRef.current = null
+      clearPendingOAuthProvider()
+      clearOAuthOnboardingContext()
+      setAuthError(getErrorMessage(err, 'Failed to sign in with Apple'))
       return { ok: false }
     }
   }, [])
@@ -672,20 +1012,123 @@ export function useAuth() {
       setAuthError(getErrorMessage(err, 'Failed to sign out'))
     } finally {
       setProfile(null)
+      setProfileReady(false)
+      setNeedsOnboarding(false)
+      pendingOAuthProviderRef.current = null
       setSession(null)
       setUser(null)
     }
   }, [session?.user?.id, user?.id])
 
+  const completeOnboarding = useCallback(async ({
+    role,
+    primaryService,
+    locationAddress,
+    shortBio,
+    serviceTypes,
+    serviceAttributes,
+  }: {
+    role: AppRole
+    primaryService?: string
+    locationAddress?: string
+    shortBio?: string
+    serviceTypes?: ProfileServiceType[]
+    serviceAttributes?: ServiceAttributes | null
+  }) => {
+    const currentUser = user ?? session?.user ?? null
+    if (!currentUser) {
+      setAuthError('No authenticated user found')
+      return { ok: false }
+    }
+
+    setAuthError(null)
+
+    const safeRole: AppRole = role === 'admin' ? 'client' : role
+    const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
+    const normalizedProviderCapabilities = safeRole === 'walker'
+      ? buildProviderSignupCapabilities({
+          serviceAttributes: serviceAttributes ?? null,
+          shortBio: shortBio ?? null,
+        })
+      : null
+
+    const profilePayload: Profile = {
+      id: currentUser.id,
+      email: currentUser.email ?? profile?.email ?? null,
+      full_name: getUserDisplayName(currentUser) ?? profile?.full_name ?? null,
+      avatar_url: getUserAvatarUrl(currentUser) ?? profile?.avatar_url ?? null,
+      role: safeRole,
+      preferred_language: profile?.preferred_language ?? getDefaultPreferredLanguage(currentUser),
+      short_bio: shortBio ?? null,
+      primary_service: primaryService ?? null,
+      location_address: locationAddress ?? null,
+      service_type: normalizedServiceTypes[0] ?? null,
+      service_types: normalizedServiceTypes,
+      service_attributes: normalizedProviderCapabilities ?? serviceAttributes ?? null,
+    }
+
+    try {
+      const { error: profileError } = await withTimeout(
+        supabase
+          .from('profiles')
+          .upsert(profilePayload, { onConflict: 'id' }),
+        PROFILE_LOAD_TIMEOUT_MS,
+        'Profile setup timed out',
+      )
+
+      if (profileError) {
+        setAuthError(profileError.message)
+        return { ok: false }
+      }
+
+      if (safeRole === 'walker' && normalizedProviderCapabilities) {
+        const providerCapabilityRows = buildProviderCapabilityRows(currentUser.id, normalizedProviderCapabilities)
+          .map((row) => ({
+            ...row,
+            updated_at: new Date().toISOString(),
+          }))
+
+        if (providerCapabilityRows.length > 0) {
+          const { error: capabilityError } = await withTimeout(
+            supabase
+              .from('provider_capabilities')
+              .upsert(providerCapabilityRows, { onConflict: 'provider_id,capability_scope' }),
+            PROFILE_LOAD_TIMEOUT_MS,
+            'Provider capabilities setup timed out',
+          )
+
+          if (capabilityError) {
+            console.warn('[useAuth] provider_capabilities upsert failed during onboarding:', capabilityError.message)
+          }
+        }
+      }
+
+      await loadProfile(currentUser)
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+      }
+      return { ok: true }
+    } catch (err) {
+      setAuthError(getErrorMessage(err, 'Failed to complete onboarding'))
+      return { ok: false }
+    }
+  }, [loadProfile, profile, session?.user, user])
+
   return {
     session,
     user,
     profile,
+    profileReady,
+    needsOnboarding,
     loading,
     authError,
+    appleSignInEnabled: isAppleAuthSupportedOnCurrentPlatform(),
     signUp,
     signIn,
     signInWithGoogle,
+    signInWithApple,
+    completeOnboarding,
+    handleNativeOAuthCallback,
     signOut,
   }
 }

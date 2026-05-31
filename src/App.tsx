@@ -12,7 +12,6 @@ import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
 import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedPushDeepLink } from './lib/pushNotifications'
-import { supabase } from './services/supabaseClient'
 import { usePushNotifications } from './hooks/usePushNotifications'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
@@ -250,11 +249,17 @@ export default function App() {
     session,
     user,
     profile,
+    profileReady,
+    needsOnboarding,
     loading,
     authError,
+    appleSignInEnabled,
     signIn,
     signUp,
     signInWithGoogle,
+    signInWithApple,
+    completeOnboarding,
+    handleNativeOAuthCallback,
     signOut,
   } = useAuth()
 
@@ -343,29 +348,12 @@ export default function App() {
 
     const handleNativeUrl = async (url: string | null | undefined) => {
       const value = String(url ?? '')
-      console.log('[auth-google] appUrlOpen received URL', {
-        url: value,
-      })
       const isStripeReturn =
         value.startsWith('regli://stripe-connect-return') || value.includes('stripe_connect=return')
 
       if (isNativeAuthCallbackUrl(value)) {
         try {
-          const callbackUrl = new URL(value)
-          const authCode = callbackUrl.searchParams.get('code')
-          console.log('[auth-google] code found', {
-            hasCode: !!authCode,
-          })
-          if (authCode) {
-            const { error } = await supabase.auth.exchangeCodeForSession(authCode)
-            if (error) {
-              console.warn('[auth-google] exchangeCodeForSession failure', {
-                message: error.message,
-              })
-            } else {
-              console.log('[auth-google] exchangeCodeForSession success')
-            }
-          }
+          await handleNativeOAuthCallback(value)
         } catch (error) {
           console.warn('[App] OAuth callback handling failed', error)
         } finally {
@@ -399,11 +387,6 @@ export default function App() {
 
     void CapacitorApp.getLaunchUrl()
       .then((result) => {
-        if (result?.url) {
-          console.log('[auth-google] launch URL received', {
-            url: result.url,
-          })
-        }
         void handleNativeUrl(result?.url)
       })
       .catch((error) => {
@@ -413,7 +396,7 @@ export default function App() {
     return () => {
       void listener?.remove()
     }
-  }, [])
+  }, [handleNativeOAuthCallback])
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -481,12 +464,19 @@ export default function App() {
   const shouldShowAuthScreen = splashDone && !hasAuthenticatedUser && !loading && !oauthRoutePending
   const shouldShowProfileBootstrap = splashDone && hasAuthenticatedUser && !profile && !authError
   const shouldShowProfileError = splashDone && hasAuthenticatedUser && !profile && authError
+  const shouldShowAuthenticatedOnboarding =
+    splashDone && hasAuthenticatedUser && !!profile && needsOnboarding && !authError
   const shouldRequireLocalUnlock = splashDone && isNativeIos && !!dashboardProfile && hasAuthenticatedUser
-  const shouldShowUnlockedDashboard = splashDone && Dashboard && (!shouldRequireLocalUnlock || localUnlockState === 'unlocked')
+  const shouldShowUnlockedDashboard =
+    splashDone &&
+    Dashboard &&
+    profileReady &&
+    !needsOnboarding &&
+    (!shouldRequireLocalUnlock || localUnlockState === 'unlocked')
   const localUnlockUserId = session?.user?.id ?? user?.id ?? null
   const localUnlockActive = shouldRequireLocalUnlock && localUnlockState !== 'unlocked'
 
-  usePushNotifications(splashDone ? dashboardProfile?.id ?? null : null)
+  usePushNotifications(splashDone && profileReady ? dashboardProfile?.id ?? null : null)
 
   const lockDashboard = useCallback((reason: 'initial' | 'resume') => {
     if (!isNativeIos) return
@@ -650,6 +640,26 @@ export default function App() {
           onSignIn={signIn}
           onSignUp={signUp}
           onGoogleSignIn={signInWithGoogle}
+          onAppleSignIn={signInWithApple}
+          appleSignInEnabled={appleSignInEnabled}
+          authError={authError}
+        />
+      )}
+
+      {shouldShowAuthenticatedOnboarding && (
+        <AuthScreen
+          onSignIn={signIn}
+          onSignUp={signUp}
+          onGoogleSignIn={signInWithGoogle}
+          onAppleSignIn={signInWithApple}
+          onCompleteOnboarding={completeOnboarding}
+          appleSignInEnabled={appleSignInEnabled}
+          authenticatedOnboarding
+          initialRole={toDashboardRole(profile.role)}
+          initialLocationAddress={profile.location_address ?? null}
+          initialShortBio={profile.short_bio ?? null}
+          initialServiceTypes={profile.service_types ?? (profile.service_type ? [profile.service_type] : null)}
+          initialServiceAttributes={profile.service_attributes ?? null}
           authError={authError}
         />
       )}
