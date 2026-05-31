@@ -24,6 +24,11 @@ import i18n from '../i18n'
 import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
+import {
+  type SavedCard as StoredSavedCard,
+  type ActivePaymentMethod,
+  toSavedCardPaymentMethod,
+} from '../lib/paymentMethods'
 
 interface CapacitorAppState {
   isActive: boolean
@@ -43,13 +48,7 @@ type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
 type ProximityLevel = 'far' | 'near' | 'arrived' | 'very_near' | 'arriving'
 type SurgeLevel = 'normal' | 'busy' | 'very_busy'
 
-type SavedCard = {
-  id: string
-  brand: string
-  last4: string
-  expMonth?: number
-  expYear?: number
-} | null
+type SavedCard = StoredSavedCard | null
 
 /** @internal Pre-booking price estimate from duration picker. After job creation, walk_requests.price is truth. */
 const DURATION_PRICE_BY_TYPE: Record<DurationType, number> = DURATION_OPTIONS.reduce(
@@ -1572,12 +1571,19 @@ export function useClientFlow(profileId: string, _profileName: string) {
     [persistBookingDraft],
   )
 
+  // Booking currently charges against a selected saved card. Keep the selection
+  // behind an explicit payment-method abstraction so Apple Pay can slot into the
+  // picker later without changing the existing Stripe card charge flow.
   const [savedCard, setSavedCard] = useState<SavedCard>(null)
   const [savedCards, setSavedCards] = useState<NonNullable<PaymentMethodsResponse['cards']>>([])
   const [stripeCustomerId, setStripeCustomerId] = useState<string | null>(null)
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null)
   const [cardLoading, setCardLoading] = useState(true)
   const [cardError, setCardError] = useState(false)
+  const activePaymentMethod = useMemo<ActivePaymentMethod | null>(
+    () => toSavedCardPaymentMethod(savedCard),
+    [savedCard],
+  )
 
   const hasUserLocationBase = !!userLocationBase
   const avgRating = useMemo(() => {
@@ -4242,6 +4248,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     dismissExhaustedRequest,
     clearExhaustedRequestForRetry,
 
+    activePaymentMethod,
     savedCard,
     savedCards,
     upcomingJobs,

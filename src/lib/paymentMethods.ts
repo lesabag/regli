@@ -8,16 +8,30 @@ export interface SavedCard {
   expYear?: number
 }
 
-export type PaymentMethodType = 'card' | 'apple_pay' | 'google_pay'
+export type PaymentMethodType = 'saved_card' | 'apple_pay'
 
-export interface ActivePaymentMethod {
-  type: PaymentMethodType
+export interface SavedCardPaymentMethod {
+  type: 'saved_card'
   card: SavedCard | null
+}
+
+export interface ApplePayPaymentMethod {
+  type: 'apple_pay'
+  card: null
+}
+
+export type ActivePaymentMethod = SavedCardPaymentMethod | ApplePayPaymentMethod
+
+export function toSavedCardPaymentMethod(card: SavedCard | null): SavedCardPaymentMethod | null {
+  if (!card) return null
+  return {
+    type: 'saved_card',
+    card,
+  }
 }
 
 export function getPaymentMethodLabel(method: ActivePaymentMethod): string {
   if (method.type === 'apple_pay') return 'Apple Pay'
-  if (method.type === 'google_pay') return 'Google Pay'
   if (method.card) {
     return `${capitalize(method.card.brand)} ${method.card.last4}`
   }
@@ -26,9 +40,14 @@ export function getPaymentMethodLabel(method: ActivePaymentMethod): string {
 
 export function getPaymentMethodIcon(type: PaymentMethodType): string {
   if (type === 'apple_pay') return 'apple'
-  if (type === 'google_pay') return 'google'
   return 'card'
 }
+
+// TODO: Apple Pay support
+// Keep booking payment methods behind a small discriminated union so a future
+// native Apple Pay option can be added without rewriting saved-card selection.
+// TODO: Native iOS Apple Pay eligibility check
+// Eligibility should be decided before rendering any future Apple Pay row.
 
 function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1)

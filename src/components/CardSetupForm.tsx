@@ -169,6 +169,10 @@ function SetupForm({
     setProcessing(true)
     setError(null)
 
+    // TODO: Stripe PaymentSheet Apple Pay configuration
+    // This form intentionally stays card-only today. A future Apple Pay path
+    // will likely use a native-capable Stripe sheet/confirmation flow instead
+    // of reusing this Elements-based saved-card setup form directly.
     const { error: submitError } = await stripe.confirmSetup({
       elements,
       confirmParams: {

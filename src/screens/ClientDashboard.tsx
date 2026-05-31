@@ -47,7 +47,7 @@ import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
 import { CreditCard } from 'lucide-react'
 import AddressPickerSheet from '../components/AddressPickerSheet'
-import { detachPaymentMethod } from '../lib/paymentMethods'
+import { detachPaymentMethod, getPaymentMethodLabel } from '../lib/paymentMethods'
 import {
   markFirstInteractionHandler,
   markFirstInteractionVisual,
@@ -3818,7 +3818,7 @@ export default function ClientDashboard({
         : budgetGuidanceChipLowStyle
 
   const compactSavedCardSummary =
-    flow.savedCard && !flow.setupClientSecret ? (
+    flow.activePaymentMethod && !flow.setupClientSecret ? (
       <button
         type="button"
         data-control="payment-row"
@@ -3832,7 +3832,7 @@ export default function ClientDashboard({
         <div style={compactSavedCardMainStyle}>
           <CreditCard size={15} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.95 }} />
           <span style={compactSavedCardBrandStyle}>
-            {capitalize(flow.savedCard.brand)} {flow.savedCard.last4}
+            {getPaymentMethodLabel(flow.activePaymentMethod).replace(/\s+(\d{4})$/, ' •••• $1')}
           </span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
             <polyline points="9 18 15 12 9 6" />
@@ -5352,6 +5352,9 @@ export default function ClientDashboard({
               <div style={paymentSheetActionsStyle}>
                 {flow.savedCards.length > 0 ? (
                   <div style={paymentSheetCardsListStyle}>
+                    {/* TODO: Apple Pay support
+                        A future native-eligible Apple Pay row should live in this
+                        same list without reworking the payment picker layout. */}
                     {flow.savedCards.map((card) => {
                       const selected = flow.savedCard?.id === card.id
                       return (
