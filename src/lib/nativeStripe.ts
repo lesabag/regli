@@ -13,17 +13,32 @@ type NativeStripeCapabilityStatus =
   | 'unsupported_platform'
   | 'missing_publishable_key'
   | 'ready_for_capability_checks'
-  | 'payment_sheet_backend_missing'
+  | 'payment_sheet_client_flow_missing'
 
 export interface NativePaymentSheetCapability {
   supported: boolean
   initialized: boolean
   applePayEligible: boolean
+  paymentSheetBackendReady: boolean
   canPresentPaymentSheet: boolean
   merchantIdentifier: string
   returnURL: string
   status: NativeStripeCapabilityStatus
   blockerReason: string | null
+}
+
+export interface NativePaymentSheetSession {
+  paymentIntentClientSecret: string
+  customerId: string
+  customerEphemeralKeySecret: string
+  merchantIdentifier: string
+  merchantDisplayName: string
+  returnURL: string
+}
+
+export interface NativePaymentSheetResult {
+  status: 'completed' | 'canceled' | 'failed'
+  error: string | null
 }
 
 let stripeModulePromise: Promise<StripePluginModule | null> | null = null
@@ -73,6 +88,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
       returnURL: NATIVE_STRIPE_RETURN_URL,
@@ -86,6 +102,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
       returnURL: NATIVE_STRIPE_RETURN_URL,
@@ -100,6 +117,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
       returnURL: NATIVE_STRIPE_RETURN_URL,
@@ -114,6 +132,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
       returnURL: NATIVE_STRIPE_RETURN_URL,
@@ -134,12 +153,106 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
     supported: true,
     initialized: true,
     applePayEligible,
-    canPresentPaymentSheet: false,
+    paymentSheetBackendReady: true,
+    canPresentPaymentSheet: true,
     merchantIdentifier: APPLE_PAY_MERCHANT_ID,
     returnURL: NATIVE_STRIPE_RETURN_URL,
-    status: 'payment_sheet_backend_missing',
-    blockerReason:
-      'Booking payments still use create-payment-intent with a saved paymentMethodId, so a native PaymentSheet client-secret flow is not wired yet.',
+    status: 'ready_for_capability_checks',
+    blockerReason: null,
+  }
+}
+
+export async function presentNativePaymentSheet(
+  session: NativePaymentSheetSession,
+): Promise<NativePaymentSheetResult> {
+  if (!isNativeIos) {
+    console.log('[native_payment_sheet] present blocked unsupported platform')
+    return {
+      status: 'failed',
+      error: 'Native PaymentSheet is only supported on iOS devices.',
+    }
+  }
+
+  console.log('[native_payment_sheet] initPaymentSheet start', {
+    merchantIdentifier: session.merchantIdentifier,
+    customerId: session.customerId,
+    hasClientSecret: !!session.paymentIntentClientSecret,
+    hasEphemeralKey: !!session.customerEphemeralKeySecret,
+  })
+
+  const initialized = await initializeNativeStripe()
+  if (!initialized) {
+    console.log('[native_payment_sheet] initPaymentSheet error', {
+      error: nativeStripeInitError ?? 'Failed to initialize native Stripe.',
+    })
+    return {
+      status: 'failed',
+      error: nativeStripeInitError ?? 'Failed to initialize native Stripe.',
+    }
+  }
+
+  const mod = await loadNativeStripeModule()
+  if (!mod) {
+    console.log('[native_payment_sheet] initPaymentSheet error', {
+      error: nativeStripeInitError ?? 'Failed to load native Stripe module.',
+    })
+    return {
+      status: 'failed',
+      error: nativeStripeInitError ?? 'Failed to load native Stripe module.',
+    }
+  }
+
+  try {
+    await mod.Stripe.createPaymentSheet({
+      paymentIntentClientSecret: session.paymentIntentClientSecret,
+      customerId: session.customerId,
+      customerEphemeralKeySecret: session.customerEphemeralKeySecret,
+      merchantDisplayName: session.merchantDisplayName,
+      returnURL: session.returnURL,
+      enableApplePay: false,
+      applePayMerchantId: session.merchantIdentifier,
+      paymentMethodLayout: 'automatic',
+      style: 'alwaysLight',
+    })
+    console.log('[native_payment_sheet] initPaymentSheet success')
+  } catch (error) {
+    console.log('[native_payment_sheet] initPaymentSheet error', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'Failed to prepare payment sheet.',
+    }
+  }
+
+  try {
+    console.log('[native_payment_sheet] presentPaymentSheet start')
+    const { paymentResult } = await mod.Stripe.presentPaymentSheet()
+
+    if (paymentResult === mod.PaymentSheetEventsEnum.Completed) {
+      console.log('[native_payment_sheet] presentPaymentSheet success')
+      return { status: 'completed', error: null }
+    }
+    if (paymentResult === mod.PaymentSheetEventsEnum.Canceled) {
+      console.log('[native_payment_sheet] presentPaymentSheet cancel')
+      return { status: 'canceled', error: null }
+    }
+
+    console.log('[native_payment_sheet] presentPaymentSheet error', {
+      paymentResult,
+    })
+    return {
+      status: 'failed',
+      error: 'Payment sheet did not complete successfully.',
+    }
+  } catch (error) {
+    console.log('[native_payment_sheet] presentPaymentSheet error', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'Payment sheet failed.',
+    }
   }
 }
 

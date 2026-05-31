@@ -3,7 +3,12 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { distanceKm, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
-import { DURATION_OPTIONS, type DurationType } from '../lib/payments'
+import {
+  DURATION_OPTIONS,
+  type DurationType,
+  finalizeNativePaymentSheet,
+  prepareNativePaymentSheet,
+} from '../lib/payments'
 import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
@@ -24,6 +29,7 @@ import i18n from '../i18n'
 import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
 import useNativePaymentSheet from './useNativePaymentSheet'
+import { presentNativePaymentSheet } from '../lib/nativeStripe'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import {
   type SavedCard as StoredSavedCard,
@@ -617,10 +623,7 @@ function isAuthoritativeRecoveryReason(reason: string): boolean {
 export function useClientFlow(profileId: string, _profileName: string) {
   const expressCheckout = useExpressCheckout()
   const nativePaymentSheet = useNativePaymentSheet()
-  const applePayBookingEnabled =
-    nativePaymentSheet.applePayEligible &&
-    nativePaymentSheet.canPresentPaymentSheet &&
-    !nativePaymentSheet.blockerReason
+  const applePayBookingEnabled = false
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -3635,6 +3638,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return
     }
 
+    const shouldUseNativePaymentSheet =
+      activePaymentMethod?.type === 'apple_pay' &&
+      Capacitor.isNativePlatform() &&
+      Capacitor.getPlatform() === 'ios' &&
+      nativePaymentSheet.canPresentPaymentSheet &&
+      nativePaymentSheet.paymentSheetBackendReady &&
+      !nativePaymentSheet.blockerReason
+
     const preferredLiveLocation =
       latestResolvedLocationRef.current &&
       (!location.trim() || location.trim() === lastAutoLocationRef.current)
@@ -3684,6 +3695,19 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
 
     try {
+      console.log('[useClientFlow] booking payment path decision', {
+        activePaymentMethod: activePaymentMethod?.type ?? null,
+        selectedSavedCardId: savedCard?.id ?? null,
+        shouldUseNativePaymentSheet,
+        nativePaymentSheet: {
+          supported: nativePaymentSheet.supported,
+          initialized: nativePaymentSheet.initialized,
+          applePayEligible: nativePaymentSheet.applePayEligible,
+          paymentSheetBackendReady: nativePaymentSheet.paymentSheetBackendReady,
+          canPresentPaymentSheet: nativePaymentSheet.canPresentPaymentSheet,
+          blockerReason: nativePaymentSheet.blockerReason,
+        },
+      })
       console.log('[useClientFlow] request submit start', {
         profileId,
         bookingTiming: effectiveBookingTiming,
@@ -3712,6 +3736,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
 
       console.log('[useClientFlow] create-payment-intent request', {
+        paymentFlow: shouldUseNativePaymentSheet ? 'native_payment_sheet' : 'saved_card',
         selectedBookingService: requestOptions.selectedBookingService ?? null,
         profileServiceTypes: requestOptions.profileServiceTypes ?? null,
         legacyProfileServiceType: requestOptions.legacyProfileServiceType ?? null,
@@ -3740,55 +3765,146 @@ export function useClientFlow(profileId: string, _profileName: string) {
         },
       })
 
-      const response = await invokeEdgeFunction<{
+      const savedCardRequestBody = {
+        bookingTiming: effectiveBookingTiming,
+        timing: effectiveBookingTiming,
+        serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
+        requestServiceType: normalizedRequestServiceType,
+        dogName: effectiveDogName ?? undefined,
+        location: bookingLocation,
+        notes: effectiveNotes,
+        issueType: effectiveIssueType ?? undefined,
+        issueDescription: effectiveIssueDescription ?? undefined,
+        customerId: stripeCustomerId,
+        paymentMethodId: savedCard.id,
+        scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
+        priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
+        durationMinutes: effectiveDurationMinutes ?? undefined,
+        dogCount: effectiveDogCount ?? undefined,
+      }
+
+      let paymentResponse: {
         jobId?: string
         paymentIntentId?: string
         clientSecret?: string
+        paymentIntentClientSecret?: string
+        customerId?: string
+        customerEphemeralKeySecret?: string
+        merchantIdentifier?: string
+        merchantDisplayName?: string
+        returnURL?: string
         paymentStatus?: string
-      }>('create-payment-intent', {
-        body: {
+      }
+
+      if (shouldUseNativePaymentSheet) {
+        console.log('[useClientFlow] native_payment_sheet create-payment-intent request payload', {
           bookingTiming: effectiveBookingTiming,
-          timing: effectiveBookingTiming,
           serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
           requestServiceType: normalizedRequestServiceType,
-          dogName: effectiveDogName ?? undefined,
+          customerId: stripeCustomerId,
+          scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
+          priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
+          durationMinutes: effectiveDurationMinutes ?? undefined,
+          dogCount: effectiveDogCount ?? undefined,
+        })
+        const prepared = await prepareNativePaymentSheet({
+          bookingTiming: effectiveBookingTiming,
+          serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
+          requestServiceType: normalizedRequestServiceType,
+          dogName: effectiveDogName ?? '',
           location: bookingLocation,
           notes: effectiveNotes,
           issueType: effectiveIssueType ?? undefined,
           issueDescription: effectiveIssueDescription ?? undefined,
           customerId: stripeCustomerId,
-          paymentMethodId: savedCard.id,
           scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
           priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
           durationMinutes: effectiveDurationMinutes ?? undefined,
           dogCount: effectiveDogCount ?? undefined,
-        },
-      })
+          paymentFlow: 'native_payment_sheet',
+        })
+        console.log('[useClientFlow] native session response', prepared)
 
-      console.log('[useClientFlow] create-payment-intent response', {
-        responseData: response.data ?? null,
-        responseError: response.error ?? null,
-      })
+        const paymentSheetResult = await presentNativePaymentSheet({
+          paymentIntentClientSecret: prepared.paymentIntentClientSecret,
+          customerId: prepared.customerId,
+          customerEphemeralKeySecret: prepared.customerEphemeralKeySecret,
+          merchantIdentifier: prepared.merchantIdentifier,
+          merchantDisplayName: prepared.merchantDisplayName,
+          returnURL: prepared.returnURL,
+        })
+        console.log('[useClientFlow] presentPaymentSheet result', paymentSheetResult)
 
-      if (response.error) throw new Error(response.error)
-      if (!response.data?.jobId) {
-        console.error('[useClientFlow] create-payment-intent missing jobId', {
+        if (paymentSheetResult.status === 'canceled') {
+          console.log('[useClientFlow] native finalize skipped because payment sheet was canceled')
+          setError(null)
+          setAvailabilityNotice(null)
+          setSuccessMessage(null)
+          return
+        }
+
+        if (paymentSheetResult.status === 'failed') {
+          throw new Error(paymentSheetResult.error || 'Payment was not completed. Please try again.')
+        }
+
+        console.log('[useClientFlow] finalize/create booking start', {
+          paymentIntentId: prepared.paymentIntentId,
+          bookingTiming: effectiveBookingTiming,
+        })
+        paymentResponse = await finalizeNativePaymentSheet({
+          bookingTiming: effectiveBookingTiming,
+          serviceType: effectiveDuration ? durationToPricingPackage(effectiveDuration) : 'standard',
+          requestServiceType: normalizedRequestServiceType,
+          dogName: effectiveDogName ?? '',
+          location: bookingLocation,
+          notes: effectiveNotes,
+          issueType: effectiveIssueType ?? undefined,
+          issueDescription: effectiveIssueDescription ?? undefined,
+          customerId: stripeCustomerId,
+          paymentIntentId: prepared.paymentIntentId,
+          scheduledFor: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
+          priceAgorot: effectivePriceILS > 0 ? Math.round(effectivePriceILS * 100) : undefined,
+          durationMinutes: effectiveDurationMinutes ?? undefined,
+          dogCount: effectiveDogCount ?? undefined,
+          paymentFlow: 'native_payment_sheet_finalize',
+        })
+        console.log('[useClientFlow] finalize/create booking success', paymentResponse)
+      } else {
+        console.log('[useClientFlow] saved_card create-payment-intent request payload', savedCardRequestBody)
+        const response = await invokeEdgeFunction<typeof paymentResponse>('create-payment-intent', {
+          body: savedCardRequestBody,
+        })
+
+        console.log('[useClientFlow] create-payment-intent response', {
           responseData: response.data ?? null,
+          responseError: response.error ?? null,
+        })
+
+        if (response.error) throw new Error(response.error)
+        if (!response.data) {
+          throw new Error('Failed to create walk request')
+        }
+        paymentResponse = response.data
+      }
+
+      if (!paymentResponse?.jobId) {
+        console.error('[useClientFlow] create-payment-intent missing jobId', {
+          responseData: paymentResponse ?? null,
           bookingTiming: effectiveBookingTiming,
           requestServiceType: normalizedRequestServiceType,
         })
         throw new Error('Failed to create walk request')
       }
       if (
-        response.data.paymentStatus !== 'requires_capture' &&
-        response.data.paymentStatus !== 'authorized' &&
-        response.data.paymentStatus !== 'succeeded' &&
-        response.data.paymentStatus !== 'paid'
+        paymentResponse.paymentStatus !== 'requires_capture' &&
+        paymentResponse.paymentStatus !== 'authorized' &&
+        paymentResponse.paymentStatus !== 'succeeded' &&
+        paymentResponse.paymentStatus !== 'paid'
       ) {
         console.warn('[useClientFlow] start-dispatch blocked by payment status', {
-          requestId: response.data.jobId ?? null,
+          requestId: paymentResponse.jobId ?? null,
           booking_timing: effectiveBookingTiming,
-          payment_status: response.data.paymentStatus ?? null,
+          payment_status: paymentResponse.paymentStatus ?? null,
           dispatch_state: null,
           smart_dispatch_state: null,
           startDispatchInvokeCalled: false,
@@ -3797,12 +3913,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
         throw new Error('Payment was not authorized. Please update your card and try again.')
       }
 
-      const jobId = response.data.jobId
+      const jobId = paymentResponse.jobId
       console.log('[useClientFlow] create-payment-intent success', {
         profileId,
         jobId,
         bookingTiming: effectiveBookingTiming,
-        paymentStatus: response.data.paymentStatus ?? null,
+        paymentStatus: paymentResponse.paymentStatus ?? null,
       })
       console.log('[useClientFlow] resolved request/job id', {
         jobId,
@@ -4041,7 +4157,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         console.log('[useClientFlow] start-dispatch invoke', {
           requestId: createdJob.id,
           booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-          payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+          payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
           dispatch_state: createdJob.dispatch_state ?? null,
           smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
           startDispatchInvokeCalled: true,
@@ -4057,7 +4173,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
             profileId,
             requestId: createdJob.id,
             booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
             dispatch_state: createdJob.dispatch_state ?? null,
             smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
             startDispatchInvokeCalled: true,
@@ -4070,6 +4186,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
         let dispatchResult: Awaited<ReturnType<typeof startDispatch>>
         try {
+          console.log('[useClientFlow] dispatch start', {
+            requestId: createdJob.id,
+            bookingTiming: createdJob.booking_timing ?? effectiveBookingTiming,
+          })
           dispatchResult = await startDispatch({
             requestId: createdJob.id,
             rankedCandidates: ranked,
@@ -4079,17 +4199,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
           console.log('[useClientFlow] start-dispatch response', {
             requestId: createdJob.id,
             booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
             dispatch_state: createdJob.dispatch_state ?? null,
             smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
             startDispatchInvokeCalled: true,
             dispatchResult,
           })
         } catch (dispatchError) {
-          console.error('[useClientFlow] start-dispatch error', {
+          console.error('[useClientFlow] dispatch error', {
             requestId: createdJob.id,
             booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
             dispatch_state: createdJob.dispatch_state ?? null,
             smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
             startDispatchInvokeCalled: true,
@@ -4101,13 +4221,17 @@ export function useClientFlow(profileId: string, _profileName: string) {
         if (!dispatchResult.ok) {
           throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
         }
+        console.log('[useClientFlow] dispatch success', {
+          requestId: createdJob.id,
+          dispatchResult,
+        })
 
         setSuccessMessage('Searching for a walker...')
       } else {
         console.log('[useClientFlow] start-dispatch not invoked', {
           requestId: createdJob.id,
           booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-          payment_status: createdJob.payment_status ?? response.data.paymentStatus ?? null,
+          payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
           dispatch_state: createdJob.dispatch_state ?? null,
           smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
           startDispatchInvokeCalled: false,
@@ -4200,6 +4324,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     duration,
     fetchCurrentAndLists,
     location,
+    nativePaymentSheet,
     persistBookingDraft,
     profileId,
     savedCard,
