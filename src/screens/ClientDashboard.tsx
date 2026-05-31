@@ -47,6 +47,7 @@ import i18n from '../i18n'
 import { hapticLight, hapticMedium, hapticSuccess } from '../utils/haptics'
 import { CreditCard } from 'lucide-react'
 import AddressPickerSheet from '../components/AddressPickerSheet'
+import { detachPaymentMethod } from '../lib/paymentMethods'
 import {
   markFirstInteractionHandler,
   markFirstInteractionVisual,
@@ -626,6 +627,9 @@ export default function ClientDashboard({
   const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
+  const [paymentActionsCardId, setPaymentActionsCardId] = useState<string | null>(null)
+  const [paymentDeleteConfirmCardId, setPaymentDeleteConfirmCardId] = useState<string | null>(null)
+  const [paymentActionLoading, setPaymentActionLoading] = useState(false)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<ClientSettingsSectionKey, boolean>>({
     language: false,
     preferredProviders: false,
@@ -658,6 +662,14 @@ export default function ClientDashboard({
     setSettingsSectionsOpen((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
   const fixedVisitBookingServices = useMemo(() => FIXED_VISIT_BOOKING_SERVICES, [])
+  const paymentActionCard = useMemo(
+    () => flow.savedCards.find((card) => card.id === paymentActionsCardId) ?? null,
+    [flow.savedCards, paymentActionsCardId],
+  )
+  const paymentDeleteConfirmCard = useMemo(
+    () => flow.savedCards.find((card) => card.id === paymentDeleteConfirmCardId) ?? null,
+    [flow.savedCards, paymentDeleteConfirmCardId],
+  )
   const availableBookingServices = useMemo(
     () => ['dog_walking', 'babysitter', ...fixedVisitBookingServices] as ServiceType[],
     [fixedVisitBookingServices],
@@ -713,6 +725,37 @@ export default function ClientDashboard({
       setSelectedService(availableBookingServices[0])
     }
   }, [availableBookingServices, selectedService])
+
+  useEffect(() => {
+    if (!paymentSheetOpen) {
+      setPaymentActionsCardId(null)
+      setPaymentDeleteConfirmCardId(null)
+      setPaymentActionLoading(false)
+    }
+  }, [paymentSheetOpen])
+
+  const closePaymentActionMenus = useCallback(() => {
+    setPaymentActionsCardId(null)
+    setPaymentDeleteConfirmCardId(null)
+    setPaymentActionLoading(false)
+  }, [])
+
+  const handleDeletePaymentMethod = useCallback(async () => {
+    if (!paymentDeleteConfirmCard) return
+    setPaymentActionLoading(true)
+    const { error } = await detachPaymentMethod(paymentDeleteConfirmCard.id)
+    setPaymentActionLoading(false)
+
+    if (error) {
+      flow.clearError()
+      console.warn('[ClientDashboard] failed to detach payment method:', error)
+      closePaymentActionMenus()
+      return
+    }
+
+    closePaymentActionMenus()
+    flow.retryLoadCard?.()
+  }, [closePaymentActionMenus, flow, paymentDeleteConfirmCard])
 
   const handleSelectBookingService = useCallback((nextService: ServiceType) => {
     const normalizedNextService = availableBookingServices.includes(nextService)
@@ -5312,46 +5355,66 @@ export default function ClientDashboard({
                     {flow.savedCards.map((card) => {
                       const selected = flow.savedCard?.id === card.id
                       return (
-                        <button
+                        <div
                           key={card.id}
-                          type="button"
-                          // TODO(payment-methods): attach future per-card actions here, e.g. overflow menu for set-default/delete.
-                          onClick={() => {
-                            flow.selectSavedCard(card.id)
-                            setPaymentSheetOpen(false)
-                          }}
                           style={{
                             ...paymentSheetCardOptionStyle,
                             ...(selected ? paymentSheetCardOptionSelectedStyle : null),
                           }}
                         >
-                          <div style={paymentSheetCardLeftStyle}>
-                            <div style={paymentSheetRadioWrapStyle}>
-                              <span
-                                style={{
-                                  ...paymentSheetRadioStyle,
-                                  ...(selected ? paymentSheetRadioSelectedStyle : null),
-                                }}
-                              />
-                            </div>
-                            <CreditCard size={20} color={selected ? '#2563EB' : '#64748B'} />
-                            <div>
-                              <div style={paymentSheetCardBrandStyle}>
-                                {capitalize(card.brand)} •••• {card.last4}
+                          <button
+                            type="button"
+                            // TODO(payment-methods): extend this row action surface later with more card-management options if needed.
+                            onClick={() => {
+                              flow.selectSavedCard(card.id)
+                              setPaymentSheetOpen(false)
+                            }}
+                            style={paymentSheetCardSelectButtonStyle}
+                          >
+                            <div style={paymentSheetCardLeftStyle}>
+                              <div style={paymentSheetRadioWrapStyle}>
+                                <span
+                                  style={{
+                                    ...paymentSheetRadioStyle,
+                                    ...(selected ? paymentSheetRadioSelectedStyle : null),
+                                  }}
+                                />
                               </div>
-                              {(card.expMonth != null && card.expYear != null) && (
-                                <div style={paymentSheetCardExpStyle}>
-                                  {pad(card.expMonth)}/{String(card.expYear).slice(-2)}
+                              <CreditCard size={20} color={selected ? '#2563EB' : '#64748B'} />
+                              <div>
+                                <div style={paymentSheetCardBrandStyle}>
+                                  {capitalize(card.brand)} •••• {card.last4}
                                 </div>
-                              )}
+                                {(card.expMonth != null && card.expYear != null) && (
+                                  <div style={paymentSheetCardExpStyle}>
+                                    {pad(card.expMonth)}/{String(card.expYear).slice(-2)}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                          {selected && (
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                              <polyline points="20 6 9 17 4 12" />
+                            {selected && (
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Card actions"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setPaymentDeleteConfirmCardId(null)
+                              setPaymentActionsCardId((current) => current === card.id ? null : card.id)
+                            }}
+                            style={paymentSheetCardMoreButtonStyle}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                              <circle cx="12" cy="5" r="1.8" />
+                              <circle cx="12" cy="12" r="1.8" />
+                              <circle cx="12" cy="19" r="1.8" />
                             </svg>
-                          )}
-                        </button>
+                          </button>
+                        </div>
                       )
                     })}
                   </div>
@@ -5379,6 +5442,70 @@ export default function ClientDashboard({
               </div>
             )}
           </div>
+
+          {paymentActionCard && !flow.setupClientSecret && (
+            <>
+              <div style={paymentActionsOverlayStyle} onClick={closePaymentActionMenus} />
+              <div style={paymentActionsMenuStyle}>
+                {!flow.savedCard || flow.savedCard.id !== paymentActionCard.id ? (
+                  <button
+                    type="button"
+                    style={paymentActionsMenuButtonStyle}
+                    onClick={() => {
+                      flow.selectSavedCard(paymentActionCard.id)
+                      closePaymentActionMenus()
+                    }}
+                  >
+                    Set as default
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  style={{ ...paymentActionsMenuButtonStyle, ...paymentActionsMenuDangerStyle }}
+                  onClick={() => {
+                    setPaymentDeleteConfirmCardId(paymentActionCard.id)
+                    setPaymentActionsCardId(null)
+                  }}
+                >
+                  Delete card
+                </button>
+                <button
+                  type="button"
+                  style={paymentActionsMenuButtonStyle}
+                  onClick={closePaymentActionMenus}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+
+          {paymentDeleteConfirmCard && !flow.setupClientSecret && (
+            <>
+              <div style={paymentActionsOverlayStyle} onClick={closePaymentActionMenus} />
+              <div style={paymentActionsMenuStyle}>
+                <div style={paymentDeleteConfirmTextStyle}>
+                  Delete {capitalize(paymentDeleteConfirmCard.brand)} •••• {paymentDeleteConfirmCard.last4}?
+                </div>
+                <button
+                  type="button"
+                  style={{ ...paymentActionsMenuButtonStyle, ...paymentActionsMenuDangerStyle }}
+                  onClick={() => { void handleDeletePaymentMethod() }}
+                  disabled={paymentActionLoading}
+                >
+                  {paymentActionLoading ? 'Deleting...' : 'Delete card'}
+                </button>
+                <button
+                  type="button"
+                  style={paymentActionsMenuButtonStyle}
+                  onClick={closePaymentActionMenus}
+                  disabled={paymentActionLoading}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -9458,7 +9585,6 @@ const paymentSheetCardsListStyle: React.CSSProperties = {
 }
 
 const paymentSheetCardOptionStyle: React.CSSProperties = {
-  appearance: 'none',
   border: 'none',
   borderBottom: '1px solid rgba(226, 232, 240, 0.82)',
   background: 'transparent',
@@ -9466,15 +9592,28 @@ const paymentSheetCardOptionStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 12,
-  padding: '14px 2px',
+  padding: '0 0 0 2px',
   borderRadius: 0,
-  cursor: 'pointer',
-  textAlign: 'start',
   boxShadow: 'none',
 }
 
 const paymentSheetCardOptionSelectedStyle: React.CSSProperties = {
   background: 'rgba(239,246,255,0.52)',
+}
+
+const paymentSheetCardSelectButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  padding: '14px 0',
+  cursor: 'pointer',
+  textAlign: 'start',
+  flex: 1,
+  minWidth: 0,
 }
 
 const paymentSheetRadioWrapStyle: React.CSSProperties = {
@@ -9496,6 +9635,21 @@ const paymentSheetRadioStyle: React.CSSProperties = {
 
 const paymentSheetRadioSelectedStyle: React.CSSProperties = {
   border: '5px solid #2563EB',
+}
+
+const paymentSheetCardMoreButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  color: '#94A3B8',
+  width: 34,
+  height: 34,
+  borderRadius: 999,
+  display: 'grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+  flexShrink: 0,
+  marginInlineStart: 6,
 }
 
 const paymentSheetDividerStyle: React.CSSProperties = {
@@ -9559,6 +9713,53 @@ const paymentSheetBrandHintPillStyle: React.CSSProperties = {
 
 const paymentSheetSetupWrapStyle: React.CSSProperties = {
   paddingTop: 2,
+}
+
+const paymentActionsOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 10000,
+  background: 'transparent',
+}
+
+const paymentActionsMenuStyle: React.CSSProperties = {
+  position: 'fixed',
+  right: 18,
+  bottom: 'calc(20px + env(safe-area-inset-bottom, 0px))',
+  zIndex: 10001,
+  minWidth: 210,
+  background: '#FFFFFF',
+  border: '1px solid rgba(226, 232, 240, 0.92)',
+  borderRadius: 18,
+  boxShadow: '0 18px 44px rgba(15, 23, 42, 0.18)',
+  padding: 6,
+  display: 'grid',
+  gap: 2,
+}
+
+const paymentActionsMenuButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: '12px 14px',
+  borderRadius: 12,
+  textAlign: 'start',
+  fontSize: 14,
+  fontWeight: 700,
+  color: '#0F172A',
+  cursor: 'pointer',
+}
+
+const paymentActionsMenuDangerStyle: React.CSSProperties = {
+  color: '#DC2626',
+}
+
+const paymentDeleteConfirmTextStyle: React.CSSProperties = {
+  padding: '10px 14px 4px',
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#475569',
+  fontWeight: 600,
 }
 
 const providerIssueClientCardStyle: React.CSSProperties = {
