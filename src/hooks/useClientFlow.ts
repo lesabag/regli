@@ -1573,6 +1573,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   )
 
   const [savedCard, setSavedCard] = useState<SavedCard>(null)
+  const [savedCards, setSavedCards] = useState<NonNullable<PaymentMethodsResponse['cards']>>([])
   const [stripeCustomerId, setStripeCustomerId] = useState<string | null>(null)
   const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null)
   const [cardLoading, setCardLoading] = useState(true)
@@ -1692,12 +1693,18 @@ export function useClientFlow(profileId: string, _profileName: string) {
         throw new Error(paymentError)
       }
 
-      const firstCard = data?.cards?.[0] ?? null
+      const cards = data?.cards ?? []
+      const firstCard = cards[0] ?? null
       setStripeCustomerId(data?.customerId ?? null)
-      setSavedCard(firstCard)
+      setSavedCards(cards)
+      setSavedCard((current) => {
+        if (!current) return firstCard
+        return cards.find((card) => card.id === current.id) ?? firstCard
+      })
     } catch (err) {
       console.warn('[useClientFlow] payment method load failed:', err instanceof Error ? err.message : err)
       setCardError(true)
+      setSavedCards([])
       setSavedCard(null)
     } finally {
       setCardLoading(false)
@@ -3335,6 +3342,13 @@ export function useClientFlow(profileId: string, _profileName: string) {
     void loadPaymentMethods()
   }, [loadPaymentMethods])
 
+  const selectSavedCard = useCallback((paymentMethodId: string) => {
+    setSavedCard((current) => {
+      if (current?.id === paymentMethodId) return current
+      return savedCards.find((card) => card.id === paymentMethodId) ?? current
+    })
+  }, [savedCards])
+
   const submitCompletionRating = useCallback(
     async (rating?: number, review?: string) => {
       if (!completionJob || !rating || rating < 1) return
@@ -4229,6 +4243,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     clearExhaustedRequestForRetry,
 
     savedCard,
+    savedCards,
     upcomingJobs,
     completedJobs,
     ratings,
@@ -4290,6 +4305,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     onCardSetupComplete,
     cancelCardSetup,
     retryLoadCard,
+    selectSavedCard,
     toggleFavoriteWalker,
     submitCompletionRating,
     dismissCompletion,
