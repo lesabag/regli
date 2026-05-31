@@ -11,6 +11,7 @@ import { useAuth, type AppRole } from './hooks/useAuth'
 import AuthScreen from './components/AuthScreen'
 import SplashScreen from './components/SplashScreen'
 import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from './lib/analytics'
+import { handleNativeStripeURLCallback, initializeNativeStripe } from './lib/nativeStripe'
 import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedPushDeepLink } from './lib/pushNotifications'
 import { usePushNotifications } from './hooks/usePushNotifications'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
@@ -344,6 +345,11 @@ export default function App() {
   }, [profile?.preferred_language])
 
   useEffect(() => {
+    if (!isNativeIos) return
+    void initializeNativeStripe()
+  }, [])
+
+  useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
 
     const handleNativeUrl = async (url: string | null | undefined) => {
@@ -365,6 +371,12 @@ export default function App() {
       const pushRoute = parsePushDeepLink(value)
       if (pushRoute) {
         emitPushDeepLink(pushRoute)
+        void Browser.close().catch(() => undefined)
+        return
+      }
+
+      const nativeStripeHandled = await handleNativeStripeURLCallback(value)
+      if (nativeStripeHandled) {
         void Browser.close().catch(() => undefined)
         return
       }

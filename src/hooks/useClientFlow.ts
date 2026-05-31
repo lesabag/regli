@@ -23,6 +23,7 @@ import {
 import i18n from '../i18n'
 import { getPushCopy, type PushCopyContext } from '../lib/pushCopy'
 import useExpressCheckout from './useExpressCheckout'
+import useNativePaymentSheet from './useNativePaymentSheet'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import {
   type SavedCard as StoredSavedCard,
@@ -615,10 +616,11 @@ function isAuthoritativeRecoveryReason(reason: string): boolean {
 
 export function useClientFlow(profileId: string, _profileName: string) {
   const expressCheckout = useExpressCheckout()
+  const nativePaymentSheet = useNativePaymentSheet()
   const applePayBookingEnabled =
-    expressCheckout.applePayAvailable &&
-    expressCheckout.nativeApplePayReady &&
-    !expressCheckout.applePayBlockedReason
+    nativePaymentSheet.applePayEligible &&
+    nativePaymentSheet.canPresentPaymentSheet &&
+    !nativePaymentSheet.blockerReason
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -4286,6 +4288,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     cardLoading,
     cardError,
     expressCheckout,
+    nativePaymentSheet,
     applePayBookingEnabled,
 
     elapsedSeconds,

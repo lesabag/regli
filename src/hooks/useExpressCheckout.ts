@@ -38,7 +38,7 @@ const CARD_ONLY: ExpressCheckoutCapabilities = {
 export default function useExpressCheckout(): ExpressCheckoutCapabilities {
   const nativeApplePayBlockedState: ExpressCheckoutCapabilities = {
     ...CARD_ONLY,
-    applePayBlockedReason: isNativeIos ? 'missing_native_stripe_sdk' : null,
+    applePayBlockedReason: isNativeIos ? 'payment_sheet_flow_not_integrated' : null,
   }
   const [capabilities, setCapabilities] = useState<ExpressCheckoutCapabilities>(
     isNativeIos
