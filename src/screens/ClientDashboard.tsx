@@ -5350,6 +5350,52 @@ export default function ClientDashboard({
               </div>
             ) : (
               <div style={paymentSheetActionsStyle}>
+                {flow.applePayBookingEnabled ? (
+                  <div
+                    style={{
+                      ...paymentSheetCardOptionStyle,
+                      ...(flow.selectedPaymentMethodType === 'apple_pay'
+                        ? paymentSheetCardOptionSelectedStyle
+                        : null),
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        flow.selectApplePay()
+                        setPaymentSheetOpen(false)
+                      }}
+                      style={paymentSheetCardSelectButtonStyle}
+                    >
+                      <div style={paymentSheetCardLeftStyle}>
+                        <div style={paymentSheetRadioWrapStyle}>
+                          <span
+                            style={{
+                              ...paymentSheetRadioStyle,
+                              ...(flow.selectedPaymentMethodType === 'apple_pay'
+                                ? paymentSheetRadioSelectedStyle
+                                : null),
+                            }}
+                          />
+                        </div>
+                        <div style={paymentSheetAppleMarkStyle}></div>
+                        <div style={paymentSheetAppleCopyStyle}>
+                          <div style={paymentSheetAppleHeadingStyle}>
+                            <div style={paymentSheetCardBrandStyle}>Apple Pay</div>
+                            <span style={paymentSheetAppleBadgeStyle}>Recommended</span>
+                          </div>
+                          <div style={paymentSheetCardExpStyle}>Pay instantly with Face ID</div>
+                        </div>
+                      </div>
+                      {flow.selectedPaymentMethodType === 'apple_pay' && (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                ) : null}
+
                 {flow.savedCards.length > 0 ? (
                   <div style={paymentSheetCardsListStyle}>
                     {flow.savedCards.map((card) => {
@@ -5422,50 +5468,6 @@ export default function ClientDashboard({
                   </div>
                 ) : null}
 
-                {flow.applePayBookingEnabled ? (
-                  <div style={paymentSheetCardsListStyle}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        flow.selectApplePay()
-                        setPaymentSheetOpen(false)
-                      }}
-                      style={paymentSheetCardSelectButtonStyle}
-                    >
-                      <div style={paymentSheetCardLeftStyle}>
-                        <div style={paymentSheetRadioWrapStyle}>
-                          <span
-                            style={{
-                              ...paymentSheetRadioStyle,
-                              ...(flow.selectedPaymentMethodType === 'apple_pay'
-                                ? paymentSheetRadioSelectedStyle
-                                : null),
-                            }}
-                          />
-                        </div>
-                        <div style={{
-                          fontSize: 18,
-                          lineHeight: 1,
-                          color: flow.selectedPaymentMethodType === 'apple_pay' ? '#111827' : '#64748B',
-                          fontWeight: 700,
-                          width: 20,
-                          textAlign: 'center',
-                          flexShrink: 0,
-                        }}></div>
-                        <div>
-                          <div style={paymentSheetCardBrandStyle}>Apple Pay</div>
-                          <div style={paymentSheetCardExpStyle}>Available on this device</div>
-                        </div>
-                      </div>
-                      {flow.selectedPaymentMethodType === 'apple_pay' && (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                ) : null}
-
                 <div style={paymentSheetDividerStyle} />
 
                 <button
@@ -5477,7 +5479,7 @@ export default function ClientDashboard({
                 >
                   <span style={paymentSheetAddIconStyle}>+</span>
                   <div style={paymentSheetAddContentStyle}>
-                    <span>{t('paymentMethods.addCard')}</span>
+                    <span style={paymentSheetAddLabelStyle}>{t('paymentMethods.addCard')}</span>
                     <div style={paymentSheetBrandHintsStyle}>
                       <span style={paymentSheetBrandHintPillStyle}>Visa</span>
                       <span style={paymentSheetBrandHintPillStyle}>Mastercard</span>
@@ -9606,6 +9608,39 @@ const paymentSheetCardLeftStyle: React.CSSProperties = {
   flex: 1,
 }
 
+const paymentSheetAppleMarkStyle: React.CSSProperties = {
+  fontSize: 22,
+  lineHeight: 1,
+  color: '#111827',
+  fontWeight: 700,
+  width: 24,
+  textAlign: 'center',
+  flexShrink: 0,
+}
+
+const paymentSheetAppleCopyStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gap: 2,
+}
+
+const paymentSheetAppleHeadingStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const paymentSheetAppleBadgeStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 800,
+  color: '#166534',
+  background: 'rgba(220, 252, 231, 0.95)',
+  borderRadius: 999,
+  padding: '3px 8px',
+  lineHeight: 1.1,
+}
+
 const paymentSheetCardBrandStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
@@ -9712,33 +9747,39 @@ const paymentSheetAddRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 10,
-  padding: '12px 2px 4px',
+  padding: '10px 2px 2px',
   borderRadius: 0,
-  fontSize: 14,
+  fontSize: 13.5,
   fontWeight: 700,
-  color: '#2563EB',
+  color: '#1D4ED8',
   cursor: 'pointer',
   textAlign: 'start',
 }
 
 const paymentSheetAddIconStyle: React.CSSProperties = {
-  width: 18,
-  height: 18,
+  width: 16,
+  height: 16,
   borderRadius: 999,
-  background: 'rgba(59,130,246,0.10)',
-  color: '#2563EB',
+  background: 'rgba(59,130,246,0.08)',
+  color: '#1D4ED8',
   display: 'grid',
   placeItems: 'center',
-  fontSize: 14,
+  fontSize: 12.5,
   fontWeight: 900,
   flexShrink: 0,
-  marginTop: 1,
+  marginTop: 2,
 }
 
 const paymentSheetAddContentStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 5,
   justifyItems: 'start',
+}
+
+const paymentSheetAddLabelStyle: React.CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 700,
+  color: '#1D4ED8',
 }
 
 const paymentSheetBrandHintsStyle: React.CSSProperties = {
@@ -9749,12 +9790,12 @@ const paymentSheetBrandHintsStyle: React.CSSProperties = {
 }
 
 const paymentSheetBrandHintPillStyle: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 10,
   fontWeight: 700,
   color: '#94A3B8',
-  background: 'rgba(248,250,252,0.98)',
+  background: 'rgba(248,250,252,0.82)',
   borderRadius: 999,
-  padding: '2px 7px',
+  padding: '2px 6px',
 }
 
 const paymentSheetSetupWrapStyle: React.CSSProperties = {

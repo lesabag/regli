@@ -1601,6 +1601,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [cardLoading, setCardLoading] = useState(true)
   const [cardError, setCardError] = useState(false)
   const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState<PaymentMethodType>('saved_card')
+  const [hasExplicitPaymentMethodSelection, setHasExplicitPaymentMethodSelection] = useState(false)
   const activePaymentMethod = useMemo<ActivePaymentMethod | null>(
     () => {
       if (selectedPaymentMethodType === 'apple_pay' && applePayBookingEnabled) {
@@ -1616,6 +1617,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
       setSelectedPaymentMethodType('saved_card')
     }
   }, [applePayBookingEnabled, selectedPaymentMethodType])
+
+  useEffect(() => {
+    if (!applePayBookingEnabled) return
+    if (hasExplicitPaymentMethodSelection) return
+    setSelectedPaymentMethodType('apple_pay')
+  }, [applePayBookingEnabled, hasExplicitPaymentMethodSelection])
 
   const hasUserLocationBase = !!userLocationBase
   const avgRating = useMemo(() => {
@@ -3390,12 +3397,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
       return savedCards.find((card) => card.id === paymentMethodId) ?? current
     })
     setSelectedPaymentMethodType('saved_card')
+    setHasExplicitPaymentMethodSelection(true)
   }, [savedCards])
 
   const selectApplePay = useCallback(() => {
     if (!applePayBookingEnabled) return
     console.log('[ApplePay] selected')
     setSelectedPaymentMethodType('apple_pay')
+    setHasExplicitPaymentMethodSelection(true)
   }, [applePayBookingEnabled])
 
   const submitCompletionRating = useCallback(
