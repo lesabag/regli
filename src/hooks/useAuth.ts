@@ -4,7 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
-import { buildProviderCapabilityRows, buildProviderSignupCapabilities } from '../lib/providerCapabilities'
+import {
+  buildProviderCapabilityRows,
+  buildProviderSignupCapabilities,
+  mergeProviderCapabilitiesSources,
+} from '../lib/providerCapabilities'
 import { disableCurrentPushTokenForUser } from './usePushNotifications'
 import { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 
@@ -214,6 +218,37 @@ function isProfileOnboardingComplete(profile: Profile): boolean {
   return hasText(profile.location_address)
 }
 
+async function hydrateProviderProfileFromCapabilities(profile: Profile): Promise<Profile> {
+  if (profile.role !== 'walker' && profile.role !== 'provider') {
+    return profile
+  }
+
+  const { data, error } = await withTimeout(
+    supabase
+      .from('provider_capabilities')
+      .select('provider_id, capability_scope, capabilities')
+      .eq('provider_id', profile.id),
+    PROFILE_LOAD_TIMEOUT_MS,
+    'Provider capabilities loading timed out',
+  )
+
+  if (error) {
+    console.warn('[useAuth] provider_capabilities load failed during profile hydration:', error.message)
+    return profile
+  }
+
+  const mergedCapabilities = mergeProviderCapabilitiesSources({
+    rows: (data as Array<{ provider_id: string; capability_scope: string; capabilities: Record<string, unknown> }> | null) ?? [],
+    fallbackServiceAttributes: profile.service_attributes ?? null,
+    shortBio: profile.short_bio ?? null,
+  })
+
+  return {
+    ...profile,
+    service_attributes: Object.keys(mergedCapabilities).length > 0 ? mergedCapabilities : profile.service_attributes ?? null,
+  }
+}
+
 function getGoogleOAuthRedirectTo(): string {
   if (Capacitor.isNativePlatform()) {
     return 'regli://auth/callback'
@@ -330,10 +365,13 @@ export function useAuth() {
           }
         }
 
+        const hydratedProfile = await hydrateProviderProfileFromCapabilities(nextProfileData as Profile)
+        if (!isCurrentRequest()) return null
+
         clearOAuthOnboardingContext()
         clearPendingOAuthProvider()
         pendingOAuthProviderRef.current = null
-        const normalizedProfile = normalizeLoadedProfile(nextProfileData)
+        const normalizedProfile = normalizeLoadedProfile(hydratedProfile)
         const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
         setProfile(normalizedProfile)
         setProfileReady(onboardingComplete)
@@ -428,10 +466,13 @@ export function useAuth() {
         }
       }
 
+      const hydratedInsertedProfile = await hydrateProviderProfileFromCapabilities(insertedProfile as Profile)
+      if (!isCurrentRequest()) return null
+
       clearOAuthOnboardingContext()
       clearPendingOAuthProvider()
       pendingOAuthProviderRef.current = null
-      const normalizedProfile = normalizeLoadedProfile(insertedProfile as Profile)
+      const normalizedProfile = normalizeLoadedProfile(hydratedInsertedProfile)
       const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
       setProfile(normalizedProfile)
       setProfileReady(onboardingComplete)
@@ -1011,6 +1052,10 @@ export function useAuth() {
     } catch (err) {
       setAuthError(getErrorMessage(err, 'Failed to sign out'))
     } finally {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+        window.sessionStorage.removeItem('regli:onboarding-wow')
+      }
       setProfile(null)
       setProfileReady(false)
       setNeedsOnboarding(false)
@@ -1042,6 +1087,10 @@ export function useAuth() {
     }
 
     setAuthError(null)
+    console.log('[provider-onboarding] Finish Setup clicked', {
+      userId: currentUser.id,
+      role,
+    })
 
     const safeRole: AppRole = role === 'admin' ? 'client' : role
     const normalizedServiceTypes = normalizeProfileServiceTypes(serviceTypes)
@@ -1051,6 +1100,22 @@ export function useAuth() {
           shortBio: shortBio ?? null,
         })
       : null
+    const validationOk = safeRole !== 'walker' || (
+      hasText(locationAddress) &&
+      hasText(shortBio) &&
+      normalizedServiceTypes.length > 0 &&
+      !!normalizedProviderCapabilities &&
+      Object.keys(normalizedProviderCapabilities).length > 0
+    )
+    console.log('[provider-onboarding] validation result', {
+      userId: currentUser.id,
+      safeRole,
+      validationOk,
+      hasLocation: hasText(locationAddress),
+      hasShortBio: hasText(shortBio),
+      serviceTypeCount: normalizedServiceTypes.length,
+      hasCapabilities: !!normalizedProviderCapabilities && Object.keys(normalizedProviderCapabilities).length > 0,
+    })
 
     const profilePayload: Profile = {
       id: currentUser.id,
@@ -1066,6 +1131,7 @@ export function useAuth() {
       service_types: normalizedServiceTypes,
       service_attributes: normalizedProviderCapabilities ?? serviceAttributes ?? null,
     }
+    console.log('[provider-onboarding] profile payload', profilePayload)
 
     try {
       const { error: profileError } = await withTimeout(
@@ -1077,9 +1143,18 @@ export function useAuth() {
       )
 
       if (profileError) {
+        console.log('[provider-onboarding] Supabase save result', {
+          stage: 'profile',
+          ok: false,
+          error: profileError.message,
+        })
         setAuthError(profileError.message)
         return { ok: false }
       }
+      console.log('[provider-onboarding] Supabase save result', {
+        stage: 'profile',
+        ok: true,
+      })
 
       if (safeRole === 'walker' && normalizedProviderCapabilities) {
         const providerCapabilityRows = buildProviderCapabilityRows(currentUser.id, normalizedProviderCapabilities)
@@ -1087,6 +1162,7 @@ export function useAuth() {
             ...row,
             updated_at: new Date().toISOString(),
           }))
+        console.log('[provider-onboarding] provider capabilities payload', providerCapabilityRows)
 
         if (providerCapabilityRows.length > 0) {
           const { error: capabilityError } = await withTimeout(
@@ -1099,11 +1175,50 @@ export function useAuth() {
 
           if (capabilityError) {
             console.warn('[useAuth] provider_capabilities upsert failed during onboarding:', capabilityError.message)
+            console.log('[provider-onboarding] Supabase save result', {
+              stage: 'provider_capabilities',
+              ok: false,
+              error: capabilityError.message,
+            })
+          } else {
+            console.log('[provider-onboarding] Supabase save result', {
+              stage: 'provider_capabilities',
+              ok: true,
+            })
           }
         }
       }
 
-      await loadProfile(currentUser)
+      const refreshedProfile = await loadProfile(currentUser)
+      console.log('[provider-onboarding] profile refresh result', {
+        userId: currentUser.id,
+        refreshed: !!refreshedProfile,
+        role: refreshedProfile?.role ?? null,
+        locationAddress: refreshedProfile?.location_address ?? null,
+        shortBio: refreshedProfile?.short_bio ?? null,
+        serviceTypes: refreshedProfile?.service_types ?? null,
+      })
+      if (!refreshedProfile) {
+        setAuthError('We saved your setup, but could not refresh your profile. Please try again.')
+        console.log('[provider-onboarding] navigation/app unlock decision', {
+          userId: currentUser.id,
+          allowDashboard: false,
+          reason: 'profile_refresh_failed',
+        })
+        return { ok: false }
+      }
+
+      const refreshedComplete = isProfileOnboardingComplete(refreshedProfile)
+      console.log('[provider-onboarding] navigation/app unlock decision', {
+        userId: currentUser.id,
+        allowDashboard: refreshedComplete,
+        needsOnboarding: !refreshedComplete,
+      })
+      if (!refreshedComplete) {
+        setAuthError('Your provider profile is still missing required details. Please review and try again.')
+        return { ok: false }
+      }
+
       if (typeof window !== 'undefined') {
         window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
       }

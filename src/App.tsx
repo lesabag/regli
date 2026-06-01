@@ -665,6 +665,7 @@ export default function App() {
           onGoogleSignIn={signInWithGoogle}
           onAppleSignIn={signInWithApple}
           onCompleteOnboarding={completeOnboarding}
+          onStartOver={signOut}
           appleSignInEnabled={appleSignInEnabled}
           authenticatedOnboarding
           initialRole={toDashboardRole(profile.role)}

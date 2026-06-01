@@ -47,6 +47,7 @@ interface AuthScreenProps {
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
   }) => Promise<{ ok: boolean }>
+  onStartOver?: () => Promise<void> | void
   appleSignInEnabled: boolean
   authenticatedOnboarding?: boolean
   initialRole?: AppRole
@@ -207,6 +208,7 @@ export default function AuthScreen({
   onGoogleSignIn,
   onAppleSignIn,
   onCompleteOnboarding,
+  onStartOver,
   appleSignInEnabled,
   authenticatedOnboarding = false,
   initialRole = 'client',
@@ -416,7 +418,16 @@ export default function AuthScreen({
   const handleBack = () => {
     if (authenticatedOnboarding) {
       const currentIndex = signupSteps.indexOf(signupStep)
-      if (currentIndex <= 0) return
+      if (currentIndex <= 0) {
+        if (onStartOver) {
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.removeItem('regli:onboarding-wow')
+            window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+          }
+          void onStartOver()
+        }
+        return
+      }
       setSignupStep(signupSteps[currentIndex - 1])
       return
     }
@@ -465,15 +476,34 @@ export default function AuthScreen({
 
     if (signupStep === 'auth') {
       if (authenticatedOnboarding) {
-        setSubmitting(true)
-        const result = await onCompleteOnboarding?.({
+        const completeOnboardingPayload = {
           role,
           primaryService: isProvider ? selectedServiceMeta.label : undefined,
           locationAddress: locationLabel,
           shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
           serviceTypes: onboardingServiceTypes,
           serviceAttributes: buildServiceAttributes(),
+        }
+        console.log('[provider-onboarding-ui] clicked', {
+          role,
+          signupStep,
         })
+        console.log('[provider-onboarding-ui] validation result', {
+          canContinue,
+          hasLocation: locationLabel.trim().length > 0,
+          serviceTypeCount: onboardingServiceTypes.length,
+          hasShortBio: providerIdentity.shortBio.trim().length > 0,
+        })
+        console.log('[provider-onboarding-ui] profile payload', {
+          role: completeOnboardingPayload.role,
+          primaryService: completeOnboardingPayload.primaryService,
+          locationAddress: completeOnboardingPayload.locationAddress,
+          shortBio: completeOnboardingPayload.shortBio,
+          serviceTypes: completeOnboardingPayload.serviceTypes,
+        })
+        console.log('[provider-onboarding-ui] provider capabilities payload', completeOnboardingPayload.serviceAttributes)
+        setSubmitting(true)
+        const result = await onCompleteOnboarding?.(completeOnboardingPayload)
         if (result?.ok && typeof window !== 'undefined') {
           window.sessionStorage.setItem(
             'regli:onboarding-wow',
@@ -1316,7 +1346,27 @@ export default function AuthScreen({
 
           <div style={bottomHintStyle}>
             {authenticatedOnboarding ? (
-              'Complete your profile to unlock the Regli app.'
+              <>
+                Complete your profile to unlock the Regli app.
+                {onStartOver && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== 'undefined') {
+                          window.sessionStorage.removeItem('regli:onboarding-wow')
+                          window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+                        }
+                        void onStartOver()
+                      }}
+                      style={textLinkStyle}
+                    >
+                      Start over / Log out
+                    </button>
+                  </>
+                )}
+              </>
             ) : mode === 'signin' ? (
               <>
                 New to Regli?{' '}
