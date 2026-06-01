@@ -13,7 +13,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.3.0"),
         .package(name: "AparajitaCapacitorBiometricAuth", path: "../../../node_modules/@aparajita/capacitor-biometric-auth"),
-        .package(name: "CapacitorCommunityStripe", path: "../../../node_modules/@capacitor-community/stripe"),
+        .package(name: "CapacitorCommunityStripe", path: "../../../vendor/capacitor-community-stripe"),
         .package(name: "CapacitorApp", path: "../../../node_modules/@capacitor/app"),
         .package(name: "CapacitorBrowser", path: "../../../node_modules/@capacitor/browser"),
         .package(name: "CapacitorHaptics", path: "../../../node_modules/@capacitor/haptics"),

@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
@@ -649,6 +650,16 @@ export default function ClientDashboard({
   const [isDraggingSheet, setIsDraggingSheet] = useState(false)
   const sheetDragRef = useRef<{ startY: number; startSnap: SheetSnap; lastDelta: number } | null>(null)
   const sheetRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!paymentSheetOpen) return
+    console.log('[ApplePay] payment sheet visibility decision', {
+      showApplePay: flow.showApplePayInPaymentSheet,
+      platform: Capacitor.getPlatform(),
+      native: Capacitor.isNativePlatform(),
+      nativePaymentSheet: flow.nativePaymentSheet,
+    })
+  }, [flow.nativePaymentSheet, flow.showApplePayInPaymentSheet, paymentSheetOpen])
 
   const debugFlags = useRef(() => {
     if (typeof window === 'undefined') return { interactionDebug: false, delayMap: false }
@@ -5422,7 +5433,7 @@ export default function ClientDashboard({
                   </div>
                 ) : null}
 
-                {flow.applePayBookingEnabled ? (
+                {flow.showApplePayInPaymentSheet ? (
                   <div style={paymentSheetCardsListStyle}>
                     <button
                       type="button"

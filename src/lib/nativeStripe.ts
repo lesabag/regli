@@ -19,6 +19,7 @@ export interface NativePaymentSheetCapability {
   supported: boolean
   initialized: boolean
   applePayEligible: boolean
+  supportsDirectApplePay: boolean
   paymentSheetBackendReady: boolean
   canPresentPaymentSheet: boolean
   merchantIdentifier: string
@@ -106,6 +107,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      supportsDirectApplePay: false,
       paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
@@ -120,6 +122,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      supportsDirectApplePay: false,
       paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
@@ -135,6 +138,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      supportsDirectApplePay: false,
       paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
@@ -150,6 +154,7 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
       supported: false,
       initialized: false,
       applePayEligible: false,
+      supportsDirectApplePay: false,
       paymentSheetBackendReady: false,
       canPresentPaymentSheet: false,
       merchantIdentifier: APPLE_PAY_MERCHANT_ID,
@@ -159,21 +164,50 @@ export async function getNativePaymentSheetCapability(): Promise<NativePaymentSh
     }
   }
 
+  const supportsDirectApplePayApi =
+    typeof mod.Stripe.createApplePay === 'function' &&
+    typeof mod.Stripe.presentApplePay === 'function'
+  const supportsApplePayAvailabilityProbe =
+    typeof mod.Stripe.isApplePayAvailable === 'function'
+
   let applePayEligible = false
-  try {
-    await mod.Stripe.isApplePayAvailable()
-    applePayEligible = true
-    console.log('[ApplePay] available')
-  } catch {
-    applePayEligible = false
+  if (supportsApplePayAvailabilityProbe) {
+    try {
+      await mod.Stripe.isApplePayAvailable()
+      applePayEligible = true
+      console.log('[ApplePay] available')
+    } catch (error) {
+      if (supportsDirectApplePayApi) {
+        applePayEligible = true
+        console.warn('[ApplePay] availability probe failed, using direct api fallback', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } else {
+        applePayEligible = false
+      }
+    }
+  } else {
+    applePayEligible = supportsDirectApplePayApi
+    if (applePayEligible) {
+      console.log('[ApplePay] available')
+    }
   }
+
+  console.log('[ApplePay] capability result', {
+    platform: Capacitor.getPlatform(),
+    native: Capacitor.isNativePlatform(),
+    isApplePayAvailableResult: applePayEligible,
+    supportsDirectApplePayApi,
+    supportsApplePayAvailabilityProbe,
+  })
 
   return {
     supported: true,
     initialized: true,
     applePayEligible,
+    supportsDirectApplePay: supportsDirectApplePayApi,
     paymentSheetBackendReady: true,
-    canPresentPaymentSheet: true,
+    canPresentPaymentSheet: typeof mod.Stripe.createPaymentSheet === 'function' || supportsDirectApplePayApi,
     merchantIdentifier: APPLE_PAY_MERCHANT_ID,
     returnURL: NATIVE_STRIPE_RETURN_URL,
     status: 'ready_for_capability_checks',

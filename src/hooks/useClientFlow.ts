@@ -626,15 +626,47 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const expressCheckout = useExpressCheckout()
   const nativePaymentSheet = useNativePaymentSheet()
   const applePayFeatureEnabled = import.meta.env.VITE_ENABLE_APPLE_PAY === 'true'
+  const showApplePayInPaymentSheet =
+    Capacitor.isNativePlatform() &&
+    Capacitor.getPlatform() === 'ios' &&
+    nativePaymentSheet.supported &&
+    nativePaymentSheet.initialized &&
+    (nativePaymentSheet.applePayEligible || nativePaymentSheet.supportsDirectApplePay) &&
+    nativePaymentSheet.canPresentPaymentSheet
   const applePayBookingEnabled =
     applePayFeatureEnabled &&
     Capacitor.isNativePlatform() &&
     Capacitor.getPlatform() === 'ios' &&
     nativePaymentSheet.initialized &&
-    nativePaymentSheet.applePayEligible &&
+    (nativePaymentSheet.applePayEligible || nativePaymentSheet.supportsDirectApplePay) &&
     nativePaymentSheet.paymentSheetBackendReady &&
     nativePaymentSheet.canPresentPaymentSheet &&
     !nativePaymentSheet.blockerReason
+  useEffect(() => {
+    console.log('[ApplePay] gate decision', {
+      platform: Capacitor.getPlatform(),
+      native: Capacitor.isNativePlatform(),
+      featureFlag: applePayFeatureEnabled,
+      showApplePayInPaymentSheet,
+      isApplePayAvailableResult: nativePaymentSheet.applePayEligible,
+      supportsDirectApplePay: nativePaymentSheet.supportsDirectApplePay,
+      initialized: nativePaymentSheet.initialized,
+      paymentSheetBackendReady: nativePaymentSheet.paymentSheetBackendReady,
+      canPresentPaymentSheet: nativePaymentSheet.canPresentPaymentSheet,
+      blockerReason: nativePaymentSheet.blockerReason,
+      applePayBookingEnabled,
+    })
+  }, [
+    applePayBookingEnabled,
+    applePayFeatureEnabled,
+    showApplePayInPaymentSheet,
+    nativePaymentSheet.applePayEligible,
+    nativePaymentSheet.blockerReason,
+    nativePaymentSheet.canPresentPaymentSheet,
+    nativePaymentSheet.initialized,
+    nativePaymentSheet.paymentSheetBackendReady,
+    nativePaymentSheet.supportsDirectApplePay,
+  ])
   const [screenState, setScreenState] = useState<ScreenState>('idle')
   const [screenPhase, setScreenPhase] = useState<ServicePhase>('idle')
   const [searchStartTime, setSearchStartTime] = useState<number | null>(null)
@@ -1603,19 +1635,19 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState<PaymentMethodType>('saved_card')
   const activePaymentMethod = useMemo<ActivePaymentMethod | null>(
     () => {
-      if (selectedPaymentMethodType === 'apple_pay' && applePayBookingEnabled) {
+      if (selectedPaymentMethodType === 'apple_pay' && showApplePayInPaymentSheet) {
         return toApplePayPaymentMethod()
       }
       return toSavedCardPaymentMethod(savedCard)
     },
-    [applePayBookingEnabled, savedCard, selectedPaymentMethodType],
+    [savedCard, selectedPaymentMethodType, showApplePayInPaymentSheet],
   )
 
   useEffect(() => {
-    if (!applePayBookingEnabled && selectedPaymentMethodType === 'apple_pay') {
+    if (!showApplePayInPaymentSheet && selectedPaymentMethodType === 'apple_pay') {
       setSelectedPaymentMethodType('saved_card')
     }
-  }, [applePayBookingEnabled, selectedPaymentMethodType])
+  }, [selectedPaymentMethodType, showApplePayInPaymentSheet])
 
   const hasUserLocationBase = !!userLocationBase
   const avgRating = useMemo(() => {
@@ -1740,7 +1772,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
         return cards.find((card) => card.id === current.id) ?? firstCard
       })
       setSelectedPaymentMethodType((current) => {
-        if (current === 'apple_pay' && applePayBookingEnabled) return current
+        if (current === 'apple_pay' && showApplePayInPaymentSheet) return current
         return 'saved_card'
       })
     } catch (err) {
@@ -1751,7 +1783,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     } finally {
       setCardLoading(false)
     }
-  }, [applePayBookingEnabled])
+  }, [showApplePayInPaymentSheet])
 
   useEffect(() => {
     void loadPaymentMethods()
@@ -3393,10 +3425,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [savedCards])
 
   const selectApplePay = useCallback(() => {
-    if (!applePayBookingEnabled) return
+    if (!showApplePayInPaymentSheet) return
     console.log('[ApplePay] selected')
     setSelectedPaymentMethodType('apple_pay')
-  }, [applePayBookingEnabled])
+  }, [showApplePayInPaymentSheet])
 
   const submitCompletionRating = useCallback(
     async (rating?: number, review?: string) => {
@@ -4514,6 +4546,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     expressCheckout,
     nativePaymentSheet,
     applePayBookingEnabled,
+    showApplePayInPaymentSheet,
 
     elapsedSeconds,
     adjustedPriceILS,
