@@ -1090,7 +1090,10 @@ export default function ClientDashboard({
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(bookingSubjectStorageKey(profile.id, requestServiceType))
-      if (!raw) return
+      if (!raw) {
+        setRecentDogNames([])
+        return
+      }
       const parsed = JSON.parse(raw) as string[]
       if (Array.isArray(parsed)) {
         setRecentDogNames(
@@ -1099,9 +1102,11 @@ export default function ClientDashboard({
             .filter(Boolean)
             .slice(0, 8),
         )
+      } else {
+        setRecentDogNames([])
       }
     } catch {
-      // noop
+      setRecentDogNames([])
     }
   }, [profile.id, requestServiceType])
 
@@ -1718,6 +1723,7 @@ export default function ClientDashboard({
   )
 
   useEffect(() => {
+    if (!isDogWalkerRequest) return
     if (activeDogPets.length === 0) return
     const mergedNames = [
       ...activeDogPets.map((pet) => pet.normalizedName),
@@ -1734,7 +1740,7 @@ export default function ClientDashboard({
     if (!same) {
       persistRecentDogNames(mergedNames)
     }
-  }, [activeDogPets, persistRecentDogNames, recentDogNames])
+  }, [activeDogPets, isDogWalkerRequest, persistRecentDogNames, recentDogNames])
 
   useEffect(() => {
     if (!isDogWalkerRequest) return
@@ -3186,6 +3192,9 @@ export default function ClientDashboard({
 
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
   const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
+  const compactPaymentAuthorizationNotice = isRtl
+    ? 'נאמת עכשיו · חיוב בסיום השירות!'
+    : 'Verified now · Charged after service completion!'
   const shouldShowBudgetRetryHint = isDispatchExhausted || shouldShowNoProvidersEmptyState
   const budgetBelowMinimumHint =
     parseBudgetBelowMinimumError(flow.currentJob?.smart_dispatch_last_error) ??
@@ -3199,10 +3208,7 @@ export default function ClientDashboard({
         })
       : t('booking.budgetRetryHint')
     : budgetGuidance.likelihood === 'low'
-      ? t('booking.budgetGuidance', {
-          min: budgetGuidance.suggestedLow,
-          max: budgetGuidance.suggestedHigh,
-        })
+      ? t('booking.budgetLowAvailabilityHint')
       : !budgetGuidance.fallback
         ? (isFixedVisitBookingMode || budgetGuidance.pricingModel === 'fixed_visit')
           ? t('booking.budgetTypicalVisitFee', {
@@ -3214,6 +3220,10 @@ export default function ClientDashboard({
               max: budgetGuidance.suggestedHigh,
             })
         : null
+  const fixedVisitCompactGuidanceText = t('booking.fixedVisit.compactGuidance', {
+    min: budgetGuidance.suggestedLow,
+    max: budgetGuidance.suggestedHigh,
+  })
   const matchingEmptyTitle = isDispatchExhausted
     ? isBudgetMinimumExhausted
       ? t('booking.budgetMinimumEmptyTitle')
@@ -3959,9 +3969,10 @@ export default function ClientDashboard({
         >
           {budgetLikelihoodLabel}
         </span>
-        {budgetGuidanceText && <span style={fixedVisitGuidanceTextStyle}>{budgetGuidanceText}</span>}
+        <span style={fixedVisitGuidanceTextStyle}>
+          {shouldShowBudgetRetryHint ? budgetGuidanceText : fixedVisitCompactGuidanceText}
+        </span>
       </div>
-      <div style={fixedVisitDisclaimerStyle}>{t('booking.fixedVisit.disclaimer')}</div>
     </div>
   )
 
@@ -4214,7 +4225,7 @@ export default function ClientDashboard({
                   />
                 </BurgerSection>
               ) : menuPage === 'settings' ? (
-                <>
+                <div style={settingsPageContentStyle}>
                   <SettingsCollapsibleSection
                     title={t('common.language')}
                     open={settingsSectionsOpen.language}
@@ -4273,7 +4284,7 @@ export default function ClientDashboard({
                       }}
                     />
                   </div>
-                </>
+                </div>
               ) : menuPage === 'futureOrders' ? (
                 <BurgerSection
                   id="future-orders-section"
@@ -4964,6 +4975,10 @@ export default function ClientDashboard({
                     t('booking.orderNow')
                   )}
                 </button>
+                <div style={stickyPaymentNoticeStyle}>
+                  <span style={paymentInfoIconStyle} aria-hidden="true">i</span>
+                  <span>{compactPaymentAuthorizationNotice}</span>
+                </div>
                 {!flow.location.trim() && !flow.locationLoading ? (
                   <div
                     onClick={openAddressPicker}
@@ -5336,11 +5351,10 @@ export default function ClientDashboard({
             </div>
 
             <div style={paymentSheetTrustRowStyle}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              <span style={paymentSheetTrustTextStyle}>Your payment information is safe with us</span>
+              <span style={paymentSheetInfoIconStyle} aria-hidden="true">i</span>
+              <span style={paymentSheetTrustTextStyle}>{t('paymentMethods.securityMessage')}</span>
             </div>
+            <div style={paymentSheetTrustBodyStyle}>{compactPaymentAuthorizationNotice}</div>
 
             {flow.setupClientSecret ? (
               <div style={paymentSheetSetupWrapStyle}>
@@ -7250,15 +7264,14 @@ const dogSummaryInlineLabelStyle: React.CSSProperties = {
 const dogSummaryInlineButtonStyle: React.CSSProperties = {
   minWidth: 0,
   maxWidth: 168,
-  height: 28,
+  height: 27,
   borderRadius: 999,
-  border: '1px solid rgba(148, 163, 184, 0.16)',
-  background: 'rgba(255,255,255,0.82)',
+  border: 'none',
+  background: 'rgba(248,250,252,0.78)',
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  padding: '0 10px 0 8px',
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.76)',
+  padding: '0 9px 0 7px',
   cursor: 'pointer',
   fontFamily: 'inherit',
 }
@@ -7389,17 +7402,16 @@ const fixedVisitSectionStyle: React.CSSProperties = {
 
 const fixedVisitTextareaStyle: React.CSSProperties = {
   width: '100%',
-  height: 46,
-  borderRadius: 18,
-  border: '1px solid rgba(148, 163, 184, 0.16)',
-  background: 'rgba(255,255,255,0.86)',
-  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
-  padding: '0 14px',
+  height: 42,
+  borderRadius: 14,
+  border: '1px solid rgba(226, 232, 240, 0.72)',
+  background: 'rgba(248,250,252,0.78)',
+  padding: '0 12px',
   boxSizing: 'border-box',
   outline: 'none',
   fontFamily: 'inherit',
-  fontSize: 13,
-  lineHeight: '46px',
+  fontSize: 12.5,
+  lineHeight: '42px',
   color: '#0F172A',
 }
 
@@ -7413,7 +7425,7 @@ const babysitterAddressFieldWrapStyle: React.CSSProperties = {
 
 const dogWalkerAddressFieldWrapStyle: React.CSSProperties = {
   marginBottom: 2,
-  marginTop: 6,
+  marginTop: 4,
   minWidth: 0,
 }
 
@@ -7459,24 +7471,23 @@ const compactFieldLabelMutedStyle: React.CSSProperties = {
 }
 
 const pickupSelectorShellStyle: React.CSSProperties = {
-  minHeight: 48,
-  borderRadius: 19,
-  border: '1px solid rgba(148, 163, 184, 0.16)',
-  background: 'rgba(255,255,255,0.86)',
+  minHeight: 43,
+  borderRadius: 14,
+  border: '1px solid rgba(226, 232, 240, 0.72)',
+  background: 'rgba(248,250,252,0.78)',
   display: 'flex',
   alignItems: 'center',
   gap: 8,
   width: '100%',
   boxSizing: 'border-box',
   minWidth: 0,
-  padding: '0 11px 0 9px',
+  padding: '0 10px 0 8px',
   cursor: 'pointer',
-  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
 }
 
 const pickupSelectorShellCompactStyle: React.CSSProperties = {
-  minHeight: 44,
-  padding: '0 10px',
+  minHeight: 41,
+  padding: '0 9px',
 }
 
 const pickupSelectorInlineIconStyle: React.CSSProperties = {
@@ -7484,19 +7495,19 @@ const pickupSelectorInlineIconStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   flexShrink: 0,
-  width: 22,
-  height: 22,
-  borderRadius: 9,
-  background: 'rgba(59,130,246,0.10)',
+  width: 20,
+  height: 20,
+  borderRadius: 8,
+  background: 'rgba(59,130,246,0.08)',
   color: '#2563EB',
-  fontSize: 11.5,
+  fontSize: 11,
   lineHeight: 1,
 }
 
 const pickupSelectorValueStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.75,
+  fontSize: 12.25,
   color: '#0F172A',
   fontWeight: 700,
   lineHeight: 'normal',
@@ -7506,7 +7517,7 @@ const pickupSelectorValueStyle: React.CSSProperties = {
 }
 
 const pickupSelectorValueCompactStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11.75,
   fontWeight: 700,
   lineHeight: 'normal',
 }
@@ -7514,7 +7525,7 @@ const pickupSelectorValueCompactStyle: React.CSSProperties = {
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.75,
+  fontSize: 12.25,
   color: '#94A3B8',
   fontWeight: 600,
   lineHeight: 'normal',
@@ -7526,38 +7537,37 @@ const pickupSelectorPlaceholderStyle: React.CSSProperties = {
 
 
 const dogInputShellStyle: React.CSSProperties = {
-  minHeight: 52,
-  borderRadius: 19,
-  border: '1px solid rgba(148, 163, 184, 0.16)',
-  background: 'rgba(255,255,255,0.86)',
+  minHeight: 44,
+  borderRadius: 14,
+  border: '1px solid rgba(226, 232, 240, 0.72)',
+  background: 'rgba(248,250,252,0.78)',
   display: 'flex',
   alignItems: 'center',
   overflow: 'hidden',
-  boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.75)',
 }
 
 const dogInputShellCompactStyle: React.CSSProperties = {
-  minHeight: 46,
+  minHeight: 42,
 }
 
 const dogThumbStyle: React.CSSProperties = {
-  width: 30,
-  height: 30,
-  borderRadius: 12,
-  marginLeft: 9,
+  width: 24,
+  height: 24,
+  borderRadius: 10,
+  marginLeft: 8,
   marginRight: 4,
-  background: 'linear-gradient(180deg, rgba(59,130,246,0.12) 0%, rgba(96,165,250,0.18) 100%)',
+  background: 'linear-gradient(180deg, rgba(59,130,246,0.08) 0%, rgba(96,165,250,0.12) 100%)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: 15,
+  fontSize: 13,
   flexShrink: 0,
 }
 
 const dogThumbCompactStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  fontSize: 14,
+  width: 22,
+  height: 22,
+  fontSize: 12,
 }
 
 const dogInputButtonStyle: React.CSSProperties = {
@@ -7577,7 +7587,7 @@ const dogInputButtonContentStyle: React.CSSProperties = {
 }
 
 const dogInputValueTextStyle: React.CSSProperties = {
-  fontSize: 13.5,
+  fontSize: 12.5,
   color: '#0F172A',
   fontWeight: 800,
   whiteSpace: 'nowrap',
@@ -7586,7 +7596,7 @@ const dogInputValueTextStyle: React.CSSProperties = {
 }
 
 const dogInputPlaceholderTextStyle: React.CSSProperties = {
-  fontSize: 13.5,
+  fontSize: 12.5,
   color: '#94A3B8',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -7594,9 +7604,9 @@ const dogInputPlaceholderTextStyle: React.CSSProperties = {
 }
 
 const dogInputChevronStyle: React.CSSProperties = {
-  paddingRight: 12,
+  paddingRight: 10,
   color: '#94A3B8',
-  fontSize: 20,
+  fontSize: 18,
   lineHeight: 1,
   flexShrink: 0,
 }
@@ -8047,9 +8057,9 @@ const fixedVisitSliderWrapStyle: React.CSSProperties = {
 
 const budgetGuidanceInlineRowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   justifyContent: 'space-between',
-  gap: 10,
+  gap: 8,
   minWidth: 0,
   paddingTop: 2,
 }
@@ -8059,12 +8069,14 @@ const budgetGuidanceInlineTextStyle: React.CSSProperties = {
   flex: 1,
   textAlign: 'right',
   fontSize: 10.5,
-  lineHeight: 1.2,
+  lineHeight: 1.25,
   fontWeight: 700,
   color: '#64748B',
-  whiteSpace: 'nowrap',
+  whiteSpace: 'normal',
   overflow: 'hidden',
-  textOverflow: 'ellipsis',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
 }
 
 const fixedVisitGuidanceStackStyle: React.CSSProperties = {
@@ -8085,23 +8097,18 @@ const fixedVisitGuidanceTextStyle: React.CSSProperties = {
   fontWeight: 700,
   color: '#64748B',
   whiteSpace: 'normal',
+  overflow: 'hidden',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
   overflowWrap: 'anywhere',
   wordBreak: 'break-word',
 }
 
-const fixedVisitDisclaimerStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  lineHeight: 1.35,
-  fontWeight: 600,
-  color: '#64748B',
-  minWidth: 0,
-  paddingTop: 2,
-}
-
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(226, 232, 240, 0.58)',
-  paddingTop: 8,
-  marginTop: 8,
+  paddingTop: 6,
+  marginTop: 6,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
@@ -8141,15 +8148,58 @@ const stickyMainActionStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
+const stickyPaymentNoticeStyle: React.CSSProperties = {
+  marginTop: 8,
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '4px 6px',
+  borderRadius: 12,
+  background: 'rgba(239, 246, 255, 0.92)',
+  border: '1px solid rgba(96, 165, 250, 0.22)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  fontSize: 10.5,
+  fontWeight: 600,
+  lineHeight: 1.2,
+  color: '#1D4ED8',
+  textAlign: 'center',
+  minWidth: 0,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+}
+
+const paymentInfoIconStyle: React.CSSProperties = {
+  width: 14,
+  height: 14,
+  minWidth: 14,
+  borderRadius: 999,
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#2563EB',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 9,
+  fontWeight: 900,
+  lineHeight: 1,
+  marginTop: 0,
+  flexShrink: 0,
+}
+
 const stickyActionRowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'stretch',
+  alignItems: 'flex-start',
   gap: 10,
 }
 
 const stickyCalendarButtonStyle: React.CSSProperties = {
   width: 58,
   minWidth: 58,
+  height: 58,
+  minHeight: 58,
+  alignSelf: 'flex-start',
   borderRadius: 20,
   border: '1px solid rgba(148, 163, 184, 0.18)',
   background: 'rgba(248,250,252,0.92)',
@@ -9032,6 +9082,13 @@ const burgerSectionStyle: React.CSSProperties = {
   paddingBottom: 14,
 }
 
+const settingsPageContentStyle: React.CSSProperties = {
+  paddingTop: 16,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: '100%',
+}
+
 const settingsCollapseButtonStyle: React.CSSProperties = {
   appearance: 'none',
   width: '100%',
@@ -9119,7 +9176,7 @@ const burgerSectionSubtitleStyle: React.CSSProperties = {
 
 const menuFooterActionWrapStyle: React.CSSProperties = {
   marginTop: 'auto',
-  paddingTop: 6,
+  paddingTop: 18,
 }
 
 const scheduleSheetStyle: React.CSSProperties = {
@@ -9583,16 +9640,46 @@ const paymentSheetTitleStyle: React.CSSProperties = {
 const paymentSheetTrustRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  justifyContent: 'center',
   gap: 8,
   marginTop: -8,
-  marginBottom: 2,
+  marginBottom: 3,
 }
 
 const paymentSheetTrustTextStyle: React.CSSProperties = {
-  fontSize: 12.5,
-  fontWeight: 600,
-  color: '#15803D',
+  fontSize: 12,
+  fontWeight: 700,
+  color: '#1D4ED8',
   lineHeight: 1.35,
+  textAlign: 'center',
+}
+
+const paymentSheetTrustBodyStyle: React.CSSProperties = {
+  marginBottom: 10,
+  padding: '6px 8px 0 8px',
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: '#1E40AF',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+  textAlign: 'center',
+}
+
+const paymentSheetInfoIconStyle: React.CSSProperties = {
+  width: 16,
+  height: 16,
+  minWidth: 16,
+  borderRadius: 999,
+  background: 'rgba(59, 130, 246, 0.14)',
+  color: '#2563EB',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 10,
+  fontWeight: 900,
+  lineHeight: 1,
 }
 
 const paymentSheetCloseStyle: React.CSSProperties = {

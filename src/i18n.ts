@@ -106,6 +106,7 @@ const resources = {
         priceLabel: 'Price:',
         priceLockedNow: 'Price locked now · payment visible · auto dispatch later',
         serviceFeeIncluded: 'Service fee included · charged after service',
+        paymentAuthorizationNotice: 'Verified now · Charged after service completion!',
         addPickupToContinue: 'Add pickup location to continue',
         completeHighlightedField: 'Complete the highlighted field to continue',
         budgetLikelihood: {
@@ -114,6 +115,7 @@ const resources = {
           high: 'High availability',
         },
         budgetGuidance: 'Providers are more likely to accept around ₪{{min}}–₪{{max}}',
+        budgetLowAvailabilityHint: 'Limited availability · Raise budget to improve matching.',
         budgetTypicalRange: 'Typical range ₪{{min}}–₪{{max}}',
         budgetTypicalVisitFee: 'Typical visit fee ₪{{min}}–₪{{max}}',
         budgetRetryHint: 'No providers accepted yet. Try increasing your budget to improve the chance of acceptance.',
@@ -124,7 +126,8 @@ const resources = {
         fixedVisit: {
           otherService: 'Other',
           issueDescriptionPlaceholder: 'Short issue description...',
-          disclaimer: 'Visit fee only. Parts/materials may be paid directly to the provider if needed.',
+          disclaimer: 'Labor only · Parts billed separately',
+          compactGuidance: 'Typical visit ₪{{min}}–₪{{max}} · Parts billed separately',
         },
         scheduleForLater: 'Schedule for later',
         scheduling: 'Scheduling...',
@@ -441,6 +444,7 @@ const resources = {
         manageCards: 'Manage cards',
         cashPayment: 'Cash payment',
         comingSoon: 'Coming soon',
+        securityMessage: 'Your payment information is safe with us',
       },
       addressPicker: {
         title: 'Service address',
@@ -533,6 +537,7 @@ const resources = {
         priceLabel: 'מחיר:',
         priceLockedNow: 'המחיר נשמר',
         serviceFeeIncluded: ' · החיוב יתבצע לאחר סיום השירות',
+        paymentAuthorizationNotice: '!נאמת עכשיו · חיוב בסיום השירות',
         addPickupToContinue: 'הוסיפו מיקום איסוף כדי להמשיך',
         completeHighlightedField: 'השלימו את השדה המודגש כדי להמשיך',
         budgetLikelihood: {
@@ -541,6 +546,7 @@ const resources = {
           high: 'זמינות גבוהה',
         },
         budgetGuidance: 'נותני השירות נוטים יותר לקבל סביב ₪{{min}}–₪{{max}}',
+        budgetLowAvailabilityHint: 'זמינות מוגבלת · תקציב גבוה יותר ישפר התאמה.',
         budgetTypicalRange: 'הטווח המקובל הוא ₪{{min}}–₪{{max}}',
         budgetTypicalVisitFee: 'מחיר ביקור מקובל ₪{{min}}–₪{{max}}',
         budgetRetryHint: 'עדיין אף נותן שירות לא קיבל. נסו להגדיל את התקציב כדי לשפר את סיכויי הקבלה.',
@@ -551,7 +557,8 @@ const resources = {
         fixedVisit: {
           otherService: 'אחר',
           issueDescriptionPlaceholder: 'תיאור קצר של הבעיה...',
-          disclaimer: 'דמי ביקור בלבד. חלקים או חומרים, אם יידרשו, עשויים להיות בתשלום ישיר לספק.',
+          disclaimer: 'עבודה בלבד · חלקים בנפרד',
+          compactGuidance: 'ביקור טיפוסי ₪{{min}}–₪{{max}} · תשלום עבור חלקים בנפרד',
         },
         scheduleForLater: 'תזמון למועד מאוחר יותר',
         scheduling: 'מתזמנים...',
@@ -868,6 +875,7 @@ const resources = {
         manageCards: 'ניהול כרטיסים',
         cashPayment: 'תשלום במזומן',
         comingSoon: 'בקרוב',
+        securityMessage: 'פרטי התשלום שלכם מאובטחים אצלנו',
       },
       addressPicker: {
         title: 'כתובת השירות',

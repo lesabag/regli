@@ -432,12 +432,21 @@ serve(async (req: Request) => {
 
     // ── PI status is 'requires_capture' — do the capture ────────
     console.log(`[capture-payment][${FUNCTION_VERSION}] Capturing PaymentIntent:`, job.stripe_payment_intent_id)
+    console.log(`[payment-auth] capture_started`, {
+      jobId,
+      paymentIntentId: job.stripe_payment_intent_id,
+    })
 
     let capturedIntent: Stripe.PaymentIntent
     try {
       capturedIntent = await stripe.paymentIntents.capture(job.stripe_payment_intent_id)
     } catch (stripeErr: unknown) {
       console.error(`[capture-payment][${FUNCTION_VERSION}] Stripe capture failed:`, stripeErr)
+      console.error(`[payment-auth] capture_failed`, {
+        jobId,
+        paymentIntentId: job.stripe_payment_intent_id,
+        error: stripeErr instanceof Error ? stripeErr.message : String(stripeErr),
+      })
 
       const stripeError = stripeErr as { type?: string; code?: string; message?: string }
 
@@ -512,6 +521,11 @@ serve(async (req: Request) => {
     }
 
     console.log(`[capture-payment][${FUNCTION_VERSION}] Capture result:`, { status: capturedIntent.status, id: capturedIntent.id })
+    console.log(`[payment-auth] capture_succeeded`, {
+      jobId,
+      paymentIntentId: capturedIntent.id,
+      status: capturedIntent.status,
+    })
 
     if (capturedIntent.status !== 'succeeded') {
       return new Response(

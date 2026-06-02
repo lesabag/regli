@@ -593,6 +593,14 @@ serve(async (req: Request) => {
           },
           metadata,
         })
+        console.log(`[payment-auth] authorization_created`, {
+          paymentFlow,
+          paymentIntentId: paymentIntent.id,
+          customerId,
+          status: paymentIntent.status,
+          currency: paymentIntent.currency,
+          amount: paymentIntent.amount,
+        })
 
         const ephemeralKey = await stripe.ephemeralKeys.create(
           { customer: customerId },
@@ -601,6 +609,11 @@ serve(async (req: Request) => {
         ephemeralKeySecret = ephemeralKey.secret
       } catch (stripeErr: unknown) {
         console.error(`[create-payment-intent][${FUNCTION_VERSION}] native_payment_sheet prepare error`, stripeErr)
+        console.error(`[payment-auth] authorization_failed`, {
+          paymentFlow,
+          customerId,
+          error: stripeErr instanceof Error ? stripeErr.message : String(stripeErr),
+        })
         const msg = stripeErr instanceof Error ? stripeErr.message : 'Unknown error'
         return new Response(
           JSON.stringify({
@@ -713,6 +726,12 @@ serve(async (req: Request) => {
           paymentIntentId,
           paymentIntentStatus: paymentIntent.status,
         })
+        console.error(`[payment-auth] authorization_failed`, {
+          paymentFlow,
+          paymentIntentId,
+          customerId,
+          status: paymentIntent.status,
+        })
         return new Response(
           JSON.stringify({
             error: 'Payment confirmation incomplete',
@@ -760,6 +779,13 @@ serve(async (req: Request) => {
       }
 
       const initialPaymentStatus = paymentStatusFromIntent(paymentIntent.status)
+      console.log(`[payment-auth] authorization_succeeded`, {
+        paymentFlow,
+        paymentIntentId: paymentIntent.id,
+        customerId,
+        status: paymentIntent.status,
+        paymentStatus: initialPaymentStatus,
+      })
       const paymentAuthorizedAt =
         initialPaymentStatus === 'authorized' || initialPaymentStatus === 'paid'
           ? new Date().toISOString()
@@ -1021,8 +1047,23 @@ serve(async (req: Request) => {
       paymentIntent = await stripe.paymentIntents.create(
         piParams as Stripe.PaymentIntentCreateParams,
       )
+      console.log(`[payment-auth] authorization_created`, {
+        paymentFlow,
+        paymentIntentId: paymentIntent.id,
+        customerId,
+        paymentMethodId,
+        status: paymentIntent.status,
+        currency: paymentIntent.currency,
+        amount: paymentIntent.amount,
+      })
     } catch (stripeErr: unknown) {
       console.error(`[create-payment-intent][${FUNCTION_VERSION}] Stripe PI creation failed:`, stripeErr)
+      console.error(`[payment-auth] authorization_failed`, {
+        paymentFlow,
+        customerId,
+        paymentMethodId,
+        error: stripeErr instanceof Error ? stripeErr.message : String(stripeErr),
+      })
       const msg = stripeErr instanceof Error ? stripeErr.message : 'Unknown error'
       return new Response(
         JSON.stringify({ error: 'Failed to create payment', details: msg, _v: FUNCTION_VERSION }),
@@ -1054,6 +1095,13 @@ serve(async (req: Request) => {
         customerId,
         paymentMethodId,
       })
+      console.error(`[payment-auth] authorization_failed`, {
+        paymentFlow,
+        paymentIntentId: paymentIntent.id,
+        customerId,
+        paymentMethodId,
+        status: paymentIntent.status,
+      })
 
       try {
         await stripe.paymentIntents.cancel(paymentIntent.id)
@@ -1073,6 +1121,14 @@ serve(async (req: Request) => {
     }
 
     const initialPaymentStatus = paymentStatusFromIntent(paymentIntent.status)
+    console.log(`[payment-auth] authorization_succeeded`, {
+      paymentFlow,
+      paymentIntentId: paymentIntent.id,
+      customerId,
+      paymentMethodId,
+      status: paymentIntent.status,
+      paymentStatus: initialPaymentStatus,
+    })
     const paymentAuthorizedAt =
       initialPaymentStatus === 'authorized' || initialPaymentStatus === 'paid'
         ? new Date().toISOString()
