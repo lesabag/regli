@@ -178,7 +178,13 @@ interface WalkerPayoutStatusRow {
   job_id: string
   net_amount: number
   currency: string
+  job_currency: string | null
+  provider_earnings_currency: string | null
   status: 'pending' | 'processing' | 'transferred' | 'in_transit' | 'paid_out' | 'failed' | 'reversed' | 'refunded'
+  stripe_transfer_currency: string | null
+  stripe_transfer_amount: number | null
+  stripe_balance_transaction_currency: string | null
+  stripe_balance_transaction_amount: number | null
   available_at: string | null
   failure_reason: string | null
   updated_at: string
@@ -1883,7 +1889,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const fetchLatestPayout = useCallback(async () => {
     const { data, error } = await supabase
       .from('walker_payouts')
-      .select('id, job_id, net_amount, currency, status, available_at, failure_reason, updated_at, created_at')
+      .select('id, job_id, net_amount, currency, job_currency, provider_earnings_currency, status, stripe_transfer_currency, stripe_transfer_amount, stripe_balance_transaction_currency, stripe_balance_transaction_amount, available_at, failure_reason, updated_at, created_at')
       .eq('walker_id', profileId)
       .order('created_at', { ascending: false })
       .limit(1)

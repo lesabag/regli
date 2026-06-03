@@ -184,6 +184,31 @@ function formatMoney(value: number | null | undefined): string {
   return `₪${Math.round(value).toLocaleString()}`
 }
 
+function majorAmountFromSmallest(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null
+  return value / 100
+}
+
+function formatCurrencyAmount(
+  value: number | null | undefined,
+  currency: string | null | undefined,
+  locale: string,
+): string | null {
+  if (value == null || !Number.isFinite(value)) return null
+  const normalizedCurrency = typeof currency === 'string' ? currency.trim().toUpperCase() : ''
+  if (!normalizedCurrency) return null
+
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: normalizedCurrency,
+      maximumFractionDigits: 2,
+    }).format(value)
+  } catch {
+    return `${normalizedCurrency} ${value.toFixed(2)}`
+  }
+}
+
 function getJobCompletedTime(job: {
   service_completed_at?: string | null
   paid_at?: string | null
@@ -1478,6 +1503,17 @@ export default function WalkerDashboard({
   const latestPayoutCard = useMemo(() => {
     const setupReady = walletPayoutReady
     const status = flow.latestPayout?.status ?? null
+    const locale = isHebrew ? 'he-IL' : 'en-US'
+    const providerEarningsCurrency = flow.latestPayout?.provider_earnings_currency ?? flow.latestPayout?.job_currency ?? null
+    const transferCurrency = flow.latestPayout?.stripe_transfer_currency ?? flow.latestPayout?.currency ?? null
+    const transferAmount = majorAmountFromSmallest(flow.latestPayout?.stripe_transfer_amount ?? null)
+    const transferAmountLabel = formatCurrencyAmount(transferAmount, transferCurrency, locale)
+    const earningsAmountLabel = formatCurrencyAmount(flow.latestPayout?.net_amount ?? null, providerEarningsCurrency, locale)
+    const transferDiffersFromEarnings =
+      !!transferAmountLabel &&
+      !!transferCurrency &&
+      !!providerEarningsCurrency &&
+      transferCurrency.toLowerCase() !== providerEarningsCurrency.toLowerCase()
 
     let setupLabel = isHebrew ? 'נדרשת פעולה' : 'Action required'
     let setupExplanation = isHebrew
@@ -1492,22 +1528,56 @@ export default function WalkerDashboard({
     }
 
     let payoutExplanation: string | null = null
+    let payoutDetail: string | null = null
     let tone: 'neutral' | 'success' | 'warning' | 'danger' = 'neutral'
 
     if (status === 'transferred') {
       payoutExplanation = isHebrew ? 'הכספים הועברו לחשבון התשלומים שלך' : 'Funds transferred to your payout account'
+      payoutDetail = transferAmountLabel
+        ? isHebrew
+          ? `הועבר לחשבון התשלומים: ${transferAmountLabel}`
+          : `Transferred to payout account: ${transferAmountLabel}`
+        : null
       tone = 'success'
     } else if (status === 'in_transit') {
       payoutExplanation = isHebrew ? 'העברה לבנק ממתינה' : 'Bank payout pending'
+      payoutDetail = transferAmountLabel
+        ? isHebrew
+          ? `ממתין לבנק: ${transferAmountLabel}`
+          : `Pending bank payout: ${transferAmountLabel}`
+        : null
       tone = 'warning'
     } else if (status === 'paid_out') {
       payoutExplanation = isHebrew ? 'שולם לחשבון הבנק' : 'Paid out to bank'
+      payoutDetail = transferAmountLabel
+        ? isHebrew
+          ? `שולם לבנק: ${transferAmountLabel}`
+          : `Paid out to bank: ${transferAmountLabel}`
+        : null
       tone = 'success'
     } else if (status === 'failed') {
       payoutExplanation = isHebrew ? 'התשלום נכשל — עדכן פרטי תשלום' : 'Payout failed — update payout details'
+      payoutDetail = transferAmountLabel
+        ? isHebrew
+          ? `ההעברה שנכשלה: ${transferAmountLabel}`
+          : `Failed payout amount: ${transferAmountLabel}`
+        : null
       tone = 'danger'
     } else if (status === 'processing') {
       payoutExplanation = isHebrew ? 'ההעברה בהכנה' : 'Transfer is being prepared'
+      payoutDetail = transferAmountLabel
+        ? isHebrew
+          ? `בהכנה לחשבון התשלומים: ${transferAmountLabel}`
+          : `Preparing payout transfer: ${transferAmountLabel}`
+        : null
+    }
+
+    if (!payoutDetail && earningsAmountLabel) {
+      payoutDetail = isHebrew
+        ? `רווחי השירות באפליקציה: ${earningsAmountLabel}`
+        : `In-app service earnings: ${earningsAmountLabel}`
+    } else if (payoutDetail && transferDiffersFromEarnings && earningsAmountLabel) {
+      payoutDetail = `${payoutDetail} · ${isHebrew ? `רווחי השירות באפליקציה: ${earningsAmountLabel}` : `In-app earnings: ${earningsAmountLabel}`}`
     }
 
     return {
@@ -1516,9 +1586,20 @@ export default function WalkerDashboard({
       setupLabel,
       setupExplanation,
       payoutExplanation,
+      payoutDetail,
       tone,
     }
-  }, [flow.latestPayout?.status, isHebrew, walletPayoutReady])
+  }, [
+    flow.latestPayout?.currency,
+    flow.latestPayout?.job_currency,
+    flow.latestPayout?.net_amount,
+    flow.latestPayout?.provider_earnings_currency,
+    flow.latestPayout?.status,
+    flow.latestPayout?.stripe_transfer_amount,
+    flow.latestPayout?.stripe_transfer_currency,
+    isHebrew,
+    walletPayoutReady,
+  ])
   const earningsSummary = useMemo(() => {
     const completed = flow.completedJobs
       .filter((job) => job.status === 'completed')
@@ -2728,7 +2809,12 @@ export default function WalkerDashboard({
                           }}
                         >
                           <strong style={payoutStatusRowCodeStyle}>{latestPayoutCard.status}</strong>
-                          <span style={payoutStatusRowTextStyle}>{latestPayoutCard.payoutExplanation}</span>
+                          <div style={payoutStatusRowTextWrapStyle}>
+                            <span style={payoutStatusRowTextStyle}>{latestPayoutCard.payoutExplanation}</span>
+                            {latestPayoutCard.payoutDetail && (
+                              <span style={payoutStatusRowDetailStyle}>{latestPayoutCard.payoutDetail}</span>
+                            )}
+                          </div>
                         </div>
                       )}
 
@@ -4780,6 +4866,18 @@ const payoutStatusRowTextStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.45,
   color: '#334155',
+}
+
+const payoutStatusRowTextWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+}
+
+const payoutStatusRowDetailStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: '#475569',
 }
 
 const payoutStatusButtonStyle: React.CSSProperties = {

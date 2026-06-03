@@ -20,6 +20,11 @@ function clampRatio(value: number): number {
   return value
 }
 
+function toStripeAmountSmallest(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return Math.round(value)
+}
+
 /**
  * Standalone transfer creation / retry.
  * Called manually (admin retry) or automatically after capture.
@@ -300,6 +305,19 @@ serve(async (req: Request) => {
 
     const netRatio = clampRatio(netAmount / grossAmount)
     stripeTransferAmountUsed = Math.round((balanceTransactionAmountSmallest ?? 0) * netRatio)
+    const jobCurrency = normalizeCurrency(job.currency) ?? paymentIntentCurrency ?? chargeCurrency ?? transferCurrencyUsed
+    const providerEarningsCurrency = paymentIntentCurrency ?? jobCurrency ?? transferCurrencyUsed
+    const accountingFields = {
+      job_currency: jobCurrency,
+      provider_earnings_currency: providerEarningsCurrency,
+      payment_intent_currency: paymentIntentCurrency,
+      charge_currency: chargeCurrency,
+      stripe_balance_transaction_currency: balanceTransactionCurrency,
+      stripe_balance_transaction_amount: toStripeAmountSmallest(balanceTransactionAmountSmallest),
+      stripe_transfer_currency: transferCurrencyUsed,
+      stripe_transfer_amount: toStripeAmountSmallest(stripeTransferAmountUsed),
+      earnings_share_ratio: Number(netRatio.toFixed(8)),
+    }
 
     if (!(stripeTransferAmountUsed > 0)) {
       return new Response(
@@ -331,6 +349,7 @@ serve(async (req: Request) => {
           net_amount: netAmount,
           currency: transferCurrencyUsed,
           status: 'processing',
+          ...accountingFields,
         })
         .then(({ error: insErr }) => {
           if (insErr && !insErr.message?.includes('duplicate')) {
@@ -343,6 +362,7 @@ serve(async (req: Request) => {
         .update({
           status: 'processing',
           currency: transferCurrencyUsed,
+          ...accountingFields,
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id)
@@ -410,6 +430,7 @@ serve(async (req: Request) => {
         stripe_transfer_id: transfer.id,
         status: 'transferred',
         currency: transferCurrencyUsed,
+        ...accountingFields,
         failure_reason: null,
         updated_at: new Date().toISOString(),
       })

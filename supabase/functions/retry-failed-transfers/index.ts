@@ -8,6 +8,13 @@ function normalizeCurrency(value: string | null | undefined): string | null {
   return /^[a-z]{3}$/.test(normalized) ? normalized : null
 }
 
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
+}
+
 /**
  * Retry failed transfers with exponential backoff.
  * Intended to be called via cron (e.g. every 5 minutes) or manually by admin.
@@ -91,7 +98,7 @@ serve(async (req: Request) => {
   // Find retryable payouts
   const { data: retryable, error: queryErr } = await supabaseAdmin
     .from('walker_payouts')
-    .select('id, walker_id, job_id, net_amount, currency, retry_count, failure_reason')
+    .select('id, walker_id, job_id, gross_amount, net_amount, currency, retry_count, failure_reason')
     .eq('status', 'failed')
     .lt('retry_count', 5)
     .lte('next_retry_at', new Date().toISOString())
@@ -186,23 +193,44 @@ serve(async (req: Request) => {
         continue
       }
 
-      // Get charge ID and real currency directly from Stripe PI
-      // CRITICAL: Do NOT use payout.currency or job.currency — may be wrong
+      // Prefer Stripe's balance transaction currency for retries too.
+      // It reflects the settled platform balance that can be safely transferred,
+      // even when the customer-facing PaymentIntent currency is different.
       let chargeId: string | undefined
+      let paymentIntentCurrency: string | null = null
+      let chargeCurrency: string | null = null
+      let balanceTransactionCurrency: string | null = null
+      let balanceTransactionAmountSmallest: number | null = null
       let transferCurrency: string | null = normalizeCurrency(job.currency) ?? normalizeCurrency(payout.currency)
 
       if (job.stripe_payment_intent_id) {
         try {
-          const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
-          chargeId = pi.latest_charge as string | undefined
-          transferCurrency = pi.currency // authoritative currency from Stripe
+          const pi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id, {
+            expand: ['latest_charge.balance_transaction'],
+          })
+          const latestCharge = typeof pi.latest_charge === 'string' ? null : pi.latest_charge
+          const balanceTransaction =
+            latestCharge && typeof latestCharge.balance_transaction !== 'string'
+              ? latestCharge.balance_transaction
+              : null
+
+          chargeId = latestCharge?.id ?? (typeof pi.latest_charge === 'string' ? pi.latest_charge : undefined)
+          paymentIntentCurrency = normalizeCurrency(pi.currency)
+          chargeCurrency = normalizeCurrency(latestCharge?.currency)
+          balanceTransactionCurrency = normalizeCurrency(balanceTransaction?.currency)
+          balanceTransactionAmountSmallest =
+            typeof balanceTransaction?.amount === 'number' ? Math.abs(balanceTransaction.amount) : null
+          transferCurrency = balanceTransactionCurrency ?? chargeCurrency ?? paymentIntentCurrency
           const normalizedJobCurrency = normalizeCurrency(job.currency)
-          if (normalizedJobCurrency && normalizedJobCurrency !== pi.currency) {
+          if (normalizedJobCurrency && transferCurrency && normalizedJobCurrency !== transferCurrency) {
             console.error('[retry] CURRENCY MISMATCH detected:', {
               jobId: payout.job_id,
               jobCurrency: normalizedJobCurrency,
               payoutCurrency: payout.currency,
-              stripeCurrency: pi.currency,
+              paymentIntentCurrency,
+              chargeCurrency,
+              balanceTransactionCurrency,
+              transferCurrency,
               paymentIntentId: pi.id,
             })
           }
@@ -250,7 +278,22 @@ serve(async (req: Request) => {
         continue
       }
 
-      const transferAmountSmallest = Math.round(payout.net_amount * 100)
+      const netRatio = clampRatio(payout.net_amount / payout.gross_amount)
+      const transferAmountSmallest = Math.round((balanceTransactionAmountSmallest ?? 0) * netRatio)
+
+      if (!chargeId || !balanceTransactionAmountSmallest || !(transferAmountSmallest > 0)) {
+        await supabaseAdmin
+          .from('walker_payouts')
+          .update({
+            status: 'failed',
+            failure_reason: 'Missing Stripe charge or balance transaction details for safe retry transfer',
+            retry_count: payout.retry_count + 1,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', payout.id)
+        results.push({ job_id: payout.job_id, success: false, error: 'Missing safe transfer currency details' })
+        continue
+      }
 
       console.log('[FINAL TRANSFER CALL]', {
         transferCurrency,
@@ -258,6 +301,10 @@ serve(async (req: Request) => {
         payoutCurrency: payout.currency,
         amount: transferAmountSmallest,
         chargeId: chargeId || 'none',
+        paymentIntentCurrency,
+        chargeCurrency,
+        balanceTransactionCurrency,
+        balanceTransactionAmountSmallest,
         destination: walkerProfile.stripe_connect_account_id,
         hasSourceTransaction: !!chargeId,
       })
@@ -291,6 +338,15 @@ serve(async (req: Request) => {
           stripe_transfer_id: transfer.id,
           status: 'transferred',
           currency: transferCurrency,
+          job_currency: normalizeCurrency(job.currency) ?? paymentIntentCurrency ?? normalizeCurrency(payout.currency),
+          provider_earnings_currency: paymentIntentCurrency ?? normalizeCurrency(job.currency) ?? normalizeCurrency(payout.currency),
+          payment_intent_currency: paymentIntentCurrency,
+          charge_currency: chargeCurrency,
+          stripe_balance_transaction_currency: balanceTransactionCurrency,
+          stripe_balance_transaction_amount: balanceTransactionAmountSmallest,
+          stripe_transfer_currency: transferCurrency,
+          stripe_transfer_amount: transfer.amount,
+          earnings_share_ratio: Number(netRatio.toFixed(8)),
           failure_reason: null,
           retry_count: payout.retry_count + 1,
           next_retry_at: null,
