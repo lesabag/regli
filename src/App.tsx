@@ -116,7 +116,8 @@ if (isStripeReturn && typeof document !== 'undefined') {
 const AdminDashboard = lazy(() => import('./screens/AdminDashboard'))
 const ClientDashboard = lazy(() => import('./screens/ClientDashboard'))
 const WalkerDashboard = lazy(() => import('./screens/WalkerDashboard'))
-const LOCAL_UNLOCK_RELOCK_THRESHOLD_MS = 30_000
+// Re-lock only after a meaningful background period so quick app switching stays smooth.
+const LOCAL_UNLOCK_RELOCK_AFTER_MS = 30 * 60 * 1000
 const isNativeIos = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios'
 
 function LocalUnlockScreen(props: {
@@ -126,85 +127,235 @@ function LocalUnlockScreen(props: {
   buttonLabel: string
   onUnlock: () => void
 }) {
+  const showPasscodeFallback = props.buttonLabel === 'Continue with passcode'
+
   return (
-    <div
-      style={{
-        minHeight: '100svh',
-        display: 'grid',
-        placeItems: 'center',
-        background: 'linear-gradient(180deg, #F8FAFC 0%, #EEF2F6 100%)',
-        padding: 24,
-        fontFamily: 'Inter, system-ui, sans-serif',
-      }}
-    >
+    <>
+      <style>{`
+        @keyframes regliUnlockOverlayFade {
+          from {
+            opacity: 0;
+            backdrop-filter: blur(0px);
+            -webkit-backdrop-filter: blur(0px);
+          }
+          to {
+            opacity: 1;
+            backdrop-filter: blur(32px);
+            -webkit-backdrop-filter: blur(32px);
+          }
+        }
+
+        @keyframes regliUnlockContentIn {
+          from {
+            opacity: 0;
+            transform: translateY(8px) scale(0.985);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+      `}</style>
       <div
         style={{
-          width: 'min(100%, 360px)',
-          borderRadius: 28,
-          background: 'rgba(255,255,255,0.92)',
-          boxShadow: '0 24px 60px rgba(15, 23, 42, 0.12)',
-          padding: '32px 24px',
-          textAlign: 'center',
+          position: 'fixed',
+          inset: 0,
+          zIndex: 70,
+          overflow: 'hidden',
+          display: 'grid',
+          placeItems: 'center',
+          padding: 'max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom))',
+          background: 'linear-gradient(180deg, rgba(2,6,23,0.34) 0%, rgba(2,6,23,0.52) 44%, rgba(15,23,42,0.68) 100%)',
+          backdropFilter: 'blur(32px) saturate(0.96) brightness(0.82)',
+          WebkitBackdropFilter: 'blur(32px) saturate(0.96) brightness(0.82)',
+          animation: 'regliUnlockOverlayFade 240ms ease-out both',
+          fontFamily: 'Inter, system-ui, sans-serif',
         }}
       >
-        <div style={{ fontSize: 42, marginBottom: 14 }}>🔒</div>
         <div
           style={{
-            fontSize: 28,
-            lineHeight: 1.1,
-            fontWeight: 800,
-            color: '#0F172A',
-            marginBottom: 10,
+            width: 'min(100%, 420px)',
+            display: 'grid',
+            gap: 18,
+            justifyItems: 'stretch',
+            animation: 'regliUnlockContentIn 240ms ease-out both',
           }}
         >
-          Unlock Regli
-        </div>
-        <div
-          style={{
-            fontSize: 15,
-            lineHeight: 1.5,
-            color: '#475569',
-            marginBottom: 22,
-          }}
-        >
-          {props.subtitle}
-        </div>
-        {props.errorMessage && (
           <div
             style={{
-              marginBottom: 18,
-              padding: '10px 12px',
-              borderRadius: 14,
-              background: '#FFF7ED',
-              color: '#9A3412',
-              fontSize: 13,
-              lineHeight: 1.4,
+              display: 'grid',
+              justifyItems: 'center',
+              gap: 14,
+              textAlign: 'center',
             }}
           >
-            {props.errorMessage}
+            <div
+              style={{
+                width: 68,
+                height: 68,
+                borderRadius: 22,
+                display: 'grid',
+                placeItems: 'center',
+                background: 'linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.56) 100%)',
+                boxShadow: '0 18px 40px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255,255,255,0.55)',
+                border: '1px solid rgba(255,255,255,0.52)',
+              }}
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M7 10V7.5C7 4.73858 9.23858 2.5 12 2.5C14.7614 2.5 17 4.73858 17 7.5V10"
+                  stroke="#0F172A"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+                <rect
+                  x="5"
+                  y="10"
+                  width="14"
+                  height="11"
+                  rx="3"
+                  stroke="#0F172A"
+                  strokeWidth="1.8"
+                />
+                <circle cx="12" cy="15.5" r="1.25" fill="#0F172A" />
+              </svg>
+            </div>
+            <div
+              style={{
+                fontSize: 28,
+                lineHeight: 1.08,
+                fontWeight: 900,
+                color: '#0F172A',
+                letterSpacing: '-0.02em',
+              }}
+            >
+              Unlock Regli
+            </div>
+            <div
+              style={{
+                fontSize: 15,
+                lineHeight: 1.45,
+                color: '#334155',
+                fontWeight: 600,
+                maxWidth: 280,
+              }}
+            >
+              {props.subtitle}
+            </div>
           </div>
-        )}
-        <button
-          type="button"
-          onClick={props.onUnlock}
-          disabled={props.busy}
-          style={{
-            width: '100%',
-            minHeight: 52,
-            border: 0,
-            borderRadius: 16,
-            background: props.busy ? '#94A3B8' : '#0F172A',
-            color: '#FFFFFF',
-            fontSize: 16,
-            fontWeight: 800,
-            cursor: props.busy ? 'default' : 'pointer',
-            transition: 'background 160ms ease',
-          }}
-        >
-          {props.busy ? 'Unlocking...' : props.buttonLabel}
-        </button>
+
+          <div style={{ display: 'grid', gap: 10 }}>
+            <button
+              type="button"
+              onClick={props.onUnlock}
+              disabled={props.busy}
+              style={{
+                width: '100%',
+                minHeight: 54,
+                border: 0,
+                borderRadius: 18,
+                background: props.busy ? '#6B7A93' : '#08153B',
+                color: '#FFFFFF',
+                fontSize: 16,
+                fontWeight: 800,
+                cursor: props.busy ? 'default' : 'pointer',
+                transition: 'transform 160ms ease, background 160ms ease, opacity 160ms ease',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                boxShadow: '0 16px 36px rgba(8,21,59,0.24)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M7 10V7.5C7 4.73858 9.23858 2.5 12 2.5C14.7614 2.5 17 4.73858 17 7.5V10"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+                <rect
+                  x="5"
+                  y="10"
+                  width="14"
+                  height="11"
+                  rx="3"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+              </svg>
+              <span>{props.busy ? 'Unlocking...' : props.buttonLabel}</span>
+            </button>
+
+            {showPasscodeFallback ? (
+              <button
+                type="button"
+                onClick={props.onUnlock}
+                disabled={props.busy}
+                style={{
+                  width: '100%',
+                  minHeight: 50,
+                  borderRadius: 18,
+                  border: '1px solid rgba(15,23,42,0.12)',
+                  background: 'rgba(255,255,255,0.56)',
+                  color: '#0F172A',
+                  fontSize: 15,
+                  fontWeight: 700,
+                  cursor: props.busy ? 'default' : 'pointer',
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                }}
+              >
+                Use device passcode instead
+              </button>
+            ) : null}
+          </div>
+
+          {props.errorMessage ? (
+            <div
+              style={{
+                justifySelf: 'center',
+                padding: '10px 12px',
+                borderRadius: 14,
+                background: 'rgba(255,247,237,0.84)',
+                color: '#9A3412',
+                fontSize: 13,
+                lineHeight: 1.4,
+                fontWeight: 600,
+                textAlign: 'center',
+                maxWidth: 320,
+              }}
+            >
+              {props.errorMessage}
+            </div>
+          ) : null}
+
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              fontSize: 12,
+              lineHeight: 1.4,
+              color: 'rgba(15,23,42,0.66)',
+              fontWeight: 600,
+              textAlign: 'center',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 3L19 6V11.5C19 16.2 15.9 20.42 12 21.5C8.1 20.42 5 16.2 5 11.5V6L12 3Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span>Your data stays private and secure</span>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -270,12 +421,14 @@ export default function App() {
   const [stripeReturnToken, setStripeReturnToken] = useState(0)
   const [oauthRoutePending, setOauthRoutePending] = useState(() => isWebOAuthCallbackInProgress())
   const [, setPendingPushRoute] = useState<ParsedPushDeepLink | null>(null)
-  const [localUnlockState, setLocalUnlockState] = useState<'locked' | 'unlocking' | 'unlocked'>('locked')
+  const [localUnlockState, setLocalUnlockState] = useState<'locked' | 'unlocking' | 'unlocked'>('unlocked')
   const [localUnlockError, setLocalUnlockError] = useState<string | null>(null)
   const [localUnlockSupportsPasscodeOnly, setLocalUnlockSupportsPasscodeOnly] = useState(false)
   const handleSplashDone = useCallback(() => setSplashDone(true), [])
   const backgroundedAtRef = useRef<number | null>(null)
   const lastUnlockedUserIdRef = useRef<string | null>(null)
+  const hasCompletedInitialUnlockRef = useRef(false)
+  const hasAutoPromptedLocalUnlockRef = useRef(false)
 
   // ── Analytics: identify + session ───────────────────────────
   const identifiedRef = useRef(false)
@@ -485,7 +638,7 @@ export default function App() {
     profileReady &&
     !needsOnboarding &&
     (!shouldRequireLocalUnlock || localUnlockState === 'unlocked')
-  const localUnlockUserId = session?.user?.id ?? user?.id ?? null
+  const localUnlockUserId = dashboardProfile?.id ?? session?.user?.id ?? user?.id ?? null
   const localUnlockActive = shouldRequireLocalUnlock && localUnlockState !== 'unlocked'
 
   usePushNotifications(splashDone && profileReady ? dashboardProfile?.id ?? null : null)
@@ -524,11 +677,12 @@ export default function App() {
       setLocalUnlockState('unlocked')
       setLocalUnlockError(null)
       lastUnlockedUserIdRef.current = localUnlockUserId
+      hasCompletedInitialUnlockRef.current = true
       backgroundedAtRef.current = null
     } catch (error) {
       const nextMessage = error instanceof BiometryError
         ? mapBiometryErrorToMessage(error)
-        : 'Unable to verify your identity right now. Please try again.'
+        : 'Unable to use Face ID right now. Please try again.'
       setLocalUnlockState('locked')
       setLocalUnlockError(nextMessage)
     }
@@ -539,18 +693,43 @@ export default function App() {
       setLocalUnlockState('unlocked')
       setLocalUnlockError(null)
       setLocalUnlockSupportsPasscodeOnly(false)
+      hasCompletedInitialUnlockRef.current = false
+      lastUnlockedUserIdRef.current = null
+      hasAutoPromptedLocalUnlockRef.current = false
       return
     }
 
-    if (localUnlockUserId && lastUnlockedUserIdRef.current !== localUnlockUserId) {
-      lastUnlockedUserIdRef.current = null
-      lockDashboard('initial')
+    if (!localUnlockUserId) {
+      setLocalUnlockState('unlocked')
+      setLocalUnlockError(null)
+      return
+    }
+
+    if (lastUnlockedUserIdRef.current !== localUnlockUserId) {
+      lastUnlockedUserIdRef.current = localUnlockUserId
+      setLocalUnlockState('unlocked')
+      setLocalUnlockError(null)
+      setLocalUnlockSupportsPasscodeOnly(false)
+      hasCompletedInitialUnlockRef.current = false
+      hasAutoPromptedLocalUnlockRef.current = false
     }
   }, [
     localUnlockUserId,
-    lockDashboard,
     shouldRequireLocalUnlock,
   ])
+
+  useEffect(() => {
+    if (!localUnlockActive) {
+      hasAutoPromptedLocalUnlockRef.current = false
+      return
+    }
+
+    if (localUnlockState !== 'locked') return
+    if (hasAutoPromptedLocalUnlockRef.current) return
+
+    hasAutoPromptedLocalUnlockRef.current = true
+    void unlockDashboard()
+  }, [localUnlockActive, localUnlockState, unlockDashboard])
 
   useEffect(() => {
     if (!shouldRequireLocalUnlock) return undefined
@@ -566,7 +745,10 @@ export default function App() {
       const backgroundedAt = backgroundedAtRef.current
       backgroundedAtRef.current = null
       if (!backgroundedAt) return
-      if (Date.now() - backgroundedAt < LOCAL_UNLOCK_RELOCK_THRESHOLD_MS) return
+      if (Date.now() - backgroundedAt < LOCAL_UNLOCK_RELOCK_AFTER_MS) return
+      if (!hasCompletedInitialUnlockRef.current) {
+        hasCompletedInitialUnlockRef.current = true
+      }
       lockDashboard('resume')
     }).then((handle) => {
       listener = handle
@@ -639,7 +821,7 @@ export default function App() {
           busy={localUnlockState === 'unlocking'}
           errorMessage={localUnlockError}
           subtitle={localUnlockSupportsPasscodeOnly ? 'Use your device passcode to continue' : 'Use Face ID to continue'}
-          buttonLabel={localUnlockSupportsPasscodeOnly ? 'Continue with passcode' : 'Unlock'}
+          buttonLabel={localUnlockSupportsPasscodeOnly ? 'Continue with passcode' : 'Continue with Face ID'}
           onUnlock={() => {
             void unlockDashboard()
           }}
@@ -757,11 +939,11 @@ function mapBiometryErrorToMessage(error: BiometryError): string {
     case BiometryErrorType.userCancel:
     case BiometryErrorType.systemCancel:
     case BiometryErrorType.appCancel:
-      return 'Unlock was cancelled. Try again when you are ready.'
+      return ''
     case BiometryErrorType.biometryNotAvailable:
-      return 'Face ID is not available on this device. Try using your device passcode.'
+      return 'Face ID is not available on this device. You can try using your device passcode.'
     case BiometryErrorType.biometryNotEnrolled:
-      return 'Face ID is not set up yet. Try using your device passcode.'
+      return 'Face ID is not set up yet. You can try using your device passcode.'
     case BiometryErrorType.passcodeNotSet:
     case BiometryErrorType.noDeviceCredential:
       return 'Set up a device passcode to unlock Regli on this device.'
@@ -770,6 +952,6 @@ function mapBiometryErrorToMessage(error: BiometryError): string {
     case BiometryErrorType.authenticationFailed:
       return 'Face ID did not recognize you. Please try again.'
     default:
-      return 'Unable to verify your identity right now. Please try again.'
+      return 'Unable to use Face ID right now. Please try again.'
   }
 }
