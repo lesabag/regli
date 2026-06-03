@@ -1624,22 +1624,48 @@ export default function WalkerDashboard({
   const weeklyAvailabilityHealth = useMemo(() => {
     if (!weeklyOverviewServiceType) return null
     const rows = availabilityRows[weeklyOverviewServiceType]
+    const nowMinutes = businessNowParts?.minutesOfDay ?? null
     const days = rows.map((row) => {
+      const startMinutes = parseAvailabilityInputMinutes(row.startTime)
+      const endMinutes = parseAvailabilityInputMinutes(row.endTime)
+
+      let status: 'available' | 'upcoming' | 'off' = 'off'
+
+      if (row.dayOfWeek < todayDayOfWeek) {
+        status = 'off'
+      } else if (row.dayOfWeek === todayDayOfWeek) {
+        if (!row.isActive || startMinutes == null || endMinutes == null || endMinutes <= startMinutes || nowMinutes == null) {
+          status = 'off'
+        } else if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
+          status = 'available'
+        } else if (nowMinutes < startMinutes) {
+          status = 'upcoming'
+        } else {
+          status = 'off'
+        }
+      } else if (row.isActive) {
+        status = 'available'
+      }
+
       return {
         dayOfWeek: row.dayOfWeek,
         dayLabel: availabilityDayLabels[row.dayOfWeek],
         isToday: row.dayOfWeek === todayDayOfWeek,
-        isAvailable: row.isActive,
+        status,
       }
     })
 
-    const availableDaysCount = days.reduce((count, day) => count + (day.isAvailable ? 1 : 0), 0)
+    const availableDaysCount = days.reduce((count, day) => (
+      day.status === 'available' || day.status === 'upcoming'
+        ? count + 1
+        : count
+    ), 0)
 
     return {
       availableDaysCount,
       days,
     }
-  }, [availabilityDayLabels, availabilityRows, todayDayOfWeek, weeklyOverviewServiceType])
+  }, [availabilityDayLabels, availabilityRows, businessNowParts, todayDayOfWeek, weeklyOverviewServiceType])
   const walletPayoutReady =
     !!flow.connectStatus?.connected &&
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
@@ -2410,11 +2436,19 @@ export default function WalkerDashboard({
               <span
                 style={{
                   ...weeklyAvailabilityDotStyle,
-                  ...(day.isAvailable ? weeklyAvailabilityDotOnStyle : weeklyAvailabilityDotOffStyle),
+                  ...(day.status === 'available'
+                    ? weeklyAvailabilityDotOnStyle
+                    : day.status === 'upcoming'
+                      ? weeklyAvailabilityDotUpcomingStyle
+                      : weeklyAvailabilityDotOffStyle),
                 }}
                 aria-hidden="true"
               >
-                {day.isAvailable ? '🟢' : '⚫'}
+                {day.status === 'available'
+                  ? '🟢'
+                  : day.status === 'upcoming'
+                    ? '🟢'
+                    : '⚫'}
               </span>
             </div>
           ))}
@@ -6507,6 +6541,11 @@ const weeklyAvailabilityDotStyle: React.CSSProperties = {
 
 const weeklyAvailabilityDotOnStyle: React.CSSProperties = {
   filter: 'saturate(0.95)',
+}
+
+const weeklyAvailabilityDotUpcomingStyle: React.CSSProperties = {
+  filter: 'saturate(0.95)',
+  opacity: 0.9,
 }
 
 const weeklyAvailabilityDotOffStyle: React.CSSProperties = {
