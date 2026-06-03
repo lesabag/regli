@@ -7,6 +7,7 @@ import CompletionCard from '../components/CompletionCard'
 import GroupedHistory from '../components/GroupedHistory'
 import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
 import type { HistoryItem } from '../components/GroupedHistory'
+import { useProviderInsights } from '../hooks/useProviderInsights'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { supabase } from '../services/supabaseClient'
@@ -42,7 +43,7 @@ import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 import { hasProviderIssue } from '../utils/completionReview'
 
 const REQUEST_TIMEOUT_SECONDS = 20
-type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings' | 'preferredCustomers'
+type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders' | 'earnings' | 'preferredCustomers' | 'insights'
 type EarningsPeriod = 'today' | 'week' | 'month'
 
 type AppRole = 'client' | 'walker' | 'admin'
@@ -182,6 +183,26 @@ function getDisplayServiceNote(serviceType: string | null | undefined, notes: st
 function formatMoney(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   return `₪${Math.round(value).toLocaleString()}`
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${Math.round(value)}%`
+}
+
+function formatInsightsWeekdayLabel(value: number | null | undefined, isHebrew: boolean): string {
+  if (value == null || !Number.isFinite(value)) return isHebrew ? 'עדיין אוספים נתונים' : 'Still learning'
+  const weekdayLabels = isHebrew
+    ? ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
+    : ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  return weekdayLabels[value] ?? (isHebrew ? 'עדיין אוספים נתונים' : 'Still learning')
+}
+
+function formatInsightsHourRange(value: number | null | undefined, isHebrew: boolean): string {
+  if (value == null || !Number.isFinite(value)) return isHebrew ? 'עדיין אוספים נתונים' : 'Still learning'
+  const startHour = Math.max(0, Math.min(23, Math.round(value)))
+  const endHour = Math.min(24, startHour + 2)
+  return `${String(startHour).padStart(2, '0')}:00–${String(endHour).padStart(2, '0')}:00`
 }
 
 function formatCurrencyAmount(
@@ -454,6 +475,25 @@ export default function WalkerDashboard({
 
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
+  const insightsRefreshKey = useMemo(
+    () => (
+      flow.openJobs.length
+      + flow.activeOffers.length
+      + flow.activeJobs.length
+      + flow.completedJobs.length
+      + flow.futureJobs.length
+      + flow.ratingsReceived.length
+    ),
+    [
+      flow.activeJobs.length,
+      flow.activeOffers.length,
+      flow.completedJobs.length,
+      flow.futureJobs.length,
+      flow.openJobs.length,
+      flow.ratingsReceived.length,
+    ],
+  )
+  const insights = useProviderInsights(profile.id, insightsRefreshKey)
   const photo = useProfilePhoto(profile.id)
   const isRtl = i18n.resolvedLanguage === 'he'
   const isHebrew = i18n.resolvedLanguage === 'he'
@@ -504,8 +544,14 @@ export default function WalkerDashboard({
   const todayAvailabilityPricingLabel = t('providerPricing.title')
   const unavailableTodayLabel = isHebrew ? 'לא זמין היום' : 'Unavailable today'
   const headerRatingValue = flow.avgRating != null ? flow.avgRating.toFixed(1) : null
+  const insightsTitle = isHebrew ? '📈 תובנות לספק' : '📈 Provider Insights'
+  const insightsPeriodLabel = isHebrew ? 'החודש' : 'This month'
+  const insightsViewCtaLabel = isHebrew ? 'צפה בתובנות' : 'View insights'
+  const insightsHeaderCtaLabel = isHebrew ? 'צפה בתובנות →' : 'View insights →'
+  const insightsSubtitle = isHebrew
+    ? 'מבט מהיר על ביצועים, ביקוש והזדמנויות שפספסת.'
+    : 'A quick view of performance, demand, and missed opportunities.'
   const walletTitle = isHebrew ? 'ארנק' : 'Wallet'
-  const reviewsLabel = isHebrew ? 'ביקורות' : 'Reviews'
   const onlineLabel = isHebrew ? 'מחובר' : 'Online'
   const readyForOrdersTitle = isHebrew ? 'מוכן להזמנות' : 'Ready for orders'
   const nearbyRequestsBody = isHebrew ? 'בקשות קרובות יופיעו כאן.' : 'Nearby requests will appear here.'
@@ -2030,6 +2076,11 @@ export default function WalkerDashboard({
     setSettingsSectionsOpen((current) => ({ ...current, [section]: true }))
   }, [])
 
+  const openInsightsScreen = useCallback(() => {
+    setBurgerOpen(true)
+    setMenuPage('insights')
+  }, [])
+
   const toggleSettingsSection = useCallback((section: SettingsSectionKey) => {
     setSettingsSectionsOpen((current) => ({ ...current, [section]: !current[section] }))
   }, [])
@@ -2292,6 +2343,112 @@ export default function WalkerDashboard({
       .filter((row): row is NonNullable<typeof row> => row != null)
   }, [isHebrew, pricingSummaryRows, profileServiceTypes])
 
+  const insightsSnapshot = insights.snapshot
+  const insightsSummaryItems = useMemo(
+    () => [
+      {
+        label: isHebrew ? 'שיעור קבלה' : 'Acceptance rate',
+        value: formatPercent(insightsSnapshot.acceptanceRate),
+      },
+      {
+        label: isHebrew ? 'בקשות שהתקבלו' : 'Requests received',
+        value: String(insightsSnapshot.requestsReceived),
+      },
+      {
+        label: isHebrew ? 'הוחמצו באופליין' : 'Missed while offline',
+        value: String(insightsSnapshot.requestsReceivedWhileOffline),
+      },
+      {
+        label: isHebrew ? 'רווח שהוחמץ' : 'Missed earnings',
+        value: formatMoney(insightsSnapshot.estimatedMissedEarnings),
+      },
+    ],
+    [
+      insightsSnapshot.acceptanceRate,
+      insightsSnapshot.estimatedMissedEarnings,
+      insightsSnapshot.requestsReceived,
+      insightsSnapshot.requestsReceivedWhileOffline,
+      isHebrew,
+    ],
+  )
+  const insightsPerformanceItems = useMemo(
+    () => [
+      {
+        label: isHebrew ? 'שיעור קבלה' : 'Acceptance rate',
+        value: formatPercent(insightsSnapshot.acceptanceRate),
+        helper: isHebrew ? 'בקשות שאושרו מתוך בקשות שהתקבלו' : 'Accepted requests / received requests',
+      },
+      {
+        label: isHebrew ? 'שיעור השלמה' : 'Completion rate',
+        value: formatPercent(insightsSnapshot.completionRate),
+        helper: isHebrew ? 'עבודות שהושלמו מתוך בקשות שאושרו' : 'Completed jobs / accepted requests',
+      },
+    ],
+    [insightsSnapshot.acceptanceRate, insightsSnapshot.completionRate, isHebrew],
+  )
+  const insightsDemandItems = useMemo(
+    () => [
+      {
+        label: isHebrew ? 'בקשות שהתקבלו' : 'Requests received',
+        value: String(insightsSnapshot.requestsReceived),
+      },
+      {
+        label: isHebrew ? 'בקשות שאושרו' : 'Requests accepted',
+        value: String(insightsSnapshot.requestsAccepted),
+      },
+      {
+        label: isHebrew ? 'בקשות שנדחו' : 'Requests declined',
+        value: String(insightsSnapshot.requestsDeclined),
+      },
+      {
+        label: isHebrew ? 'בקשות שפגו' : 'Requests expired',
+        value: String(insightsSnapshot.requestsExpired),
+      },
+    ],
+    [
+      insightsSnapshot.requestsAccepted,
+      insightsSnapshot.requestsDeclined,
+      insightsSnapshot.requestsExpired,
+      insightsSnapshot.requestsReceived,
+      isHebrew,
+    ],
+  )
+  const insightsAvailabilityItems = useMemo(
+    () => [
+      {
+        label: isHebrew ? 'הזדמנויות באופליין' : 'Offline opportunities',
+        value: String(insightsSnapshot.requestsReceivedWhileOffline),
+      },
+      {
+        label: isHebrew ? 'מחוץ לשעות הזמינות' : 'Outside availability',
+        value: String(insightsSnapshot.requestsOutsideAvailability),
+      },
+      {
+        label: isHebrew ? 'רווח משוער שהוחמץ' : 'Estimated missed earnings',
+        value: formatMoney(insightsSnapshot.estimatedMissedEarnings),
+      },
+    ],
+    [
+      insightsSnapshot.estimatedMissedEarnings,
+      insightsSnapshot.requestsOutsideAvailability,
+      insightsSnapshot.requestsReceivedWhileOffline,
+      isHebrew,
+    ],
+  )
+  const insightsBestTimeItems = useMemo(
+    () => [
+      {
+        label: isHebrew ? 'היום הפעיל ביותר' : 'Most active weekday',
+        value: formatInsightsWeekdayLabel(insightsSnapshot.mostActiveWeekday, isHebrew),
+      },
+      {
+        label: isHebrew ? 'טווח השעות הפעיל ביותר' : 'Most active hour range',
+        value: formatInsightsHourRange(insightsSnapshot.mostActiveHour, isHebrew),
+      },
+    ],
+    [insightsSnapshot.mostActiveHour, insightsSnapshot.mostActiveWeekday, isHebrew],
+  )
+
   const isHomeDashboard = flow.screenState === 'offline' || flow.screenState === 'waiting'
   const preferredCustomerItems = useMemo(
     () => Array.from(preferredCustomerIds).map((clientId) => ({
@@ -2395,10 +2552,47 @@ export default function WalkerDashboard({
               )}
             </div>
           </div>
+
+          <button
+            type="button"
+            onClick={openInsightsScreen}
+            style={providerInsightsCardButtonStyle}
+          >
+            <div style={providerInsightsCardHeaderStyle}>
+              <span style={providerInsightsHeaderCtaStyle}>{insightsHeaderCtaLabel}</span>
+              <div style={providerInsightsCardTitleStyle}>{insightsTitle}</div>
+            </div>
+            <div style={providerInsightsSummaryGridStyle}>
+              {insightsSummaryItems.map((item) => (
+                <div key={item.label} style={providerInsightsSummaryItemStyle}>
+                  <span style={providerInsightsSummaryLabelStyle}>{item.label}</span>
+                  <strong style={providerInsightsSummaryValueStyle}>
+                    {insights.loading ? '—' : item.value}
+                  </strong>
+                </div>
+              ))}
+            </div>
+            {insights.error ? (
+              <div style={providerInsightsCardFooterStyle}>
+                <span style={providerInsightsErrorStyle}>
+                  {isHebrew ? 'חלק מהנתונים יתעדכנו בקרוב.' : 'Some insights will refresh shortly.'}
+                </span>
+              </div>
+            ) : null}
+          </button>
         </div>
 
         <div style={{ ...dashboardSectionStyle, ...walletSectionStyle, ...homeDashboardWalletSectionStyle }}>
-          <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
+          <div style={dashboardSectionHeaderRowStyle}>
+            {(flow.connectLoading || walletPayoutReady) ? (
+              flow.connectLoading ? (
+                <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
+              ) : (
+                <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
+              )
+            ) : null}
+            <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
+          </div>
           <div style={walletDashboardGridStyle}>
             <div style={walletDashboardMetricCardStyle}>
               <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
@@ -2410,11 +2604,7 @@ export default function WalkerDashboard({
             </div>
           </div>
           <div style={walletDashboardStatusRowStyle}>
-            {flow.connectLoading ? (
-              <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
-            ) : walletPayoutReady ? (
-              <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
-            ) : (
+            {!flow.connectLoading && !walletPayoutReady ? (
               <>
                 <span style={walletStatusWarningStyle}>
                   {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
@@ -2442,33 +2632,40 @@ export default function WalkerDashboard({
                       : 'Set up payouts'}
                 </button>
               </>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
     </div>
   ), [
-    flow.avgRating,
     flow.connectLoading,
     flow.wallet.availableBalance,
     flow.wallet.pendingEarnings,
     handleOnlineToggle,
     handleStripeSetup,
     idleHeroTitle,
+    insights.error,
+    insights.loading,
+    insightsHeaderCtaLabel,
+    insightsPeriodLabel,
+    insightsSubtitle,
+    insightsSummaryItems,
+    insightsTitle,
+    insightsViewCtaLabel,
     isCheckingPayout,
     isHebrew,
     nearbyRequestsBody,
     onlineLabel,
+    openInsightsScreen,
+    openSettingsSection,
     payoutCtaAnimationStopped,
     payoutCtaNudgeActive,
+    pricingSummaryCardRows,
     readyForOrdersTitle,
     renderTodayAvailabilityCard,
-    reviewsLabel,
-    openSettingsSection,
+    todayAvailabilityPricingLabel,
     walletPayoutReady,
     walletTitle,
-    todayAvailabilityPricingLabel,
-    pricingSummaryCardRows,
   ])
 
   return (
@@ -2721,6 +2918,8 @@ export default function WalkerDashboard({
                             ? t('menu.futureOrders')
                             : menuPage === 'earnings'
                               ? (isHebrew ? 'רווחים' : 'Earnings')
+                              : menuPage === 'insights'
+                                ? insightsTitle
                               : menuPage === 'preferredCustomers'
                                 ? preferredCustomersLabel
                               : t('menu.menu')}
@@ -2952,6 +3151,79 @@ export default function WalkerDashboard({
                         ))}
                       </div>
                     )}
+                  </BurgerSection>
+                ) : menuPage === 'insights' ? (
+                  <BurgerSection
+                    title={insightsTitle}
+                    subtitle={isHebrew ? 'מבוסס על ביקוש תואם והצעות שקיבלת החודש.' : 'Based on matching demand and offers you received this month.'}
+                  >
+                    <div style={providerInsightsScreenIntroStyle}>
+                      <div style={providerInsightsScreenIntroTitleStyle}>{insightsPeriodLabel}</div>
+                      <div style={providerInsightsScreenIntroBodyStyle}>
+                        {insights.error
+                          ? (isHebrew
+                            ? 'לא הצלחנו לרענן את כל הנתונים כרגע. נציג את המידע האחרון הזמין.'
+                            : 'We could not refresh every metric right now, so we are showing the latest available snapshot.')
+                          : insightsSubtitle}
+                      </div>
+                    </div>
+
+                    <div style={providerInsightsScreenStackStyle}>
+                      <section style={providerInsightsSectionStyle}>
+                        <div style={providerInsightsSectionTitleStyle}>{isHebrew ? 'ביצועים' : 'Performance'}</div>
+                        <div style={providerInsightsCompactGridStyle}>
+                          {insightsPerformanceItems.map((item) => (
+                            <div key={item.label} style={providerInsightsCompactCardStyle}>
+                              <span style={providerInsightsDetailLabelStyle}>{item.label}</span>
+                              <strong style={providerInsightsDetailValueStyle}>{insights.loading ? '—' : item.value}</strong>
+                              <span style={providerInsightsHelperTextStyle}>{item.helper}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section style={providerInsightsSectionStyle}>
+                        <div style={providerInsightsSectionTitleStyle}>{isHebrew ? 'ביקוש' : 'Demand'}</div>
+                        <div style={providerInsightsDetailGridStyle}>
+                          {insightsDemandItems.map((item) => (
+                            <div key={item.label} style={providerInsightsCompactCardStyle}>
+                              <span style={providerInsightsDetailLabelStyle}>{item.label}</span>
+                              <strong style={providerInsightsDetailValueStyle}>{insights.loading ? '—' : item.value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section style={providerInsightsSectionStyle}>
+                        <div style={providerInsightsSectionTitleStyle}>{isHebrew ? 'השפעת זמינות' : 'Availability impact'}</div>
+                        <div style={providerInsightsRowsWrapStyle}>
+                          {insightsAvailabilityItems.map((item, index) => (
+                            <div
+                              key={item.label}
+                              style={index === 0 ? providerInsightsFirstRowStyle : providerInsightsRowStyle}
+                            >
+                              <span style={providerInsightsDetailLabelStyle}>{item.label}</span>
+                              <strong style={providerInsightsRowValueStyle}>{insights.loading ? '—' : item.value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section style={providerInsightsSectionStyle}>
+                        <div style={providerInsightsSectionTitleStyle}>{isHebrew ? 'הזמנים הטובים ביותר' : 'Best times'}</div>
+                        <div style={providerInsightsRowsWrapStyle}>
+                          {insightsBestTimeItems.map((item, index) => (
+                            <div
+                              key={item.label}
+                              style={index === 0 ? providerInsightsFirstRowStyle : providerInsightsRowStyle}
+                            >
+                              <span style={providerInsightsDetailLabelStyle}>{item.label}</span>
+                              <strong style={providerInsightsRowValueStyle}>{insights.loading ? '—' : item.value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
                   </BurgerSection>
                 ) : menuPage === 'preferredCustomers' ? (
                   <BurgerSection
@@ -5705,13 +5977,13 @@ const homeDashboardSummaryStackStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'space-between',
-  gap: 10,
-  paddingTop: 18,
+  gap: 8,
+  paddingTop: 14,
 }
 
 const homeDashboardMiddleGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 7,
   marginTop: 'auto',
   marginBottom: 'auto',
 }
@@ -6073,8 +6345,15 @@ const dashboardSectionTitleStyle: React.CSSProperties = {
   color: '#0F172A',
 }
 
+const dashboardSectionHeaderRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
 const walletSectionStyle: React.CSSProperties = {
-  marginTop: 6,
+  marginTop: 2,
 }
 
 const walletDashboardGridStyle: React.CSSProperties = {
@@ -6167,6 +6446,207 @@ const walletSetupButtonPulseStyle: React.CSSProperties = {
 
 const walletSetupButtonPulseAndNudgeStyle: React.CSSProperties = {
   animation: 'walkerPayoutPulse 2.5s ease-in-out infinite, walkerPayoutNudge 0.85s ease-in-out 1',
+}
+
+const providerInsightsCardButtonStyle: React.CSSProperties = {
+  width: '100%',
+  border: '1px solid #DBE7F4',
+  background: 'linear-gradient(180deg, #F8FBFF 0%, #F2F7FD 100%)',
+  borderRadius: 24,
+  padding: '11px 12px 10px',
+  boxShadow: '0 12px 24px rgba(15,23,42,0.045)',
+  display: 'grid',
+  gap: 8,
+  textAlign: 'start',
+  cursor: 'pointer',
+  appearance: 'none',
+}
+
+const providerInsightsCardHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const providerInsightsCardTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.2,
+  fontWeight: 900,
+  color: '#0F172A',
+  textAlign: 'end',
+}
+
+const providerInsightsHeaderCtaStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.35,
+  color: '#2563EB',
+  fontWeight: 800,
+}
+
+const providerInsightsSummaryGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 6,
+}
+
+const providerInsightsSummaryItemStyle: React.CSSProperties = {
+  minHeight: 52,
+  borderRadius: 16,
+  padding: '8px 9px',
+  background: 'rgba(255,255,255,0.82)',
+  border: '1px solid rgba(219, 231, 244, 0.88)',
+  display: 'grid',
+  gap: 2,
+}
+
+const providerInsightsSummaryLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1.35,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const providerInsightsSummaryValueStyle: React.CSSProperties = {
+  fontSize: 16,
+  lineHeight: 1.2,
+  color: '#0F172A',
+  fontWeight: 900,
+}
+
+const providerInsightsCardFooterStyle: React.CSSProperties = {
+  minHeight: 18,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+  gap: 6,
+  flexWrap: 'wrap',
+}
+
+const providerInsightsErrorStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#8A6A12',
+  fontWeight: 700,
+}
+
+const providerInsightsScreenIntroStyle: React.CSSProperties = {
+  borderRadius: 18,
+  padding: '12px 13px 11px',
+  background: 'linear-gradient(180deg, #F8FBFF 0%, #F4F8FE 100%)',
+  border: '1px solid #DBE7F4',
+  display: 'grid',
+  gap: 4,
+}
+
+const providerInsightsScreenIntroTitleStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#1D4ED8',
+  fontWeight: 900,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+}
+
+const providerInsightsScreenIntroBodyStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#475569',
+  fontWeight: 600,
+}
+
+const providerInsightsScreenStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const providerInsightsSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const providerInsightsSectionTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.3,
+  color: '#0F172A',
+  fontWeight: 800,
+}
+
+const providerInsightsDetailGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 6,
+}
+
+const providerInsightsCompactGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 6,
+}
+
+const providerInsightsRowsWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 0,
+  borderRadius: 18,
+  overflow: 'hidden',
+  border: '1px solid #E5EDF7',
+  background: '#FFFFFF',
+  boxShadow: '0 8px 18px rgba(15,23,42,0.035)',
+}
+
+const providerInsightsCompactCardStyle: React.CSSProperties = {
+  minHeight: 74,
+  borderRadius: 18,
+  border: '1px solid #E5EDF7',
+  background: '#FFFFFF',
+  boxShadow: '0 8px 18px rgba(15,23,42,0.035)',
+  padding: '10px 11px',
+  display: 'grid',
+  gap: 4,
+}
+
+const providerInsightsRowStyle: React.CSSProperties = {
+  minHeight: 42,
+  padding: '0 12px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  borderTop: '1px solid #EEF2F7',
+}
+
+const providerInsightsFirstRowStyle: React.CSSProperties = {
+  ...providerInsightsRowStyle,
+  borderTop: 'none',
+}
+
+const providerInsightsRowValueStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.2,
+  color: '#0F172A',
+  fontWeight: 900,
+  flexShrink: 0,
+}
+
+const providerInsightsDetailLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.35,
+  color: '#64748B',
+  fontWeight: 700,
+}
+
+const providerInsightsDetailValueStyle: React.CSSProperties = {
+  fontSize: 17,
+  lineHeight: 1.2,
+  color: '#0F172A',
+  fontWeight: 900,
+}
+
+const providerInsightsHelperTextStyle: React.CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1.35,
+  color: '#94A3B8',
+  fontWeight: 700,
 }
 
 const activeCardStyle: React.CSSProperties = {
