@@ -23,6 +23,14 @@ const SAFE_PUSH_COPY_FALLBACKS: Record<string, { title: string; body: string }> 
     title: 'Dispute update',
     body: 'A booking issue needs review.',
   },
+  payout_update: {
+    title: 'Payment received',
+    body: 'Your earnings were sent to your payout account.',
+  },
+  payment_received: {
+    title: 'Payment received',
+    body: 'Your earnings were sent to your payout account.',
+  },
 }
 
 type ApnsEnvironment = keyof typeof APNS_HOSTS

@@ -159,6 +159,21 @@ serve(async (req: Request) => {
       )
     }
 
+    let transferAttempted = false
+    let captureResultStatus: string | null = null
+    const providerId = job.walker_id ?? job.selected_walker_id ?? null
+    const logCaptureInvocation = (stage: string) => {
+      console.log('[capture-payment] invoked', {
+        requestId: job.id,
+        providerId,
+        paymentIntentId: job.stripe_payment_intent_id ?? null,
+        paymentStatusBeforeCapture: job.payment_status ?? null,
+        captureResultStatus,
+        transferAttempted,
+        stage,
+      })
+    }
+
     console.log(`[capture-payment][${FUNCTION_VERSION}] Job loaded:`, {
       request_id: job.id,
       action: 'capture_payment',
@@ -171,6 +186,7 @@ serve(async (req: Request) => {
       payment_status: job.payment_status,
       stripe_payment_intent_id: job.stripe_payment_intent_id,
     })
+    logCaptureInvocation('job_loaded')
 
     const callerOwnsJob = callerIsClient && job.client_id === user.id
     const jobIsDisputed = isCompletionReviewRequired(job.notes)
@@ -201,6 +217,7 @@ serve(async (req: Request) => {
 
     // ── Idempotent: already completed + paid ────────────────────
     if (job.status === 'completed' && job.payment_status === 'paid') {
+      captureResultStatus = 'already_paid'
       console.log(`[capture-payment][${FUNCTION_VERSION}] Job already completed and paid, ensuring wallet credit`)
       if (jobIsDisputed) {
         await supabaseAdmin
@@ -226,9 +243,21 @@ serve(async (req: Request) => {
           console.error('[capture-payment] Payment notification on idempotent path failed:', err)
         )
       }
-      await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
+      transferAttempted = true
+      const transferResult = await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) => {
         console.error('[capture-payment] Transfer on idempotent path failed:', err)
-      )
+        return 'failed' as const
+      })
+      if (transferResult === 'created') {
+        console.log('[payout-push] transfer success reached', {
+          jobId: job.id,
+          providerId: job.walker_id,
+          source: 'capture-payment',
+          path: 'idempotent_paid',
+        })
+        await sendWalkerPayoutPush({ supabaseUrl, serviceRoleKey, job })
+      }
+      logCaptureInvocation('idempotent_paid_return')
       return new Response(
         JSON.stringify({
           success: true,
@@ -279,6 +308,8 @@ serve(async (req: Request) => {
 
     // If there's no PaymentIntent, just mark as completed (free walk / test)
     if (!job.stripe_payment_intent_id) {
+      captureResultStatus = 'no_payment_intent'
+      logCaptureInvocation('no_payment_intent')
       console.log(`[capture-payment][${FUNCTION_VERSION}] No PaymentIntent — marking completed without capture`)
       const now = new Date().toISOString()
       await supabaseAdmin
@@ -330,6 +361,7 @@ serve(async (req: Request) => {
     // ── Handle PI based on its actual Stripe status ─────────────
 
     if (pi.status === 'succeeded') {
+      captureResultStatus = pi.status
       // Payment already captured (by a previous attempt or webhook) — reconcile DB
       console.log(`[capture-payment][${FUNCTION_VERSION}] PI already succeeded — reconciling DB`)
       const now = new Date().toISOString()
@@ -358,9 +390,21 @@ serve(async (req: Request) => {
         )
       }
 
-      await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
+      transferAttempted = true
+      const transferResult = await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) => {
         console.error('[capture-payment] Transfer failed:', err)
-      )
+        return 'failed' as const
+      })
+      if (transferResult === 'created') {
+        console.log('[payout-push] transfer success reached', {
+          jobId: job.id,
+          providerId: job.walker_id,
+          source: 'capture-payment',
+          path: 'pi_already_succeeded',
+        })
+        await sendWalkerPayoutPush({ supabaseUrl, serviceRoleKey, job })
+      }
+      logCaptureInvocation('pi_already_succeeded_return')
 
       return new Response(
         JSON.stringify({
@@ -377,6 +421,8 @@ serve(async (req: Request) => {
     }
 
     if (pi.status === 'canceled') {
+      captureResultStatus = pi.status
+      logCaptureInvocation('pi_canceled')
       console.warn(`[capture-payment][${FUNCTION_VERSION}] PI is canceled — cannot capture`)
       const now = new Date().toISOString()
       await supabaseAdmin
@@ -398,6 +444,8 @@ serve(async (req: Request) => {
     }
 
     if (pi.status === 'requires_payment_method' || pi.status === 'requires_confirmation') {
+      captureResultStatus = pi.status
+      logCaptureInvocation('pi_not_authorized')
       // Payment was never authorized. Do not mark the walk completed, and do not
       // auto-cancel here; the app keeps the active job visible with a clear error.
       console.error(`[capture-payment][${FUNCTION_VERSION}] PI in '${pi.status}' — payment was never authorized. Leaving job ${jobId} active`)
@@ -418,6 +466,8 @@ serve(async (req: Request) => {
     }
 
     if (pi.status !== 'requires_capture') {
+      captureResultStatus = pi.status
+      logCaptureInvocation('pi_unexpected_state')
       // PI is in another non-capturable state (processing, etc.)
       console.error(`[capture-payment][${FUNCTION_VERSION}] PI in unexpected state:`, pi.status)
       return new Response(
@@ -456,6 +506,7 @@ serve(async (req: Request) => {
         try {
           const freshPi = await stripe.paymentIntents.retrieve(job.stripe_payment_intent_id)
           if (freshPi.status === 'succeeded') {
+            captureResultStatus = freshPi.status
             console.log(`[capture-payment][${FUNCTION_VERSION}] PI succeeded between retrieve and capture — reconciling`)
             const now = new Date().toISOString()
             await supabaseAdmin
@@ -484,9 +535,21 @@ serve(async (req: Request) => {
               )
             }
 
-            await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
+            transferAttempted = true
+            const transferResult = await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) => {
               console.error('[capture-payment] Transfer failed:', err)
-            )
+              return 'failed' as const
+            })
+            if (transferResult === 'created') {
+              console.log('[payout-push] transfer success reached', {
+                jobId: job.id,
+                providerId: job.walker_id,
+                source: 'capture-payment',
+                path: 'capture_race_reconcile',
+              })
+              await sendWalkerPayoutPush({ supabaseUrl, serviceRoleKey, job })
+            }
+            logCaptureInvocation('capture_race_reconcile_return')
 
             return new Response(
               JSON.stringify({
@@ -521,6 +584,7 @@ serve(async (req: Request) => {
     }
 
     console.log(`[capture-payment][${FUNCTION_VERSION}] Capture result:`, { status: capturedIntent.status, id: capturedIntent.id })
+    captureResultStatus = capturedIntent.status
     console.log(`[payment-auth] capture_succeeded`, {
       jobId,
       paymentIntentId: capturedIntent.id,
@@ -528,6 +592,7 @@ serve(async (req: Request) => {
     })
 
     if (capturedIntent.status !== 'succeeded') {
+      logCaptureInvocation('capture_unexpected_result')
       return new Response(
         JSON.stringify({
           error: `Unexpected capture result`,
@@ -593,9 +658,21 @@ serve(async (req: Request) => {
     }
 
     // Create Stripe Transfer to walker (non-blocking — payment is already captured)
-    await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) =>
+    transferAttempted = true
+    const transferResult = await tryCreateTransfer(supabaseAdmin, stripeKey, job).catch((err: unknown) => {
       console.error('[capture-payment] Transfer creation failed (non-blocking):', err)
-    )
+      return 'failed' as const
+    })
+    if (transferResult === 'created') {
+      console.log('[payout-push] transfer success reached', {
+        jobId: job.id,
+        providerId: job.walker_id,
+        source: 'capture-payment',
+        path: 'capture_success',
+      })
+      await sendWalkerPayoutPush({ supabaseUrl, serviceRoleKey, job })
+    }
+    logCaptureInvocation('capture_success_return')
 
     console.log(`[capture-payment][${FUNCTION_VERSION}] Success: job`, jobId, 'completed and paid')
 
@@ -717,6 +794,96 @@ async function notifyWalkerPaymentReceived(
   if (insertError) throw insertError
 }
 
+async function sendWalkerPayoutPush(params: {
+  supabaseUrl: string
+  serviceRoleKey: string
+  job: JobRow
+}) {
+  if (!params.job.walker_id) return
+  const title = 'Payment received'
+  const body = 'Your earnings were sent to your payout account.'
+
+  try {
+    console.log('[payout-push] sending provider push', {
+      providerId: params.job.walker_id,
+      notificationType: 'payment_received',
+      title,
+      body,
+      source: 'capture-payment',
+    })
+
+    const response = await fetch(`${params.supabaseUrl}/functions/v1/send-push-notification`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${params.serviceRoleKey}`,
+        apikey: params.serviceRoleKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        targetUserId: params.job.walker_id,
+        title,
+        body,
+        notificationType: 'payment_received',
+        relatedJobId: params.job.id,
+        deepLink: 'regli://wallet',
+        source: 'capture_payment_transfer',
+        data: {
+          dedupId: `payout-transfer:${params.job.id}`,
+          type: 'payment_received',
+          source: 'capture_payment_transfer',
+        },
+      }),
+    })
+
+    let responseBody: Record<string, unknown> | null = null
+    try {
+      responseBody = await response.json() as Record<string, unknown>
+    } catch {
+      responseBody = null
+    }
+
+    if (!response.ok) {
+      console.warn('[payout-push] provider push failed', {
+        jobId: params.job.id,
+        providerId: params.job.walker_id,
+        status: response.status,
+        responseBody,
+      })
+      return
+    }
+
+    const sent = typeof responseBody?.sent === 'number' ? responseBody.sent : null
+    const skipped = typeof responseBody?.skipped === 'string' ? responseBody.skipped : null
+    const iosTotal = typeof responseBody?.iosTotal === 'number' ? responseBody.iosTotal : null
+
+    if (!sent || sent < 1) {
+      console.warn('[payout-push] provider push failed', {
+        jobId: params.job.id,
+        providerId: params.job.walker_id,
+        sent,
+        skipped,
+        iosTotal,
+        responseBody,
+      })
+      return
+    }
+
+    console.log('[payout-push] provider push sent', {
+      jobId: params.job.id,
+      providerId: params.job.walker_id,
+      sent,
+      iosTotal,
+      responseBody,
+    })
+  } catch (error) {
+    console.warn('[payout-push] provider push failed', {
+      jobId: params.job.id,
+      providerId: params.job.walker_id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 async function tryCreateTransfer(
   supabaseAdmin: ReturnType<typeof createClient>,
   stripeKey: string,
@@ -725,7 +892,12 @@ async function tryCreateTransfer(
   const walkerId = job.walker_id || job.selected_walker_id
   if (!walkerId) {
     console.warn('[transfer] No walker_id for job', job.id)
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: null,
+      reason: 'missing_walker_id',
+    })
+    return 'skipped' as const
   }
 
   // Check if transfer already exists (idempotent)
@@ -737,13 +909,24 @@ async function tryCreateTransfer(
 
   if (existing?.stripe_transfer_id) {
     console.log('[transfer] Transfer already exists for job', job.id, ':', existing.stripe_transfer_id)
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'existing_transfer',
+      stripeTransferId: existing.stripe_transfer_id,
+    })
+    return 'existing' as const
   }
 
   // Skip if already processing (race condition guard)
   if (existing?.status === 'processing') {
     console.log('[transfer] Transfer already processing for job', job.id)
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'already_processing',
+    })
+    return 'processing' as const
   }
 
   // Get walker's connected account and rollout flag
@@ -755,13 +938,38 @@ async function tryCreateTransfer(
 
   if (!walkerProfile?.stripe_connect_account_id) {
     console.warn('[transfer] Walker has no connected account, skipping transfer for job', job.id)
-    return
+    console.log('[payout-transfer] provider stripe account missing', {
+      jobId: job.id,
+      providerId: walkerId,
+      payoutsEnabled: walkerProfile?.payouts_enabled ?? null,
+      livePayoutsEnabled: walkerProfile?.live_payouts_enabled ?? null,
+    })
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'missing_stripe_connect_account_id',
+    })
+    return 'skipped' as const
   }
+
+  console.log('[payout-transfer] provider stripe account found', {
+    jobId: job.id,
+    providerId: walkerId,
+    stripeConnectAccountId: walkerProfile.stripe_connect_account_id,
+    payoutsEnabled: walkerProfile.payouts_enabled,
+    livePayoutsEnabled: walkerProfile.live_payouts_enabled,
+  })
 
   // Rollout guard: skip transfer if walker is not enabled for live payouts
   if (!walkerProfile.live_payouts_enabled) {
     console.log('[transfer] Walker not enabled for live payouts, skipping transfer for job', job.id, 'walker', walkerId)
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'live_payouts_disabled',
+      stripeConnectAccountId: walkerProfile.stripe_connect_account_id,
+    })
+    return 'skipped' as const
   }
 
   // Calculate amounts
@@ -771,7 +979,13 @@ async function tryCreateTransfer(
 
   if (netAmount <= 0) {
     console.warn('[transfer] Net amount is 0, skipping transfer for job', job.id)
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'net_amount_zero',
+      netAmount,
+    })
+    return 'skipped' as const
   }
 
   // Get charge ID and real currency directly from the PaymentIntent
@@ -835,7 +1049,12 @@ async function tryCreateTransfer(
           transferCurrencyUsed,
           sourceTransactionUsed,
         })
-        return
+        console.log('[payout-transfer] skipped reason', {
+          jobId: job.id,
+          providerId: walkerId,
+          reason: 'missing_charge_or_balance_transaction',
+        })
+        return 'failed' as const
       }
 
       console.log('[transfer] PI retrieved:', {
@@ -853,11 +1072,21 @@ async function tryCreateTransfer(
     } catch (err) {
       console.error('[transfer] Failed to retrieve PI:', err)
       console.error('[transfer] ABORTING transfer — cannot determine currency without PI')
-      return
+      console.log('[payout-transfer] skipped reason', {
+        jobId: job.id,
+        providerId: walkerId,
+        reason: 'payment_intent_retrieve_failed',
+      })
+      return 'failed' as const
     }
   } else {
     console.error('[transfer] No stripe_payment_intent_id on job', job.id, '— cannot determine currency')
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'missing_payment_intent_id',
+    })
+    return 'failed' as const
   }
 
   const netRatio = clampRatio(netAmount / grossAmount)
@@ -879,7 +1108,12 @@ async function tryCreateTransfer(
       stripeTransferAmountUsed,
       sourceTransactionUsed,
     })
-    return
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'derived_transfer_amount_zero',
+    })
+    return 'failed' as const
   }
 
   // Insert pending payout record (or update existing)
@@ -899,8 +1133,21 @@ async function tryCreateTransfer(
     if (insertErr) {
       if (!insertErr.message?.includes('duplicate')) {
         console.error('[transfer] Failed to insert walker_payouts:', insertErr)
-        return
+        console.log('[payout-transfer] skipped reason', {
+          jobId: job.id,
+          providerId: walkerId,
+          reason: 'walker_payout_insert_failed',
+          error: insertErr.message,
+        })
+        return 'failed' as const
       }
+    } else {
+      console.log('[payout-transfer] walker_payouts upserted', {
+        jobId: job.id,
+        providerId: walkerId,
+        mode: 'insert',
+        status: 'processing',
+      })
     }
   } else {
     const { error: lockErr } = await supabaseAdmin
@@ -915,12 +1162,32 @@ async function tryCreateTransfer(
 
     if (lockErr) {
       console.warn('[transfer] Failed to acquire processing lock for job', job.id)
-      return
+      console.log('[payout-transfer] skipped reason', {
+        jobId: job.id,
+        providerId: walkerId,
+        reason: 'processing_lock_failed',
+        error: lockErr.message,
+      })
+      return 'failed' as const
     }
+    console.log('[payout-transfer] walker_payouts upserted', {
+      jobId: job.id,
+      providerId: walkerId,
+      mode: 'update',
+      status: 'processing',
+      payoutId: existing.id,
+    })
   }
 
   // Create the Stripe Transfer
   try {
+    console.log('[payout-transfer] create transfer started', {
+      jobId: job.id,
+      providerId: walkerId,
+      destination: walkerProfile.stripe_connect_account_id,
+      amount: stripeTransferAmountUsed,
+      currency: transferCurrencyUsed,
+    })
     console.log('[FINAL TRANSFER CALL]', {
       paymentIntentId,
       paymentIntentCurrency,
@@ -966,13 +1233,25 @@ async function tryCreateTransfer(
         transferCurrencyUsed,
         sourceTransactionUsed,
       })
-      return
+      console.log('[payout-transfer] skipped reason', {
+        jobId: job.id,
+        providerId: walkerId,
+        reason: 'missing_source_transaction',
+      })
+      return 'failed' as const
     }
     transferParams.source_transaction = sourceTransactionUsed
 
     const transfer = await stripe.transfers.create(transferParams)
 
     console.log('[transfer] Created:', transfer.id, 'for job', job.id, 'amount', stripeTransferAmountUsed, transferCurrencyUsed)
+    console.log('[payout-transfer] create transfer succeeded', {
+      jobId: job.id,
+      providerId: walkerId,
+      stripeTransferId: transfer.id,
+      amount: stripeTransferAmountUsed,
+      currency: transferCurrencyUsed,
+    })
 
     await supabaseAdmin
       .from('walker_payouts')
@@ -984,6 +1263,14 @@ async function tryCreateTransfer(
         updated_at: new Date().toISOString(),
       })
       .eq('job_id', job.id)
+    console.log('[payout-transfer] walker_payouts upserted', {
+      jobId: job.id,
+      providerId: walkerId,
+      mode: 'finalize',
+      status: 'transferred',
+      stripeTransferId: transfer.id,
+    })
+    return 'created' as const
   } catch (stripeErr: unknown) {
     console.error('[transfer] Stripe transfer failed for job', job.id, ':', stripeErr)
 
@@ -999,5 +1286,12 @@ async function tryCreateTransfer(
         updated_at: new Date().toISOString(),
       })
       .eq('job_id', job.id)
+    console.log('[payout-transfer] skipped reason', {
+      jobId: job.id,
+      providerId: walkerId,
+      reason: 'stripe_transfer_failed',
+      error: errMsg,
+    })
+    return 'failed' as const
   }
 }

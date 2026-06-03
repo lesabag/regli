@@ -3144,12 +3144,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
           dogCount: completedJob?.dog_count ?? fallbackJob?.dog_count ?? null,
           serviceType: completedJob?.service_type ?? fallbackJob?.service_type ?? null,
         })
-        void sendPushEvent({
-          type: 'service_completed',
-          targetUserId: pending.walkerId,
-          relatedJobId: pending.jobId,
-          preferServerLocalization: true,
-        })
       }
 
       void fetchCurrentAndLists()

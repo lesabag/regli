@@ -163,11 +163,17 @@ export function getPushCopy(
           body: 'עבודה מצוינת! המשך כך.',
         }
       case 'tip_received':
-      case 'payout_update':
         return {
           language,
           title: '🎁 קיבלת טיפ',
           body: amountText ? `${amountText} נוספו לארנק שלך.` : 'נוסף טיפ לארנק שלך.',
+        }
+      case 'payment_received':
+      case 'payout_update':
+        return {
+          language,
+          title: 'התשלום התקבל',
+          body: 'הרווחים הועברו לחשבון התשלומים שלך.',
         }
       case 'rating_reminder':
         return {
@@ -274,11 +280,17 @@ export function getPushCopy(
         body: 'Excellent work. Keep it up.',
       }
     case 'tip_received':
-    case 'payout_update':
       return {
         language,
         title: '🎁 You received a tip',
         body: amountText ? `${amountText} was added to your wallet.` : 'A tip was added to your wallet.',
+      }
+    case 'payment_received':
+    case 'payout_update':
+      return {
+        language,
+        title: 'Payment received',
+        body: 'Your earnings were sent to your payout account.',
       }
     case 'rating_reminder':
       return {

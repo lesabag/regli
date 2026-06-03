@@ -173,6 +173,18 @@ interface ConnectStatus {
   charges_enabled: boolean
 }
 
+interface WalkerPayoutStatusRow {
+  id: string
+  job_id: string
+  net_amount: number
+  currency: string
+  status: 'pending' | 'processing' | 'transferred' | 'in_transit' | 'paid_out' | 'failed' | 'reversed' | 'refunded'
+  available_at: string | null
+  failure_reason: string | null
+  updated_at: string
+  created_at: string
+}
+
 function isStripeReadyForOnline(status: ConnectStatus | null | undefined): boolean {
   return !!(
     status?.connected &&
@@ -432,6 +444,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const [connectLoading, setConnectLoading] = useState(true)
   const [connectError, setConnectError] = useState<string | null>(null)
   const connectStatusRequestRef = useRef<Promise<ConnectStatus | null> | null>(null)
+  const [latestPayout, setLatestPayout] = useState<WalkerPayoutStatusRow | null>(null)
 
   const [completingJobId, setCompletingJobId] = useState<string | null>(null)
   const [pendingClientConfirmation, setPendingClientConfirmation] = useState<string | null>(null)
@@ -1867,6 +1880,35 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     setBalanceAdjustments(data || [])
   }, [profileId])
 
+  const fetchLatestPayout = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('walker_payouts')
+      .select('id, job_id, net_amount, currency, status, available_at, failure_reason, updated_at, created_at')
+      .eq('walker_id', profileId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.warn('[payout-status] latest_payout_loaded', {
+        walkerId: profileId,
+        ok: false,
+        error: error.message,
+      })
+      return null
+    }
+
+    const nextPayout = (data as WalkerPayoutStatusRow | null) ?? null
+    setLatestPayout(nextPayout)
+    console.log('[payout-status] latest_payout_loaded', {
+      walkerId: profileId,
+      hasPayout: !!nextPayout,
+      status: nextPayout?.status ?? null,
+      payoutId: nextPayout?.id ?? null,
+    })
+    return nextPayout
+  }, [profileId])
+
   const fetchConnectStatus = useCallback(async () => {
     if (connectStatusRequestRef.current) {
       return connectStatusRequestRef.current
@@ -1893,6 +1935,13 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               const nextStatus = data as ConnectStatus
               setConnectStatus(nextStatus)
               setConnectError(null)
+              console.log('[payout-status] connect_status_loaded', {
+                walkerId: profileId,
+                connected: nextStatus.connected,
+                onboardingComplete: nextStatus.stripe_connect_onboarding_complete,
+                payoutsEnabled: nextStatus.payouts_enabled,
+                chargesEnabled: nextStatus.charges_enabled,
+              })
               return nextStatus
             }
           }
@@ -1917,7 +1966,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       connectStatusRequestRef.current = null
       setConnectLoading(false)
     }
-  }, [])
+  }, [profileId])
 
   const fetchOnlineStatus = useCallback(async () => {
     const { data } = await supabase.from('profiles').select('is_online').eq('id', profileId).maybeSingle()
@@ -1959,6 +2008,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     const t2 = setTimeout(() => {
       void fetchBalanceAdjustments()
       void fetchConnectStatus()
+      void fetchLatestPayout()
     }, 1200)
 
     let ch1: ReturnType<typeof supabase.channel> | null = null
@@ -1967,6 +2017,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     let ch4: ReturnType<typeof supabase.channel> | null = null
     let ch5: ReturnType<typeof supabase.channel> | null = null
     let ch6: ReturnType<typeof supabase.channel> | null = null
+    let ch7: ReturnType<typeof supabase.channel> | null = null
+    let ch8: ReturnType<typeof supabase.channel> | null = null
     let isCleaningUp = false
 
     const hydrateOnSubscribed = (reason: string, channelName: string) => {
@@ -2094,6 +2146,38 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           },
         )
         .subscribe()
+
+      ch7 = supabase
+        .channel(`wf-payouts-${profileId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'walker_payouts', filter: `walker_id=eq.${profileId}` },
+          () => {
+            void fetchLatestPayout()
+          },
+        )
+        .subscribe()
+
+      ch8 = supabase
+        .channel(`wf-notifications-${profileId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${profileId}` },
+          (payload) => {
+            const row =
+              typeof payload?.new === 'object' && payload.new
+                ? (payload.new as Record<string, unknown>)
+                : null
+            const type = typeof row?.type === 'string' ? row.type : null
+            if (type !== 'payment_received' && type !== 'payout_update' && type !== 'payout_failed') {
+              return
+            }
+            void fetchWallet()
+            void fetchLatestPayout()
+            void fetchBalanceAdjustments()
+          },
+        )
+        .subscribe()
     }, 800)
 
     return () => {
@@ -2107,6 +2191,8 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       if (ch4) supabase.removeChannel(ch4)
       if (ch5) supabase.removeChannel(ch5)
       if (ch6) supabase.removeChannel(ch6)
+      if (ch7) supabase.removeChannel(ch7)
+      if (ch8) supabase.removeChannel(ch8)
     }
   }, [
     profileId,
@@ -2114,6 +2200,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     fetchWallet,
     fetchBalanceAdjustments,
     fetchConnectStatus,
+    fetchLatestPayout,
     fetchOnlineStatus,
   ])
 
@@ -3187,10 +3274,12 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     connectStatus,
     connectLoading,
     connectError,
+    latestPayout,
     stripeReadyForOnline: isStripeReadyForOnline(connectStatus),
     handleConnectAccount,
     handleContinueOnboarding,
     fetchConnectStatus,
+    fetchLatestPayout,
 
     completingJobId,
     pendingClientConfirmation,

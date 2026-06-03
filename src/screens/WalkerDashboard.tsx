@@ -1475,6 +1475,50 @@ export default function WalkerDashboard({
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
     !!flow.connectStatus?.payouts_enabled
   const walletNeedsSetup = !flow.connectLoading && !walletPayoutReady
+  const latestPayoutCard = useMemo(() => {
+    const setupReady = walletPayoutReady
+    const status = flow.latestPayout?.status ?? null
+
+    let setupLabel = isHebrew ? 'נדרשת פעולה' : 'Action required'
+    let setupExplanation = isHebrew
+      ? 'השלם את Stripe Connect כדי לקבל תשלומים לחשבון שלך.'
+      : 'Complete Stripe Connect to receive payouts to your account.'
+
+    if (setupReady) {
+      setupLabel = isHebrew ? 'מוכן' : 'Ready'
+      setupExplanation = isHebrew
+        ? 'חשבון התשלומים שלך מוכן לקבל כספים.'
+        : 'Your payout account is ready to receive funds.'
+    }
+
+    let payoutExplanation: string | null = null
+    let tone: 'neutral' | 'success' | 'warning' | 'danger' = 'neutral'
+
+    if (status === 'transferred') {
+      payoutExplanation = isHebrew ? 'הכספים הועברו לחשבון התשלומים שלך' : 'Funds transferred to your payout account'
+      tone = 'success'
+    } else if (status === 'in_transit') {
+      payoutExplanation = isHebrew ? 'העברה לבנק ממתינה' : 'Bank payout pending'
+      tone = 'warning'
+    } else if (status === 'paid_out') {
+      payoutExplanation = isHebrew ? 'שולם לחשבון הבנק' : 'Paid out to bank'
+      tone = 'success'
+    } else if (status === 'failed') {
+      payoutExplanation = isHebrew ? 'התשלום נכשל — עדכן פרטי תשלום' : 'Payout failed — update payout details'
+      tone = 'danger'
+    } else if (status === 'processing') {
+      payoutExplanation = isHebrew ? 'ההעברה בהכנה' : 'Transfer is being prepared'
+    }
+
+    return {
+      setupReady,
+      status,
+      setupLabel,
+      setupExplanation,
+      payoutExplanation,
+      tone,
+    }
+  }, [flow.latestPayout?.status, isHebrew, walletPayoutReady])
   const earningsSummary = useMemo(() => {
     const completed = flow.completedJobs
       .filter((job) => job.status === 'completed')
@@ -1987,6 +2031,7 @@ export default function WalkerDashboard({
   useEffect(() => {
     const refreshConnect = () => {
       void flow.fetchConnectStatus()
+      void flow.fetchLatestPayout()
     }
 
     window.addEventListener('focus', refreshConnect)
@@ -1998,14 +2043,15 @@ export default function WalkerDashboard({
       document.removeEventListener('visibilitychange', refreshConnect)
       window.removeEventListener('pageshow', refreshConnect)
     }
-  }, [flow.fetchConnectStatus])
+  }, [flow.fetchConnectStatus, flow.fetchLatestPayout])
 
   useEffect(() => {
     if (!stripeReturnToken) return
     setShowStripeGate(false)
     setShowOnboardingWow(false)
     void flow.fetchConnectStatus()
-  }, [flow.fetchConnectStatus, stripeReturnToken])
+    void flow.fetchLatestPayout()
+  }, [flow.fetchConnectStatus, flow.fetchLatestPayout, stripeReturnToken])
 
   useEffect(() => {
     let pendingAutoOnline = false
@@ -2252,7 +2298,7 @@ export default function WalkerDashboard({
               <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
             </div>
             <div style={walletDashboardMetricCardStyle}>
-              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'ממתין' : 'Pending balance'}</div>
+              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'רווחים בהמתנה' : 'Pending earnings'}</div>
               <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
             </div>
           </div>
@@ -2635,7 +2681,7 @@ export default function WalkerDashboard({
                       </div>
                       <div style={earningsWalletStripStyle}>
                         <div>
-                          <span style={earningsWalletLabelStyle}>{isHebrew ? 'ממתין לתשלום' : 'Pending payout'}</span>
+                          <span style={earningsWalletLabelStyle}>{isHebrew ? 'רווחים בהמתנה' : 'Pending earnings'}</span>
                           <strong style={earningsWalletValueStyle}>{formatMoney(flow.wallet.pendingEarnings)}</strong>
                         </div>
                         <div>
@@ -2649,6 +2695,63 @@ export default function WalkerDashboard({
                             ? 'חלק מהרווחים הם הערכה לפי 80% ממחיר ההזמנה.'
                             : 'Some earnings are estimated at 80% of request price.'}
                         </div>
+                      )}
+                    </div>
+
+                    <div style={payoutStatusCardStyle}>
+                      <div style={payoutStatusHeaderStyle}>
+                        <div>
+                          <div style={payoutStatusTitleStyle}>{isHebrew ? 'סטטוס תשלומים' : 'Payout status'}</div>
+                          <div style={payoutStatusSubtitleStyle}>{latestPayoutCard.setupExplanation}</div>
+                        </div>
+                        <span
+                          style={{
+                            ...payoutStatusBadgeStyle,
+                            ...(latestPayoutCard.setupReady ? payoutStatusBadgeReadyStyle : payoutStatusBadgeActionStyle),
+                          }}
+                        >
+                          {latestPayoutCard.setupLabel}
+                        </span>
+                      </div>
+
+                      {latestPayoutCard.status && latestPayoutCard.payoutExplanation && (
+                        <div
+                          style={{
+                            ...payoutStatusRowStyle,
+                            ...(latestPayoutCard.tone === 'success'
+                              ? payoutStatusRowSuccessStyle
+                              : latestPayoutCard.tone === 'warning'
+                                ? payoutStatusRowWarningStyle
+                                : latestPayoutCard.tone === 'danger'
+                                  ? payoutStatusRowDangerStyle
+                                  : null),
+                          }}
+                        >
+                          <strong style={payoutStatusRowCodeStyle}>{latestPayoutCard.status}</strong>
+                          <span style={payoutStatusRowTextStyle}>{latestPayoutCard.payoutExplanation}</span>
+                        </div>
+                      )}
+
+                      {(latestPayoutCard.setupReady || flow.latestPayout?.status === 'failed') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleStripeSetup(false)
+                          }}
+                          disabled={flow.connectLoading || isCheckingPayout}
+                          style={{
+                            ...payoutStatusButtonStyle,
+                            ...((flow.connectLoading || isCheckingPayout) ? walletSetupButtonDisabledStyle : null),
+                          }}
+                        >
+                          {flow.connectLoading || isCheckingPayout
+                            ? (isHebrew ? 'בודק...' : 'Checking...')
+                            : flow.latestPayout?.status === 'failed'
+                              ? (isHebrew ? 'עדכון הגדרת תשלומים' : 'Update payout setup')
+                              : latestPayoutCard.setupReady
+                              ? (isHebrew ? 'ניהול תשלומים' : 'Manage payouts')
+                              : (isHebrew ? 'עדכון הגדרת תשלומים' : 'Update payout setup')}
+                        </button>
                       )}
                     </div>
 
@@ -4593,6 +4696,101 @@ const earningsEstimateNoteStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.45,
   color: 'rgba(255, 255, 255, 0.74)',
+}
+
+const payoutStatusCardStyle: React.CSSProperties = {
+  border: '1px solid rgba(15, 23, 42, 0.08)',
+  background: '#FFFFFF',
+  borderRadius: 20,
+  padding: 16,
+  display: 'grid',
+  gap: 12,
+  boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+}
+
+const payoutStatusHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 12,
+  alignItems: 'flex-start',
+}
+
+const payoutStatusTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const payoutStatusSubtitleStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#64748B',
+}
+
+const payoutStatusBadgeStyle: React.CSSProperties = {
+  borderRadius: 999,
+  padding: '7px 10px',
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: 'nowrap',
+}
+
+const payoutStatusBadgeReadyStyle: React.CSSProperties = {
+  border: '1px solid rgba(34, 197, 94, 0.24)',
+  background: '#ECFDF5',
+  color: '#15803D',
+}
+
+const payoutStatusBadgeActionStyle: React.CSSProperties = {
+  border: '1px solid rgba(245, 158, 11, 0.24)',
+  background: '#FFFBEB',
+  color: '#B45309',
+}
+
+const payoutStatusRowStyle: React.CSSProperties = {
+  borderRadius: 16,
+  padding: '12px 14px',
+  display: 'grid',
+  gap: 4,
+}
+
+const payoutStatusRowSuccessStyle: React.CSSProperties = {
+  background: '#F0FDF4',
+  border: '1px solid rgba(34, 197, 94, 0.18)',
+}
+
+const payoutStatusRowWarningStyle: React.CSSProperties = {
+  background: '#FFFBEB',
+  border: '1px solid rgba(245, 158, 11, 0.18)',
+}
+
+const payoutStatusRowDangerStyle: React.CSSProperties = {
+  background: '#FEF2F2',
+  border: '1px solid rgba(239, 68, 68, 0.18)',
+}
+
+const payoutStatusRowCodeStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 900,
+  color: '#0F172A',
+}
+
+const payoutStatusRowTextStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#334155',
+}
+
+const payoutStatusButtonStyle: React.CSSProperties = {
+  border: 'none',
+  borderRadius: 14,
+  padding: '12px 15px',
+  background: '#111827',
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 900,
+  cursor: 'pointer',
 }
 
 const earningsPayoutCtaStyle: React.CSSProperties = {
