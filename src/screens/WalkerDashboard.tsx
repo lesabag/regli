@@ -184,11 +184,6 @@ function formatMoney(value: number | null | undefined): string {
   return `₪${Math.round(value).toLocaleString()}`
 }
 
-function majorAmountFromSmallest(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null
-  return value / 100
-}
-
 function formatCurrencyAmount(
   value: number | null | undefined,
   currency: string | null | undefined,
@@ -531,6 +526,7 @@ export default function WalkerDashboard({
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
   const [showStripeGate, setShowStripeGate] = useState(false)
   const [showOnboardingWow, setShowOnboardingWow] = useState(false)
+  const [stripeReturnNotice, setStripeReturnNotice] = useState<string | null>(null)
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
   const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
@@ -1502,18 +1498,11 @@ export default function WalkerDashboard({
   const walletNeedsSetup = !flow.connectLoading && !walletPayoutReady
   const latestPayoutCard = useMemo(() => {
     const setupReady = walletPayoutReady
+    const hasLatestPayout = !!flow.latestPayout
     const status = flow.latestPayout?.status ?? null
-    const locale = isHebrew ? 'he-IL' : 'en-US'
     const providerEarningsCurrency = flow.latestPayout?.provider_earnings_currency ?? flow.latestPayout?.job_currency ?? null
-    const transferCurrency = flow.latestPayout?.stripe_transfer_currency ?? flow.latestPayout?.currency ?? null
-    const transferAmount = majorAmountFromSmallest(flow.latestPayout?.stripe_transfer_amount ?? null)
-    const transferAmountLabel = formatCurrencyAmount(transferAmount, transferCurrency, locale)
+    const locale = isHebrew ? 'he-IL' : 'en-US'
     const earningsAmountLabel = formatCurrencyAmount(flow.latestPayout?.net_amount ?? null, providerEarningsCurrency, locale)
-    const transferDiffersFromEarnings =
-      !!transferAmountLabel &&
-      !!transferCurrency &&
-      !!providerEarningsCurrency &&
-      transferCurrency.toLowerCase() !== providerEarningsCurrency.toLowerCase()
 
     let setupLabel = isHebrew ? 'נדרשת פעולה' : 'Action required'
     let setupExplanation = isHebrew
@@ -1532,59 +1521,52 @@ export default function WalkerDashboard({
     let tone: 'neutral' | 'success' | 'warning' | 'danger' = 'neutral'
 
     if (status === 'transferred') {
-      payoutExplanation = isHebrew ? 'הכספים הועברו לחשבון התשלומים שלך' : 'Funds transferred to your payout account'
-      payoutDetail = transferAmountLabel
-        ? isHebrew
-          ? `הועבר לחשבון התשלומים: ${transferAmountLabel}`
-          : `Transferred to payout account: ${transferAmountLabel}`
-        : null
+      payoutExplanation = isHebrew ? '✅ הכספים הועברו לחשבון התשלומים שלך' : '✅ Funds were transferred to your payout account'
       tone = 'success'
     } else if (status === 'in_transit') {
       payoutExplanation = isHebrew ? 'העברה לבנק ממתינה' : 'Bank payout pending'
-      payoutDetail = transferAmountLabel
-        ? isHebrew
-          ? `ממתין לבנק: ${transferAmountLabel}`
-          : `Pending bank payout: ${transferAmountLabel}`
-        : null
       tone = 'warning'
     } else if (status === 'paid_out') {
       payoutExplanation = isHebrew ? 'שולם לחשבון הבנק' : 'Paid out to bank'
-      payoutDetail = transferAmountLabel
-        ? isHebrew
-          ? `שולם לבנק: ${transferAmountLabel}`
-          : `Paid out to bank: ${transferAmountLabel}`
-        : null
       tone = 'success'
     } else if (status === 'failed') {
       payoutExplanation = isHebrew ? 'התשלום נכשל — עדכן פרטי תשלום' : 'Payout failed — update payout details'
-      payoutDetail = transferAmountLabel
-        ? isHebrew
-          ? `ההעברה שנכשלה: ${transferAmountLabel}`
-          : `Failed payout amount: ${transferAmountLabel}`
-        : null
       tone = 'danger'
     } else if (status === 'processing') {
       payoutExplanation = isHebrew ? 'ההעברה בהכנה' : 'Transfer is being prepared'
-      payoutDetail = transferAmountLabel
-        ? isHebrew
-          ? `בהכנה לחשבון התשלומים: ${transferAmountLabel}`
-          : `Preparing payout transfer: ${transferAmountLabel}`
-        : null
     }
 
-    if (!payoutDetail && earningsAmountLabel) {
+    if (earningsAmountLabel) {
       payoutDetail = isHebrew
         ? `רווחי השירות באפליקציה: ${earningsAmountLabel}`
         : `In-app service earnings: ${earningsAmountLabel}`
-    } else if (payoutDetail && transferDiffersFromEarnings && earningsAmountLabel) {
-      payoutDetail = `${payoutDetail} · ${isHebrew ? `רווחי השירות באפליקציה: ${earningsAmountLabel}` : `In-app earnings: ${earningsAmountLabel}`}`
     }
 
+    const renderMode = hasLatestPayout ? 'latest_payout' : 'connect_status'
+    const headerSubtitle = hasLatestPayout
+      ? payoutDetail ?? payoutExplanation ?? setupExplanation
+      : setupExplanation
+    const badgeLabel = hasLatestPayout
+      ? (isHebrew ? 'סטטוס תשלום' : 'Payout status')
+      : setupLabel
+    const badgeReady = hasLatestPayout ? tone !== 'danger' : setupReady
+
+    console.log('[payout-status-ui] render mode', {
+      renderMode,
+      hasLatestPayout,
+      status,
+      transferAmountHidden: flow.latestPayout?.stripe_transfer_amount ?? null,
+      setupReady,
+    })
+
     return {
+      renderMode,
+      hasLatestPayout,
       setupReady,
       status,
-      setupLabel,
-      setupExplanation,
+      setupLabel: badgeLabel,
+      setupExplanation: headerSubtitle,
+      setupBadgeReady: badgeReady,
       payoutExplanation,
       payoutDetail,
       tone,
@@ -1596,7 +1578,6 @@ export default function WalkerDashboard({
     flow.latestPayout?.provider_earnings_currency,
     flow.latestPayout?.status,
     flow.latestPayout?.stripe_transfer_amount,
-    flow.latestPayout?.stripe_transfer_currency,
     isHebrew,
     walletPayoutReady,
   ])
@@ -2127,12 +2108,57 @@ export default function WalkerDashboard({
   }, [flow.fetchConnectStatus, flow.fetchLatestPayout])
 
   useEffect(() => {
+    console.log('[payout-status-ui] latestPayout state', {
+      payoutId: flow.latestPayout?.id ?? null,
+      status: flow.latestPayout?.status ?? null,
+      stripeTransferCurrencyHidden: flow.latestPayout?.stripe_transfer_currency ?? null,
+      stripeTransferAmountHidden: flow.latestPayout?.stripe_transfer_amount ?? null,
+    })
+  }, [
+    flow.latestPayout?.id,
+    flow.latestPayout?.status,
+    flow.latestPayout?.stripe_transfer_amount,
+  ])
+
+  useEffect(() => {
     if (!stripeReturnToken) return
-    setShowStripeGate(false)
-    setShowOnboardingWow(false)
-    void flow.fetchConnectStatus()
-    void flow.fetchLatestPayout()
-  }, [flow.fetchConnectStatus, flow.fetchLatestPayout, stripeReturnToken])
+    let cancelled = false
+    const run = async () => {
+      setShowStripeGate(false)
+      setShowOnboardingWow(false)
+      setMenuPage('earnings')
+      setStripeReturnNotice(
+        isHebrew
+          ? 'הגדרת התשלומים עודכנה. אנחנו מרעננים את סטטוס התשלומים שלך.'
+          : 'Payout setup updated. Refreshing your payout status.'
+      )
+      const [connectStatusResult, latestPayoutResult] = await Promise.all([
+        flow.fetchConnectStatus(),
+        flow.fetchLatestPayout(),
+      ])
+      if (cancelled) return
+      console.log('[payout-status-ui] stripe return refresh completed', {
+        stripeReturnToken,
+        connectReady: !!(
+          connectStatusResult?.connected &&
+          connectStatusResult?.stripe_connect_onboarding_complete &&
+          connectStatusResult?.payouts_enabled
+        ),
+        latestPayoutId: latestPayoutResult?.id ?? null,
+        latestPayoutStatus: latestPayoutResult?.status ?? null,
+      })
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [flow.fetchConnectStatus, flow.fetchLatestPayout, isHebrew, stripeReturnToken])
+
+  useEffect(() => {
+    if (!stripeReturnNotice) return
+    const id = window.setTimeout(() => setStripeReturnNotice(null), 4000)
+    return () => window.clearTimeout(id)
+  }, [stripeReturnNotice])
 
   useEffect(() => {
     let pendingAutoOnline = false
@@ -2788,7 +2814,7 @@ export default function WalkerDashboard({
                         <span
                           style={{
                             ...payoutStatusBadgeStyle,
-                            ...(latestPayoutCard.setupReady ? payoutStatusBadgeReadyStyle : payoutStatusBadgeActionStyle),
+                            ...(latestPayoutCard.setupBadgeReady ? payoutStatusBadgeReadyStyle : payoutStatusBadgeActionStyle),
                           }}
                         >
                           {latestPayoutCard.setupLabel}
@@ -2808,7 +2834,6 @@ export default function WalkerDashboard({
                                   : null),
                           }}
                         >
-                          <strong style={payoutStatusRowCodeStyle}>{latestPayoutCard.status}</strong>
                           <div style={payoutStatusRowTextWrapStyle}>
                             <span style={payoutStatusRowTextStyle}>{latestPayoutCard.payoutExplanation}</span>
                             {latestPayoutCard.payoutDetail && (
@@ -2833,12 +2858,17 @@ export default function WalkerDashboard({
                           {flow.connectLoading || isCheckingPayout
                             ? (isHebrew ? 'בודק...' : 'Checking...')
                             : flow.latestPayout?.status === 'failed'
-                              ? (isHebrew ? 'עדכון הגדרת תשלומים' : 'Update payout setup')
+                              ? (isHebrew ? '💳 חשבון תשלומים' : '💳 Payout account')
                               : latestPayoutCard.setupReady
-                              ? (isHebrew ? 'ניהול תשלומים' : 'Manage payouts')
-                              : (isHebrew ? 'עדכון הגדרת תשלומים' : 'Update payout setup')}
+                              ? (isHebrew ? '💳 חשבון תשלומים' : '💳 Payout account')
+                              : (isHebrew ? '💳 חשבון תשלומים' : '💳 Payout account')}
                         </button>
                       )}
+                      <div style={payoutStatusHelperStyle}>
+                        {isHebrew
+                          ? 'ניהול חשבון התשלומים מתבצע דרך Stripe'
+                          : 'Payout account settings are managed securely by Stripe'}
+                      </div>
                     </div>
 
                     {!walletPayoutReady && (
@@ -3619,6 +3649,12 @@ export default function WalkerDashboard({
             </div>
           )}
 
+          {stripeReturnNotice && flow.screenState !== 'completed' && (
+            <div style={toastSuccessStyle}>
+              <span>{stripeReturnNotice}</span>
+              <button onClick={() => setStripeReturnNotice(null)} style={toastDismissStyle}>×</button>
+            </div>
+          )}
           {flow.successMessage && flow.screenState !== 'completed' && (
             <div style={toastSuccessStyle}>
               <span>{flow.successMessage}</span>
@@ -4856,12 +4892,6 @@ const payoutStatusRowDangerStyle: React.CSSProperties = {
   border: '1px solid rgba(239, 68, 68, 0.18)',
 }
 
-const payoutStatusRowCodeStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 900,
-  color: '#0F172A',
-}
-
 const payoutStatusRowTextStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.45,
@@ -4889,6 +4919,12 @@ const payoutStatusButtonStyle: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 900,
   cursor: 'pointer',
+}
+
+const payoutStatusHelperStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#64748B',
 }
 
 const earningsPayoutCtaStyle: React.CSSProperties = {

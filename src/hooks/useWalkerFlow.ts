@@ -182,13 +182,22 @@ interface WalkerPayoutStatusRow {
   provider_earnings_currency: string | null
   status: 'pending' | 'processing' | 'transferred' | 'in_transit' | 'paid_out' | 'failed' | 'reversed' | 'refunded'
   stripe_transfer_currency: string | null
-  stripe_transfer_amount: number | null
+  stripe_transfer_amount: number | string | null
   stripe_balance_transaction_currency: string | null
-  stripe_balance_transaction_amount: number | null
+  stripe_balance_transaction_amount: number | string | null
   available_at: string | null
   failure_reason: string | null
   updated_at: string
   created_at: string
+}
+
+function coerceNumericString(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
 }
 
 function isStripeReadyForOnline(status: ConnectStatus | null | undefined): boolean {
@@ -1904,13 +1913,22 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       return null
     }
 
-    const nextPayout = (data as WalkerPayoutStatusRow | null) ?? null
+    const nextPayoutRaw = (data as WalkerPayoutStatusRow | null) ?? null
+    const nextPayout = nextPayoutRaw
+      ? {
+          ...nextPayoutRaw,
+          stripe_transfer_amount: coerceNumericString(nextPayoutRaw.stripe_transfer_amount),
+          stripe_balance_transaction_amount: coerceNumericString(nextPayoutRaw.stripe_balance_transaction_amount),
+        }
+      : null
     setLatestPayout(nextPayout)
     console.log('[payout-status] latest_payout_loaded', {
       walkerId: profileId,
       hasPayout: !!nextPayout,
       status: nextPayout?.status ?? null,
       payoutId: nextPayout?.id ?? null,
+      stripeTransferCurrency: nextPayout?.stripe_transfer_currency ?? null,
+      stripeTransferAmount: nextPayout?.stripe_transfer_amount ?? null,
     })
     return nextPayout
   }, [profileId])
