@@ -7,6 +7,7 @@ import CompletionCard from '../components/CompletionCard'
 import GroupedHistory from '../components/GroupedHistory'
 import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
 import type { HistoryItem } from '../components/GroupedHistory'
+import { useProviderDashboardCards, type ProviderDashboardCardKey } from '../hooks/useProviderDashboardCards'
 import { useProviderInsights } from '../hooks/useProviderInsights'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
@@ -59,7 +60,7 @@ type AvailabilityFormRow = {
 }
 
 type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
-type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'about' | 'capabilities' | 'preferredCustomers'
+type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'about' | 'capabilities' | 'preferredCustomers' | 'dashboard'
 type ProviderPricingSummaryPreferenceRow = {
   service_type: ProfileServiceType
   booking_type: 'asap' | 'scheduled'
@@ -475,6 +476,7 @@ export default function WalkerDashboard({
 
   const walkerName = profile.full_name || profile.email || 'Walker'
   const flow = useWalkerFlow(profile.id, walkerName)
+  const dashboardCards = useProviderDashboardCards(profile.id)
   const insightsRefreshKey = useMemo(
     () => (
       flow.openJobs.length
@@ -546,12 +548,25 @@ export default function WalkerDashboard({
   const headerRatingValue = flow.avgRating != null ? flow.avgRating.toFixed(1) : null
   const insightsTitle = isHebrew ? '📈 תובנות לספק' : '📈 Provider Insights'
   const insightsPeriodLabel = isHebrew ? 'החודש' : 'This month'
-  const insightsViewCtaLabel = isHebrew ? 'צפה בתובנות' : 'View insights'
   const insightsHeaderCtaLabel = isHebrew ? 'צפה בתובנות →' : 'View insights →'
+  const dashboardSectionLabel = isHebrew ? 'התאמת מסך הבית' : 'Customize home'
+  const dashboardSectionSubtitle = isHebrew ? 'כרטיסים במסך הבית' : 'Home cards'
+  const dashboardSectionHelperText = isHebrew
+    ? 'בחר אילו כרטיסים יופיעו במסך הראשי.'
+    : 'Choose which cards appear on your home screen.'
+  const pricingCardLabel = isHebrew ? 'העדפות תמחור' : 'Pricing preferences'
+  const providerInsightsCardLabel = isHebrew ? 'תובנות לספק' : 'Provider insights'
+  const hideCardLabel = isHebrew ? 'הסתר' : 'Hide'
+  const visibleToggleOnLabel = isHebrew ? 'מוצג' : 'Shown'
+  const visibleToggleOffLabel = isHebrew ? 'מוסתר' : 'Hidden'
+  const cardHiddenToastLabel = isHebrew
+    ? 'הכרטיס הוסתר. אפשר לשחזר אותו מההגדרות.'
+    : 'Card hidden. You can restore it from Settings.'
   const insightsSubtitle = isHebrew
     ? 'מבט מהיר על ביצועים, ביקוש והזדמנויות שפספסת.'
     : 'A quick view of performance, demand, and missed opportunities.'
   const walletTitle = isHebrew ? 'ארנק' : 'Wallet'
+  const walletCardLabel = walletTitle
   const onlineLabel = isHebrew ? 'מחובר' : 'Online'
   const readyForOrdersTitle = isHebrew ? 'מוכן להזמנות' : 'Ready for orders'
   const nearbyRequestsBody = isHebrew ? 'בקשות קרובות יופיעו כאן.' : 'Nearby requests will appear here.'
@@ -573,6 +588,7 @@ export default function WalkerDashboard({
   const [showStripeGate, setShowStripeGate] = useState(false)
   const [showOnboardingWow, setShowOnboardingWow] = useState(false)
   const [stripeReturnNotice, setStripeReturnNotice] = useState<string | null>(null)
+  const [dashboardCardNotice, setDashboardCardNotice] = useState<string | null>(null)
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
   const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
@@ -622,6 +638,7 @@ export default function WalkerDashboard({
     serviceType: false,
     availability: false,
     pricing: false,
+    dashboard: false,
     about: false,
     capabilities: false,
     preferredCustomers: false,
@@ -1760,6 +1777,12 @@ export default function WalkerDashboard({
     return () => window.clearTimeout(id)
   }, [flow.takenNotice, flow.dismissTakenNotice])
 
+  useEffect(() => {
+    if (!dashboardCardNotice) return
+    const id = window.setTimeout(() => setDashboardCardNotice(null), 3200)
+    return () => window.clearTimeout(id)
+  }, [dashboardCardNotice])
+
   const [countdown, setCountdown] = useState(REQUEST_TIMEOUT_SECONDS)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const trackedVisibleOfferKeyRef = useRef<string | null>(null)
@@ -2080,6 +2103,11 @@ export default function WalkerDashboard({
     setBurgerOpen(true)
     setMenuPage('insights')
   }, [])
+
+  const handleHideDashboardCard = useCallback((card: ProviderDashboardCardKey) => {
+    dashboardCards.hideCard(card)
+    setDashboardCardNotice(cardHiddenToastLabel)
+  }, [cardHiddenToastLabel, dashboardCards])
 
   const toggleSettingsSection = useCallback((section: SettingsSectionKey) => {
     setSettingsSectionsOpen((current) => ({ ...current, [section]: !current[section] }))
@@ -2495,154 +2523,263 @@ export default function WalkerDashboard({
       <div style={homeDashboardSummaryStackStyle}>
         <div style={homeDashboardMiddleGroupStyle}>
           {renderTodayAvailabilityCard()}
+        </div>
 
-          <div style={todayAvailabilityPricingCardStyle}>
-            <div style={todayAvailabilityHeaderStyle}>
-              <div style={todayAvailabilityTitleStyle}>{todayAvailabilityPricingLabel}</div>
-              <button
-                type="button"
-                onClick={() => openSettingsSection('pricing')}
-                style={todayAvailabilityManageButtonStyle}
-              >
-                <span>{isHebrew ? 'נהל תמחור' : 'Manage pricing'}</span>
-                <span style={todayAvailabilityManageChevronStyle}>›</span>
-              </button>
-            </div>
-            <div style={todayAvailabilityListStyle}>
-              {pricingSummaryCardRows.length > 0 ? pricingSummaryCardRows.map((item, index) => (
+        <div style={homeDashboardOptionalCardsStyle}>
+          {dashboardCards.visibleCards.pricing ? (
+            <div style={todayAvailabilityPricingCardStyle}>
+              <div style={todayAvailabilityHeaderStyle}>
+                {!isHebrew ? (
+                  <button
+                    type="button"
+                    onClick={() => handleHideDashboardCard('pricing')}
+                    style={dashboardCardHideButtonStyle}
+                    aria-label={`${hideCardLabel} ${pricingCardLabel}`}
+                  >
+                    ×
+                  </button>
+                ) : null}
                 <div
-                  key={item.bookingType}
                   style={{
-                    ...todayAvailabilityRowStyle,
-                    ...pricingSummaryRowStyle,
-                    ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+                    ...dashboardCardHeaderMainStyle,
+                    ...(isHebrew ? dashboardCardHeaderMainRtlStyle : null),
                   }}
                 >
-                  <span style={pricingSummaryBookingTypeStyle}>{item.label}</span>
-                  <span style={pricingSummaryPriceStyle}>{item.priceLabel}</span>
-                  <span
-                    ref={openPricingSummaryTooltip === item.bookingType ? pricingSummaryTooltipRef : null}
-                    style={pricingSummaryRangeWrapStyle}
+                  <div style={todayAvailabilityTitleStyle}>{todayAvailabilityPricingLabel}</div>
+                  <button
+                    type="button"
+                    onClick={() => openSettingsSection('pricing')}
+                    style={todayAvailabilityManageButtonStyle}
                   >
-                    <span style={pricingSummaryRangeLabelStyle}>{item.rangeLabel}</span>
-                    <button
-                      type="button"
-                      aria-label={item.tooltipLabel}
-                      aria-expanded={openPricingSummaryTooltip === item.bookingType}
-                      onClick={() => setOpenPricingSummaryTooltip((current) => (
-                        current === item.bookingType ? null : item.bookingType
-                      ))}
-                      style={pricingSummaryInfoButtonStyle}
+                    <span>{isHebrew ? 'נהל תמחור' : 'Manage pricing'}</span>
+                    <span style={todayAvailabilityManageChevronStyle}>›</span>
+                  </button>
+                </div>
+                {isHebrew ? (
+                  <button
+                    type="button"
+                    onClick={() => handleHideDashboardCard('pricing')}
+                    style={dashboardCardHideButtonStyle}
+                    aria-label={`${hideCardLabel} ${pricingCardLabel}`}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <div style={todayAvailabilityListStyle}>
+                {pricingSummaryCardRows.length > 0 ? pricingSummaryCardRows.map((item, index) => (
+                  <div
+                    key={item.bookingType}
+                    style={{
+                      ...todayAvailabilityRowStyle,
+                      ...pricingSummaryRowStyle,
+                      ...(index > 0 ? todayAvailabilityRowWithDividerStyle : null),
+                    }}
+                  >
+                    <span style={pricingSummaryBookingTypeStyle}>{item.label}</span>
+                    <span style={pricingSummaryPriceStyle}>{item.priceLabel}</span>
+                    <span
+                      ref={openPricingSummaryTooltip === item.bookingType ? pricingSummaryTooltipRef : null}
+                      style={pricingSummaryRangeWrapStyle}
                     >
-                      <span style={pricingSummaryInfoIconStyle}>ⓘ</span>
-                    </button>
-                    {openPricingSummaryTooltip === item.bookingType ? (
-                      <span role="tooltip" style={pricingSummaryTooltipBubbleStyle}>
-                        {item.tooltipLabel}
-                      </span>
-                    ) : null}
+                      <span style={pricingSummaryRangeLabelStyle}>{item.rangeLabel}</span>
+                      <button
+                        type="button"
+                        aria-label={item.tooltipLabel}
+                        aria-expanded={openPricingSummaryTooltip === item.bookingType}
+                        onClick={() => setOpenPricingSummaryTooltip((current) => (
+                          current === item.bookingType ? null : item.bookingType
+                        ))}
+                        style={pricingSummaryInfoButtonStyle}
+                      >
+                        <span style={pricingSummaryInfoIconStyle}>ⓘ</span>
+                      </button>
+                      {openPricingSummaryTooltip === item.bookingType ? (
+                        <span role="tooltip" style={pricingSummaryTooltipBubbleStyle}>
+                          {item.tooltipLabel}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                )) : (
+                  <div style={todayAvailabilityPricingSubtitleStyle}>
+                    {isHebrew
+                      ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
+                      : 'Manage pricing ranges and service preferences for each booking type.'}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {dashboardCards.visibleCards.insights ? (
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={openInsightsScreen}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  openInsightsScreen()
+                }
+              }}
+              style={providerInsightsCardButtonStyle}
+            >
+              <div style={providerInsightsCardHeaderStyle}>
+                {!isHebrew ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleHideDashboardCard('insights')
+                    }}
+                    style={dashboardCardHideButtonStyle}
+                    aria-label={`${hideCardLabel} ${providerInsightsCardLabel}`}
+                  >
+                    ×
+                  </button>
+                ) : null}
+                <div
+                  style={{
+                    ...providerInsightsCardTitleWrapStyle,
+                    ...(isHebrew ? providerInsightsCardTitleWrapRtlStyle : null),
+                  }}
+                >
+                  <span style={providerInsightsHeaderCtaStyle}>{insightsHeaderCtaLabel}</span>
+                  <div style={providerInsightsCardTitleStyle}>{insightsTitle}</div>
+                </div>
+                {isHebrew ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleHideDashboardCard('insights')
+                    }}
+                    style={dashboardCardHideButtonStyle}
+                    aria-label={`${hideCardLabel} ${providerInsightsCardLabel}`}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <div style={providerInsightsSummaryGridStyle}>
+                {insightsSummaryItems.map((item) => (
+                  <div key={item.label} style={providerInsightsSummaryItemStyle}>
+                    <span style={providerInsightsSummaryLabelStyle}>{item.label}</span>
+                    <strong style={providerInsightsSummaryValueStyle}>
+                      {insights.loading ? '—' : item.value}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+              {insights.error ? (
+                <div style={providerInsightsCardFooterStyle}>
+                  <span style={providerInsightsErrorStyle}>
+                    {isHebrew ? 'חלק מהנתונים יתעדכנו בקרוב.' : 'Some insights will refresh shortly.'}
                   </span>
                 </div>
-              )) : (
-                <div style={todayAvailabilityPricingSubtitleStyle}>
-                  {isHebrew
-                    ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
-                    : 'Manage pricing ranges and service preferences for each booking type.'}
-                </div>
-              )}
+              ) : null}
             </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={openInsightsScreen}
-            style={providerInsightsCardButtonStyle}
-          >
-            <div style={providerInsightsCardHeaderStyle}>
-              <span style={providerInsightsHeaderCtaStyle}>{insightsHeaderCtaLabel}</span>
-              <div style={providerInsightsCardTitleStyle}>{insightsTitle}</div>
-            </div>
-            <div style={providerInsightsSummaryGridStyle}>
-              {insightsSummaryItems.map((item) => (
-                <div key={item.label} style={providerInsightsSummaryItemStyle}>
-                  <span style={providerInsightsSummaryLabelStyle}>{item.label}</span>
-                  <strong style={providerInsightsSummaryValueStyle}>
-                    {insights.loading ? '—' : item.value}
-                  </strong>
-                </div>
-              ))}
-            </div>
-            {insights.error ? (
-              <div style={providerInsightsCardFooterStyle}>
-                <span style={providerInsightsErrorStyle}>
-                  {isHebrew ? 'חלק מהנתונים יתעדכנו בקרוב.' : 'Some insights will refresh shortly.'}
-                </span>
-              </div>
-            ) : null}
-          </button>
+          ) : null}
         </div>
 
-        <div style={{ ...dashboardSectionStyle, ...walletSectionStyle, ...homeDashboardWalletSectionStyle }}>
-          <div style={dashboardSectionHeaderRowStyle}>
-            {(flow.connectLoading || walletPayoutReady) ? (
-              flow.connectLoading ? (
-                <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
-              ) : (
-                <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
-              )
-            ) : null}
-            <div style={dashboardSectionTitleStyle}>{walletTitle}</div>
-          </div>
-          <div style={walletDashboardGridStyle}>
-            <div style={walletDashboardMetricCardStyle}>
-              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
-              <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
-            </div>
-            <div style={walletDashboardMetricCardStyle}>
-              <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'רווחים בהמתנה' : 'Pending earnings'}</div>
-              <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
-            </div>
-          </div>
-          <div style={walletDashboardStatusRowStyle}>
-            {!flow.connectLoading && !walletPayoutReady ? (
-              <>
-                <span style={walletStatusWarningStyle}>
-                  {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
-                </span>
+        {dashboardCards.visibleCards.wallet ? (
+          <div style={{ ...dashboardSectionStyle, ...walletSectionStyle, ...homeDashboardWalletSectionStyle }}>
+            <div style={dashboardSectionHeaderRowStyle}>
+              {!isHebrew ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setPayoutCtaAnimationStopped(true)
-                    void handleStripeSetup(false)
-                  }}
-                  disabled={isCheckingPayout}
-                  style={{
-                    ...walletSetupButtonStyle,
-                    ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
-                    ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
-                    ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
-                  }}
+                  onClick={() => handleHideDashboardCard('wallet')}
+                  style={dashboardCardHideButtonStyle}
+                  aria-label={`${hideCardLabel} ${walletCardLabel}`}
                 >
-                  {isCheckingPayout
-                    ? isHebrew
-                      ? 'בודק...'
-                      : 'Checking...'
-                    : isHebrew
-                      ? 'הגדר תשלומים'
-                      : 'Set up payouts'}
+                  ×
                 </button>
-              </>
-            ) : null}
+              ) : null}
+              <div
+                style={{
+                  ...dashboardCardHeaderMainStyle,
+                  ...(isHebrew ? dashboardCardHeaderMainRtlStyle : null),
+                }}
+              >
+                {isHebrew ? <div style={dashboardSectionTitleStyle}>{walletTitle}</div> : null}
+                {(flow.connectLoading || walletPayoutReady) ? (
+                  flow.connectLoading ? (
+                    <span style={walletStatusNeutralStyle}>{isHebrew ? 'בודק הגדרת תשלומים...' : 'Checking payout setup...'}</span>
+                  ) : (
+                    <span style={walletDashboardReadyStyle}>{isHebrew ? 'מוכן לקבל תשלומים' : 'Ready to receive payouts'}</span>
+                  )
+                ) : null}
+                {!isHebrew ? <div style={dashboardSectionTitleStyle}>{walletTitle}</div> : null}
+              </div>
+              {isHebrew ? (
+                <button
+                  type="button"
+                  onClick={() => handleHideDashboardCard('wallet')}
+                  style={dashboardCardHideButtonStyle}
+                  aria-label={`${hideCardLabel} ${walletCardLabel}`}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+            <div style={walletDashboardGridStyle}>
+              <div style={walletDashboardMetricCardStyle}>
+                <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'זמין' : 'Available balance'}</div>
+                <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.availableBalance.toFixed(0)}</div>
+              </div>
+              <div style={walletDashboardMetricCardStyle}>
+                <div style={walletDashboardMetricLabelStyle}>{isHebrew ? 'רווחים בהמתנה' : 'Pending earnings'}</div>
+                <div style={walletDashboardMetricValueStyle}>₪{flow.wallet.pendingEarnings.toFixed(0)}</div>
+              </div>
+            </div>
+            <div style={walletDashboardStatusRowStyle}>
+              {!flow.connectLoading && !walletPayoutReady ? (
+                <>
+                  <span style={walletStatusWarningStyle}>
+                    {isHebrew ? 'השלם הגדרת תשלומים כדי לקבל כספים' : 'Complete payout setup to receive earnings'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPayoutCtaAnimationStopped(true)
+                      void handleStripeSetup(false)
+                    }}
+                    disabled={isCheckingPayout}
+                    style={{
+                      ...walletSetupButtonStyle,
+                      ...(!payoutCtaAnimationStopped && !payoutCtaNudgeActive ? walletSetupButtonPulseStyle : null),
+                      ...(!payoutCtaAnimationStopped && payoutCtaNudgeActive ? walletSetupButtonPulseAndNudgeStyle : null),
+                      ...(isCheckingPayout ? walletSetupButtonDisabledStyle : null),
+                    }}
+                  >
+                    {isCheckingPayout
+                      ? isHebrew
+                        ? 'בודק...'
+                        : 'Checking...'
+                      : isHebrew
+                        ? 'הגדר תשלומים'
+                        : 'Set up payouts'}
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
     </div>
   ), [
+    cardHiddenToastLabel,
+    dashboardCards.visibleCards.insights,
+    dashboardCards.visibleCards.pricing,
+    dashboardCards.visibleCards.wallet,
     flow.connectLoading,
     flow.wallet.availableBalance,
     flow.wallet.pendingEarnings,
     handleOnlineToggle,
     handleStripeSetup,
+    handleHideDashboardCard,
+    hideCardLabel,
     idleHeroTitle,
     insights.error,
     insights.loading,
@@ -2651,7 +2788,6 @@ export default function WalkerDashboard({
     insightsSubtitle,
     insightsSummaryItems,
     insightsTitle,
-    insightsViewCtaLabel,
     isCheckingPayout,
     isHebrew,
     nearbyRequestsBody,
@@ -2660,11 +2796,14 @@ export default function WalkerDashboard({
     openSettingsSection,
     payoutCtaAnimationStopped,
     payoutCtaNudgeActive,
+    pricingCardLabel,
     pricingSummaryCardRows,
+    providerInsightsCardLabel,
     readyForOrdersTitle,
     renderTodayAvailabilityCard,
     todayAvailabilityPricingLabel,
     walletPayoutReady,
+    walletCardLabel,
     walletTitle,
   ])
 
@@ -3787,6 +3926,63 @@ export default function WalkerDashboard({
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
+                      title={dashboardSectionLabel}
+                      subtitle={dashboardSectionSubtitle}
+                      open={settingsSectionsOpen.dashboard}
+                      onToggle={() => toggleSettingsSection('dashboard')}
+                    >
+                      <div style={dashboardSettingsHelperStyle}>{dashboardSectionHelperText}</div>
+                      <div style={dashboardSettingsCardStyle}>
+                        {([
+                          { key: 'pricing', label: pricingCardLabel, visible: dashboardCards.visibleCards.pricing },
+                          { key: 'insights', label: providerInsightsCardLabel, visible: dashboardCards.visibleCards.insights },
+                          { key: 'wallet', label: walletCardLabel, visible: dashboardCards.visibleCards.wallet },
+                        ] as Array<{ key: ProviderDashboardCardKey; label: string; visible: boolean }>).map((item, index) => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            style={index === 0 ? dashboardSettingsRowFirstStyle : dashboardSettingsRowStyle}
+                            aria-label={item.label}
+                            aria-pressed={item.visible}
+                            role="switch"
+                            onClick={() => {
+                              dashboardCards.setCardVisible(item.key, !item.visible)
+                            }}
+                          >
+                            <div style={dashboardSettingsRowTextStyle}>
+                              <div style={dashboardSettingsRowTitleStyle}>{item.label}</div>
+                            </div>
+                            <div style={dashboardSettingsToggleWrapStyle}>
+                              <span
+                                style={{
+                                  ...dashboardSettingsToggleStateStyle,
+                                  ...(item.visible ? dashboardSettingsToggleStateOnStyle : dashboardSettingsToggleStateOffStyle),
+                                }}
+                              >
+                                {item.visible ? visibleToggleOnLabel : visibleToggleOffLabel}
+                              </span>
+                              <span style={availabilityToggleShellStyle}>
+                                <span
+                                  style={{
+                                    ...availabilityToggleTrackStyle,
+                                    ...(item.visible ? availabilityToggleTrackActiveStyle : null),
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      ...availabilityToggleThumbStyle,
+                                      ...(item.visible ? availabilityToggleThumbActiveStyle : null),
+                                    }}
+                                  />
+                                </span>
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
                       title={t('providerPricing.title')}
                       subtitle={t('providerPricing.subtitle')}
                       open={settingsSectionsOpen.pricing}
@@ -3925,6 +4121,12 @@ export default function WalkerDashboard({
             <div style={toastSuccessStyle}>
               <span>{stripeReturnNotice}</span>
               <button onClick={() => setStripeReturnNotice(null)} style={toastDismissStyle}>×</button>
+            </div>
+          )}
+          {dashboardCardNotice && flow.screenState !== 'completed' && (
+            <div style={toastSuccessStyle}>
+              <span>{dashboardCardNotice}</span>
+              <button onClick={() => setDashboardCardNotice(null)} style={toastDismissStyle}>×</button>
             </div>
           )}
           {flow.successMessage && flow.screenState !== 'completed' && (
@@ -5984,8 +6186,13 @@ const homeDashboardSummaryStackStyle: React.CSSProperties = {
 const homeDashboardMiddleGroupStyle: React.CSSProperties = {
   display: 'grid',
   gap: 7,
-  marginTop: 'auto',
-  marginBottom: 'auto',
+  marginTop: 0,
+  marginBottom: 0,
+}
+
+const homeDashboardOptionalCardsStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 7,
 }
 
 const homeDashboardWalletSectionStyle: React.CSSProperties = {
@@ -6352,6 +6559,33 @@ const dashboardSectionHeaderRowStyle: React.CSSProperties = {
   gap: 10,
 }
 
+const dashboardCardHeaderMainStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+}
+
+const dashboardCardHeaderMainRtlStyle: React.CSSProperties = {
+  justifyContent: 'flex-end',
+  textAlign: 'end',
+  flexShrink: 0,
+}
+
+const dashboardCardHideButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  minHeight: 28,
+  minWidth: 28,
+  padding: '0 8px',
+  borderRadius: 999,
+  border: '1px solid rgba(148,163,184,0.22)',
+  background: 'rgba(255,255,255,0.8)',
+  color: '#64748B',
+  fontSize: 11,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
 const walletSectionStyle: React.CSSProperties = {
   marginTop: 2,
 }
@@ -6469,6 +6703,19 @@ const providerInsightsCardHeaderStyle: React.CSSProperties = {
   gap: 10,
 }
 
+const providerInsightsCardTitleWrapStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  justifyContent: 'flex-start',
+  minWidth: 0,
+  flex: 1,
+}
+
+const providerInsightsCardTitleWrapRtlStyle: React.CSSProperties = {
+  justifyContent: 'flex-end',
+}
+
 const providerInsightsCardTitleStyle: React.CSSProperties = {
   fontSize: 14,
   lineHeight: 1.2,
@@ -6482,6 +6729,82 @@ const providerInsightsHeaderCtaStyle: React.CSSProperties = {
   lineHeight: 1.35,
   color: '#2563EB',
   fontWeight: 800,
+}
+
+const dashboardSettingsCardStyle: React.CSSProperties = {
+  borderRadius: 20,
+  border: '1px solid #E5EDF7',
+  background: '#FFFFFF',
+  boxShadow: '0 10px 22px rgba(15,23,42,0.04)',
+  overflow: 'hidden',
+}
+
+const dashboardSettingsHelperStyle: React.CSSProperties = {
+  marginBottom: 10,
+  fontSize: 12,
+  lineHeight: 1.45,
+  color: '#64748B',
+  fontWeight: 600,
+}
+
+const dashboardSettingsRowStyle: React.CSSProperties = {
+  appearance: 'none',
+  width: '100%',
+  minHeight: 60,
+  padding: '0 14px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  borderTop: '1px solid #EEF2F7',
+  background: '#FFFFFF',
+  borderLeft: 'none',
+  borderRight: 'none',
+  borderBottom: 'none',
+  textAlign: 'start',
+  cursor: 'pointer',
+}
+
+const dashboardSettingsRowFirstStyle: React.CSSProperties = {
+  ...dashboardSettingsRowStyle,
+  borderTop: 'none',
+}
+
+const dashboardSettingsRowTextStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+}
+
+const dashboardSettingsRowTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.35,
+  color: '#0F172A',
+  fontWeight: 700,
+}
+
+const dashboardSettingsToggleWrapStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 10,
+  flexShrink: 0,
+  pointerEvents: 'none',
+}
+
+const dashboardSettingsToggleStateStyle: React.CSSProperties = {
+  minWidth: 44,
+  fontSize: 11,
+  lineHeight: 1.35,
+  fontWeight: 800,
+  textAlign: 'end',
+}
+
+const dashboardSettingsToggleStateOnStyle: React.CSSProperties = {
+  color: '#15803D',
+}
+
+const dashboardSettingsToggleStateOffStyle: React.CSSProperties = {
+  color: '#94A3B8',
 }
 
 const providerInsightsSummaryGridStyle: React.CSSProperties = {
