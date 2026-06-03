@@ -929,10 +929,10 @@ async function tryCreateTransfer(
     return 'processing' as const
   }
 
-  // Get walker's connected account and rollout flag
+  // Get walker's connected account and Stripe payout readiness flags
   const { data: walkerProfile } = await supabaseAdmin
     .from('profiles')
-    .select('stripe_connect_account_id, payouts_enabled, live_payouts_enabled')
+    .select('stripe_connect_account_id, payouts_enabled, charges_enabled')
     .eq('id', walkerId)
     .single()
 
@@ -942,7 +942,7 @@ async function tryCreateTransfer(
       jobId: job.id,
       providerId: walkerId,
       payoutsEnabled: walkerProfile?.payouts_enabled ?? null,
-      livePayoutsEnabled: walkerProfile?.live_payouts_enabled ?? null,
+      chargesEnabled: walkerProfile?.charges_enabled ?? null,
     })
     console.log('[payout-transfer] skipped reason', {
       jobId: job.id,
@@ -957,17 +957,17 @@ async function tryCreateTransfer(
     providerId: walkerId,
     stripeConnectAccountId: walkerProfile.stripe_connect_account_id,
     payoutsEnabled: walkerProfile.payouts_enabled,
-    livePayoutsEnabled: walkerProfile.live_payouts_enabled,
+    chargesEnabled: walkerProfile.charges_enabled,
   })
 
-  // Rollout guard: skip transfer if walker is not enabled for live payouts
-  if (!walkerProfile.live_payouts_enabled) {
-    console.log('[transfer] Walker not enabled for live payouts, skipping transfer for job', job.id, 'walker', walkerId)
+  if (!walkerProfile.payouts_enabled || !walkerProfile.charges_enabled) {
     console.log('[payout-transfer] skipped reason', {
       jobId: job.id,
       providerId: walkerId,
-      reason: 'live_payouts_disabled',
+      reason: 'stripe_connect_not_ready',
       stripeConnectAccountId: walkerProfile.stripe_connect_account_id,
+      payoutsEnabled: walkerProfile.payouts_enabled,
+      chargesEnabled: walkerProfile.charges_enabled,
     })
     return 'skipped' as const
   }

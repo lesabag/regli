@@ -165,10 +165,10 @@ serve(async (req: Request) => {
       )
     }
 
-    // Get walker's connected account and rollout flag
+    // Get walker's connected account and Stripe payout readiness flags
     const { data: walkerProfile } = await supabaseAdmin
       .from('profiles')
-      .select('stripe_connect_account_id, payouts_enabled, live_payouts_enabled')
+      .select('stripe_connect_account_id, payouts_enabled, charges_enabled')
       .eq('id', walkerId)
       .single()
 
@@ -179,10 +179,9 @@ serve(async (req: Request) => {
       )
     }
 
-    // Rollout guard: reject if walker is not enabled for live payouts
-    if (!walkerProfile.live_payouts_enabled) {
+    if (!walkerProfile.payouts_enabled || !walkerProfile.charges_enabled) {
       return new Response(
-        JSON.stringify({ error: 'Live payouts not yet enabled for this walker' }),
+        JSON.stringify({ error: 'Walker Stripe Connect account is not payout-ready' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
