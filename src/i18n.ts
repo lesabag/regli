@@ -191,8 +191,8 @@ const resources = {
       },
       providerPricing: {
         title: 'Pricing preferences',
-        subtitle: 'Set service pricing guidance for each booking type.',
-        helper: 'These prices help Regli guide clients toward budgets providers are more likely to accept.',
+        subtitle: 'Set pricing guidance by booking type.',
+        helper: 'Helps Regli recommend better client budgets.',
         loading: 'Loading pricing preferences...',
         noSupportedServices: 'Add a supported service to configure pricing preferences.',
         asap: 'ASAP',
@@ -225,7 +225,7 @@ const resources = {
       },
       providerProfile: {
         aboutMe: 'About me',
-        aboutMeSubtitle: 'A short introduction clients can see after you accept.',
+        aboutMeSubtitle: 'clients can see after you accept.',
         aboutMePlaceholder:
           'Tell clients a little about yourself, your experience, or what makes your service great.',
         whatsappNumber: 'WhatsApp number',
@@ -622,7 +622,7 @@ const resources = {
       },
       providerPricing: {
         title: 'העדפות תמחור',
-        subtitle: 'הגדירו הכוונת מחיר לכל סוג שירות וסוג הזמנה.',
+        subtitle: 'הגדירו מחיר לכל סוג שירות והזמנה.',
         helper: 'המחירים האלו עוזרים ל-Regli לכוון לקוחות לתקציבים שספקים נוטים יותר לקבל.',
         loading: 'טוענים העדפות תמחור...',
         noSupportedServices: 'הוסיפו שירות נתמך כדי להגדיר העדפות תמחור.',
@@ -656,7 +656,7 @@ const resources = {
       },
       providerProfile: {
         aboutMe: 'עליי בקצרה',
-        aboutMeSubtitle: 'היכרות קצרה שלקוחות יראו אחרי קבלת ההזמנה.',
+        aboutMeSubtitle: 'היכרות, לקוחות יראו אחרי קבלת ההזמנה.',
         aboutMePlaceholder:
           'ספר ללקוחות בקצרה על עצמך, הניסיון שלך או מה מיוחד בשירות שלך.',
         whatsappNumber: 'מספר וואטסאפ',
