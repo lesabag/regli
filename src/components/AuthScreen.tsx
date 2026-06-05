@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import {
   getProfileServiceOptions,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import i18n, { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
 import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
 import customerCharacterImage from '../assets/onboarding/customer-character.jpg'
@@ -164,22 +166,10 @@ function getStepIndex(mode: OnboardingMode, step: SignupStep, signupSteps: Signu
   return signupSteps.indexOf(step)
 }
 
-function getStepTitle(mode: OnboardingMode, step: SignupStep, role: AppRole) {
-  if (mode === 'signin') return 'Log in'
-  if (step === 'role') return 'How will you use Regli?'
-  if (step === 'service') {
-    return role === 'walker' ? 'What service do you provide?' : 'What service are you looking for?'
-  }
-  if (step === 'location') return 'Where are you located?'
-  if (step === 'details') return 'Tell us more'
-  if (step === 'auth') return 'Create your account'
-  return 'Welcome'
-}
-
-async function reverseGeocodeLocation(lat: number, lng: number): Promise<string> {
+async function reverseGeocodeLocation(lat: number, lng: number, language: SupportedLanguage): Promise<string> {
   return reverseGeocodeAddress(lat, lng, {
-    language: 'en',
-    fallbackLabel: 'Current location detected',
+    language,
+    fallbackLabel: language === 'he' ? 'המיקום הנוכחי זוהה' : 'Current location detected',
   })
 }
 
@@ -202,6 +192,22 @@ function writePersistedSignupStep(step: SignupStep) {
   window.sessionStorage.setItem(SIGNUP_STEP_STORAGE_KEY, step)
 }
 
+function detectInitialAuthLanguage(): SupportedLanguage {
+  if (typeof window !== 'undefined') {
+    const stored = normalizeSupportedLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY))
+    if (stored) return stored
+  }
+
+  const resolved = normalizeSupportedLanguage(i18n.resolvedLanguage)
+  if (resolved) return resolved
+
+  if (typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('he')) {
+    return 'he'
+  }
+
+  return 'en'
+}
+
 export default function AuthScreen({
   onSignIn,
   onSignUp,
@@ -218,6 +224,8 @@ export default function AuthScreen({
   initialServiceAttributes = null,
   authError,
 }: AuthScreenProps) {
+  useTranslation()
+  const [language, setLanguage] = useState<SupportedLanguage>(() => detectInitialAuthLanguage())
   const [mode, setMode] = useState<OnboardingMode>(() => (
     authenticatedOnboarding ? 'signup' : (readPersistedSignupStep() ? 'signup' : 'welcome')
   ))
@@ -233,7 +241,7 @@ export default function AuthScreen({
       ? (initialServiceTypes && initialServiceTypes.length > 0 ? initialServiceTypes : ['dog_walker'])
       : ['dog_walker'],
   )
-  const [locationLabel, setLocationLabel] = useState(initialLocationAddress || 'Your area')
+  const [locationLabel, setLocationLabel] = useState(initialLocationAddress || (language === 'he' ? 'האזור שלך' : 'Your area'))
   const [locationStatus, setLocationStatus] = useState<'placeholder' | 'live' | 'denied' | 'loading'>(
     initialLocationAddress ? 'live' : 'placeholder',
   )
@@ -268,21 +276,123 @@ export default function AuthScreen({
         : [],
   })
   const serviceOptions = useMemo<ServiceOption[]>(
-    () => getProfileServiceOptions(false).map((option) => ({
+    () => getProfileServiceOptions(language === 'he').map((option) => ({
       id: option.value,
       icon: option.icon,
       label: option.label,
       description: option.description,
     })),
-    [],
+    [language],
   )
   const signupSteps = useMemo(() => getSignupSteps(role), [role])
   const safeSignupStep = signupStep ?? (mode === 'signup' ? 'role' : 'welcome')
+  const isHebrew = language === 'he'
+  const isRtl = isHebrew
+  const direction = isRtl ? 'rtl' : 'ltr'
+  const textAlign = isRtl ? 'right' : 'left'
+  const copy = useMemo(() => ({
+    welcomeEyebrow: isHebrew ? 'ברוכים הבאים' : 'Welcome',
+    welcomeTitle: isHebrew ? 'שירותים אמינים, בדרך שלך' : 'Book trusted local services with ease',
+    welcomeSubtitle: isHebrew
+      ? 'בחרו שירות, אשרו כמה פרטים, ו-Regli תחבר אתכם לספקים מתאימים בקרבתכם.'
+      : 'Choose the service you need, confirm a few details, and Regli helps you connect with trusted providers nearby.',
+    welcomeFeatureLocation: isHebrew ? '📍 מותאם לאזור שלך' : '📍 Tailored to your area',
+    welcomeFeatureFast: isHebrew ? '⚡ התחלה מהירה' : '⚡ Fast setup',
+    welcomeFeatureTrusted: isHebrew ? '🤝 ספקים ולקוחות אמינים' : '🤝 Trusted providers and clients',
+    roleTitle: isHebrew ? 'איך תרצו להשתמש ב-Regli?' : 'How will you use Regli?',
+    providerTitle: isHebrew ? 'ספק' : 'Provider',
+    providerDescription: isHebrew ? 'הציעו שירותים, קבלו הזמנות, ועבדו בקצב שלכם.' : 'Offer services, get booked, and earn on your schedule.',
+    clientTitle: isHebrew ? 'לקוח' : 'Customer',
+    clientDescription: isHebrew ? 'מצאו ספקים אמינים והזמינו שירותים בקלות.' : 'Find trusted providers and book services with confidence.',
+    serviceIntro: isHebrew ? 'בחרו את סוג השירות הראשי שלכם. אפשר להרחיב אחר כך.' : 'Choose your primary service for now. You can always expand later.',
+    locationIntro: isHebrew ? 'נשתמש בזה כדי להציג תוצאות קרובות וחוויה מדויקת יותר.' : 'We use this to personalize nearby results and a smoother first experience.',
+    locationCurrent: isHebrew ? 'מיקום נוכחי' : 'Current location',
+    locationChecking: isHebrew ? 'בודקים מיקום' : 'Checking location',
+    locationUnavailable: isHebrew ? 'המיקום לא זמין' : 'Location unavailable',
+    locationPreview: isHebrew ? 'תצוגת מיקום' : 'Location preview',
+    locationUsing: isHebrew ? 'משתמשים במיקום הנוכחי שלך.' : 'Using your current location.',
+    locationDetecting: isHebrew ? 'מאתרים את המיקום שלך…' : 'Detecting your location…',
+    locationDenied: isHebrew ? 'המיקום הנוכחי לא זמין כרגע.' : 'Current location unavailable right now.',
+    locationHint: isHebrew ? 'מפה עדינה עוזרת להתאים תוצאות ושירותים קרובים.' : 'A subtle map preview helps personalize nearby services.',
+    useCurrentLocation: isHebrew ? 'השתמש במיקום הנוכחי' : 'Use current location',
+    refreshingLocation: isHebrew ? 'מרענן מיקום...' : 'Refreshing location...',
+    detailsProvider: isHebrew ? 'הגדירו יכולות והעדפות כדי שנוכל לחבר אתכם ללקוחות מתאימים.' : 'Define your capabilities so we can match you with the right clients.',
+    detailsClient: isHebrew ? 'שתפו כמה פרטים כדי שנוכל להתאים את החוויה לצרכים שלכם.' : 'Share a few details so we can personalize your experience.',
+    yearsExperience: isHebrew ? 'שנות ניסיון' : 'Years of experience',
+    shortBio: isHebrew ? 'תיאור קצר' : 'Short bio',
+    shortBioPlaceholder: isHebrew ? 'למשל: חשמלאי אמין עם ניסיון בתיקונים לבית.' : 'Reliable electrician specializing in residential repairs.',
+    languagesSpoken: isHebrew ? 'שפות מדוברות' : 'Languages spoken',
+    buildTrustTitle: isHebrew ? 'יוצרים אמון מהרגע הראשון' : 'Build trust quickly',
+    buildTrustSubtitle: isHebrew ? 'כמה פרטים בסיסיים עוזרים ללקוחות להבין מי אתם לפני ההזמנה.' : 'A few profile basics help clients understand who you are before they book.',
+    finishSetup: isHebrew ? 'סיימו את ההגדרה כדי להמשיך ל-Regli.' : 'Finish your Regli setup to continue.',
+    signInPrompt: isHebrew ? 'התחברו כדי להמשיך מאיפה שהפסקתם.' : 'Log in to continue where you left off.',
+    createAccountPrompt: isHebrew ? 'השלימו את יצירת החשבון כדי להתחיל עם Regli.' : 'Finish setting up your account to start with Regli.',
+    useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Use email instead',
+    fullName: isHebrew ? 'שם מלא' : 'Full name',
+    fullNamePlaceholder: isHebrew ? 'השם המלא שלך' : 'Your full name',
+    email: isHebrew ? 'אימייל' : 'Email',
+    password: isHebrew ? 'סיסמה' : 'Password',
+    passwordPlaceholder: isHebrew ? 'סיסמה' : 'Password',
+    continueWithGoogle: isHebrew ? 'המשך עם Google' : 'Continue with Google',
+    continueWithApple: isHebrew ? 'המשך עם Apple' : 'Continue with Apple',
+    connectingGoogle: isHebrew ? 'מתחבר ל-Google...' : 'Connecting to Google...',
+    connectingApple: isHebrew ? 'מתחבר ל-Apple...' : 'Connecting to Apple...',
+    back: isHebrew ? 'חזרה' : 'Back',
+    login: isHebrew ? 'התחברות' : 'Log in',
+    getStarted: isHebrew ? 'מתחילים' : 'Get started',
+    pleaseWait: isHebrew ? 'רק רגע...' : 'Please wait...',
+    next: isHebrew ? 'המשך' : 'Next',
+    finish: isHebrew ? 'סיום ההגדרה' : 'Finish Setup',
+    createAccount: isHebrew ? 'צור חשבון' : 'Create account',
+    continueToAccount: isHebrew ? 'המשך לחשבון' : 'Continue to account',
+    newToRegli: isHebrew ? 'חדשים ב-Regli?' : 'New to Regli?',
+    alreadyHaveAccount: isHebrew ? 'כבר יש לכם חשבון?' : 'Already have an account?',
+    designedHint: isHebrew ? 'Regli נבנתה להזמנת שירותים כלליים במובייל.' : 'Designed for mobile-first booking across many everyday services.',
+    startOver: isHebrew ? 'התחל מחדש / התנתק' : 'Start over / Log out',
+    readyToBook: isHebrew ? 'מוכנים להזמין' : 'Ready to book',
+    provider: isHebrew ? 'ספק' : 'Provider',
+    customer: isHebrew ? 'לקוח' : 'Customer',
+    dogWalking: isHebrew ? 'טיול כלבים' : 'Dog walking',
+    babySitting: isHebrew ? 'בייביסיטר' : 'Baby sitting',
+    dogSizesHandle: isHebrew ? 'גדלי כלבים שאתם מטפלים בהם' : 'Dog sizes you handle',
+    energyLevelsManage: isHebrew ? 'רמות אנרגיה שאתם מנהלים' : 'Energy levels you manage',
+    ageRangesCover: isHebrew ? 'טווחי גילאים שאתם מכסים' : 'Age ranges you cover',
+    petName: isHebrew ? 'שם חיית המחמד' : 'Pet name',
+    petNamePlaceholder: isHebrew ? 'למשל: בוקי' : 'e.g. Boki',
+    dogSize: isHebrew ? 'גודל הכלב' : 'Dog size',
+    energyLevel: isHebrew ? 'רמת אנרגיה' : 'Energy level',
+    numberOfChildren: isHebrew ? 'כמה ילדים צריכים בייביסיטר?' : 'How many children need babysitting?',
+    childAge: isHebrew ? ((index: number) => `גיל ילד ${index}`) : ((index: number) => `Child ${index} age`),
+    ageYearsPlaceholder: isHebrew ? 'גיל בשנים' : 'Age in years',
+    notesAllergies: isHebrew ? 'הערות מיוחדות / אלרגיות' : 'Special notes / allergies',
+    notesPlaceholder: isHebrew ? 'כל דבר שחשוב שנדע (אופציונלי)' : 'Anything we should know (optional)',
+    serviceProvide: isHebrew ? 'איזה שירות אתם מציעים?' : 'What service do you provide?',
+    serviceNeed: isHebrew ? 'איזה שירות אתם מחפשים?' : 'What service are you looking for?',
+    whereLocated: isHebrew ? 'איפה אתם נמצאים?' : 'Where are you located?',
+    tellUsMore: isHebrew ? 'ספרו לנו עוד' : 'Tell us more',
+    createYourAccount: isHebrew ? 'יצירת חשבון' : 'Create your account',
+    logInTitle: isHebrew ? 'התחברות' : 'Log in',
+  }), [isHebrew])
 
   useEffect(() => {
     if (mode !== 'signup') return
     writePersistedSignupStep(safeSignupStep)
   }, [mode, safeSignupStep])
+
+  useEffect(() => {
+    if (i18n.resolvedLanguage !== language) {
+      void i18n.changeLanguage(language)
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language)
+    }
+  }, [language])
+
+  useEffect(() => {
+    if (locationStatus === 'placeholder' && !initialLocationAddress) {
+      setLocationLabel(language === 'he' ? 'האזור שלך' : 'Your area')
+    }
+  }, [initialLocationAddress, language, locationStatus])
 
   useEffect(() => {
     if (mode !== 'signup') return
@@ -307,10 +417,23 @@ export default function AuthScreen({
     () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
     [selectedServices, serviceOptions],
   )
+  const selectedPrimaryService = selectedServices[0] ?? null
+  const selectedServiceIllustration = selectedPrimaryService === 'dog_walker'
+    ? providerCharacterImage
+    : selectedPrimaryService === 'baby_sitter'
+      ? customerCharacterImage
+      : welcomeHeroImage
+  const selectedServiceIllustrationAlt = selectedPrimaryService === 'baby_sitter'
+    ? (language === 'he' ? 'איור בייביסיטר' : 'Babysitter service illustration')
+    : selectedPrimaryService === 'dog_walker'
+      ? (language === 'he' ? 'איור טיול כלבים' : 'Dog walking service illustration')
+      : (language === 'he' ? 'איור שירותים כלליים של Regli' : 'Regli general services illustration')
 
   const hasDog = selectedServices.includes('dog_walker')
   const hasSitter = selectedServices.includes('baby_sitter')
   const isProvider = role === 'walker'
+  const isProviderDogWalker = isProvider && selectedPrimaryService === 'dog_walker'
+  const isProviderBabySitter = isProvider && selectedPrimaryService === 'baby_sitter'
   const onboardingServiceTypes = isProvider ? selectedServices : []
 
   const dogValid = isProvider
@@ -337,7 +460,7 @@ export default function AuthScreen({
     return true
   }, [authenticatedOnboarding, currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
-  const roleSummary = role === 'walker' ? 'Provider' : 'Customer'
+  const roleSummary = role === 'walker' ? copy.provider : copy.customer
 
   useEffect(() => {
     document.body.dataset.authOnboarding = 'true'
@@ -361,7 +484,7 @@ export default function AuthScreen({
   const requestCurrentLocation = () => {
     if (!navigator.geolocation) {
       setLocationStatus('denied')
-      setLocationLabel('Your area')
+      setLocationLabel(language === 'he' ? 'האזור שלך' : 'Your area')
       return
     }
 
@@ -369,13 +492,13 @@ export default function AuthScreen({
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords
-        const nextLabel = await reverseGeocodeLocation(latitude, longitude)
+        const nextLabel = await reverseGeocodeLocation(latitude, longitude, language)
         setLocationLabel(nextLabel)
         setLocationStatus('live')
       },
       () => {
         setLocationStatus('denied')
-        setLocationLabel('Your area')
+        setLocationLabel(language === 'he' ? 'האזור שלך' : 'Your area')
       },
       {
         enableHighAccuracy: true,
@@ -394,7 +517,7 @@ export default function AuthScreen({
     if (locationAutoRequestedRef.current) return
     locationAutoRequestedRef.current = true
     requestCurrentLocation()
-  }, [currentStep, mode])
+  }, [currentStep, language, mode])
 
   const handleUseCurrentLocation = () => {
     requestCurrentLocation()
@@ -670,7 +793,7 @@ export default function AuthScreen({
       >
         <span style={socialIconStyle}>G</span>
         <span style={socialLabelStyle}>
-          {googleSubmitting ? 'Connecting to Google...' : 'Continue with Google'}
+          {googleSubmitting ? copy.connectingGoogle : copy.continueWithGoogle}
         </span>
       </button>
 
@@ -690,19 +813,33 @@ export default function AuthScreen({
       >
         <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
         <span style={socialLabelStyle}>
-          {appleSubmitting ? 'Connecting to Apple...' : 'Continue with Apple'}
+          {appleSubmitting ? copy.connectingApple : copy.continueWithApple}
         </span>
         {!appleSignInEnabled && <span style={comingSoonPillStyle}>Coming soon</span>}
       </button>
     </div>
   )
 
-  const stepTitle = getStepTitle(mode, currentStep, role)
+  const stepTitle =
+    mode === 'signin'
+      ? copy.logInTitle
+      : currentStep === 'role'
+        ? copy.roleTitle
+        : currentStep === 'service'
+          ? (role === 'walker' ? copy.serviceProvide : copy.serviceNeed)
+          : currentStep === 'location'
+            ? copy.whereLocated
+            : currentStep === 'details'
+              ? copy.tellUsMore
+              : currentStep === 'auth'
+                ? copy.createYourAccount
+                : copy.welcomeTitle
   const shouldShowEmailFields = !authenticatedOnboarding && currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
-  const cardIsScrollable = (currentStep === 'auth' && shouldShowEmailFields) || currentStep === 'details'
+  const cardIsScrollable = true
+  const shouldShowWelcomeContent = !authenticatedOnboarding && currentStep === 'welcome'
 
   return (
-    <div style={screenStyle}>
+    <div dir={direction} style={screenStyle}>
       <style>{`
         @keyframes authStepEnter {
           0% { opacity: 0; transform: translateY(18px); }
@@ -738,17 +875,36 @@ export default function AuthScreen({
         <div style={routeMarkerEndStyle}>⌂</div>
       </div>
 
-      <div style={shellStyle}>
+      <div style={{ ...shellStyle, direction }}>
         <div style={heroStyle}>
-          <div style={brandRowStyle}>
+          <div style={{ ...heroTopRowStyle, ...(isRtl ? heroTopRowRtlStyle : null) }}>
+            <div style={{ ...brandRowStyle, ...(isRtl ? brandRowRtlStyle : null) }}>
             <div style={brandBadgeStyle}>R</div>
-            <div>
+            <div style={{ textAlign }}>
               <div style={brandNameStyle}>Regli</div>
-              <div style={brandSubtitleStyle}>Trusted services, beautifully coordinated.</div>
+              <div style={{ ...brandSubtitleStyle, textAlign }}>
+                {isHebrew ? 'שירותים אמינים, מתואמים יפה.' : 'Trusted services, beautifully coordinated.'}
+              </div>
+            </div>
+          </div>
+            <div style={{ ...languageSwitchStyle, ...(isRtl ? languageSwitchRtlStyle : null) }}>
+              {(['en', 'he'] as SupportedLanguage[]).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setLanguage(option)}
+                  style={{
+                    ...languagePillStyle,
+                    ...(language === option ? languagePillActiveStyle : null),
+                  }}
+                >
+                  {option === 'he' ? 'עברית' : 'EN'}
+                </button>
+              ))}
             </div>
           </div>
 
-          <div style={stepsRowStyle}>
+          <div style={{ ...stepsRowStyle, ...(isRtl ? stepsRowRtlStyle : null) }}>
             {signupSteps.map((step, index) => (
               <span
                 key={step}
@@ -761,62 +917,63 @@ export default function AuthScreen({
           </div>
         </div>
 
-        <div key={`${mode}-${currentStep}`} className="auth-step-enter" style={cardStyle}>
+        <div className="auth-step-enter" style={{ ...cardStyle, direction }}>
           <div
             style={{
               ...cardContentStyle,
               ...(cardIsScrollable ? cardContentScrollableStyle : null),
+              textAlign,
             }}
           >
-          {!authenticatedOnboarding && mode === 'welcome' && (
+          {shouldShowWelcomeContent && (
             <>
               <div style={welcomeHeroWrapStyle}>
                 <img
                   src={welcomeHeroImage}
-                  alt="Premium onboarding welcome illustration"
+                  alt={isHebrew ? 'איור פתיחה של Regli לשירותים כלליים' : 'Regli onboarding illustration for local services'}
                   style={welcomeHeroImageStyle}
                   decoding="async"
                   fetchPriority="high"
                 />
               </div>
-              <div style={eyebrowStyle}>Welcome</div>
-              <h1 style={titleStyle}>Book trusted services in minutes</h1>
-              <p style={subtitleStyle}>
-                Choose a service, confirm your details, and we’ll find a trusted provider nearby.
+              <div style={{ ...eyebrowStyle, textAlign }}>{copy.welcomeEyebrow}</div>
+              <h1 style={{ ...titleStyle, textAlign }}>{copy.welcomeTitle}</h1>
+              <p style={{ ...subtitleStyle, textAlign }}>
+                {copy.welcomeSubtitle}
               </p>
 
               <div style={featureRowStyle}>
-                <div style={featurePillStyle}>📍 Live location ready</div>
-                <div style={featurePillStyle}>⚡ Fast booking</div>
-                <div style={featurePillStyle}>🤝 Trusted providers</div>
+                <div style={featurePillStyle}>{copy.welcomeFeatureLocation}</div>
+                <div style={featurePillStyle}>{copy.welcomeFeatureFast}</div>
+                <div style={featurePillStyle}>{copy.welcomeFeatureTrusted}</div>
               </div>
             </>
           )}
 
           {mode === 'signup' && currentStep === 'role' && (
             <>
-              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
-              <h1 style={titleStyle}>{stepTitle}</h1>
+              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
               <div style={optionStackStyle}>
                 <RoleCard
-                  title="Provider"
-                  description="Offer services, get booked, and earn on your time."
+                  title={copy.providerTitle}
+                  description={copy.providerDescription}
                   selected={role === 'walker'}
                   icon="🧑‍💼"
                   imageSrc={providerCharacterImage}
-                  imageAlt="Provider onboarding character"
+                  imageAlt={isHebrew ? 'איור ספק' : 'Provider onboarding character'}
                   onClick={() => {
                     setRole('walker')
                     setSelectedServices((current) => current.length > 0 ? current : ['dog_walker'])
                   }}
                 />
                 <RoleCard
-                  title="Customer"
-                  description="Find trusted providers and book services with ease."
+                  title={copy.clientTitle}
+                  description={copy.clientDescription}
                   selected={role === 'client'}
                   icon="✨"
                   imageSrc={customerCharacterImage}
-                  imageAlt="Customer onboarding character"
+                  imageAlt={isHebrew ? 'איור לקוח' : 'Customer onboarding character'}
                   onClick={() => {
                     setRole('client')
                     setSelectedServices([])
@@ -828,11 +985,20 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'service' && (
             <>
-              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
-              <h1 style={titleStyle}>{stepTitle}</h1>
-              <p style={subtitleStyle}>
-                Pick one primary service for now. You can expand this later in settings.
+              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <p style={{ ...subtitleStyle, textAlign }}>
+                {copy.serviceIntro}
               </p>
+              <div style={serviceIllustrationCardStyle}>
+                <img
+                  src={selectedServiceIllustration}
+                  alt={selectedServiceIllustrationAlt}
+                  style={serviceIllustrationImageStyle}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
               <div style={serviceGridStyle}>
                 {serviceOptions.map((service) => {
                   const selected = selectedServices[0] === service.id
@@ -861,10 +1027,10 @@ export default function AuthScreen({
 
           {mode === 'signup' && currentStep === 'location' && (
             <>
-              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
-              <h1 style={titleStyle}>{stepTitle}</h1>
-              <p style={subtitleStyle}>
-                We’ll use this to tailor nearby availability and a smoother first experience.
+              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <p style={{ ...subtitleStyle, textAlign }}>
+                {copy.locationIntro}
               </p>
 
               <div style={locationCardStyle}>
@@ -884,55 +1050,55 @@ export default function AuthScreen({
                 <div style={locationMetaStyle}>
                   <div style={locationLabelTitleStyle}>
                     {locationStatus === 'live'
-                      ? 'Current location'
+                      ? copy.locationCurrent
                       : locationStatus === 'loading'
-                        ? 'Checking location'
+                        ? copy.locationChecking
                         : locationStatus === 'denied'
-                          ? 'Location unavailable'
-                          : 'Location preview'}
+                          ? copy.locationUnavailable
+                          : copy.locationPreview}
                   </div>
                   <div style={locationLabelValueStyle}>{locationLabel}</div>
                   <div style={locationHintStyle}>
                     {locationStatus === 'live'
-                      ? 'Using your current location.'
+                      ? copy.locationUsing
                       : locationStatus === 'loading'
-                        ? 'Detecting your location…'
+                        ? copy.locationDetecting
                         : locationStatus === 'denied'
-                          ? 'Current location unavailable right now.'
-                          : 'A soft map preview helps personalize nearby results.'}
+                          ? copy.locationDenied
+                          : copy.locationHint}
                   </div>
                 </div>
               </div>
 
               <button type="button" onClick={handleUseCurrentLocation} style={secondaryInlineButtonStyle}>
-                {locationStatus === 'loading' ? 'Refreshing location...' : 'Use current location'}
+                {locationStatus === 'loading' ? copy.refreshingLocation : copy.useCurrentLocation}
               </button>
             </>
           )}
 
           {mode === 'signup' && currentStep === 'details' && (
             <>
-              <div style={eyebrowStyle}>Step {signupStepNumber}</div>
-              <h1 style={titleStyle}>{stepTitle}</h1>
-              <p style={subtitleStyle}>
+              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <p style={{ ...subtitleStyle, textAlign }}>
                 {isProvider
-                  ? 'Define your capabilities so we can match you with the right clients.'
-                  : 'Help us personalize your experience by sharing a few details.'}
+                  ? copy.detailsProvider
+                  : copy.detailsClient}
               </p>
 
               <div style={detailsSectionsStyle}>
                 {isProvider ? (
                   <>
                     <div style={providerIdentityCardStyle}>
-                      <div style={providerIdentityHeaderStyle}>
-                        <div style={providerIdentityTitleStyle}>Build trust quickly</div>
+                        <div style={providerIdentityHeaderStyle}>
+                        <div style={providerIdentityTitleStyle}>{copy.buildTrustTitle}</div>
                         <div style={providerIdentitySubtitleStyle}>
-                          A few profile basics help clients understand who you are before they book.
+                          {copy.buildTrustSubtitle}
                         </div>
                       </div>
 
                       <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>Years of experience</label>
+                        <label style={labelStyle}>{copy.yearsExperience}</label>
                         <div style={chipRowStyle}>
                           {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
                             <button
@@ -952,18 +1118,18 @@ export default function AuthScreen({
                       </div>
 
                       <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>Short bio</label>
+                        <label style={labelStyle}>{copy.shortBio}</label>
                         <textarea
                           value={providerIdentity.shortBio}
                           onChange={(e) => setProviderIdentity((prev) => ({ ...prev, shortBio: e.target.value }))}
-                          placeholder="Reliable electrician specializing in residential repairs."
+                          placeholder={copy.shortBioPlaceholder}
                           rows={2}
                           style={compactTextareaStyle}
                         />
                       </div>
 
                       <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>Languages spoken</label>
+                        <label style={labelStyle}>{copy.languagesSpoken}</label>
                         <div style={chipRowStyle}>
                           {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
                             const selected = providerIdentity.languages.includes(option.value)
@@ -991,11 +1157,10 @@ export default function AuthScreen({
                       </div>
                     </div>
 
-                    {hasDog && (
+                    {isProviderDogWalker && (
                       <div style={detailsSectionStyle}>
-                        {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Dog sizes you handle</label>
+                          <label style={labelStyle}>{copy.dogSizesHandle}</label>
                           <div style={chipRowStyle}>
                             {DOG_SIZE_OPTIONS.map((opt) => {
                               const selected = provDogAttrs.supportedDogSizes.includes(opt.value)
@@ -1009,12 +1174,13 @@ export default function AuthScreen({
                                       ? prev.supportedDogSizes.filter((s) => s !== opt.value)
                                       : [...prev.supportedDogSizes, opt.value],
                                   }))}
-                                  style={{
-                                    ...chipStyle,
-                                    ...(selected ? chipSelectedStyle : null),
-                                  }}
-                                >
-                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                style={{
+                                  ...chipStyle,
+                                  ...compactChipStyle,
+                                  ...(selected ? chipSelectedStyle : null),
+                                }}
+                              >
+                                  <span style={compactChipLabelStyle}>{opt.label}</span>
                                   <span style={chipDescStyle}>{opt.desc}</span>
                                 </button>
                               )
@@ -1023,7 +1189,7 @@ export default function AuthScreen({
                         </div>
 
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Energy levels you manage</label>
+                          <label style={labelStyle}>{copy.energyLevelsManage}</label>
                           <div style={chipRowStyle}>
                             {ENERGY_OPTIONS.map((opt) => {
                               const selected = provDogAttrs.supportedEnergyLevels.includes(opt.value)
@@ -1037,12 +1203,13 @@ export default function AuthScreen({
                                       ? prev.supportedEnergyLevels.filter((s) => s !== opt.value)
                                       : [...prev.supportedEnergyLevels, opt.value],
                                   }))}
-                                  style={{
-                                    ...chipStyle,
-                                    ...(selected ? chipSelectedStyle : null),
-                                  }}
-                                >
-                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                style={{
+                                  ...chipStyle,
+                                  ...compactChipStyle,
+                                  ...(selected ? chipSelectedStyle : null),
+                                }}
+                              >
+                                  <span style={compactChipLabelStyle}>{opt.label}</span>
                                 </button>
                               )
                             })}
@@ -1052,11 +1219,10 @@ export default function AuthScreen({
                       </div>
                     )}
 
-                    {hasSitter && (
+                    {isProviderBabySitter && (
                       <div style={detailsSectionStyle}>
-                        {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Age ranges you cover</label>
+                          <label style={labelStyle}>{copy.ageRangesCover}</label>
                           <div style={chipRowStyle}>
                             {AGE_RANGE_OPTIONS.map((opt) => {
                               const selected = provSitterAttrs.supportedAgeRanges.includes(opt.value)
@@ -1070,12 +1236,13 @@ export default function AuthScreen({
                                       ? prev.supportedAgeRanges.filter((s) => s !== opt.value)
                                       : [...prev.supportedAgeRanges, opt.value],
                                   }))}
-                                  style={{
-                                    ...chipStyle,
-                                    ...(selected ? chipSelectedStyle : null),
-                                  }}
-                                >
-                                  <span style={chipLabelStyle}>{opt.label}</span>
+                                style={{
+                                  ...chipStyle,
+                                  ...compactChipStyle,
+                                  ...(selected ? chipSelectedStyle : null),
+                                }}
+                              >
+                                  <span style={compactChipLabelStyle}>{opt.label}</span>
                                 </button>
                               )
                             })}
@@ -1089,19 +1256,19 @@ export default function AuthScreen({
                   <>
                     {hasDog && (
                       <div style={detailsSectionStyle}>
-                        {hasSitter && <div style={detailsSectionLabelStyle}>Dog walking</div>}
+                        {hasSitter && <div style={detailsSectionLabelStyle}>{copy.dogWalking}</div>}
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Pet name</label>
+                          <label style={labelStyle}>{copy.petName}</label>
                           <input
                             value={dogAttrs.petName}
                             onChange={(e) => setDogAttrs((prev) => ({ ...prev, petName: e.target.value }))}
-                            placeholder="e.g. Boki"
+                            placeholder={copy.petNamePlaceholder}
                             style={inputStyle}
                           />
                         </div>
 
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Dog size</label>
+                          <label style={labelStyle}>{copy.dogSize}</label>
                           <div style={chipRowStyle}>
                             {DOG_SIZE_OPTIONS.map((opt) => (
                               <button
@@ -1121,7 +1288,7 @@ export default function AuthScreen({
                         </div>
 
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Energy level</label>
+                          <label style={labelStyle}>{copy.energyLevel}</label>
                           <div style={chipRowStyle}>
                             {ENERGY_OPTIONS.map((opt) => (
                               <button
@@ -1143,9 +1310,9 @@ export default function AuthScreen({
 
                     {hasSitter && (
                       <div style={detailsSectionStyle}>
-                        {hasDog && <div style={detailsSectionLabelStyle}>Baby sitting</div>}
+                        {hasDog && <div style={detailsSectionLabelStyle}>{copy.babySitting}</div>}
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>How many children need babysitting?</label>
+                          <label style={labelStyle}>{copy.numberOfChildren}</label>
                           <div style={chipRowStyle}>
                             {[1, 2, 3, 4].map((n) => (
                               <button
@@ -1173,7 +1340,7 @@ export default function AuthScreen({
                         {sitterAttrs.numberOfKids >= 1 &&
                           sitterAttrs.childrenAges.map((age, i) => (
                             <div key={i} style={detailsFieldBlockStyle}>
-                              <label style={labelStyle}>Child {i + 1} age</label>
+                              <label style={labelStyle}>{copy.childAge(i + 1)}</label>
                               <input
                                 value={age}
                                 onChange={(e) => {
@@ -1184,7 +1351,7 @@ export default function AuthScreen({
                                     return { ...prev, childrenAges: next }
                                   })
                                 }}
-                                placeholder="Age in years"
+                                placeholder={copy.ageYearsPlaceholder}
                                 inputMode="numeric"
                                 style={inputStyle}
                               />
@@ -1193,11 +1360,11 @@ export default function AuthScreen({
                         }
 
                         <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>Special notes / allergies</label>
+                          <label style={labelStyle}>{copy.notesAllergies}</label>
                           <textarea
                             value={sitterAttrs.specialNotes}
                             onChange={(e) => setSitterAttrs((prev) => ({ ...prev, specialNotes: e.target.value }))}
-                            placeholder="Anything we should know (optional)"
+                            placeholder={copy.notesPlaceholder}
                             rows={3}
                             style={textareaStyle}
                           />
@@ -1213,15 +1380,19 @@ export default function AuthScreen({
           {isCreateAccountStep && (
             <>
               <div style={eyebrowStyle}>
-                {authenticatedOnboarding ? `Step ${signupStepNumber}` : mode === 'signin' ? 'Welcome back' : `Step ${signupStepNumber}`}
-              </div>
-              <h1 style={titleStyle}>{stepTitle}</h1>
-              <p style={subtitleStyle}>
                 {authenticatedOnboarding
-                  ? 'Finish your Regli setup to continue.'
+                  ? (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)
                   : mode === 'signin'
-                  ? 'Log in to continue where you left off.'
-                  : 'Finish setting up your account to start with Regli.'}
+                    ? (isHebrew ? 'שמחים שחזרתם' : 'Welcome back')
+                    : (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)}
+              </div>
+              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <p style={{ ...subtitleStyle, textAlign }}>
+                {authenticatedOnboarding
+                  ? copy.finishSetup
+                  : mode === 'signin'
+                  ? copy.signInPrompt
+                  : copy.createAccountPrompt}
               </p>
 
               {mode === 'signup' && (
@@ -1231,7 +1402,7 @@ export default function AuthScreen({
                     <span>
                       {isProvider
                         ? selectedServices.map((value) => serviceOptions.find((service) => service.id === value)?.label).filter(Boolean).join(', ')
-                        : 'Ready to book'}
+                        : copy.readyToBook}
                     </span>
                   </div>
                   <div style={summaryLocationStyle}>{locationLabel}</div>
@@ -1246,24 +1417,24 @@ export default function AuthScreen({
                   onClick={() => setShowEmailAuth(true)}
                   style={secondaryInlineButtonStyle}
                 >
-                  Use email instead
+                  {copy.useEmailInstead}
                 </button>
               ) : !authenticatedOnboarding ? (
                 <>
                   {mode === 'signup' && (
                     <div style={fieldBlockStyle}>
-                      <label style={labelStyle}>Full name</label>
+                      <label style={labelStyle}>{copy.fullName}</label>
                       <input
                         value={fullName}
                         onChange={(event) => setFullName(event.target.value)}
-                        placeholder="Your full name"
+                        placeholder={copy.fullNamePlaceholder}
                         style={inputStyle}
                       />
                     </div>
                   )}
 
                   <div style={fieldBlockStyle}>
-                    <label style={labelStyle}>Email</label>
+                    <label style={labelStyle}>{copy.email}</label>
                     <input
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
@@ -1275,11 +1446,11 @@ export default function AuthScreen({
                   </div>
 
                   <div style={fieldBlockStyle}>
-                    <label style={labelStyle}>Password</label>
+                    <label style={labelStyle}>{copy.password}</label>
                     <input
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      placeholder="Password"
+                      placeholder={copy.passwordPlaceholder}
                       type="password"
                       autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
                       style={inputStyle}
@@ -1298,17 +1469,17 @@ export default function AuthScreen({
           <div style={buttonRowStyle}>
             {(mode !== 'welcome' || authenticatedOnboarding) && (
               <button type="button" onClick={handleBack} style={secondaryButtonStyle}>
-                Back
+                {copy.back}
               </button>
             )}
 
             {!authenticatedOnboarding && mode === 'welcome' ? (
               <>
                 <button type="button" onClick={goToSignIn} style={secondaryButtonStyle}>
-                  Log in
+                  {copy.login}
                 </button>
                 <button type="button" onClick={goToSignup} style={primaryButtonStyle}>
-                  Get started
+                  {copy.getStarted}
                 </button>
               </>
             ) : (
@@ -1328,26 +1499,26 @@ export default function AuthScreen({
                 }}
               >
                 {submitting
-                  ? 'Please wait...'
+                  ? copy.pleaseWait
                   : authenticatedOnboarding
-                    ? (hasNextSignupStep ? 'Next' : 'Finish Setup')
+                    ? (hasNextSignupStep ? copy.next : copy.finish)
                   : mode === 'signin'
-                    ? 'Log in'
+                    ? copy.login
                     : currentStep === 'auth'
-                      ? 'Create account'
+                      ? copy.createAccount
                       : currentStep === 'location'
-                        ? 'Continue'
+                        ? copy.next
                         : currentStep === 'details'
-                          ? 'Continue to account'
-                          : 'Continue'}
+                          ? copy.continueToAccount
+                          : copy.next}
               </button>
             )}
           </div>
 
-          <div style={bottomHintStyle}>
+          <div style={{ ...bottomHintStyle, textAlign }}>
             {authenticatedOnboarding ? (
               <>
-                Complete your profile to unlock the Regli app.
+                {copy.finishSetup}
                 {onStartOver && (
                   <>
                     {' '}
@@ -1362,27 +1533,27 @@ export default function AuthScreen({
                       }}
                       style={textLinkStyle}
                     >
-                      Start over / Log out
+                      {copy.startOver}
                     </button>
                   </>
                 )}
               </>
             ) : mode === 'signin' ? (
               <>
-                New to Regli?{' '}
+                {copy.newToRegli}{' '}
                 <button type="button" onClick={goToSignup} style={textLinkStyle}>
-                  Get started
+                  {copy.getStarted}
                 </button>
               </>
             ) : mode === 'signup' && currentStep === 'auth' ? (
               <>
-                Already have an account?{' '}
+                {copy.alreadyHaveAccount}{' '}
                 <button type="button" onClick={goToSignIn} style={textLinkStyle}>
-                  Log in
+                  {copy.login}
                 </button>
               </>
             ) : (
-              'Designed for mobile-first booking and provider onboarding.'
+              copy.designedHint
             )}
           </div>
         </div>
@@ -1567,10 +1738,25 @@ const heroStyle: CSSProperties = {
   gap: 8,
 }
 
+const heroTopRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+}
+
+const heroTopRowRtlStyle: CSSProperties = {
+  flexDirection: 'row-reverse',
+}
+
 const brandRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 14,
+}
+
+const brandRowRtlStyle: CSSProperties = {
+  flexDirection: 'row-reverse',
 }
 
 const brandBadgeStyle: CSSProperties = {
@@ -1603,6 +1789,10 @@ const brandSubtitleStyle: CSSProperties = {
 const stepsRowStyle: CSSProperties = {
   display: 'flex',
   gap: 8,
+}
+
+const stepsRowRtlStyle: CSSProperties = {
+  flexDirection: 'row-reverse',
 }
 
 const stepDotStyle: CSSProperties = {
@@ -1644,6 +1834,7 @@ const cardContentScrollableStyle: CSSProperties = {
   overflowY: 'auto',
   overscrollBehavior: 'contain',
   paddingRight: 2,
+  paddingBottom: 24,
 }
 
 const eyebrowStyle: CSSProperties = {
@@ -1693,6 +1884,41 @@ const featureRowStyle: CSSProperties = {
   gap: 6,
 }
 
+const languageSwitchStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: 4,
+  borderRadius: 999,
+  background: 'rgba(255,255,255,0.78)',
+  border: '1px solid rgba(145, 164, 196, 0.16)',
+  boxShadow: '0 10px 24px rgba(45, 68, 126, 0.08)',
+  flexShrink: 0,
+}
+
+const languageSwitchRtlStyle: CSSProperties = {
+  flexDirection: 'row-reverse',
+}
+
+const languagePillStyle: CSSProperties = {
+  appearance: 'none',
+  minHeight: 30,
+  padding: '0 10px',
+  borderRadius: 999,
+  border: '1px solid transparent',
+  background: 'transparent',
+  color: '#64748B',
+  fontSize: 12,
+  fontWeight: 800,
+  cursor: 'pointer',
+}
+
+const languagePillActiveStyle: CSSProperties = {
+  background: '#EEF4FF',
+  borderColor: 'rgba(91, 124, 250, 0.18)',
+  color: '#233B74',
+}
+
 const socialStackStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
@@ -1709,7 +1935,7 @@ const socialButtonStyle: CSSProperties = {
   gap: 10,
   padding: '0 14px',
   boxSizing: 'border-box',
-  textAlign: 'left',
+  textAlign: 'start',
   cursor: 'pointer',
 }
 
@@ -1780,7 +2006,7 @@ const optionStackStyle: CSSProperties = {
 
 const roleCardStyle: CSSProperties = {
   width: '100%',
-  textAlign: 'left',
+  textAlign: 'start',
   border: '1px solid rgba(145, 164, 196, 0.24)',
   background: '#FFFFFF',
   borderRadius: 22,
@@ -1865,21 +2091,42 @@ const roleDescriptionStyle: CSSProperties = {
 const serviceGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
-  gap: 10,
+  gap: 8,
+}
+
+const serviceIllustrationCardStyle: CSSProperties = {
+  minHeight: 96,
+  borderRadius: 20,
+  border: '1px solid rgba(145, 164, 196, 0.18)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
+  display: 'grid',
+  placeItems: 'center',
+  overflow: 'hidden',
+  padding: '6px 10px',
+}
+
+const serviceIllustrationImageStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  maxHeight: 110,
+  objectFit: 'contain',
+  objectPosition: 'center',
+  display: 'block',
 }
 
 const serviceCardStyle: CSSProperties = {
   position: 'relative',
   border: '1px solid rgba(145, 164, 196, 0.22)',
   background: '#FFFFFF',
-  borderRadius: 20,
-  padding: '14px 12px',
-  minHeight: 92,
+  borderRadius: 18,
+  padding: '10px 9px',
+  minHeight: 72,
   display: 'grid',
-  alignContent: 'space-between',
+  gap: 6,
+  alignContent: 'start',
   justifyItems: 'start',
   cursor: 'pointer',
-  textAlign: 'left',
+  textAlign: 'start',
 }
 
 const serviceCardSelectedStyle: CSSProperties = {
@@ -1889,19 +2136,19 @@ const serviceCardSelectedStyle: CSSProperties = {
 }
 
 const serviceEmojiStyle: CSSProperties = {
-  fontSize: 22,
+  fontSize: 18,
 }
 
 const serviceLabelStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 12.5,
   lineHeight: 1.35,
   fontWeight: 800,
   color: '#0F172A',
 }
 
 const serviceDescriptionStyle: CSSProperties = {
-  fontSize: 11.5,
-  lineHeight: 1.45,
+  fontSize: 10.5,
+  lineHeight: 1.35,
   color: '#64748B',
 }
 
@@ -2188,7 +2435,7 @@ const detailsFieldBlockStyle: CSSProperties = {
 
 const chipRowStyle: CSSProperties = {
   display: 'flex',
-  gap: 8,
+  gap: 6,
   flexWrap: 'wrap',
 }
 
@@ -2196,14 +2443,14 @@ const chipStyle: CSSProperties = {
   appearance: 'none',
   border: '1px solid rgba(145, 164, 196, 0.24)',
   background: '#FFFFFF',
-  borderRadius: 14,
-  padding: '10px 14px',
+  borderRadius: 13,
+  padding: '8px 11px',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   gap: 2,
   cursor: 'pointer',
-  minWidth: 52,
+  minWidth: 46,
   transition: 'all 180ms ease',
 }
 
@@ -2214,12 +2461,12 @@ const chipSelectedStyle: CSSProperties = {
 }
 
 const compactChipStyle: CSSProperties = {
-  padding: '9px 12px',
+  padding: '8px 11px',
   minWidth: 0,
 }
 
 const chipLabelStyle: CSSProperties = {
-  fontSize: 15,
+  fontSize: 13,
   fontWeight: 800,
   color: '#0F172A',
 }
@@ -2232,7 +2479,7 @@ const compactChipLabelStyle: CSSProperties = {
 }
 
 const chipDescStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: 10,
   color: '#64748B',
   fontWeight: 600,
 }
