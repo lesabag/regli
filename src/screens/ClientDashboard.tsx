@@ -1809,6 +1809,10 @@ export default function ClientDashboard({
     }
 
     setSelectedDogPetIds((prev) => (prev.length === 0 ? prev : []))
+    if (flow.dogName) {
+      flow.setDogName('')
+      persistSelectedBookingSubject('')
+    }
   }, [activeDogPets, flow, isDogWalkerRequest, persistSelectedBookingSubject])
 
   useEffect(() => {
@@ -1906,6 +1910,50 @@ export default function ClientDashboard({
       return (data as ClientPetRow | null) ?? null
     },
     [findDogPetByName, profile.id],
+  )
+
+  const deleteClientDog = useCallback(
+    async (pet: { id: string; normalizedName: string }) => {
+      setDogNameSheetError(null)
+      setDogNameSheetSaving(true)
+
+      const { error } = await supabase
+        .from('client_pets')
+        .delete()
+        .eq('id', pet.id)
+        .eq('client_id', profile.id)
+
+      setDogNameSheetSaving(false)
+
+      if (error) {
+        console.warn('[ClientDashboard] failed to delete client pet:', error.message)
+        setDogNameSheetError(
+          isRtl ? 'לא הצלחנו למחוק את הכלב. נסו שוב.' : 'We could not delete this dog right now. Please try again.',
+        )
+        return
+      }
+
+      setClientPets((current) => current.filter((currentPet) => currentPet.id !== pet.id))
+      setSelectedDogPetIds((current) => current.filter((id) => id !== pet.id))
+      setSelectedDogDraftPetId((current) => (current === pet.id ? null : current))
+      setDogNameDraft((current) =>
+        normalizeDogName(current).toLocaleLowerCase() === pet.normalizedName.toLocaleLowerCase()
+          ? ''
+          : current,
+      )
+      setDogSizeDraft(DEFAULT_DOG_SIZE)
+
+      const nextRecentNames = recentDogNames.filter(
+        (name) => normalizeDogName(name).toLocaleLowerCase() !== pet.normalizedName.toLocaleLowerCase(),
+      )
+      persistRecentDogNames(nextRecentNames)
+
+      if (normalizeDogName(flow.dogName).toLocaleLowerCase() === pet.normalizedName.toLocaleLowerCase()) {
+        flow.setDogName('')
+        persistSelectedBookingSubject('')
+      }
+    },
+    [flow, isRtl, persistRecentDogNames, persistSelectedBookingSubject, profile.id, recentDogNames],
   )
 
   const openDogNameSheet = useCallback(() => {
@@ -5420,22 +5468,37 @@ export default function ClientDashboard({
                   {activeDogPets.map((pet) => {
                     const isSelectedDraft = selectedDogDraftPetId === pet.id
                     return (
-                      <button
-                        key={pet.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedDogDraftPetId(pet.id)
-                          setDogNameDraft(pet.normalizedName)
-                          setDogSizeDraft(pet.dog_size ?? DEFAULT_DOG_SIZE)
-                          setDogNameSheetError(null)
-                        }}
-                        style={{
-                          ...dogNameChipStyle,
-                          ...(isSelectedDraft ? dogNameChipActiveStyle : null),
-                        }}
-                      >
-                        <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true })}</span>
-                      </button>
+                      <div key={pet.id} style={dogNameChipWrapStyle}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDogDraftPetId(pet.id)
+                            setDogNameDraft(pet.normalizedName)
+                            setDogSizeDraft(pet.dog_size ?? DEFAULT_DOG_SIZE)
+                            setDogNameSheetError(null)
+                          }}
+                          style={{
+                            ...dogNameChipStyle,
+                            ...(isSelectedDraft ? dogNameChipActiveStyle : null),
+                          }}
+                        >
+                          <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true })}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void deleteClientDog(pet)
+                          }}
+                          style={dogNameChipDeleteStyle}
+                          disabled={dogNameSheetSaving}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </button>
+                      </div>
                     )
                   })}
                 </div>
@@ -5484,6 +5547,7 @@ export default function ClientDashboard({
                             }
                           }}
                           style={dogNameChipDeleteStyle}
+                          disabled={dogNameSheetSaving}
                         >
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="18" y1="6" x2="6" y2="18" />
