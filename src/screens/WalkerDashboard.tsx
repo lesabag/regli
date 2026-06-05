@@ -51,6 +51,7 @@ type AppRole = 'client' | 'walker' | 'admin'
 
 type ServiceAttributes = Record<string, Record<string, unknown>>
 type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+type CapabilitySectionId = 'profile' | 'dog_walker' | 'baby_sitter'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
 type AvailabilityFormRow = {
   dayOfWeek: number
@@ -719,10 +720,6 @@ export default function WalkerDashboard({
     const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return Array.isArray(sa?.supportedDogSizes) ? (sa.supportedDogSizes as string[]) : []
   })
-  const [provDogEnergy, setProvDogEnergy] = useState<string[]>(() => {
-    const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
-    return Array.isArray(sa?.supportedEnergyLevels) ? (sa.supportedEnergyLevels as string[]) : []
-  })
   const [provDogExp, setProvDogExp] = useState<number>(() => {
     const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'dog_walker')
     return typeof sa?.experienceYears === 'number' ? (sa.experienceYears as number) : 0
@@ -747,6 +744,7 @@ export default function WalkerDashboard({
     const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'baby_sitter')
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
+  const [activeCapabilitySection, setActiveCapabilitySection] = useState<CapabilitySectionId>('profile')
   const providerBioCharCount = useMemo(() => countCodePoints(providerBio), [providerBio])
   const providerBioMenuPreview = useMemo(
     () => truncateCodePoints(providerBio, PROVIDER_BIO_MENU_PREVIEW_MAX_CHARS),
@@ -757,7 +755,6 @@ export default function WalkerDashboard({
     const dogSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'dog_walker') ?? {}
     const sitterSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'baby_sitter') ?? {}
     const origDogSizes = Array.isArray(dogSa.supportedDogSizes) ? (dogSa.supportedDogSizes as string[]) : []
-    const origDogEnergy = Array.isArray(dogSa.supportedEnergyLevels) ? (dogSa.supportedEnergyLevels as string[]) : []
     const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
     const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
     const origExperienceRange =
@@ -782,7 +779,6 @@ export default function WalkerDashboard({
       provExperienceRange !== origExperienceRange ||
       !arrEq(provLanguages, origLanguages) ||
       !arrEq(provDogSizes, origDogSizes) ||
-      !arrEq(provDogEnergy, origDogEnergy) ||
       provDogExp !== origDogExp ||
       provDogNotes !== origDogNotes ||
       !arrEq(provSitterAges, origSitterAges) ||
@@ -793,7 +789,7 @@ export default function WalkerDashboard({
     providerCapabilities,
     provExperienceRange,
     provLanguages,
-    provDogSizes, provDogEnergy, provDogExp, provDogNotes,
+    provDogSizes, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
 
@@ -810,10 +806,27 @@ export default function WalkerDashboard({
     ? 'יש לבחור לפחות שירות אחד בהגדרות לפני מעבר לאונליין.'
     : 'Please choose at least one service in Settings before going online.'
   const hasSelectedProfileService = profileServiceTypes.length > 0
+  const capabilitySections = useMemo<Array<{ id: CapabilitySectionId; label: string }>>(() => {
+    const sections: Array<{ id: CapabilitySectionId; label: string }> = [
+      { id: 'profile', label: isHebrew ? 'פרופיל' : 'Profile' },
+    ]
+    if (profileServiceTypes.includes('dog_walker')) {
+      sections.push({ id: 'dog_walker', label: isHebrew ? 'הליכת כלבים' : 'Dog walking' })
+    }
+    if (profileServiceTypes.includes('baby_sitter')) {
+      sections.push({ id: 'baby_sitter', label: isHebrew ? 'שמרטפות' : 'Babysitting' })
+    }
+    return sections
+  }, [isHebrew, profileServiceTypes])
 
   useEffect(() => {
     setProfileServiceTypes(normalizeProfileServiceTypes(profile.service_types ?? profile.service_type))
   }, [profile.service_type, profile.service_types])
+
+  useEffect(() => {
+    if (capabilitySections.some((section) => section.id === activeCapabilitySection)) return
+    setActiveCapabilitySection(capabilitySections[0]?.id ?? 'profile')
+  }, [activeCapabilitySection, capabilitySections])
 
   useEffect(() => {
     const mergedCapabilities = mergeProviderCapabilitiesSources({
@@ -838,7 +851,6 @@ export default function WalkerDashboard({
     )
     const dogAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'dog_walker') ?? {}
     setProvDogSizes(Array.isArray(dogAttrs.supportedDogSizes) ? (dogAttrs.supportedDogSizes as string[]) : [])
-    setProvDogEnergy(Array.isArray(dogAttrs.supportedEnergyLevels) ? (dogAttrs.supportedEnergyLevels as string[]) : [])
     setProvDogExp(typeof dogAttrs.experienceYears === 'number' ? (dogAttrs.experienceYears as number) : 0)
     setProvDogNotes(typeof dogAttrs.notes === 'string' ? (dogAttrs.notes as string) : '')
     const sitterAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'baby_sitter') ?? {}
@@ -899,7 +911,6 @@ export default function WalkerDashboard({
       )
       const dogAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'dog_walker') ?? {}
       setProvDogSizes(Array.isArray(dogAttrs.supportedDogSizes) ? (dogAttrs.supportedDogSizes as string[]) : [])
-      setProvDogEnergy(Array.isArray(dogAttrs.supportedEnergyLevels) ? (dogAttrs.supportedEnergyLevels as string[]) : [])
       setProvDogExp(typeof dogAttrs.experienceYears === 'number' ? (dogAttrs.experienceYears as number) : 0)
       setProvDogNotes(typeof dogAttrs.notes === 'string' ? (dogAttrs.notes as string) : '')
       const sitterAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'baby_sitter') ?? {}
@@ -1130,7 +1141,6 @@ export default function WalkerDashboard({
       next.dog_walker = {
         ...(getCapabilityScope<Record<string, unknown>>(existing, 'dog_walker') ?? {}),
         supportedDogSizes: provDogSizes,
-        supportedEnergyLevels: provDogEnergy,
         experienceYears: provDogExp,
         notes: provDogNotes.trim() || null,
       }
@@ -1177,7 +1187,7 @@ export default function WalkerDashboard({
   }, [
     capSaving, profile.id, profileServiceTypes, isHebrew, providerCapabilities, providerBio,
     provExperienceRange, provLanguages,
-    provDogSizes, provDogEnergy, provDogExp, provDogNotes,
+    provDogSizes, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
 
@@ -3733,59 +3743,95 @@ export default function WalkerDashboard({
                       open={settingsSectionsOpen.capabilities}
                       onToggle={() => toggleSettingsSection('capabilities')}
                     >
-                        <div style={capEditorStyle}>
-                          <div style={capSectionStyle}>
-                            <div style={capSectionLabelStyle}>
-                              {isHebrew ? 'פרופיל ספק' : 'Provider profile'}
-                            </div>
+                      <div style={capEditorStyle}>
+                        {capabilitySections.length > 1 && (
+                          <div style={capSelectorRowStyle}>
+                            {capabilitySections.map((section) => (
+                              <button
+                                key={section.id}
+                                type="button"
+                                onClick={() => setActiveCapabilitySection(section.id)}
+                                style={{
+                                  ...capSelectorPillStyle,
+                                  ...(activeCapabilitySection === section.id ? capSelectorPillActiveStyle : null),
+                                }}
+                              >
+                                {section.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
 
-                            <div style={capFieldStyle}>
-                              <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
-                              <div style={capChipRowStyle}>
-                                {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
-                                  <button
-                                    key={option.value}
-                                    type="button"
-                                    onClick={() => setProvExperienceRange(option.value)}
-                                    style={{ ...capChipStyle, ...(provExperienceRange === option.value ? capChipSelectedStyle : null) }}
-                                  >
-                                    {isHebrew ? option.labelHe : option.labelEn}
-                                  </button>
-                                ))}
+                        {activeCapabilitySection === 'profile' && (
+                          <div style={capSectionCardStyle}>
+                            <div style={capSectionStyle}>
+                              <div style={capSectionLabelStyle}>
+                                {isHebrew ? 'פרופיל ספק' : 'Provider profile'}
                               </div>
-                            </div>
 
-                            <div style={capFieldStyle}>
-                              <div style={capFieldLabelStyle}>{isHebrew ? 'שפות' : 'Languages'}</div>
-                              <div style={capChipRowStyle}>
-                                {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
-                                  const selected = provLanguages.includes(option.value)
-                                  return (
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
+                                <div style={capChipRowStyle}>
+                                  {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
                                     <button
                                       key={option.value}
                                       type="button"
-                                      onClick={() => setProvLanguages((prev) =>
-                                        selected
-                                          ? prev.filter((value) => value !== option.value)
-                                          : [...prev, option.value]
-                                      )}
-                                      style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
+                                      onClick={() => setProvExperienceRange(option.value)}
+                                      style={{ ...capChipStyle, ...(provExperienceRange === option.value ? capChipSelectedStyle : null) }}
                                     >
                                       {isHebrew ? option.labelHe : option.labelEn}
                                     </button>
-                                  )
-                                })}
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'שפות' : 'Languages'}</div>
+                                <div style={capChipRowStyle}>
+                                  {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                                    const selected = provLanguages.includes(option.value)
+                                    return (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => setProvLanguages((prev) =>
+                                          selected
+                                            ? prev.filter((value) => value !== option.value)
+                                            : [...prev, option.value]
+                                        )}
+                                        style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
+                                      >
+                                        {isHebrew ? option.labelHe : option.labelEn}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות / ביוגרפיה' : 'Bio / notes'}</div>
+                                <textarea
+                                  value={providerBio}
+                                  onChange={(event) => {
+                                    setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
+                                    setCapSavedAt(0)
+                                    setCapError(null)
+                                  }}
+                                  placeholder={isHebrew ? 'ספרו בקצרה על הניסיון והסגנון שלכם' : 'Share a quick note about your experience and style'}
+                                  rows={3}
+                                  style={capTextareaStyle}
+                                />
                               </div>
                             </div>
                           </div>
+                        )}
 
-                          {profileServiceTypes.includes('dog_walker') && (
+                        {activeCapabilitySection === 'dog_walker' && profileServiceTypes.includes('dog_walker') && (
+                          <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
-                              {profileServiceTypes.length > 1 && (
-                                <div style={capSectionLabelStyle}>
-                                  {isHebrew ? 'הליכת כלבים' : 'Dog walking'}
-                                </div>
-                              )}
+                              <div style={capSectionLabelStyle}>
+                                {isHebrew ? 'הליכת כלבים' : 'Dog walking'}
+                              </div>
 
                               <div style={capFieldStyle}>
                                 <div style={capFieldLabelStyle}>{isHebrew ? 'גדלי כלבים' : 'Dog sizes'}</div>
@@ -3802,30 +3848,6 @@ export default function WalkerDashboard({
                                         style={{ ...capChipStyle, ...(sel ? capChipSelectedStyle : null) }}
                                       >
                                         {size}
-                                      </button>
-                                    )
-                                  })}
-                                </div>
-                              </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'רמות אנרגיה' : 'Energy levels'}</div>
-                                <div style={capChipRowStyle}>
-                                  {(['low', 'medium', 'high'] as const).map((level) => {
-                                    const sel = provDogEnergy.includes(level)
-                                    const label = level === 'low' ? (isHebrew ? 'נמוך' : 'Low')
-                                      : level === 'medium' ? (isHebrew ? 'בינוני' : 'Medium')
-                                      : (isHebrew ? 'גבוה' : 'High')
-                                    return (
-                                      <button
-                                        key={level}
-                                        type="button"
-                                        onClick={() => setProvDogEnergy((prev) =>
-                                          sel ? prev.filter((s) => s !== level) : [...prev, level]
-                                        )}
-                                        style={{ ...capChipStyle, ...(sel ? capChipSelectedStyle : null) }}
-                                      >
-                                        {label}
                                       </button>
                                     )
                                   })}
@@ -3859,15 +3881,15 @@ export default function WalkerDashboard({
                                 />
                               </div>
                             </div>
-                          )}
+                          </div>
+                        )}
 
-                          {profileServiceTypes.includes('baby_sitter') && (
+                        {activeCapabilitySection === 'baby_sitter' && profileServiceTypes.includes('baby_sitter') && (
+                          <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
-                              {profileServiceTypes.length > 1 && (
-                                <div style={capSectionLabelStyle}>
-                                  {isHebrew ? 'שמרטפות' : 'Baby sitting'}
-                                </div>
-                              )}
+                              <div style={capSectionLabelStyle}>
+                                {isHebrew ? 'שמרטפות' : 'Babysitting'}
+                              </div>
 
                               <div style={capFieldStyle}>
                                 <div style={capFieldLabelStyle}>{isHebrew ? 'טווחי גילאים' : 'Age ranges'}</div>
@@ -3918,34 +3940,35 @@ export default function WalkerDashboard({
                                 />
                               </div>
                             </div>
-                          )}
+                          </div>
+                        )}
 
-                          <button
-                            type="button"
-                            onClick={() => void handleSaveCapabilities()}
-                            disabled={capSaving || !capDirty}
-                            style={{
-                              ...capSaveButtonStyle,
-                              ...(capSaving || !capDirty ? capSaveButtonDisabledStyle : null),
-                            }}
-                          >
-                            {capSaving
-                              ? (isHebrew ? 'שומר...' : 'Saving...')
-                              : (isHebrew ? 'שמור יכולות' : 'Save capabilities')}
-                          </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveCapabilities()}
+                          disabled={capSaving || !capDirty}
+                          style={{
+                            ...capSaveButtonStyle,
+                            ...(capSaving || !capDirty ? capSaveButtonDisabledStyle : null),
+                          }}
+                        >
+                          {capSaving
+                            ? (isHebrew ? 'שומר...' : 'Saving...')
+                            : (isHebrew ? 'שמור יכולות' : 'Save capabilities')}
+                        </button>
 
-                          {capError && <div style={serviceTypeStatusErrorStyle}>{capError}</div>}
-                          {!capError && capabilitiesLoading ? (
-                            <div style={serviceTypeStatusMutedStyle}>
-                              {isHebrew ? 'טוען יכולות שמורות...' : 'Loading saved capabilities...'}
-                            </div>
-                          ) : null}
-                          {!capSaving && capSavedAt > 0 && !capDirty && !capError && (
-                            <div style={serviceTypeStatusSuccessStyle}>
-                              {isHebrew ? 'היכולות נשמרו.' : 'Capabilities saved.'}
-                            </div>
-                          )}
-                        </div>
+                        {capError && <div style={serviceTypeStatusErrorStyle}>{capError}</div>}
+                        {!capError && capabilitiesLoading ? (
+                          <div style={serviceTypeStatusMutedStyle}>
+                            {isHebrew ? 'טוען יכולות שמורות...' : 'Loading saved capabilities...'}
+                          </div>
+                        ) : null}
+                        {!capSaving && capSavedAt > 0 && !capDirty && !capError && (
+                          <div style={serviceTypeStatusSuccessStyle}>
+                            {isHebrew ? 'היכולות נשמרו.' : 'Capabilities saved.'}
+                          </div>
+                        )}
+                      </div>
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
@@ -7743,7 +7766,48 @@ const completionOverlayCardStyle: React.CSSProperties = {
 
 const capEditorStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 18,
+  gap: 12,
+}
+
+const capSelectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'nowrap',
+  overflowX: 'auto',
+  overscrollBehaviorX: 'contain',
+  paddingBottom: 2,
+}
+
+const capSelectorPillStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.20)',
+  background: 'rgba(255,255,255,0.84)',
+  color: '#475569',
+  minHeight: 34,
+  padding: '0 12px',
+  borderRadius: 999,
+  fontSize: 12.5,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
+const capSelectorPillActiveStyle: React.CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.24)',
+  background: '#EEF4FF',
+  color: '#233B74',
+  boxShadow: '0 10px 20px rgba(91, 124, 250, 0.10)',
+}
+
+const capSectionCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 12,
+  padding: '12px 12px 13px',
+  borderRadius: 20,
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
+  border: '1px solid rgba(145, 164, 196, 0.16)',
+  boxShadow: '0 12px 26px rgba(45, 68, 126, 0.08)',
 }
 
 const capSectionStyle: React.CSSProperties = {
