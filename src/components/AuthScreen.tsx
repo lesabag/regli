@@ -74,6 +74,7 @@ type EnergyLevel = 'low' | 'medium' | 'high'
 type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
 type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
+type ProviderDetailsSection = 'experience' | 'bio' | 'languages' | 'dog' | 'babysitter'
 
 interface DogWalkerAttrs {
   petName: string
@@ -255,6 +256,7 @@ export default function AuthScreen({
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
   const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [] })
   const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [] })
+  const [activeProviderDetailsSection, setActiveProviderDetailsSection] = useState<ProviderDetailsSection>('experience')
   const [providerIdentity, setProviderIdentity] = useState<ProviderIdentityAttrs>({
     experienceRange:
       typeof initialServiceAttributes?.provider_profile === 'object' &&
@@ -299,7 +301,7 @@ export default function AuthScreen({
     welcomeFeatureLocation: isHebrew ? '📍 מותאם לאזור שלך' : '📍 Tailored to your area',
     welcomeFeatureFast: isHebrew ? '⚡ התחלה מהירה' : '⚡ Fast setup',
     welcomeFeatureTrusted: isHebrew ? '🤝 ספקים ולקוחות אמינים' : '🤝 Trusted providers and clients',
-    roleTitle: isHebrew ? 'איך תרצו להשתמש ב-Regli?' : 'How will you use Regli?',
+    roleTitle: isHebrew ? 'שרותכם ב-Regli?' : 'Use Regli as?',
     providerTitle: isHebrew ? 'ספק' : 'Provider',
     providerDescription: isHebrew ? 'הציעו שירותים, קבלו הזמנות, ועבדו בקצב שלכם.' : 'Offer services, get booked, and earn on your schedule.',
     clientTitle: isHebrew ? 'לקוח' : 'Customer',
@@ -320,8 +322,10 @@ export default function AuthScreen({
     detailsClient: isHebrew ? 'שתפו כמה פרטים כדי שנוכל להתאים את החוויה לצרכים שלכם.' : 'Share a few details so we can personalize your experience.',
     yearsExperience: isHebrew ? 'שנות ניסיון' : 'Years of experience',
     shortBio: isHebrew ? 'תיאור קצר' : 'Short bio',
-    shortBioPlaceholder: isHebrew ? 'למשל: חשמלאי אמין עם ניסיון בתיקונים לבית.' : 'Reliable electrician specializing in residential repairs.',
+    shortBioPlaceholder: isHebrew ? 'תיאור קצר על עצמך, תוכל לשנות אח״כ.' : 'A brief description about yourself, you can change it later.',
     languagesSpoken: isHebrew ? 'שפות מדוברות' : 'Languages spoken',
+    dogPreferences: isHebrew ? 'העדפות לכלבים' : 'Dog preferences',
+    babysitterPreferences: isHebrew ? 'טווחי גילאים' : 'Age ranges',
     buildTrustTitle: isHebrew ? 'יוצרים אמון מהרגע הראשון' : 'Build trust quickly',
     buildTrustSubtitle: isHebrew ? 'כמה פרטים בסיסיים עוזרים ללקוחות להבין מי אתם לפני ההזמנה.' : 'A few profile basics help clients understand who you are before they book.',
     finishSetup: isHebrew ? 'סיימו את ההגדרה כדי להמשיך ל-Regli.' : 'Finish your Regli setup to continue.',
@@ -369,7 +373,7 @@ export default function AuthScreen({
     serviceProvide: isHebrew ? 'איזה שירות אתם מציעים?' : 'What service do you provide?',
     serviceNeed: isHebrew ? 'איזה שירות אתם מחפשים?' : 'What service are you looking for?',
     whereLocated: isHebrew ? 'איפה אתם נמצאים?' : 'Where are you located?',
-    tellUsMore: isHebrew ? 'ספרו לנו עוד' : 'Tell us more',
+    tellUsMore: isHebrew ? 'ספרו לנו עוד..' : 'Tell us more..',
     createYourAccount: isHebrew ? 'יצירת חשבון' : 'Create your account',
     logInTitle: isHebrew ? 'התחברות' : 'Log in',
   }), [isHebrew])
@@ -419,10 +423,10 @@ export default function AuthScreen({
   )
   const selectedPrimaryService = selectedServices[0] ?? null
   const selectedServiceIllustration = selectedPrimaryService === 'dog_walker'
-    ? providerCharacterImage
+    ? welcomeHeroImage
     : selectedPrimaryService === 'baby_sitter'
       ? customerCharacterImage
-      : welcomeHeroImage
+      : customerCharacterImage
   const selectedServiceIllustrationAlt = selectedPrimaryService === 'baby_sitter'
     ? (language === 'he' ? 'איור בייביסיטר' : 'Babysitter service illustration')
     : selectedPrimaryService === 'dog_walker'
@@ -435,6 +439,16 @@ export default function AuthScreen({
   const isProviderDogWalker = isProvider && selectedPrimaryService === 'dog_walker'
   const isProviderBabySitter = isProvider && selectedPrimaryService === 'baby_sitter'
   const onboardingServiceTypes = isProvider ? selectedServices : []
+  const providerDetailSections = useMemo(
+    () => [
+      { id: 'experience' as const, label: copy.yearsExperience },
+      { id: 'bio' as const, label: copy.shortBio },
+      { id: 'languages' as const, label: copy.languagesSpoken },
+      ...(isProviderDogWalker ? [{ id: 'dog' as const, label: copy.dogPreferences }] : []),
+      ...(isProviderBabySitter ? [{ id: 'babysitter' as const, label: copy.babysitterPreferences }] : []),
+    ],
+    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.shortBio, copy.yearsExperience, isProviderBabySitter, isProviderDogWalker],
+  )
 
   const dogValid = isProvider
     ? !hasDog || provDogAttrs.supportedDogSizes.length > 0
@@ -461,6 +475,12 @@ export default function AuthScreen({
   }, [authenticatedOnboarding, currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
 
   const roleSummary = role === 'walker' ? copy.provider : copy.customer
+
+  useEffect(() => {
+    if (!isProvider) return
+    if (providerDetailSections.some((section) => section.id === activeProviderDetailsSection)) return
+    setActiveProviderDetailsSection(providerDetailSections[0]?.id ?? 'experience')
+  }, [activeProviderDetailsSection, isProvider, providerDetailSections])
 
   useEffect(() => {
     document.body.dataset.authOnboarding = 'true'
@@ -928,21 +948,56 @@ export default function AuthScreen({
           {shouldShowWelcomeContent && (
             <>
               <div style={welcomeHeroWrapStyle}>
-                <img
-                  src={welcomeHeroImage}
-                  alt={isHebrew ? 'איור פתיחה של Regli לשירותים כלליים' : 'Regli onboarding illustration for local services'}
-                  style={welcomeHeroImageStyle}
-                  decoding="async"
-                  fetchPriority="high"
-                />
+                <div style={welcomeHeroStageStyle}>
+                  <div style={welcomeHeroPairStyle}>
+                    <div style={welcomeHeroFigureStyle}>
+                      <div style={welcomeHeroFigureFrameStyle}>
+                        <img
+                          src={welcomeHeroImage}
+                          alt={isHebrew ? 'דוג ווקר עם כלב' : 'Dog walker with a dog'}
+                          style={welcomeHeroImageStyle}
+                          decoding="async"
+                          fetchPriority="high"
+                        />
+                      </div>
+                      <div style={welcomeHeroBadgeStyle}>
+                        {isHebrew ? 'דוג ווקר' : 'Dog Walker'}
+                      </div>
+                    </div>
+                    <div style={welcomeHeroFigureStyle}>
+                      <div style={welcomeHeroFigureFrameStyle}>
+                        <img
+                          src={customerCharacterImage}
+                          alt={isHebrew ? 'בייביסיטר עם ילדים' : 'Babysitter with children'}
+                          style={welcomeHeroImageStyle}
+                          decoding="async"
+                          fetchPriority="high"
+                        />
+                      </div>
+                      <div style={welcomeHeroBadgeStyle}>
+                        {isHebrew ? 'בייביסיטר' : 'Baby Sitter'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div style={{ ...eyebrowStyle, textAlign }}>{copy.welcomeEyebrow}</div>
-              <h1 style={{ ...titleStyle, textAlign }}>{copy.welcomeTitle}</h1>
-              <p style={{ ...subtitleStyle, textAlign }}>
-                {copy.welcomeSubtitle}
-              </p>
+              <div style={welcomeCopyStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign }}>{copy.welcomeEyebrow}</div>
+                <h1
+                  style={{
+                    ...titleStyle,
+                    ...(isHebrew ? compactHeroTitleStyle : null),
+                    textAlign,
+                  }}
+                >
+                  {copy.welcomeTitle}
+                </h1>
+                <p style={{ ...subtitleStyle, textAlign }}>
+                  {copy.welcomeSubtitle}
+                </p>
+              </div>
 
-              <div style={featureRowStyle}>
+              <div style={welcomeFeatureRowStyle}>
                 <div style={featurePillStyle}>{copy.welcomeFeatureLocation}</div>
                 <div style={featurePillStyle}>{copy.welcomeFeatureFast}</div>
                 <div style={featurePillStyle}>{copy.welcomeFeatureTrusted}</div>
@@ -953,7 +1008,15 @@ export default function AuthScreen({
           {mode === 'signup' && currentStep === 'role' && (
             <>
               <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <h1
+                style={{
+                  ...titleStyle,
+                  ...(isHebrew ? compactRoleTitleStyle : null),
+                  textAlign,
+                }}
+              >
+                {stepTitle}
+              </h1>
               <div style={optionStackStyle}>
                 <RoleCard
                   title={copy.providerTitle}
@@ -986,7 +1049,15 @@ export default function AuthScreen({
           {mode === 'signup' && currentStep === 'service' && (
             <>
               <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+              <h1
+                style={{
+                  ...titleStyle,
+                  ...(isHebrew ? compactServiceTitleStyle : null),
+                  textAlign,
+                }}
+              >
+                {stepTitle}
+              </h1>
               <p style={{ ...subtitleStyle, textAlign }}>
                 {copy.serviceIntro}
               </p>
@@ -1090,77 +1161,107 @@ export default function AuthScreen({
                 {isProvider ? (
                   <>
                     <div style={providerIdentityCardStyle}>
-                        <div style={providerIdentityHeaderStyle}>
+                      <div style={providerIdentityHeaderStyle}>
                         <div style={providerIdentityTitleStyle}>{copy.buildTrustTitle}</div>
                         <div style={providerIdentitySubtitleStyle}>
                           {copy.buildTrustSubtitle}
                         </div>
                       </div>
 
-                      <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>{copy.yearsExperience}</label>
-                        <div style={chipRowStyle}>
-                          {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => setProviderIdentity((prev) => ({ ...prev, experienceRange: option.value }))}
-                              style={{
-                                ...chipStyle,
-                                ...compactChipStyle,
-                                ...(providerIdentity.experienceRange === option.value ? chipSelectedStyle : null),
-                              }}
-                            >
-                              <span style={compactChipLabelStyle}>{option.label}</span>
-                            </button>
-                          ))}
-                        </div>
+                      <div style={detailsSelectorRowStyle}>
+                        {providerDetailSections.map((section) => (
+                          <button
+                            key={section.id}
+                            type="button"
+                            onClick={() => setActiveProviderDetailsSection(section.id)}
+                            style={{
+                              ...detailsSelectorPillStyle,
+                              ...(activeProviderDetailsSection === section.id ? detailsSelectorPillActiveStyle : null),
+                            }}
+                          >
+                            {section.label}
+                          </button>
+                        ))}
                       </div>
 
-                      <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>{copy.shortBio}</label>
-                        <textarea
-                          value={providerIdentity.shortBio}
-                          onChange={(e) => setProviderIdentity((prev) => ({ ...prev, shortBio: e.target.value }))}
-                          placeholder={copy.shortBioPlaceholder}
-                          rows={2}
-                          style={compactTextareaStyle}
-                        />
-                      </div>
-
-                      <div style={detailsFieldBlockStyle}>
-                        <label style={labelStyle}>{copy.languagesSpoken}</label>
-                        <div style={chipRowStyle}>
-                          {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
-                            const selected = providerIdentity.languages.includes(option.value)
-                            return (
+                      {activeProviderDetailsSection === 'experience' && (
+                        <div style={chipFieldCardStyle}>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.yearsExperience}</label>
+                          </div>
+                          <div style={chipRowStyle}>
+                            {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
                               <button
                                 key={option.value}
                                 type="button"
-                                onClick={() => setProviderIdentity((prev) => ({
-                                  ...prev,
-                                  languages: selected
-                                    ? prev.languages.filter((value) => value !== option.value)
-                                    : [...prev.languages, option.value],
-                                }))}
+                                onClick={() => setProviderIdentity((prev) => ({ ...prev, experienceRange: option.value }))}
                                 style={{
                                   ...chipStyle,
                                   ...compactChipStyle,
-                                  ...(selected ? chipSelectedStyle : null),
+                                  ...(providerIdentity.experienceRange === option.value ? chipSelectedStyle : null),
                                 }}
                               >
                                 <span style={compactChipLabelStyle}>{option.label}</span>
                               </button>
-                            )
-                          })}
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    </div>
+                      )}
 
-                    {isProviderDogWalker && (
-                      <div style={detailsSectionStyle}>
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>{copy.dogSizesHandle}</label>
+                      {activeProviderDetailsSection === 'bio' && (
+                        <div style={chipFieldCardStyle}>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.shortBio}</label>
+                          </div>
+                          <div style={chipInputShellStyle}>
+                            <textarea
+                              value={providerIdentity.shortBio}
+                              onChange={(e) => setProviderIdentity((prev) => ({ ...prev, shortBio: e.target.value }))}
+                              placeholder={copy.shortBioPlaceholder}
+                              rows={2}
+                              style={compactTextareaStyle}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {activeProviderDetailsSection === 'languages' && (
+                        <div style={chipFieldCardStyle}>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.languagesSpoken}</label>
+                          </div>
+                          <div style={chipRowStyle}>
+                            {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                              const selected = providerIdentity.languages.includes(option.value)
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => setProviderIdentity((prev) => ({
+                                    ...prev,
+                                    languages: selected
+                                      ? prev.languages.filter((value) => value !== option.value)
+                                      : [...prev.languages, option.value],
+                                  }))}
+                                  style={{
+                                    ...chipStyle,
+                                    ...compactChipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
+                                  <span style={compactChipLabelStyle}>{option.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {activeProviderDetailsSection === 'dog' && isProviderDogWalker && (
+                        <div style={chipFieldCardStyle}>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.dogSizesHandle}</label>
+                          </div>
                           <div style={chipRowStyle}>
                             {DOG_SIZE_OPTIONS.map((opt) => {
                               const selected = provDogAttrs.supportedDogSizes.includes(opt.value)
@@ -1174,22 +1275,21 @@ export default function AuthScreen({
                                       ? prev.supportedDogSizes.filter((s) => s !== opt.value)
                                       : [...prev.supportedDogSizes, opt.value],
                                   }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...compactChipStyle,
-                                  ...(selected ? chipSelectedStyle : null),
-                                }}
-                              >
+                                  style={{
+                                    ...chipStyle,
+                                    ...compactChipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
                                   <span style={compactChipLabelStyle}>{opt.label}</span>
                                   <span style={chipDescStyle}>{opt.desc}</span>
                                 </button>
                               )
                             })}
                           </div>
-                        </div>
-
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>{copy.energyLevelsManage}</label>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.energyLevelsManage}</label>
+                          </div>
                           <div style={chipRowStyle}>
                             {ENERGY_OPTIONS.map((opt) => {
                               const selected = provDogAttrs.supportedEnergyLevels.includes(opt.value)
@@ -1203,26 +1303,25 @@ export default function AuthScreen({
                                       ? prev.supportedEnergyLevels.filter((s) => s !== opt.value)
                                       : [...prev.supportedEnergyLevels, opt.value],
                                   }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...compactChipStyle,
-                                  ...(selected ? chipSelectedStyle : null),
-                                }}
-                              >
+                                  style={{
+                                    ...chipStyle,
+                                    ...compactChipStyle,
+                                    ...(selected ? chipSelectedStyle : null),
+                                  }}
+                                >
                                   <span style={compactChipLabelStyle}>{opt.label}</span>
                                 </button>
                               )
                             })}
                           </div>
                         </div>
+                      )}
 
-                      </div>
-                    )}
-
-                    {isProviderBabySitter && (
-                      <div style={detailsSectionStyle}>
-                        <div style={detailsFieldBlockStyle}>
-                          <label style={labelStyle}>{copy.ageRangesCover}</label>
+                      {activeProviderDetailsSection === 'babysitter' && isProviderBabySitter && (
+                        <div style={chipFieldCardStyle}>
+                          <div style={chipFieldHeaderStyle}>
+                            <label style={labelStyle}>{copy.ageRangesCover}</label>
+                          </div>
                           <div style={chipRowStyle}>
                             {AGE_RANGE_OPTIONS.map((opt) => {
                               const selected = provSitterAttrs.supportedAgeRanges.includes(opt.value)
@@ -1248,9 +1347,8 @@ export default function AuthScreen({
                             })}
                           </div>
                         </div>
-
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1277,10 +1375,11 @@ export default function AuthScreen({
                                 onClick={() => setDogAttrs((prev) => ({ ...prev, dogSize: opt.value }))}
                                 style={{
                                   ...chipStyle,
+                                  ...compactChipStyle,
                                   ...(dogAttrs.dogSize === opt.value ? chipSelectedStyle : null),
                                 }}
                               >
-                                <span style={chipLabelStyle}>{opt.label}</span>
+                                <span style={compactChipLabelStyle}>{opt.label}</span>
                                 <span style={chipDescStyle}>{opt.desc}</span>
                               </button>
                             ))}
@@ -1297,10 +1396,11 @@ export default function AuthScreen({
                                 onClick={() => setDogAttrs((prev) => ({ ...prev, energyLevel: opt.value }))}
                                 style={{
                                   ...chipStyle,
+                                  ...compactChipStyle,
                                   ...(dogAttrs.energyLevel === opt.value ? chipSelectedStyle : null),
                                 }}
                               >
-                                <span style={chipLabelStyle}>{opt.label}</span>
+                                <span style={compactChipLabelStyle}>{opt.label}</span>
                               </button>
                             ))}
                           </div>
@@ -1328,10 +1428,11 @@ export default function AuthScreen({
                                 }}
                                 style={{
                                   ...chipStyle,
+                                  ...compactChipStyle,
                                   ...(sitterAttrs.numberOfKids === n ? chipSelectedStyle : null),
                                 }}
                               >
-                                <span style={chipLabelStyle}>{n}</span>
+                                <span style={compactChipLabelStyle}>{n}</span>
                               </button>
                             ))}
                           </div>
@@ -1852,6 +1953,24 @@ const titleStyle: CSSProperties = {
   color: '#0F172A',
 }
 
+const compactHeroTitleStyle: CSSProperties = {
+  fontSize: 24,
+  lineHeight: 1.08,
+  whiteSpace: 'nowrap',
+}
+
+const compactRoleTitleStyle: CSSProperties = {
+  fontSize: 22,
+  lineHeight: 1.1,
+  whiteSpace: 'nowrap',
+}
+
+const compactServiceTitleStyle: CSSProperties = {
+  fontSize: 23,
+  lineHeight: 1.08,
+  whiteSpace: 'nowrap',
+}
+
 const subtitleStyle: CSSProperties = {
   margin: 0,
   fontSize: 13,
@@ -1859,29 +1978,105 @@ const subtitleStyle: CSSProperties = {
   color: '#5E6B83',
 }
 
+const welcomeCopyStackStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  paddingTop: 22,
+}
+
 const welcomeHeroWrapStyle: CSSProperties = {
   width: '100%',
-  maxHeight: 156,
-  minHeight: 132,
+  maxHeight: 190,
+  minHeight: 160,
   display: 'grid',
   placeItems: 'center',
-  padding: '2px 0 0',
+  padding: '6px 0 8px',
   boxSizing: 'border-box',
+}
+
+const welcomeHeroStageStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 160,
+  maxHeight: 190,
+  display: 'grid',
+  alignItems: 'end',
+  padding: '8px 8px 2px',
+  boxSizing: 'border-box',
+  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
+  borderRadius: 24,
+  boxShadow: '0 12px 28px rgba(165, 143, 214, 0.08), inset 0 1px 0 rgba(255,255,255,0.42)',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+}
+
+const welcomeHeroPairStyle: CSSProperties = {
+  width: '100%',
+  display: 'flex',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  gap: 6,
+}
+
+const welcomeHeroFigureStyle: CSSProperties = {
+  flex: '0 1 48%',
+  minWidth: 0,
+  display: 'grid',
+  justifyItems: 'center',
+  alignItems: 'end',
+  gap: 4,
+}
+
+const welcomeHeroFigureFrameStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 144,
+  maxHeight: 164,
+  display: 'grid',
+  placeItems: 'end center',
+  borderRadius: 0,
+  padding: '0',
+  boxSizing: 'border-box',
+  background: 'transparent',
+  boxShadow: 'none',
+  backdropFilter: 'none',
+  WebkitBackdropFilter: 'none',
+}
+
+const welcomeHeroBadgeStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 20,
+  padding: '0 8px',
+  borderRadius: 999,
+  background: 'rgba(255,255,255,0.58)',
+  border: 'none',
+  color: '#475569',
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '0.01em',
+  boxShadow: 'none',
 }
 
 const welcomeHeroImageStyle: CSSProperties = {
   width: '100%',
   height: '100%',
-  maxHeight: 156,
+  maxHeight: 164,
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
+  filter: 'drop-shadow(0 12px 20px rgba(45, 68, 126, 0.07)) saturate(1.01)',
+  mixBlendMode: 'darken',
 }
 
 const featureRowStyle: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
   gap: 6,
+}
+
+const welcomeFeatureRowStyle: CSSProperties = {
+  ...featureRowStyle,
+  paddingTop: 18,
 }
 
 const languageSwitchStyle: CSSProperties = {
@@ -2043,7 +2238,7 @@ const roleCardImageWrapStyle: CSSProperties = {
   minWidth: 84,
   height: 84,
   borderRadius: 18,
-  background: 'linear-gradient(180deg, rgba(239,244,255,0.92) 0%, rgba(248,251,255,0.96) 100%)',
+  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
   border: '1px solid rgba(145, 164, 196, 0.14)',
   display: 'grid',
   placeItems: 'center',
@@ -2056,6 +2251,7 @@ const roleCardImageStyle: CSSProperties = {
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
+  mixBlendMode: 'multiply',
 }
 
 const roleCardTitleRowStyle: CSSProperties = {
@@ -2098,7 +2294,7 @@ const serviceIllustrationCardStyle: CSSProperties = {
   minHeight: 96,
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
+  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
   display: 'grid',
   placeItems: 'center',
   overflow: 'hidden',
@@ -2112,6 +2308,7 @@ const serviceIllustrationImageStyle: CSSProperties = {
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
+  mixBlendMode: 'multiply',
 }
 
 const serviceCardStyle: CSSProperties = {
@@ -2120,9 +2317,9 @@ const serviceCardStyle: CSSProperties = {
   background: '#FFFFFF',
   borderRadius: 18,
   padding: '10px 9px',
-  minHeight: 72,
+  minHeight: 70,
   display: 'grid',
-  gap: 6,
+  gap: 4,
   alignContent: 'start',
   justifyItems: 'start',
   cursor: 'pointer',
@@ -2147,9 +2344,12 @@ const serviceLabelStyle: CSSProperties = {
 }
 
 const serviceDescriptionStyle: CSSProperties = {
-  fontSize: 10.5,
-  lineHeight: 1.35,
+  fontSize: 9.5,
+  lineHeight: 1.15,
   color: '#64748B',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const checkBadgeStyle: CSSProperties = {
@@ -2391,7 +2591,7 @@ const detailsSectionsStyle: CSSProperties = {
 
 const providerIdentityCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 10,
   padding: '14px 14px 12px',
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
@@ -2433,6 +2633,53 @@ const detailsFieldBlockStyle: CSSProperties = {
   gap: 6,
 }
 
+const detailsSelectorRowStyle: CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'nowrap',
+  overflowX: 'auto',
+  overscrollBehaviorX: 'contain',
+  paddingBottom: 2,
+}
+
+const detailsSelectorPillStyle: CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.18)',
+  background: 'rgba(255,255,255,0.82)',
+  color: '#475569',
+  minHeight: 34,
+  padding: '0 12px',
+  borderRadius: 999,
+  fontSize: 12.5,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
+const detailsSelectorPillActiveStyle: CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.28)',
+  background: '#EEF4FF',
+  color: '#233B74',
+  boxShadow: '0 10px 20px rgba(91, 124, 250, 0.10)',
+}
+
+const chipFieldCardStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  padding: '12px 12px 13px',
+  borderRadius: 18,
+  background: 'rgba(255,255,255,0.84)',
+  border: '1px solid rgba(145, 164, 196, 0.16)',
+}
+
+const chipFieldHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
 const chipRowStyle: CSSProperties = {
   display: 'flex',
   gap: 6,
@@ -2443,32 +2690,30 @@ const chipStyle: CSSProperties = {
   appearance: 'none',
   border: '1px solid rgba(145, 164, 196, 0.24)',
   background: '#FFFFFF',
-  borderRadius: 13,
-  padding: '8px 11px',
-  display: 'flex',
+  borderRadius: 999,
+  padding: '8px 12px',
+  display: 'inline-flex',
   flexDirection: 'column',
   alignItems: 'center',
-  gap: 2,
+  justifyContent: 'center',
+  gap: 1,
   cursor: 'pointer',
-  minWidth: 46,
+  minWidth: 44,
+  minHeight: 36,
   transition: 'all 180ms ease',
+  boxShadow: '0 1px 0 rgba(15, 23, 42, 0.03)',
 }
 
 const chipSelectedStyle: CSSProperties = {
   border: '1px solid rgba(91, 124, 250, 0.52)',
   background: '#F0F4FF',
-  boxShadow: '0 8px 20px rgba(91, 124, 250, 0.12)',
+  boxShadow: '0 10px 22px rgba(91, 124, 250, 0.12)',
 }
 
 const compactChipStyle: CSSProperties = {
-  padding: '8px 11px',
+  padding: '8px 12px',
   minWidth: 0,
-}
-
-const chipLabelStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  color: '#0F172A',
+  maxWidth: '100%',
 }
 
 const compactChipLabelStyle: CSSProperties = {
@@ -2476,12 +2721,15 @@ const compactChipLabelStyle: CSSProperties = {
   lineHeight: 1.25,
   fontWeight: 800,
   color: '#0F172A',
+  whiteSpace: 'nowrap',
 }
 
 const chipDescStyle: CSSProperties = {
-  fontSize: 10,
+  fontSize: 10.5,
+  lineHeight: 1.15,
   color: '#64748B',
   fontWeight: 600,
+  whiteSpace: 'nowrap',
 }
 
 const textareaStyle: CSSProperties = {
@@ -2505,4 +2753,14 @@ const compactTextareaStyle: CSSProperties = {
   maxHeight: 80,
   lineHeight: 1.45,
   resize: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: '0',
+}
+
+const chipInputShellStyle: CSSProperties = {
+  padding: '10px 12px',
+  borderRadius: 16,
+  background: 'rgba(248,251,255,0.96)',
+  border: '1px solid rgba(145, 164, 196, 0.18)',
 }
