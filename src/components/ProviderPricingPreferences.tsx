@@ -136,6 +136,8 @@ export default function ProviderPricingPreferences({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [customRadiusKeys, setCustomRadiusKeys] = useState<string[]>([])
+  const [activeServiceType, setActiveServiceType] = useState<ProfileServiceType | null>(serviceTypes[0] ?? null)
+  const [activeBookingType, setActiveBookingType] = useState<BookingType>('asap')
   const radiusOptions = useMemo(
     () => [
       { value: 'unlimited' as const, label: t('providerPricing.radiusOptions.unlimited') },
@@ -198,6 +200,11 @@ export default function ProviderPricingPreferences({
       cancelled = true
     }
   }, [providerId, supportedServices])
+
+  useEffect(() => {
+    if (supportedServices.includes(activeServiceType ?? ('dog_walker' as ProfileServiceType))) return
+    setActiveServiceType(supportedServices[0] ?? null)
+  }, [activeServiceType, supportedServices])
 
   function updateRow(serviceType: ProfileServiceType, bookingType: BookingType, patch: Partial<PreferenceRow>) {
     setRows((current) =>
@@ -300,6 +307,8 @@ export default function ProviderPricingPreferences({
       ?? createDefaultRow(providerId, serviceType, bookingType),
     ),
   }))
+  const activeServiceRows = groupedRows.find((group) => group.serviceType === activeServiceType) ?? groupedRows[0] ?? null
+  const activeRow = activeServiceRows?.rows.find((row) => row.booking_type === activeBookingType) ?? activeServiceRows?.rows[0] ?? null
 
   if (supportedServices.length === 0) {
     return (
@@ -316,23 +325,55 @@ export default function ProviderPricingPreferences({
       {loading ? (
         <div style={stateTextStyle}>{t('providerPricing.loading')}</div>
       ) : (
-        <div style={serviceListStyle}>
-          {groupedRows.map(({ serviceType, rows: serviceRows }) => (
-            <div key={serviceType} style={serviceCardStyle}>
+        <div style={editorStackStyle}>
+          {supportedServices.length > 1 && (
+            <div style={selectorRowStyle}>
+              {groupedRows.map(({ serviceType }) => (
+                <button
+                  key={serviceType}
+                  type="button"
+                  onClick={() => setActiveServiceType(serviceType)}
+                  style={{
+                    ...selectorPillStyle,
+                    ...(activeServiceRows?.serviceType === serviceType ? selectorPillActiveStyle : null),
+                  }}
+                >
+                  {getProfileServiceTypeLabel(serviceType, isHebrew)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {activeServiceRows && (
+            <div style={serviceCardStyle}>
               <div style={serviceHeaderStyle}>
-                <div style={serviceTitleStyle}>{getProfileServiceTypeLabel(serviceType, isHebrew)}</div>
+                <div style={serviceTitleStyle}>{getProfileServiceTypeLabel(activeServiceRows.serviceType, isHebrew)}</div>
               </div>
 
-              <div style={bookingGridStyle}>
-                {serviceRows.map((row) => (
-                  <div key={`${row.service_type}:${row.booking_type}`} style={bookingCardStyle}>
-                    {(() => {
-                      const radiusRowKey = getRadiusRowKey(row.service_type, row.booking_type)
-                      const isCustomRadius = customRadiusKeys.includes(radiusRowKey)
-                      const radiusOptionValue = isCustomRadius ? 'custom' : getRadiusOptionValue(row.service_radius_km)
+              <div style={selectorRowStyle}>
+                {activeServiceRows.rows.map((row) => (
+                  <button
+                    key={`${row.service_type}:${row.booking_type}:pill`}
+                    type="button"
+                    onClick={() => setActiveBookingType(row.booking_type)}
+                    style={{
+                      ...selectorPillStyle,
+                      ...(activeRow?.booking_type === row.booking_type ? selectorPillActiveStyle : null),
+                    }}
+                  >
+                    {row.booking_type === 'asap' ? t('providerPricing.asap') : t('providerPricing.scheduled')}
+                  </button>
+                ))}
+              </div>
 
-                      return (
-                        <>
+              {activeRow && (() => {
+                const row = activeRow
+                const radiusRowKey = getRadiusRowKey(row.service_type, row.booking_type)
+                const isCustomRadius = customRadiusKeys.includes(radiusRowKey)
+                const radiusOptionValue = isCustomRadius ? 'custom' : getRadiusOptionValue(row.service_radius_km)
+
+                return (
+                  <div key={`${row.service_type}:${row.booking_type}`} style={bookingCardStyle}>
                     <div style={bookingHeaderStyle}>
                       <div style={bookingTitleStyle}>
                         {row.booking_type === 'asap' ? t('providerPricing.asap') : t('providerPricing.scheduled')}
@@ -479,14 +520,11 @@ export default function ProviderPricingPreferences({
                         </label>
                       </div>
                     ) : null}
-                        </>
-                      )
-                    })()}
                   </div>
-                ))}
-              </div>
+                )
+              })()}
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -513,6 +551,11 @@ const wrapStyle: React.CSSProperties = {
   gap: 12,
 }
 
+const editorStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
 const helperTextStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.45,
@@ -530,11 +573,6 @@ const emptyStyle: React.CSSProperties = {
   padding: '4px 0',
 }
 
-const serviceListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-}
-
 const serviceCardStyle: React.CSSProperties = {
   borderRadius: 18,
   border: '1px solid rgba(226, 232, 240, 0.95)',
@@ -543,6 +581,37 @@ const serviceCardStyle: React.CSSProperties = {
   padding: 11,
   display: 'grid',
   gap: 9,
+}
+
+const selectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'nowrap',
+  overflowX: 'auto',
+  overscrollBehaviorX: 'contain',
+  paddingBottom: 2,
+}
+
+const selectorPillStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.20)',
+  background: 'rgba(255,255,255,0.84)',
+  color: '#475569',
+  minHeight: 34,
+  padding: '0 12px',
+  borderRadius: 999,
+  fontSize: 12.5,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
+const selectorPillActiveStyle: React.CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.24)',
+  background: '#EEF4FF',
+  color: '#233B74',
+  boxShadow: '0 10px 20px rgba(91, 124, 250, 0.10)',
 }
 
 const serviceHeaderStyle: React.CSSProperties = {
@@ -556,11 +625,6 @@ const serviceTitleStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
   color: '#0F172A',
-}
-
-const bookingGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 8,
 }
 
 const bookingCardStyle: React.CSSProperties = {
