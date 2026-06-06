@@ -299,7 +299,7 @@ type ClientPetRow = {
   updated_at: string
 }
 
-type DogSize = 'S' | 'M' | 'L' | 'XL'
+type DogSize = 'S' | 'M' | 'L'
 
 type RepeatType = 'one_time' | 'weekly'
 type RecurringStatus = 'active' | 'paused' | 'cancelled'
@@ -330,23 +330,36 @@ type ProviderProfileSheetState = {
   requestedServiceType: string | null
 }
 
-const DOG_SIZE_OPTIONS: DogSize[] = ['S', 'M', 'L', 'XL']
-const DEFAULT_DOG_SIZE: DogSize = 'M'
+const DOG_SIZE_OPTIONS: DogSize[] = ['S', 'M', 'L']
 
 function normalizeDogSize(value: unknown): DogSize | null {
-  if (value === 'S' || value === 'M' || value === 'L' || value === 'XL') return value
+  if (value === 'S' || value === 'M' || value === 'L') return value
+  if (value === 'XL') return 'L'
   return null
+}
+
+function getDogSizeLabel(dogSize: DogSize | null | undefined, isHebrew: boolean): string | null {
+  if (!dogSize) return null
+  if (isHebrew) {
+    if (dogSize === 'S') return 'קטן'
+    if (dogSize === 'M') return 'בינוני'
+    return 'גדול'
+  }
+  if (dogSize === 'S') return 'Small'
+  if (dogSize === 'M') return 'Medium'
+  return 'Large'
 }
 
 function formatDogDisplayLabel(
   name: string,
   dogSize: DogSize | null | undefined,
-  options?: { includeEmoji?: boolean },
+  options?: { includeEmoji?: boolean; isHebrew?: boolean },
 ): string {
   const normalizedName = normalizeDogName(name)
   if (!normalizedName) return ''
   const prefix = options?.includeEmoji ? '🐶 ' : ''
-  const sizeSuffix = dogSize ? ` • ${dogSize}` : ''
+  const localizedSize = getDogSizeLabel(dogSize, options?.isHebrew ?? false)
+  const sizeSuffix = localizedSize ? ` • ${localizedSize}` : ''
   return `${prefix}${normalizedName}${sizeSuffix}`
 }
 
@@ -584,8 +597,7 @@ export default function ClientDashboard({
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
-  const [dogSizeDraft, setDogSizeDraft] = useState<DogSize>(DEFAULT_DOG_SIZE)
-  const [selectedDogDraftPetId, setSelectedDogDraftPetId] = useState<string | null>(null)
+  const [dogSizeDraft, setDogSizeDraft] = useState<DogSize | null>(null)
   const [dogNameSheetSaving, setDogNameSheetSaving] = useState(false)
   const [dogNameSheetError, setDogNameSheetError] = useState<string | null>(null)
   const [babysitterServiceDetails, setBabysitterServiceDetails] = useState('')
@@ -736,7 +748,7 @@ export default function ClientDashboard({
     [clientPets],
   )
   const selectedDogPets = useMemo(
-    () => activeDogPets.filter((pet) => selectedDogPetIds.includes(pet.id)).slice(0, 2),
+    () => activeDogPets.filter((pet) => selectedDogPetIds.includes(pet.id)),
     [activeDogPets, selectedDogPetIds],
   )
   const selectedDogNames = useMemo(
@@ -746,7 +758,7 @@ export default function ClientDashboard({
   const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
   const shouldShowDogCountControl = isDogWalkerRequest && activeDogPets.length >= 2
   const normalizedDogCount = shouldShowDogCountControl
-    ? normalizeDogCount(Math.min(2, Math.max(1, selectedDogPets.length)))
+    ? normalizeDogCount(Math.max(1, selectedDogPets.length))
     : 1
   const selectedDogNamesLabel = selectedDogNames.join(', ')
   const effectiveDogBookingName = selectedDogNamesLabel || flow.dogName.trim()
@@ -763,11 +775,14 @@ export default function ClientDashboard({
   )
   const bookingSubjectDisplayValue = isBabysitterRequest
     ? babysitterServiceDetails.trim()
-    : selectedDogPets.length > 1
-      ? `${formatDogDisplayLabel(selectedDogPets[0]?.normalizedName ?? '', selectedDogPets[0]?.dog_size)} +${selectedDogPets.length - 1}`
-      : selectedDogPets.length === 1
-        ? formatDogDisplayLabel(selectedDogPets[0]?.normalizedName ?? '', selectedDogPets[0]?.dog_size)
-        : formatDogDisplayLabel(flow.dogName.trim(), selectedSingleDogSize)
+    : selectedDogPets.length > 0
+      ? selectedDogPets
+          .map((pet) =>
+            formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { isHebrew: isRtl }),
+          )
+          .filter(Boolean)
+          .join(', ')
+      : formatDogDisplayLabel(flow.dogName.trim(), selectedSingleDogSize, { isHebrew: isRtl })
   const selectedDogNamesNote = selectedDogNames.length > 0 ? `Dogs: ${selectedDogNames.join(', ')}` : null
   useEffect(() => {
     selectedBookingServiceRef.current = resolvedBookingService
@@ -1801,7 +1816,7 @@ export default function ClientDashboard({
 
     if (activeDogPets.length >= 2) {
       setSelectedDogPetIds((prev) => {
-        const valid = prev.filter((id) => activeDogPets.some((pet) => pet.id === id)).slice(0, 2)
+        const valid = prev.filter((id) => activeDogPets.some((pet) => pet.id === id))
         if (valid.length > 0) return valid
         return [activeDogPets[0].id]
       })
@@ -1860,11 +1875,41 @@ export default function ClientDashboard({
     [activeDogPets],
   )
 
+  const selectSingleDogForBooking = useCallback(
+    (pet: { id: string; normalizedName: string }) => {
+      setSelectedDogPetIds([pet.id])
+      flow.setDogName(pet.normalizedName)
+      persistSelectedBookingSubject(pet.normalizedName)
+    },
+    [flow, persistSelectedBookingSubject],
+  )
+
+  const toggleDogSelection = useCallback(
+    (pet: { id: string; normalizedName: string }) => {
+      setSelectedDogPetIds((current) => {
+        const alreadySelected = current.includes(pet.id)
+        const next = alreadySelected
+          ? current.filter((id) => id !== pet.id)
+          : [...current, pet.id]
+        const nextNames = activeDogPets
+          .filter((activePet) => next.includes(activePet.id))
+          .map((activePet) => activePet.normalizedName)
+
+        flow.setDogName(nextNames.join(', '))
+        persistSelectedBookingSubject(nextNames.join(', '))
+        return next
+      })
+      setDogNameSheetError(null)
+    },
+    [activeDogPets, flow, persistSelectedBookingSubject],
+  )
+
   const persistClientDog = useCallback(
-    async (rawName: string, rawSize: DogSize, existingPetId?: string | null) => {
+    async (rawName: string, rawSize: DogSize | null, existingPetId?: string | null) => {
       const nextName = normalizeDogName(rawName)
-      const nextDogSize = normalizeDogSize(rawSize) ?? DEFAULT_DOG_SIZE
+      const nextDogSize = normalizeDogSize(rawSize)
       if (!nextName) return null
+      if (!nextDogSize) return null
 
       const duplicatePet =
         existingPetId == null
@@ -1935,13 +1980,12 @@ export default function ClientDashboard({
 
       setClientPets((current) => current.filter((currentPet) => currentPet.id !== pet.id))
       setSelectedDogPetIds((current) => current.filter((id) => id !== pet.id))
-      setSelectedDogDraftPetId((current) => (current === pet.id ? null : current))
       setDogNameDraft((current) =>
         normalizeDogName(current).toLocaleLowerCase() === pet.normalizedName.toLocaleLowerCase()
           ? ''
           : current,
       )
-      setDogSizeDraft(DEFAULT_DOG_SIZE)
+      setDogSizeDraft(null)
 
       const nextRecentNames = recentDogNames.filter(
         (name) => normalizeDogName(name).toLocaleLowerCase() !== pet.normalizedName.toLocaleLowerCase(),
@@ -1958,18 +2002,11 @@ export default function ClientDashboard({
 
   const openDogNameSheet = useCallback(() => {
     const isBabysitterRequest = requestServiceType === 'baby_sitter'
-    const draftPet =
-      !isBabysitterRequest
-        ? (selectedDogPetIds.length === 1
-            ? activeDogPets.find((pet) => pet.id === selectedDogPetIds[0]) ?? null
-            : findDogPetByName(flow.dogName || ''))
-        : null
     setDogNameSheetError(null)
     setShowDogNameSheet(true)
-    setSelectedDogDraftPetId(draftPet?.id ?? null)
-    setDogNameDraft(isBabysitterRequest ? babysitterServiceDetails : (draftPet?.normalizedName ?? flow.dogName ?? ''))
-    setDogSizeDraft(draftPet?.dog_size ?? DEFAULT_DOG_SIZE)
-  }, [activeDogPets, babysitterServiceDetails, findDogPetByName, flow.dogName, requestServiceType, selectedDogPetIds])
+    setDogNameDraft(isBabysitterRequest ? babysitterServiceDetails : '')
+    setDogSizeDraft(null)
+  }, [babysitterServiceDetails, requestServiceType])
 
   const closeDogNameSheet = useCallback(() => {
     if (dogNameSheetSaving) return
@@ -1979,23 +2016,33 @@ export default function ClientDashboard({
 
   const submitDogNameSheet = useCallback(async () => {
     const nextName = normalizeDogName(dogNameDraft)
-    if (!nextName) return
-
     setDogNameSheetError(null)
 
     if (requestServiceType === 'baby_sitter') {
+      if (!nextName) return
       commitBabysitterSubject(nextName)
       setShowDogNameSheet(false)
       return
     }
 
-    const existingPet =
-      selectedDogDraftPetId != null
-        ? activeDogPets.find((pet) => pet.id === selectedDogDraftPetId) ?? null
-        : findDogPetByName(nextName)
+    if (!nextName) {
+      if (selectedDogPetIds.length > 0) {
+        setShowDogNameSheet(false)
+      }
+      return
+    }
+
+    if (!dogSizeDraft) {
+      setDogNameSheetError(
+        isRtl ? 'בחרו גודל כלב לפני השמירה.' : 'Choose a dog size before saving.',
+      )
+      return
+    }
+
+    const existingPet = findDogPetByName(nextName)
 
     setDogNameSheetSaving(true)
-    const persistedPet = await persistClientDog(nextName, dogSizeDraft, selectedDogDraftPetId)
+    const persistedPet = await persistClientDog(nextName, dogSizeDraft, existingPet?.id ?? null)
     setDogNameSheetSaving(false)
 
     if (!persistedPet) {
@@ -2013,18 +2060,15 @@ export default function ClientDashboard({
         .filter((pet) => pet.pet_type === 'dog')
         .sort((a, b) => a.created_at.localeCompare(b.created_at))
     })
-    setSelectedDogDraftPetId(persistedPet.id)
-    setSelectedDogPetIds((current) => {
-      if (existingPet) {
-        return current.length === 0 ? [persistedPet.id] : current
-      }
-      if (current.includes(persistedPet.id)) return current
-      return [persistedPet.id]
+    selectSingleDogForBooking({
+      id: persistedPet.id,
+      normalizedName: nextName,
     })
     commitDogName(nextName)
     setShowDogNameSheet(false)
   }, [
     activeDogPets,
+    selectSingleDogForBooking,
     commitBabysitterSubject,
     commitDogName,
     dogNameDraft,
@@ -2033,7 +2077,7 @@ export default function ClientDashboard({
     isRtl,
     persistClientDog,
     requestServiceType,
-    selectedDogDraftPetId,
+    selectedDogPetIds.length,
   ])
 
   const handleFirstBookingStart = useCallback(() => {
@@ -3746,6 +3790,9 @@ export default function ClientDashboard({
   const dogSizeSectionLabel = isRtl ? 'גודל הכלב' : 'Dog size'
   const existingDogsLabel = isRtl ? 'הכלבים שלי' : 'My dogs'
   const recentSubjectsLabel = isRtl ? 'אחרונים' : 'Recent'
+  const canSaveDogNameSheet = isBabySitterMode
+    ? !!normalizeDogName(dogNameDraft)
+    : (!!normalizeDogName(dogNameDraft) && !!dogSizeDraft) || selectedDogPetIds.length > 0
   const showBookingSubjectSuggestions = true
   const shouldShowBookingSubjectCaption = false
   const dogSelectorBlock = (
@@ -3884,11 +3931,7 @@ export default function ClientDashboard({
                 setSelectedDogPetIds((current) => {
                   const isSelected = current.includes(pet.id)
                   if (isSelected) {
-                    if (current.length <= 1) return current
                     return current.filter((id) => id !== pet.id)
-                  }
-                  if (current.length >= 2) {
-                    return [current[0], pet.id]
                   }
                   return [...current, pet.id]
                 })
@@ -3899,7 +3942,7 @@ export default function ClientDashboard({
               }}
               aria-pressed={selected}
             >
-              <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true })}</span>
+              <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true, isHebrew: isRtl })}</span>
             </button>
           )
         })}
@@ -5466,23 +5509,20 @@ export default function ClientDashboard({
                 <div style={dogNameInputLabelStyle}>{existingDogsLabel}</div>
                 <div style={dogNameSuggestionsWrapStyle}>
                   {activeDogPets.map((pet) => {
-                    const isSelectedDraft = selectedDogDraftPetId === pet.id
+                    const isSelected = selectedDogPetIds.includes(pet.id)
                     return (
                       <div key={pet.id} style={dogNameChipWrapStyle}>
                         <button
                           type="button"
                           onClick={() => {
-                            setSelectedDogDraftPetId(pet.id)
-                            setDogNameDraft(pet.normalizedName)
-                            setDogSizeDraft(pet.dog_size ?? DEFAULT_DOG_SIZE)
-                            setDogNameSheetError(null)
+                            toggleDogSelection(pet)
                           }}
                           style={{
                             ...dogNameChipStyle,
-                            ...(isSelectedDraft ? dogNameChipActiveStyle : null),
+                            ...(isSelected ? dogNameChipActiveStyle : null),
                           }}
                         >
-                          <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true })}</span>
+                          <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true, isHebrew: isRtl })}</span>
                         </button>
                         <button
                           type="button"
@@ -5511,50 +5551,32 @@ export default function ClientDashboard({
                 <div style={dogNameSuggestionsWrapStyle}>
                   {recentDogNames.map((name) => {
                     const matchingPet = !isBabySitterMode ? findDogPetByName(name) : null
+                    const isSelected = !!matchingPet && selectedDogPetIds.includes(matchingPet.id)
                     return (
-                      <div key={name} style={dogNameChipWrapStyle}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDogNameDraft(name)
-                            setSelectedDogDraftPetId(matchingPet?.id ?? null)
-                            setDogSizeDraft(matchingPet?.dog_size ?? DEFAULT_DOG_SIZE)
-                            setDogNameSheetError(null)
-                          }}
-                          style={dogNameChipStyle}
-                        >
-                          <span>{isBabySitterMode ? '🧸' : '🐶'}</span>
-                          <span>
-                            {isBabySitterMode
-                              ? name
-                              : formatDogDisplayLabel(name, matchingPet?.dog_size ?? null)}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            const next = recentDogNames.filter((n) => n !== name)
-                            persistRecentDogNames(next)
-                            const currentValue = isBabySitterMode ? babysitterServiceDetails : flow.dogName
-                            if (normalizeDogName(currentValue) === name) {
-                              if (isBabySitterMode) {
-                                setBabysitterServiceDetails('')
-                              } else {
-                                flow.setDogName('')
-                              }
-                              persistSelectedBookingSubject('')
-                            }
-                          }}
-                          style={dogNameChipDeleteStyle}
-                          disabled={dogNameSheetSaving}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                          </svg>
-                        </button>
-                      </div>
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => {
+                          if (matchingPet) {
+                            toggleDogSelection(matchingPet)
+                            return
+                          }
+                          setDogNameDraft(name)
+                          setDogSizeDraft(null)
+                          setDogNameSheetError(null)
+                        }}
+                        style={{
+                          ...dogNameChipStyle,
+                          ...(isSelected ? dogNameChipActiveStyle : null),
+                        }}
+                      >
+                        <span>{isBabySitterMode ? '🧸' : '🐶'}</span>
+                        <span>
+                          {isBabySitterMode
+                            ? name
+                            : formatDogDisplayLabel(name, matchingPet?.dog_size ?? null, { isHebrew: isRtl })}
+                        </span>
+                      </button>
                     )
                   })}
                 </div>
@@ -5585,9 +5607,9 @@ export default function ClientDashboard({
                 <div style={dogNameInputLabelStyle}>{dogSizeSectionLabel}</div>
                 <div style={dogSizeSelectorStyle}>
                   {DOG_SIZE_OPTIONS.map((size) => {
-                    const selected = dogSizeDraft === size
-                    return (
-                      <button
+                  const selected = dogSizeDraft === size
+                  return (
+                    <button
                         key={size}
                         type="button"
                         onClick={() => {
@@ -5600,10 +5622,10 @@ export default function ClientDashboard({
                         }}
                         aria-pressed={selected}
                       >
-                        {size}
+                        {getDogSizeLabel(size, isRtl)}
                       </button>
-                    )
-                  })}
+                  )
+                })}
                 </div>
               </div>
             )}
@@ -5627,7 +5649,7 @@ export default function ClientDashboard({
                   void submitDogNameSheet()
                 }}
                 style={dogNamePrimaryBtnStyle}
-                disabled={!normalizeDogName(dogNameDraft) || dogNameSheetSaving}
+                disabled={!canSaveDogNameSheet || dogNameSheetSaving}
               >
                 {dogNameSheetSaving ? (isRtl ? 'שומר...' : 'Saving...') : t('common.save')}
               </button>
