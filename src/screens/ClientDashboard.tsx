@@ -755,6 +755,13 @@ export default function ClientDashboard({
     () => selectedDogPets.map((pet) => pet.normalizedName),
     [selectedDogPets],
   )
+  const selectedKnownDogSizes = useMemo(
+    () =>
+      selectedDogPets
+        .map((pet) => normalizeDogSize(pet.dog_size))
+        .filter((size): size is DogSize => size !== null),
+    [selectedDogPets],
+  )
   const bookingTypeForGuidance: 'asap' | 'scheduled' = flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap'
   const shouldShowDogCountControl = isDogWalkerRequest && activeDogPets.length >= 2
   const normalizedDogCount = shouldShowDogCountControl
@@ -1685,6 +1692,13 @@ export default function ClientDashboard({
         durationMinutesOverride: dogWalkerDurationMinutes,
         priceOverrideILS: dogWalkerBudgetRequestValue,
         dogCountOverride: effectiveDogCount,
+        clientServiceAttributesOverride: selectedKnownDogSizes.length > 0
+          ? {
+              dog_walker: {
+                selectedDogSizes: selectedKnownDogSizes,
+              },
+            }
+          : null,
         bookingTimingOverride: flow.bookingTiming,
         scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
       })
@@ -1724,6 +1738,7 @@ export default function ClientDashboard({
     babysitterFixedBudgetValue,
     availableBookingServices,
     effectiveDogBookingName,
+    selectedKnownDogSizes,
     flow,
     flow.dogName,
     flow.duration,

@@ -7,8 +7,9 @@ import {
   sanitizeCandidates,
   type RankedCandidate,
 } from '../_shared/dispatch.ts'
-import { rankDispatchCandidatesByFinalScore, computeAttributeScore } from '../_shared/dispatchRanking.ts'
+import { rankDispatchCandidatesByFinalScore, computeAttributeScore, evaluateDogSizeCompatibility } from '../_shared/dispatchRanking.ts'
 import { evaluatePricingEligibility, type ProviderPricingPreferenceRow } from '../_shared/pricingEligibility.ts'
+import { loadSelectedDogSizesForRequest, mergeSelectedDogSizesIntoClientAttributes } from '../_shared/requestDogSizes.ts'
 import {
   getNormalizedProviderServiceTypes,
   normalizeProviderServiceType,
@@ -553,7 +554,15 @@ serve(async (req) => {
           .eq('pricing_model', 'time_based'),
       ])
 
-      clientServiceAttributes = (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
+      const selectedDogSizes = await loadSelectedDogSizesForRequest({
+        supabase,
+        clientId,
+        dogNameValue: requestRow.dog_name ?? null,
+      })
+      clientServiceAttributes = mergeSelectedDogSizesIntoClientAttributes(
+        (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null,
+        selectedDogSizes,
+      )
       providerPricingPreferenceRows = (providerPricingRows as ProviderPricingPreferenceRow[] | null) ?? []
 
       if (providerPricingError) {
@@ -652,7 +661,32 @@ serve(async (req) => {
       })
     }
 
-    const affinityRankedCandidates = rankedCandidates
+    const dogSizeCompatibleCandidates = rankedCandidates.filter((candidate) => {
+      const providerAttrs = providerServiceAttrsById.get(candidate.walkerId) ?? null
+      const compatibility = evaluateDogSizeCompatibility(
+        requestProviderServiceType,
+        clientServiceAttributes,
+        providerAttrs,
+      )
+
+      if (!compatibility.compatible) {
+        console.log('[start-dispatch] candidate excluded by dog size compatibility', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          clientId,
+          walker_id: candidate.walkerId,
+          requestServiceType: requestProviderServiceType,
+          reason: compatibility.reason,
+          knownClientDogSizes: compatibility.knownClientDogSizes,
+          providerAcceptedDogSizes: compatibility.providerAcceptedDogSizes,
+          missingClientDogSizes: compatibility.missingClientDogSizes,
+        })
+      }
+
+      return compatibility.compatible
+    })
+
+    const affinityRankedCandidates = dogSizeCompatibleCandidates
       .filter((candidate) => {
         if (!matchingServiceWalkerIds) return true
         return matchingServiceWalkerIds.has(candidate.walkerId)
@@ -727,6 +761,7 @@ serve(async (req) => {
       requestServiceType: requestRow.service_type ?? null,
       normalizedProviderServiceType: requestProviderServiceType,
       candidates_before_filters: rankedCandidates.length,
+      candidates_after_dog_size_filter: dogSizeCompatibleCandidates.length,
       candidates_after_availability_filter: affinityRankedCandidates.length,
       candidateCountBeforeServiceTypeFilter: rankedCandidates.length,
       providersFoundCount: affinityRankedCandidates.length,

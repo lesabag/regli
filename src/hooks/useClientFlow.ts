@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
-import { distanceKm, rankWalkerCandidates } from '../lib/dispatchRanking'
+import { distanceKm, evaluateDogSizeCompatibility, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
 import {
   DURATION_OPTIONS,
@@ -251,6 +251,7 @@ type RequestWalkOptions = {
   issueDescriptionOverride?: string | null
   bookingTimingOverride?: 'asap' | 'scheduled'
   scheduledForOverride?: string | null
+  clientServiceAttributesOverride?: Record<string, unknown> | null
 }
 
 type DispatchWalkerProfile = {
@@ -1695,7 +1696,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
     return normalized
   }
 
-  function walkerSupportsRequestedService(
+function walkerSupportsRequestedService(
     walker: {
       service_type?: string | null
       service_types?: string[] | string | null
@@ -1726,8 +1727,34 @@ export function useClientFlow(profileId: string, _profileName: string) {
       }
     }
 
-    return normalizeProviderServiceType(walker.service_type) === requestServiceType
+  return normalizeProviderServiceType(walker.service_type) === requestServiceType
+}
+
+function mergeClientDogSizeAttributes(
+  baseAttributes: Record<string, unknown> | null,
+  overrideAttributes: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!baseAttributes && !overrideAttributes) return null
+  const baseDogWalker =
+    baseAttributes && typeof baseAttributes.dog_walker === 'object' && baseAttributes.dog_walker
+      ? { ...(baseAttributes.dog_walker as Record<string, unknown>) }
+      : {}
+  const overrideDogWalker =
+    overrideAttributes && typeof overrideAttributes.dog_walker === 'object' && overrideAttributes.dog_walker
+      ? (overrideAttributes.dog_walker as Record<string, unknown>)
+      : null
+
+  return {
+    ...(baseAttributes ?? {}),
+    ...(overrideAttributes ?? {}),
+    dog_walker: overrideDogWalker
+      ? {
+          ...baseDogWalker,
+          ...overrideDogWalker,
+        }
+      : baseDogWalker,
   }
+}
 
   const startsInMinutes = useCallback((date: string | null | undefined) => {
     const dt = parseWallClockDate(date)
@@ -4136,7 +4163,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
           throw new Error(walkersError.message)
         }
 
-        const clientServiceAttributes = (clientProfileRow?.service_attributes as Record<string, unknown> | null) ?? null
+        const clientServiceAttributes = mergeClientDogSizeAttributes(
+          (clientProfileRow?.service_attributes as Record<string, unknown> | null) ?? null,
+          requestOptions.clientServiceAttributesOverride ?? null,
+        )
         const requestedProviderServiceType = normalizeProviderServiceType(
           createdJob.service_type ?? normalizedRequestServiceType,
         )
@@ -4229,8 +4259,31 @@ export function useClientFlow(profileId: string, _profileName: string) {
             .map((w) => [w.id, w.service_attributes as Record<string, unknown>]),
         )
 
+        const dogSizeCompatibleWalkers = availableWalkers.filter((walker) => {
+          const compatibility = evaluateDogSizeCompatibility(
+            requestedProviderServiceType,
+            clientServiceAttributes,
+            walkerServiceAttrsById.get(walker.id) ?? null,
+          )
+
+          if (!compatibility.compatible) {
+            console.log('[useClientFlow] provider excluded by dog size compatibility', {
+              profileId,
+              requestId: createdJob.id,
+              walkerId: walker.id,
+              requestServiceType: requestedProviderServiceType,
+              reason: compatibility.reason,
+              knownClientDogSizes: compatibility.knownClientDogSizes,
+              providerAcceptedDogSizes: compatibility.providerAcceptedDogSizes,
+              missingClientDogSizes: compatibility.missingClientDogSizes,
+            })
+          }
+
+          return compatibility.compatible
+        })
+
         const ranked = rankWalkerCandidates(
-          availableWalkers.map((walker) => {
+          dogSizeCompatibleWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
             const hasWalkerLocation =
               userLocation &&
@@ -4288,6 +4341,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
           onlineWalkerCount: allOnlineWalkers.length,
           matchingWalkerCount: matchingWalkers.length,
           availableWalkerCount: availableWalkers.length,
+          dogSizeCompatibleWalkerCount: dogSizeCompatibleWalkers.length,
           rankedCandidateCount: ranked.length,
         })
 

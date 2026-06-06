@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluatePricingEligibility, getDogPricingMultiplier, type ProviderPricingPreferenceRow } from '../supabase/functions/_shared/pricingEligibility.ts'
 import { providerSupportsRequestedService } from '../supabase/functions/_shared/providerServiceTypes.ts'
-import { computeAttributeScore } from '../supabase/functions/_shared/dispatchRanking.ts'
+import { computeAttributeScore, evaluateDogSizeCompatibility } from '../supabase/functions/_shared/dispatchRanking.ts'
 import { mapBookingServiceTypeToProfileServiceType, mapProfileServiceTypeToBookingServiceType } from '../src/lib/profileServiceTypes.ts'
 import { providerSupportsRequestedService as clientProviderSupportsRequestedService } from '../src/lib/providerServiceTypes.ts'
 import { getBudgetGuidanceFromProviderPreferences } from '../src/lib/pricing.ts'
@@ -426,6 +426,75 @@ test('fixed visit guidance preserves preferred fee as the upper range bound', ()
   assert.equal(guidance.recommendedGood, 200)
   assert.equal(guidance.suggestedLow, 150)
   assert.equal(guidance.suggestedHigh, 200)
+})
+
+test('dog size compatibility treats empty provider sizes as accepts all', () => {
+  const result = evaluateDogSizeCompatibility(
+    'dog_walker',
+    { dog_walker: { selectedDogSizes: ['L'] } },
+    { dog_walker: { supportedDogSizes: [] } },
+  )
+
+  assert.equal(result.compatible, true)
+  assert.equal(result.reason, 'provider_accepts_all_sizes')
+})
+
+test('dog size compatibility excludes providers missing one of multiple selected dog sizes', () => {
+  const result = evaluateDogSizeCompatibility(
+    'dog_walker',
+    { dog_walker: { selectedDogSizes: ['S', 'M'] } },
+    { dog_walker: { supportedDogSizes: ['S'] } },
+  )
+
+  assert.equal(result.compatible, false)
+  assert.equal(result.reason, 'dog_size_mismatch')
+  assert.deepEqual(result.missingClientDogSizes, ['M'])
+})
+
+test('dog size compatibility keeps providers eligible when all selected sizes are supported', () => {
+  const result = evaluateDogSizeCompatibility(
+    'dog_walker',
+    { dog_walker: { selectedDogSizes: ['S', 'M'] } },
+    { dog_walker: { supportedDogSizes: ['S', 'M'] } },
+  )
+
+  assert.equal(result.compatible, true)
+  assert.equal(result.reason, 'dog_size_match')
+  assert.deepEqual(result.missingClientDogSizes, [])
+})
+
+test('dog size compatibility does not exclude providers when client dog sizes are unknown', () => {
+  const result = evaluateDogSizeCompatibility(
+    'dog_walker',
+    { dog_walker: { selectedDogSizes: [null, ''] } },
+    { dog_walker: { supportedDogSizes: ['S'] } },
+  )
+
+  assert.equal(result.compatible, true)
+  assert.equal(result.reason, 'unknown_client_dog_sizes')
+})
+
+test('baby sitter matching remains unaffected by dog size compatibility', () => {
+  const result = evaluateDogSizeCompatibility(
+    'baby_sitter',
+    { dog_walker: { selectedDogSizes: ['S', 'M'] } },
+    { dog_walker: { supportedDogSizes: ['S'] } },
+  )
+
+  assert.equal(result.compatible, true)
+  assert.equal(result.reason, 'not_dog_walker')
+})
+
+test('dog walker attribute scoring uses multi-dog size compatibility', () => {
+  const result = computeAttributeScore(
+    'dog_walker',
+    { dog_walker: { selectedDogSizes: ['S', 'M'] } },
+    { dog_walker: { supportedDogSizes: ['S', 'M'] } },
+  )
+
+  assert.equal(result.attributeReason, 'size_match')
+  assert.equal(result.attributeScore, 0.025)
+  assert.deepEqual(result.attributeMatches, ['dogSize:S', 'dogSize:M'])
 })
 
 test('mixed pricing-model pools prefer time-based guidance when duration is provided', () => {

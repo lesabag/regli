@@ -18,6 +18,20 @@ export type AttributeMatchResult = {
   attributeMatches: string[]
 }
 
+export type DogSizeCompatibilityResult = {
+  compatible: boolean
+  reason:
+    | 'not_dog_walker'
+    | 'missing_attributes'
+    | 'unknown_client_dog_sizes'
+    | 'provider_accepts_all_sizes'
+    | 'dog_size_match'
+    | 'dog_size_mismatch'
+  knownClientDogSizes: string[]
+  providerAcceptedDogSizes: string[]
+  missingClientDogSizes: string[]
+}
+
 export type RankedWalkerCandidate = {
   walkerId: string
   score: number
@@ -105,6 +119,119 @@ const AGE_RANGE_MAP: Record<string, [number, number]> = {
   '11+': [11, 120],
 }
 
+function normalizeClientDogSize(value: unknown): 'S' | 'M' | 'L' | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toUpperCase()
+  if (normalized === 'S' || normalized === 'M' || normalized === 'L') return normalized
+  return null
+}
+
+function normalizeProviderDogSize(value: unknown): 'S' | 'M' | 'L' | 'XL' | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toUpperCase()
+  if (normalized === 'S' || normalized === 'M' || normalized === 'L' || normalized === 'XL') return normalized
+  return null
+}
+
+function unique<T>(values: T[]): T[] {
+  return values.filter((value, index) => values.indexOf(value) === index)
+}
+
+function getKnownClientDogSizes(clientAttrs: Record<string, unknown>): ('S' | 'M' | 'L')[] {
+  const clientDog = (clientAttrs.dog_walker ?? clientAttrs) as Record<string, unknown>
+  const sizesFromArray = Array.isArray(clientDog.selectedDogSizes)
+    ? clientDog.selectedDogSizes
+    : Array.isArray(clientDog.dogSizes)
+      ? clientDog.dogSizes
+      : null
+
+  if (sizesFromArray && sizesFromArray.length > 0) {
+    return unique(
+      sizesFromArray
+        .map((size) => normalizeClientDogSize(size))
+        .filter((size): size is 'S' | 'M' | 'L' => size !== null),
+    )
+  }
+
+  const singleDogSize = normalizeClientDogSize(clientDog.dogSize)
+  return singleDogSize ? [singleDogSize] : []
+}
+
+function getProviderAcceptedDogSizes(providerAttrs: Record<string, unknown>): ('S' | 'M' | 'L' | 'XL')[] {
+  const providerDog = (providerAttrs.dog_walker ?? providerAttrs) as Record<string, unknown>
+  return Array.isArray(providerDog.supportedDogSizes)
+    ? unique(
+        providerDog.supportedDogSizes
+          .map((size) => normalizeProviderDogSize(size))
+          .filter((size): size is 'S' | 'M' | 'L' | 'XL' => size !== null),
+      )
+    : []
+}
+
+export function evaluateDogSizeCompatibility(
+  serviceType: string | null | undefined,
+  clientAttrs: ServiceAttributes,
+  providerAttrs: ServiceAttributes,
+): DogSizeCompatibilityResult {
+  const normalizedType = serviceType?.trim().toLowerCase() ?? null
+  if (normalizedType !== 'dog_walker' && normalizedType !== 'dog_walking' && normalizedType !== 'dog-walker') {
+    return {
+      compatible: true,
+      reason: 'not_dog_walker',
+      knownClientDogSizes: [],
+      providerAcceptedDogSizes: [],
+      missingClientDogSizes: [],
+    }
+  }
+
+  if (!clientAttrs || !providerAttrs) {
+    return {
+      compatible: true,
+      reason: 'missing_attributes',
+      knownClientDogSizes: [],
+      providerAcceptedDogSizes: [],
+      missingClientDogSizes: [],
+    }
+  }
+
+  const normalizedClientAttrs = clientAttrs as Record<string, unknown>
+  const normalizedProviderAttrs = providerAttrs as Record<string, unknown>
+  const knownClientDogSizes = getKnownClientDogSizes(normalizedClientAttrs)
+  const providerAcceptedDogSizes = getProviderAcceptedDogSizes(normalizedProviderAttrs)
+
+  if (knownClientDogSizes.length === 0) {
+    return {
+      compatible: true,
+      reason: 'unknown_client_dog_sizes',
+      knownClientDogSizes,
+      providerAcceptedDogSizes,
+      missingClientDogSizes: [],
+    }
+  }
+
+  if (providerAcceptedDogSizes.length === 0) {
+    return {
+      compatible: true,
+      reason: 'provider_accepts_all_sizes',
+      knownClientDogSizes,
+      providerAcceptedDogSizes,
+      missingClientDogSizes: [],
+    }
+  }
+
+  const missingClientDogSizes = knownClientDogSizes.filter(
+    (size) => !providerAcceptedDogSizes.includes(size),
+  )
+
+  return {
+    compatible: missingClientDogSizes.length === 0,
+    reason: missingClientDogSizes.length === 0 ? 'dog_size_match' : 'dog_size_mismatch',
+    knownClientDogSizes,
+    providerAcceptedDogSizes,
+    missingClientDogSizes,
+  }
+}
+
 export function normalizeAgeRangeValue(value: unknown): '1-2' | '2-4' | '5-7' | '7+' | null {
   if (typeof value !== 'string') return null
   const normalized = value.trim()
@@ -149,8 +276,8 @@ function computeDogWalkerAttributeScore(
   const clientDog = (clientAttrs.dog_walker ?? clientAttrs) as Record<string, unknown>
   const providerDog = (providerAttrs.dog_walker ?? providerAttrs) as Record<string, unknown>
 
-  const clientDogSize = typeof clientDog.dogSize === 'string' ? clientDog.dogSize : null
   const clientEnergy = typeof clientDog.energyLevel === 'string' ? clientDog.energyLevel : null
+  const dogSizeCompatibility = evaluateDogSizeCompatibility('dog_walker', clientAttrs, providerAttrs)
   const providerSizes = Array.isArray(providerDog.supportedDogSizes) ? providerDog.supportedDogSizes as string[] : null
   const providerEnergy = Array.isArray(providerDog.supportedEnergyLevels) ? providerDog.supportedEnergyLevels as string[] : null
 
@@ -158,10 +285,10 @@ function computeDogWalkerAttributeScore(
   const matches: string[] = []
   const reasons: string[] = []
 
-  if (clientDogSize && providerSizes && providerSizes.length > 0) {
-    if (providerSizes.includes(clientDogSize)) {
+  if (dogSizeCompatibility.knownClientDogSizes.length > 0 && providerSizes && providerSizes.length > 0) {
+    if (dogSizeCompatibility.compatible) {
       score += ATTR_DOG_SIZE_BONUS
-      matches.push(`dogSize:${clientDogSize}`)
+      dogSizeCompatibility.knownClientDogSizes.forEach((size) => matches.push(`dogSize:${size}`))
       reasons.push('size_match')
     } else {
       score += ATTR_DOG_SIZE_PENALTY

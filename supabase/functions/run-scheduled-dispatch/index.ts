@@ -10,7 +10,8 @@ import {
   isProviderAvailableAt,
   type ProviderAvailabilityRow,
 } from '../_shared/providerAvailability.ts'
-import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
+import { evaluateDogSizeCompatibility, rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
+import { loadSelectedDogSizesForRequest, mergeSelectedDogSizesIntoClientAttributes } from '../_shared/requestDogSizes.ts'
 
 function getScheduledDispatchLeadMinutes(): number {
   const raw = Deno.env.get('SCHEDULED_DISPATCH_LEAD_MINUTES')
@@ -495,7 +496,15 @@ serve(async (req) => {
                 .maybeSingle(),
             ])
 
-          clientServiceAttributes = (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
+          const selectedDogSizes = await loadSelectedDogSizesForRequest({
+            supabase,
+            clientId: job.client_id,
+            dogNameValue: job.dog_name ?? null,
+          })
+          clientServiceAttributes = mergeSelectedDogSizesIntoClientAttributes(
+            (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null,
+            selectedDogSizes,
+          )
 
           if (favoriteCustomersError) {
             await supabase.rpc('log_dispatch_event', {
@@ -528,8 +537,34 @@ serve(async (req) => {
           }
         }
 
+        const dogSizeCompatibleWalkers = onlineWalkers.filter((walker) => {
+          const compatibility = evaluateDogSizeCompatibility(
+            requestedProviderServiceType,
+            clientServiceAttributes,
+            walkerServiceAttrsById.get(walker.id) ?? null,
+          )
+
+          if (!compatibility.compatible) {
+            void supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_dog_size_filtered_provider',
+              p_payload: {
+                walker_id: walker.id,
+                request_service_type: requestedProviderServiceType,
+                reason: compatibility.reason,
+                known_client_dog_sizes: compatibility.knownClientDogSizes,
+                provider_accepted_dog_sizes: compatibility.providerAcceptedDogSizes,
+                missing_client_dog_sizes: compatibility.missingClientDogSizes,
+              },
+            })
+          }
+
+          return compatibility.compatible
+        })
+
         const ranked = rankWalkerCandidates(
-          onlineWalkers.map((walker) => {
+          dogSizeCompatibleWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
             return {
               walkerId: walker.id,
@@ -573,6 +608,7 @@ serve(async (req) => {
           p_event_type: 'scheduled_dispatch_start_dispatch_invoked',
           p_payload: {
             candidate_count: ranked.length,
+            dog_size_compatible_candidate_count: dogSizeCompatibleWalkers.length,
             timeout_seconds: DISPATCH_TIMEOUT_SECONDS,
             top_candidates: ranked.slice(0, 5).map((candidate) => ({
               walker_id: candidate.walkerId,

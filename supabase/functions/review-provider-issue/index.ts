@@ -6,7 +6,8 @@ import {
   isProviderAvailableAt,
   type ProviderAvailabilityRow,
 } from '../_shared/providerAvailability.ts'
-import { rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
+import { evaluateDogSizeCompatibility, rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
+import { loadSelectedDogSizesForRequest, mergeSelectedDogSizesIntoClientAttributes } from '../_shared/requestDogSizes.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -139,11 +140,12 @@ async function buildRankedCandidatesForReassignment(params: {
   requestId: string
   clientId: string | null
   requestServiceType: string | null | undefined
+  dogNameValue?: string | null
   bookingTiming: string | null | undefined
   scheduledFor: string | null | undefined
   excludedWalkerId: string | null
 }) {
-  const { supabaseAdmin, clientId, requestServiceType, bookingTiming, scheduledFor, excludedWalkerId } = params
+  const { supabaseAdmin, clientId, requestServiceType, dogNameValue, bookingTiming, scheduledFor, excludedWalkerId } = params
   const { data: walkers, error: walkersError } = await supabaseAdmin
     .from('profiles')
     .select('id, service_type, service_types, service_attributes')
@@ -275,13 +277,43 @@ async function buildRankedCandidatesForReassignment(params: {
     }
 
     if (!clientProfileError) {
-      clientServiceAttributes =
-        (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null
+      const selectedDogSizes = await loadSelectedDogSizesForRequest({
+        supabase: supabaseAdmin,
+        clientId,
+        dogNameValue: dogNameValue ?? null,
+      })
+      clientServiceAttributes = mergeSelectedDogSizesIntoClientAttributes(
+        (clientProfileRow as { service_attributes?: unknown } | null)?.service_attributes as Record<string, unknown> | null ?? null,
+        selectedDogSizes,
+      )
     }
   }
 
+  const dogSizeCompatibleWalkers = eligibleWalkers.filter((walker) => {
+    const compatibility = evaluateDogSizeCompatibility(
+      requestedProviderServiceType,
+      clientServiceAttributes,
+      walkerServiceAttrsById.get(walker.id) ?? null,
+    )
+
+    if (!compatibility.compatible) {
+      console.warn(PROVIDER_REASSIGN_LOG, {
+        requestId: params.requestId,
+        action: 'dog_size_filter',
+        result: 'excluded',
+        walkerId: walker.id,
+        reason: compatibility.reason,
+        knownClientDogSizes: compatibility.knownClientDogSizes,
+        providerAcceptedDogSizes: compatibility.providerAcceptedDogSizes,
+        missingClientDogSizes: compatibility.missingClientDogSizes,
+      })
+    }
+
+    return compatibility.compatible
+  })
+
   const rankedCandidates = rankWalkerCandidates(
-    eligibleWalkers.map((walker) => {
+    dogSizeCompatibleWalkers.map((walker) => {
       const ratingStats = ratingsByWalker.get(walker.id)
       return {
         walkerId: walker.id,
@@ -321,7 +353,7 @@ async function buildRankedCandidatesForReassignment(params: {
 
   return {
     rankedCandidates,
-    eligibleWalkerIds: eligibleWalkers.map((walker) => walker.id),
+    eligibleWalkerIds: dogSizeCompatibleWalkers.map((walker) => walker.id),
   }
 }
 
@@ -407,7 +439,7 @@ serve(async (req: Request) => {
 
     const { data: job, error: jobError } = await supabaseAdmin
       .from('walk_requests')
-      .select('id, client_id, walker_id, selected_walker_id, status, booking_timing, scheduled_for, service_type, payment_status, stripe_payment_intent_id, notes, service_started_at, service_completed_at, dispatch_state, smart_dispatch_state')
+      .select('id, client_id, walker_id, selected_walker_id, status, booking_timing, scheduled_for, service_type, dog_name, payment_status, stripe_payment_intent_id, notes, service_started_at, service_completed_at, dispatch_state, smart_dispatch_state')
       .eq('id', jobId)
       .maybeSingle()
 
@@ -608,6 +640,7 @@ serve(async (req: Request) => {
         requestId: jobId,
         clientId: job.client_id,
         requestServiceType: job.service_type,
+        dogNameValue: (job as { dog_name?: string | null }).dog_name ?? null,
         bookingTiming: job.booking_timing,
         scheduledFor: job.scheduled_for,
         excludedWalkerId: oldProviderId,
