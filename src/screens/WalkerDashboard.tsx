@@ -4135,6 +4135,18 @@ export default function WalkerDashboard({
                     </SettingsCollapsibleSection>
 
                     <SettingsCollapsibleSection
+                      title={t('providerPricing.title')}
+                      subtitle={t('providerPricing.subtitle')}
+                      open={settingsSectionsOpen.pricing}
+                      onToggle={() => toggleSettingsSection('pricing')}
+                    >
+                      <ProviderPricingPreferences
+                        providerId={profile.id}
+                        serviceTypes={profileServiceTypes}
+                      />
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
                       title={dashboardSectionLabel}
                       subtitle={dashboardSectionSubtitle}
                       open={settingsSectionsOpen.dashboard}
@@ -4189,18 +4201,6 @@ export default function WalkerDashboard({
                           </button>
                         ))}
                       </div>
-                    </SettingsCollapsibleSection>
-
-                    <SettingsCollapsibleSection
-                      title={t('providerPricing.title')}
-                      subtitle={t('providerPricing.subtitle')}
-                      open={settingsSectionsOpen.pricing}
-                      onToggle={() => toggleSettingsSection('pricing')}
-                    >
-                      <ProviderPricingPreferences
-                        providerId={profile.id}
-                        serviceTypes={profileServiceTypes}
-                      />
                     </SettingsCollapsibleSection>
 
                     <div style={menuFooterActionWrapStyle}>

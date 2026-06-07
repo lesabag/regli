@@ -202,6 +202,32 @@ function bookingSubjectSelectedStorageKey(profileId: string, requestServiceType:
   return `regli_client_selected_subject_${profileId}_${normalizedServiceType}`
 }
 
+function readRecentBookingSubjects(profileId: string, requestServiceType: string | null): string[] {
+  try {
+    const raw = window.localStorage.getItem(bookingSubjectStorageKey(profileId, requestServiceType))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as string[]
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((name) => normalizeDogName(String(name ?? '')))
+      .filter(Boolean)
+      .slice(0, 8)
+  } catch {
+    return []
+  }
+}
+
+function writeRecentBookingSubjects(profileId: string, requestServiceType: string | null, names: string[]): void {
+  try {
+    window.localStorage.setItem(
+      bookingSubjectStorageKey(profileId, requestServiceType),
+      JSON.stringify(names),
+    )
+  } catch {
+    // noop
+  }
+}
+
 function normalizeDogName(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
 }
@@ -596,6 +622,7 @@ export default function ClientDashboard({
   const [scheduleDraft, setScheduleDraft] = useState(getNowPlus15LocalInput())
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
+  const [recentBabysitterNames, setRecentBabysitterNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
   const [dogSizeDraft, setDogSizeDraft] = useState<DogSize | null>(null)
   const [dogNameSheetSaving, setDogNameSheetSaving] = useState(false)
@@ -790,6 +817,11 @@ export default function ClientDashboard({
           .filter(Boolean)
           .join(', ')
       : formatDogDisplayLabel(flow.dogName.trim(), selectedSingleDogSize, { isHebrew: isRtl })
+  const compactBookingSubjectDisplayValue = isBabysitterRequest
+    ? bookingSubjectDisplayValue
+    : selectedDogPets.length > 1
+      ? `${formatDogDisplayLabel(selectedDogPets[0]?.normalizedName ?? '', selectedDogPets[0]?.dog_size, { isHebrew: isRtl })} +${selectedDogPets.length - 1}`
+      : bookingSubjectDisplayValue
   const selectedDogNamesNote = selectedDogNames.length > 0 ? `Dogs: ${selectedDogNames.join(', ')}` : null
   useEffect(() => {
     selectedBookingServiceRef.current = resolvedBookingService
@@ -1154,25 +1186,17 @@ export default function ClientDashboard({
   }, [mapMounted])
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(bookingSubjectStorageKey(profile.id, requestServiceType))
-      if (!raw) {
-        setRecentDogNames([])
-        return
-      }
-      const parsed = JSON.parse(raw) as string[]
-      if (Array.isArray(parsed)) {
-        setRecentDogNames(
-          parsed
-            .map((name) => normalizeDogName(String(name ?? '')))
-            .filter(Boolean)
-            .slice(0, 8),
-        )
-      } else {
-        setRecentDogNames([])
-      }
-    } catch {
-      setRecentDogNames([])
+    setRecentDogNames(readRecentBookingSubjects(profile.id, 'dog_walker'))
+    setRecentBabysitterNames(readRecentBookingSubjects(profile.id, 'baby_sitter'))
+  }, [profile.id])
+
+  useEffect(() => {
+    if (requestServiceType === 'dog_walker') {
+      setRecentDogNames(readRecentBookingSubjects(profile.id, 'dog_walker'))
+      return
+    }
+    if (requestServiceType === 'baby_sitter') {
+      setRecentBabysitterNames(readRecentBookingSubjects(profile.id, 'baby_sitter'))
     }
   }, [profile.id, requestServiceType])
 
@@ -1761,16 +1785,13 @@ export default function ClientDashboard({
   }, [flow.requestCardSetup])
 
   const persistRecentDogNames = useCallback(
-    (names: string[]) => {
-      setRecentDogNames(names)
-      try {
-        window.localStorage.setItem(
-          bookingSubjectStorageKey(profile.id, requestServiceType),
-          JSON.stringify(names),
-        )
-      } catch {
-        // noop
+    (names: string[], targetServiceType: string | null = requestServiceType) => {
+      if (targetServiceType === 'dog_walker') {
+        setRecentDogNames(names)
+      } else if (targetServiceType === 'baby_sitter') {
+        setRecentBabysitterNames(names)
       }
+      writeRecentBookingSubjects(profile.id, targetServiceType, names)
     },
     [profile.id, requestServiceType],
   )
@@ -1859,10 +1880,11 @@ export default function ClientDashboard({
       flow.setDogName(nextName)
       persistSelectedBookingSubject(nextName)
       if (!nextName) return
-      const nextNames = [nextName, ...recentDogNames.filter((name) => name !== nextName)].slice(0, 8)
+      const currentNames = readRecentBookingSubjects(profile.id, 'dog_walker')
+      const nextNames = [nextName, ...currentNames.filter((name) => name !== nextName)].slice(0, 8)
       persistRecentDogNames(nextNames)
     },
-    [flow, persistRecentDogNames, persistSelectedBookingSubject, recentDogNames],
+    [flow, persistRecentDogNames, persistSelectedBookingSubject, profile.id],
   )
 
   const commitBabysitterSubject = useCallback(
@@ -1871,10 +1893,11 @@ export default function ClientDashboard({
       setBabysitterServiceDetails(nextName)
       persistSelectedBookingSubject(nextName)
       if (!nextName) return
-      const nextNames = [nextName, ...recentDogNames.filter((name) => name !== nextName)].slice(0, 8)
-      persistRecentDogNames(nextNames)
+      const currentNames = readRecentBookingSubjects(profile.id, 'baby_sitter')
+      const nextNames = [nextName, ...currentNames.filter((name) => name !== nextName)].slice(0, 8)
+      persistRecentDogNames(nextNames, 'baby_sitter')
     },
-    [persistRecentDogNames, persistSelectedBookingSubject, recentDogNames],
+    [persistRecentDogNames, persistSelectedBookingSubject, profile.id],
   )
 
   const findDogPetByName = useCallback(
@@ -2013,6 +2036,28 @@ export default function ClientDashboard({
       }
     },
     [flow, isRtl, persistRecentDogNames, persistSelectedBookingSubject, profile.id, recentDogNames],
+  )
+
+  const deleteRecentBookingSubject = useCallback(
+    (rawName: string, targetServiceType: 'dog_walker' | 'baby_sitter') => {
+      const nextName = normalizeDogName(rawName)
+      if (!nextName) return
+      const currentNames = readRecentBookingSubjects(profile.id, targetServiceType)
+      const nextNames = currentNames.filter((name) => name !== nextName)
+      persistRecentDogNames(nextNames, targetServiceType)
+
+      if (targetServiceType === 'baby_sitter' && normalizeDogName(babysitterServiceDetails) === nextName) {
+        setBabysitterServiceDetails('')
+        try {
+          window.localStorage.removeItem(
+            bookingSubjectSelectedStorageKey(profile.id, targetServiceType),
+          )
+        } catch {
+          // noop
+        }
+      }
+    },
+    [babysitterServiceDetails, persistRecentDogNames, profile.id],
   )
 
   const openDogNameSheet = useCallback(() => {
@@ -3333,6 +3378,7 @@ export default function ClientDashboard({
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
+  const currentRecentSubjectNames = isBabySitterMode ? recentBabysitterNames : recentDogNames
   const isFixedVisitBookingMode = isFixedVisitMode
   const selectedFixedVisitServiceLabel = t(serviceKeys.label)
   const bookingSubjectValue = isBabysitterRequest
@@ -3840,12 +3886,12 @@ export default function ClientDashboard({
             )}
             <div
               style={
-                bookingSubjectDisplayValue
+                compactBookingSubjectDisplayValue
                   ? dogInputValueTextStyle
                   : dogInputPlaceholderTextStyle
               }
             >
-              <span>{bookingSubjectDisplayValue || bookingSubjectPlaceholder}</span>
+              <span>{compactBookingSubjectDisplayValue || bookingSubjectPlaceholder}</span>
             </div>
           </div>
           <div style={dogInputChevronStyle}>›</div>
@@ -3925,12 +3971,12 @@ export default function ClientDashboard({
           <span style={dogSummaryInlineIconStyle}>{SERVICE_ICONS[resolvedBookingService]}</span>
           <span
             style={
-              bookingSubjectDisplayValue
+              compactBookingSubjectDisplayValue
                 ? dogSummaryInlineValueStyle
                 : dogSummaryInlinePlaceholderStyle
             }
           >
-            <span>{bookingSubjectDisplayValue || bookingSubjectPlaceholder}</span>
+            <span>{compactBookingSubjectDisplayValue || bookingSubjectPlaceholder}</span>
           </span>
         </button>
       </div>
@@ -5560,13 +5606,46 @@ export default function ClientDashboard({
               </div>
             )}
 
-            {showBookingSubjectSuggestions && !!recentDogNames.length && (
+            {showBookingSubjectSuggestions && !!currentRecentSubjectNames.length && (
               <div style={dogNameInputCardStyle}>
                 <div style={dogNameInputLabelStyle}>{recentSubjectsLabel}</div>
                 <div style={dogNameSuggestionsWrapStyle}>
-                  {recentDogNames.map((name) => {
+                  {currentRecentSubjectNames.map((name) => {
                     const matchingPet = !isBabySitterMode ? findDogPetByName(name) : null
                     const isSelected = !!matchingPet && selectedDogPetIds.includes(matchingPet.id)
+                    if (isBabySitterMode) {
+                      return (
+                        <div key={name} style={dogNameChipWrapStyle}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDogNameDraft(name)
+                              setDogSizeDraft(null)
+                              setDogNameSheetError(null)
+                            }}
+                            style={dogNameChipStyle}
+                          >
+                            <span>🧸</span>
+                            <span>{name}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              deleteRecentBookingSubject(name, 'baby_sitter')
+                            }}
+                            style={dogNameChipDeleteStyle}
+                            disabled={dogNameSheetSaving}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                          </button>
+                        </div>
+                      )
+                    }
+
                     return (
                       <button
                         key={name}
@@ -5585,11 +5664,9 @@ export default function ClientDashboard({
                           ...(isSelected ? dogNameChipActiveStyle : null),
                         }}
                       >
-                        <span>{isBabySitterMode ? '🧸' : '🐶'}</span>
+                        <span>🐶</span>
                         <span>
-                          {isBabySitterMode
-                            ? name
-                            : formatDogDisplayLabel(name, matchingPet?.dog_size ?? null, { isHebrew: isRtl })}
+                          {formatDogDisplayLabel(name, matchingPet?.dog_size ?? null, { isHebrew: isRtl })}
                         </span>
                       </button>
                     )
