@@ -7,6 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function isValidEmailAddress(value: string | null | undefined): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -73,6 +80,15 @@ serve(async (req: Request) => {
       )
     }
 
+    if (!isValidEmailAddress(profile.email as string | null | undefined)) {
+      return new Response(
+        JSON.stringify({
+          error: 'Please enter a valid email address before continuing to Stripe.',
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     const stripe = new Stripe(stripeKey, { apiVersion: '2024-12-18.acacia' })
 
     let accountId = profile.stripe_connect_account_id as string | null
@@ -83,7 +99,7 @@ serve(async (req: Request) => {
         const account = await stripe.accounts.create({
           type: 'express',
           country: 'IL',
-          email: profile.email || undefined,
+          email: profile.email,
           capabilities: {
             transfers: { requested: true },
           },

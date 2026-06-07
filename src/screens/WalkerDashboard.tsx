@@ -383,6 +383,20 @@ function providerAutoOnlineCompletedStorageKey(profileId: string) {
   return `regli_provider_auto_online_completed_${profileId}`
 }
 
+function isValidEmailAddress(value: string | null | undefined): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
+}
+
+function getAvailabilityDayLabel(dayOfWeek: number, isHebrew: boolean): string {
+  const labels = isHebrew
+    ? ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  return labels[dayOfWeek] ?? String(dayOfWeek)
+}
+
 function getPreferredCustomerKey(input: {
   clientId?: string | null
   clientName?: string | null
@@ -598,6 +612,10 @@ export default function WalkerDashboard({
     ? 'עדיין לא הוגדרו חלונות זמינות פעילים. אפשר לבחור יום ולהפעיל אותו כאן.'
     : 'No active availability windows yet. Choose a day and turn it on here.'
   const availabilityAvailableNowLabel = isHebrew ? 'זמין להזמנות' : 'Available for bookings'
+  const availabilityScheduledTodayLabel = isHebrew ? 'מוגדר להיום' : 'Scheduled today'
+  const payoutSetupEmailErrorLabel = isHebrew
+    ? 'יש להזין כתובת אימייל תקינה לפני שממשיכים ל-Stripe.'
+    : 'Please enter a valid email address before continuing to Stripe.'
   const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
   const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות' : 'Manage availability'
   const weeklyAvailabilitySummaryLabel = isHebrew
@@ -673,6 +691,7 @@ export default function WalkerDashboard({
   const [availabilitySaving, setAvailabilitySaving] = useState(false)
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [availabilitySavedAt, setAvailabilitySavedAt] = useState(0)
+  const [payoutSetupError, setPayoutSetupError] = useState<string | null>(null)
   const [selectedAvailabilityDayByService, setSelectedAvailabilityDayByService] = useState<Record<ProfileServiceType, number>>(
     () => createAvailabilityDaySelection(getBusinessLocalNowParts()?.dayOfWeek ?? new Date().getDay()),
   )
@@ -697,6 +716,9 @@ export default function WalkerDashboard({
   const [pricingSummaryRows, setPricingSummaryRows] = useState<ProviderPricingSummaryPreferenceRow[]>([])
   const [openPricingSummaryTooltip, setOpenPricingSummaryTooltip] = useState<'asap' | 'scheduled' | null>(null)
   const availabilityRowsRef = useRef(availabilityRows)
+  const [availabilityStateVersion, setAvailabilityStateVersion] = useState(0)
+  const availabilityStateVersionRef = useRef(0)
+  const availabilityLoadRequestIdRef = useRef(0)
   const pricingSummaryTooltipRef = useRef<HTMLSpanElement | null>(null)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<SettingsSectionKey, boolean>>({
     language: false,
@@ -954,9 +976,34 @@ export default function WalkerDashboard({
     }
   }, [profile.id, profile.service_attributes, profile.short_bio])
 
-  useEffect(() => {
-    availabilityRowsRef.current = availabilityRows
-  }, [availabilityRows])
+  const setAvailabilityState = useCallback((nextState: AvailabilityFormState) => {
+    availabilityRowsRef.current = nextState
+    setAvailabilityRows(nextState)
+  }, [])
+
+  const applyAvailabilityRows = useCallback((
+    rows: ProviderAvailabilityRow[],
+    options?: { clearError?: boolean; logReason?: string },
+  ) => {
+    availabilityStateVersionRef.current += 1
+    const nextStateVersion = availabilityStateVersionRef.current
+    const nextState = buildAvailabilityState(rows)
+    setAvailabilityState(nextState)
+    setAvailabilityStateVersion(nextStateVersion)
+    setLastSavedAvailabilitySignature(serializeAvailabilityState(nextState, profileServiceTypes))
+    if (options?.clearError !== false) {
+      setAvailabilityError(null)
+    }
+    if (options?.logReason) {
+      console.log('[provider-availability] dashboard summary recomputed', {
+        reason: options.logReason,
+        serviceTypes: profileServiceTypes,
+        activeRowCount: rows.filter((row) => row.is_active !== false).length,
+        stateVersion: nextStateVersion,
+      })
+    }
+    return nextState
+  }, [profileServiceTypes, setAvailabilityState])
 
   useEffect(() => {
     const currentBusinessDay = getBusinessLocalNowParts()?.dayOfWeek ?? new Date().getDay()
@@ -1020,7 +1067,13 @@ export default function WalkerDashboard({
     }
   }, [profile.id])
 
-  const loadAvailability = useCallback(async (): Promise<ProviderAvailabilityRow[] | null> => {
+  const loadAvailability = useCallback(async (
+    options?: { silent?: boolean },
+  ): Promise<ProviderAvailabilityRow[] | null> => {
+    const silent = options?.silent === true
+    const requestId = availabilityLoadRequestIdRef.current + 1
+    availabilityLoadRequestIdRef.current = requestId
+    const stateVersionAtStart = availabilityStateVersionRef.current
     try {
       const { data, error } = await supabase
         .from('provider_availability')
@@ -1029,23 +1082,47 @@ export default function WalkerDashboard({
 
       if (error) {
         console.warn('[WalkerDashboard] failed to load provider_availability:', error.message)
-        setAvailabilityError(availabilityErrorLabel)
+        if (!silent) {
+          setAvailabilityError(availabilityErrorLabel)
+        }
         return null
       }
 
       const rows = (data as ProviderAvailabilityRow[] | null) ?? []
-      const nextState = buildAvailabilityState(rows)
-      setAvailabilityRows(nextState)
-      setLastSavedAvailabilitySignature(serializeAvailabilityState(nextState, profileServiceTypes))
-      setAvailabilityError(null)
+      console.log('[provider-availability] load result', {
+        providerId: profile.id,
+        rows: rows.map((row) => ({
+          service_type: row.service_type,
+          db_day_of_week: row.day_of_week,
+          day_label: typeof row.day_of_week === 'number' ? getAvailabilityDayLabel(row.day_of_week, isHebrew) : null,
+          isActive: row.is_active !== false,
+          start_time: row.start_time,
+          end_time: row.end_time,
+        })),
+      })
+      if (stateVersionAtStart !== availabilityStateVersionRef.current) {
+        console.log('[provider-availability] skipped stale availability load', {
+          requestId,
+          stateVersionAtStart,
+          currentStateVersion: availabilityStateVersionRef.current,
+        })
+        return rows
+      }
+
+      applyAvailabilityRows(rows, {
+        clearError: true,
+        logReason: silent ? 'silent_refresh' : 'load',
+      })
       return rows
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn('[WalkerDashboard] unexpected provider_availability load error:', message)
-      setAvailabilityError(availabilityErrorLabel)
+      if (!silent) {
+        setAvailabilityError(availabilityErrorLabel)
+      }
       return null
     }
-  }, [availabilityErrorLabel, profile.id, profileServiceTypes])
+  }, [applyAvailabilityRows, availabilityErrorLabel, isHebrew, profile.id])
 
   useEffect(() => {
     let cancelled = false
@@ -1076,15 +1153,16 @@ export default function WalkerDashboard({
   ) => {
     setAvailabilitySavedAt(0)
     setAvailabilityError(null)
-    setAvailabilityRows((prev) => ({
-      ...prev,
-      [serviceType]: prev[serviceType].map((row) => (
+    const nextState = {
+      ...availabilityRowsRef.current,
+      [serviceType]: availabilityRowsRef.current[serviceType].map((row) => (
         row.dayOfWeek === dayOfWeek
           ? { ...row, ...patch }
           : row
       )),
-    }))
-  }, [])
+    }
+    setAvailabilityState(nextState)
+  }, [setAvailabilityState])
 
   const handleAvailabilityToggle = useCallback((
     serviceType: ProfileServiceType,
@@ -1248,6 +1326,20 @@ export default function WalkerDashboard({
         is_active: row.isActive,
       })),
     )
+    console.log('[provider-availability] save started', {
+      providerId: profile.id,
+      serviceTypes: profileServiceTypes,
+      activeRowCount: activeRows.length,
+      rows: payload.map((row) => ({
+        service_type: row.service_type,
+        ui_day_index: row.day_of_week,
+        db_day_of_week: row.day_of_week,
+        day_label: getAvailabilityDayLabel(row.day_of_week, isHebrew),
+        isActive: row.is_active,
+        start_time: row.start_time,
+        end_time: row.end_time,
+      })),
+    })
 
     const { error } = await supabase
       .from('provider_availability')
@@ -1262,17 +1354,36 @@ export default function WalkerDashboard({
       return
     }
 
-    try {
-      const refreshedRows = await loadAvailability()
-      if (refreshedRows == null) {
-        return
-      }
+    const savedRows = payload.map((row) => ({
+      provider_id: row.provider_id,
+      service_type: row.service_type,
+      day_of_week: row.day_of_week,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      is_active: row.is_active,
+    })) as ProviderAvailabilityRow[]
+    console.log('[provider-availability] save success', {
+      providerId: profile.id,
+      savedRowCount: savedRows.length,
+      activeRowCount: savedRows.filter((row) => row.is_active !== false).length,
+    })
 
-      setAvailabilitySavedAt(Date.now())
-    } finally {
-      setAvailabilitySaving(false)
-    }
+    applyAvailabilityRows(savedRows, {
+      clearError: true,
+      logReason: 'save_success',
+    })
+    setAvailabilityError(null)
+    setAvailabilitySavedAt(Date.now())
+    console.log('[provider-availability] local state updated after save', {
+      providerId: profile.id,
+      stateVersion: availabilityStateVersionRef.current,
+    })
+    setAvailabilitySaving(false)
+    setAvailabilityLoading(false)
+
+    void loadAvailability({ silent: true })
   }, [
+    applyAvailabilityRows,
     availabilityErrorLabel,
     availabilityInvalidRangeLabel,
     availabilitySaving,
@@ -1629,7 +1740,7 @@ export default function WalkerDashboard({
   const todayDayOfWeek = businessNowParts?.dayOfWeek ?? new Date().getDay()
   const currentAvailabilitySignature = useMemo(
     () => serializeAvailabilityState(availabilityRows, profileServiceTypes),
-    [availabilityRows, profileServiceTypes],
+    [availabilityRows, availabilityStateVersion, profileServiceTypes],
   )
   const availabilityHasUnsavedChanges =
     profileServiceTypes.length > 0 &&
@@ -1639,50 +1750,64 @@ export default function WalkerDashboard({
     () => profileServiceTypes.some((serviceType) =>
       availabilityRows[serviceType].some((row) => row.isActive),
     ),
-    [availabilityRows, profileServiceTypes],
+    [availabilityRows, availabilityStateVersion, profileServiceTypes],
   )
   const todayAvailabilityRows = useMemo(
     () =>
       profileServiceTypes.map((serviceType) => {
+        const rows = availabilityRows[serviceType]
         const todayRow = availabilityRows[serviceType].find((row) => row.dayOfWeek === todayDayOfWeek) ?? null
+        const configuredRows = rows.filter((row) => row.isActive)
+        const startMinutes = parseAvailabilityInputMinutes(todayRow?.startTime ?? '')
+        const endMinutes = parseAvailabilityInputMinutes(todayRow?.endTime ?? '')
+        const hasConfiguredTodayWindow =
+          !!todayRow?.isActive &&
+          startMinutes != null &&
+          endMinutes != null &&
+          endMinutes > startMinutes
+        const isAvailableNow =
+          hasConfiguredTodayWindow &&
+          businessNowParts != null &&
+          businessNowParts.minutesOfDay >= startMinutes &&
+          businessNowParts.minutesOfDay < endMinutes
+        const nextConfiguredRow = configuredRows[0] ?? null
+        const nextConfiguredSummary = nextConfiguredRow
+          ? `${availabilityDayLabels[nextConfiguredRow.dayOfWeek]} ${formatAvailabilityTimeRange(nextConfiguredRow.startTime, nextConfiguredRow.endTime)}`
+          : unavailableTodayLabel
         return {
           serviceType,
           label: getProfileServiceTypeLabel(serviceType, isHebrew),
-          isAvailable: !!todayRow?.isActive,
-          summary:
-            todayRow?.isActive
-              ? formatAvailabilityTimeRange(todayRow.startTime, todayRow.endTime)
-              : unavailableTodayLabel,
+          configuredRows,
+          hasConfiguredTodayWindow,
+          isAvailableNow,
+          statusLabel: hasConfiguredTodayWindow
+            ? (isAvailableNow ? availabilityAvailableNowLabel : availabilityScheduledTodayLabel)
+            : nextConfiguredRow
+              ? availabilityScheduledTodayLabel
+            : unavailableTodayLabel,
+          summary: hasConfiguredTodayWindow && todayRow
+            ? formatAvailabilityTimeRange(todayRow.startTime, todayRow.endTime)
+            : nextConfiguredSummary,
         }
       }),
-    [availabilityRows, isHebrew, profileServiceTypes, todayDayOfWeek, unavailableTodayLabel],
+    [
+      availabilityAvailableNowLabel,
+      availabilityRows,
+      availabilityScheduledTodayLabel,
+      availabilityStateVersion,
+      businessNowParts,
+      isHebrew,
+      profileServiceTypes,
+      todayDayOfWeek,
+      unavailableTodayLabel,
+    ],
   )
   const weeklyAvailabilityByService = useMemo(() => {
-    const nowMinutes = businessNowParts?.minutesOfDay ?? null
     return profileServiceTypes.reduce((acc, serviceType) => {
       const rows = availabilityRows[serviceType]
       const days = AVAILABILITY_DAY_ORDER.map((dayOfWeek) => {
         const row = rows.find((entry) => entry.dayOfWeek === dayOfWeek) ?? null
-        const startMinutes = parseAvailabilityInputMinutes(row?.startTime ?? '')
-        const endMinutes = parseAvailabilityInputMinutes(row?.endTime ?? '')
-
-        let status: 'available' | 'upcoming' | 'off' = 'off'
-
-        if (dayOfWeek < todayDayOfWeek) {
-          status = 'off'
-        } else if (dayOfWeek === todayDayOfWeek) {
-          if (!row?.isActive || startMinutes == null || endMinutes == null || endMinutes <= startMinutes || nowMinutes == null) {
-            status = 'off'
-          } else if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
-            status = 'available'
-          } else if (nowMinutes < startMinutes) {
-            status = 'upcoming'
-          } else {
-            status = 'off'
-          }
-        } else if (row?.isActive) {
-          status = 'available'
-        }
+        const status: 'available' | 'upcoming' | 'off' = row?.isActive ? 'available' : 'off'
 
         return {
           dayOfWeek,
@@ -1693,21 +1818,18 @@ export default function WalkerDashboard({
       })
 
       acc[serviceType] = {
-        availableDaysCount: days.reduce((count, day) => (
-          day.status === 'available' || day.status === 'upcoming'
-            ? count + 1
-            : count
-        ), 0),
+        availableDaysCount: days.reduce((count, day) => (day.status === 'available' ? count + 1 : count), 0),
         days,
       }
       return acc
     }, {} as Record<ProfileServiceType, { availableDaysCount: number; days: Array<{ dayOfWeek: number; dayLabel: string; isToday: boolean; status: 'available' | 'upcoming' | 'off' }> }>)
-  }, [availabilityDayLabels, availabilityRows, businessNowParts, profileServiceTypes, todayDayOfWeek])
+  }, [availabilityDayLabels, availabilityRows, availabilityStateVersion, profileServiceTypes, todayDayOfWeek])
   const defaultAvailabilityService = useMemo(() => (
-    todayAvailabilityRows.find((item) => item.isAvailable)?.serviceType
+    todayAvailabilityRows.find((item) => item.hasConfiguredTodayWindow)?.serviceType
+    ?? profileServiceTypes.find((serviceType) => availabilityRows[serviceType].some((row) => row.isActive))
     ?? profileServiceTypes[0]
     ?? null
-  ), [profileServiceTypes, todayAvailabilityRows])
+  ), [availabilityRows, profileServiceTypes, todayAvailabilityRows])
   const selectedAvailabilityService = useMemo(() => {
     if (!profileServiceTypes.length) return null
     if (activeAvailabilityService && profileServiceTypes.includes(activeAvailabilityService)) {
@@ -1726,6 +1848,7 @@ export default function WalkerDashboard({
     !!flow.connectStatus?.connected &&
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
     !!flow.connectStatus?.payouts_enabled
+  const payoutSetupInlineError = payoutSetupError ?? flow.connectError ?? null
   const walletNeedsSetup = !flow.connectLoading && !walletPayoutReady
   const latestPayoutCard = useMemo(() => {
     const setupReady = walletPayoutReady
@@ -2287,6 +2410,14 @@ export default function WalkerDashboard({
 
   const handleStripeSetup = useCallback(async (rememberAutoOnline = false) => {
     if (isCheckingPayout) return
+    const normalizedEmail = profile.email?.trim() ?? ''
+    if (!isValidEmailAddress(normalizedEmail)) {
+      setPayoutSetupError(payoutSetupEmailErrorLabel)
+      setIsCheckingPayout(false)
+      return
+    }
+
+    setPayoutSetupError(null)
     setIsCheckingPayout(true)
     if (rememberAutoOnline) {
       try {
@@ -2304,7 +2435,7 @@ export default function WalkerDashboard({
     } finally {
       setIsCheckingPayout(false)
     }
-  }, [flow, isCheckingPayout, profile.id])
+  }, [flow, isCheckingPayout, payoutSetupEmailErrorLabel, profile.email, profile.id])
 
   useEffect(() => {
     if (!showOnboardingWowToken) return
@@ -2406,6 +2537,12 @@ export default function WalkerDashboard({
     const id = window.setTimeout(() => setStripeReturnNotice(null), 4000)
     return () => window.clearTimeout(id)
   }, [stripeReturnNotice])
+
+  useEffect(() => {
+    if (isValidEmailAddress(profile.email)) {
+      setPayoutSetupError(null)
+    }
+  }, [profile.email])
 
   useEffect(() => {
     if (!flow.isOnline || !availabilityError) return
@@ -2554,6 +2691,33 @@ export default function WalkerDashboard({
   const renderTodayAvailabilityCard = useCallback(() => {
     if (!selectedTodayAvailability || !selectedWeeklyAvailabilityHealth) return null
 
+    console.log('[provider-availability] visible dashboard render', {
+      serviceTypes: profileServiceTypes,
+      activeRowCount: profileServiceTypes.reduce((count, serviceType) => (
+        count + availabilityRows[serviceType].filter((row) => row.isActive).length
+      ), 0),
+      todayConfiguredCount: todayAvailabilityRows.filter((row) => row.hasConfiguredTodayWindow).length,
+      stateVersion: availabilityStateVersion,
+      todayRowsCount: todayAvailabilityRows.length,
+    })
+    console.log('[provider-availability] visible dashboard display rows', {
+      rows: todayAvailabilityRows.map((row) => ({
+        serviceType: row.serviceType,
+        label: row.label,
+        hasConfiguredTodayWindow: row.hasConfiguredTodayWindow,
+        isAvailableNow: row.isAvailableNow,
+        statusLabel: row.statusLabel,
+        summary: row.summary,
+        configuredRows: row.configuredRows.map((configuredRow) => ({
+          dayOfWeek: configuredRow.dayOfWeek,
+          dayLabel: availabilityDayLabels[configuredRow.dayOfWeek],
+          isActive: configuredRow.isActive,
+          startTime: configuredRow.startTime,
+          endTime: configuredRow.endTime,
+        })),
+      })),
+    })
+
     return (
       <div style={todayAvailabilityCardStyle}>
         <div style={todayAvailabilityHeaderStyle}>
@@ -2582,7 +2746,7 @@ export default function WalkerDashboard({
         ) : null}
         {profileServiceTypes.length === 1 ? (
           <div style={todayAvailabilityPrimaryWrapStyle}>
-            {selectedTodayAvailability.isAvailable ? (
+            {selectedTodayAvailability.hasConfiguredTodayWindow ? (
               <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
             ) : (
               <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
@@ -2591,7 +2755,10 @@ export default function WalkerDashboard({
         ) : (
           <div style={todayAvailabilitySelectedServiceCardStyle}>
             <div style={todayAvailabilitySelectedServiceLabelStyle}>{selectedTodayAvailability.label}</div>
-            {selectedTodayAvailability.isAvailable ? (
+            <div style={selectedTodayAvailability.isAvailableNow ? availabilitySelectedEditorMetaActiveStyle : availabilitySelectedEditorMetaInactiveStyle}>
+              {selectedTodayAvailability.statusLabel}
+            </div>
+            {selectedTodayAvailability.hasConfiguredTodayWindow ? (
               <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
             ) : (
               <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
@@ -2636,8 +2803,11 @@ export default function WalkerDashboard({
       </div>
     )
   }, [
+    availabilityRows,
+    availabilityStateVersion,
     handleManageAvailability,
     profileServiceTypes.length,
+    profileServiceTypes,
     selectedAvailabilityService,
     selectedTodayAvailability,
     selectedWeeklyAvailabilityHealth,
@@ -2889,6 +3059,9 @@ export default function WalkerDashboard({
           </>
         ) : null}
       </div>
+      {payoutSetupInlineError ? (
+        <div style={serviceTypeStatusErrorStyle}>{payoutSetupInlineError}</div>
+      ) : null}
     </div>
     )
   }
@@ -3088,10 +3261,25 @@ export default function WalkerDashboard({
       return
     }
     setActiveAvailabilityService((current) => {
-      if (current && profileServiceTypes.includes(current)) return current
+      if (current && profileServiceTypes.includes(current)) {
+        const currentHasConfiguredTodayWindow =
+          todayAvailabilityRows.find((item) => item.serviceType === current)?.hasConfiguredTodayWindow ?? false
+        const currentHasAnyConfiguredAvailability = availabilityRows[current].some((row) => row.isActive)
+        const defaultHasConfiguredTodayWindow =
+          defaultAvailabilityService != null &&
+          (todayAvailabilityRows.find((item) => item.serviceType === defaultAvailabilityService)?.hasConfiguredTodayWindow ?? false)
+
+        if (!currentHasConfiguredTodayWindow && defaultHasConfiguredTodayWindow) {
+          return defaultAvailabilityService
+        }
+        if (!currentHasAnyConfiguredAvailability && defaultAvailabilityService) {
+          return defaultAvailabilityService
+        }
+        return current
+      }
       return defaultAvailabilityService
     })
-  }, [defaultAvailabilityService, profileServiceTypes])
+  }, [availabilityRows, defaultAvailabilityService, profileServiceTypes, todayAvailabilityRows])
 
   const renderHomeDashboard = useCallback((connected: boolean) => (
     <div className="sheet-state-enter" style={homeDashboardShellStyle}>
@@ -3345,6 +3533,9 @@ export default function WalkerDashboard({
                     Maybe later
                   </button>
                 </div>
+                {payoutSetupInlineError ? (
+                  <div style={serviceTypeStatusErrorStyle}>{payoutSetupInlineError}</div>
+                ) : null}
               </div>
             </>
           )}
@@ -3396,6 +3587,9 @@ export default function WalkerDashboard({
                     </button>
                   )}
                 </div>
+                {payoutSetupInlineError ? (
+                  <div style={serviceTypeStatusErrorStyle}>{payoutSetupInlineError}</div>
+                ) : null}
               </div>
             </>
           )}
@@ -6338,13 +6532,17 @@ const availabilityEditorHintStyle: React.CSSProperties = {
 
 const availabilityTimeInputsStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 8,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))',
+  gap: 10,
+  width: '100%',
+  alignItems: 'stretch',
 }
 
 const availabilityTimeFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 5,
+  minWidth: 0,
+  width: '100%',
 }
 
 const availabilityTimeLabelStyle: React.CSSProperties = {
@@ -6366,6 +6564,8 @@ const availabilityTimeInputStyle: React.CSSProperties = {
   fontWeight: 600,
   padding: '0 11px',
   boxSizing: 'border-box',
+  minWidth: 0,
+  appearance: 'none',
 }
 
 const availabilitySaveButtonStyle: React.CSSProperties = {
@@ -6513,31 +6713,36 @@ const homeOptionalCardsShellStyle: React.CSSProperties = {
 }
 
 const homeOptionalCardTabsStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  overflowX: 'auto',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(108px, 1fr))',
+  gap: 6,
+  width: '100%',
   paddingBottom: 2,
-  scrollbarWidth: 'none',
 }
 
 const homeOptionalCardTabsRtlStyle: React.CSSProperties = {
-  flexDirection: 'row-reverse',
+  direction: 'rtl',
 }
 
 const homeOptionalCardTabStyle: React.CSSProperties = {
   appearance: 'none',
-  minHeight: 34,
-  padding: '0 13px',
+  width: '100%',
+  minWidth: 0,
+  minHeight: 36,
+  padding: '7px 10px',
   borderRadius: 999,
   border: '1px solid #E2E8F0',
   background: 'rgba(255,255,255,0.86)',
   color: '#64748B',
-  fontSize: 12,
+  fontSize: 11.5,
+  lineHeight: 1.15,
   fontWeight: 800,
-  whiteSpace: 'nowrap',
+  textAlign: 'center',
+  whiteSpace: 'normal',
   cursor: 'pointer',
-  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const homeOptionalCardTabActiveStyle: React.CSSProperties = {
