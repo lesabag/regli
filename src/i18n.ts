@@ -368,6 +368,7 @@ const resources = {
         shutters: 'Shutters',
         more: 'More',
         comingSoon: 'Coming soon',
+        moreComingSoon: 'More services coming soon',
       },
       serviceInput: {
         dogWalking: {
@@ -799,6 +800,7 @@ const resources = {
         shutters: 'תריסים',
         more: 'עוד',
         comingSoon: 'בקרוב',
+        moreComingSoon: 'שירותים נוספים יגיעו בקרוב',
       },
       serviceInput: {
         dogWalking: {

@@ -46,6 +46,18 @@ Wiki candidates:
 and wait for approval before updating the wiki.
 
 
+# Current Launch Scope
+
+Client-facing services currently exposed:
+
+- dog_walker
+- baby_sitter
+
+Additional services may exist in the codebase but remain hidden until launch readiness.
+
+Do not remove future services from the architecture.
+Hide them from the client UI until explicitly enabled.
+
 ## Product Identity
 
 Regli is a general services marketplace.

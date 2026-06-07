@@ -18,7 +18,7 @@ import CardSetupForm from '../components/CardSetupForm'
 import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
-  FIXED_VISIT_BOOKING_SERVICES,
+  PRIMARY_SERVICES,
   SERVICE_ICONS,
   SERVICE_I18N_KEYS,
   getBookingPricingModelForService,
@@ -39,7 +39,6 @@ import {
   type ProviderCapabilityRow,
 } from '../lib/providerCapabilities'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
-import MoreServicesSheet from '../components/MoreServicesSheet'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDogCountLabel, isDogServiceType, normalizeDogCount } from '../utils/dogCount'
@@ -691,7 +690,6 @@ export default function ClientDashboard({
   const [shouldAnimateGuidedField, setShouldAnimateGuidedField] = useState(false)
   const [_matchingUiState, setMatchingUiState] = useState<'matching' | 'empty' | null>(null)
   const [selectedService, setSelectedService] = useState<ServiceType>('dog_walking')
-  const [moreServicesOpen, setMoreServicesOpen] = useState(false)
   const [addressPickerOpen, setAddressPickerOpen] = useState(false)
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('default')
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false)
@@ -739,7 +737,6 @@ export default function ClientDashboard({
   const toggleSettingsSection = useCallback((key: ClientSettingsSectionKey) => {
     setSettingsSectionsOpen((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
-  const fixedVisitBookingServices = useMemo(() => FIXED_VISIT_BOOKING_SERVICES, [])
   const paymentActionCard = useMemo(
     () => flow.savedCards.find((card) => card.id === paymentActionsCardId) ?? null,
     [flow.savedCards, paymentActionsCardId],
@@ -749,8 +746,8 @@ export default function ClientDashboard({
     [flow.savedCards, paymentDeleteConfirmCardId],
   )
   const availableBookingServices = useMemo(
-    () => ['dog_walking', 'babysitter', ...fixedVisitBookingServices] as ServiceType[],
-    [fixedVisitBookingServices],
+    () => [...PRIMARY_SERVICES] as ServiceType[],
+    [],
   )
   const shouldShowProfileServicePicker = availableBookingServices.length > 1
   const resolvedBookingService = availableBookingServices.includes(selectedService)
@@ -5043,12 +5040,18 @@ export default function ClientDashboard({
             >
               <div style={bookingCardStyle}>
                 {shouldShowProfileServicePicker && (
-                  <ServiceSelectorPanel
-                    selected={resolvedBookingService}
-                    onSelect={handleSelectBookingService}
-                    onMorePress={() => setMoreServicesOpen(true)}
-                    services={availableBookingServices}
-                  />
+                  <div style={launchServicesSelectorWrapStyle}>
+                    <ServiceSelectorPanel
+                      selected={resolvedBookingService}
+                      onSelect={handleSelectBookingService}
+                      onMorePress={() => undefined}
+                      services={availableBookingServices}
+                    />
+                    <div style={launchServicesHintStyle} aria-hidden="true">
+                      <span style={launchServicesHintIconStyle}>✦</span>
+                      <span>{t('services.moreComingSoon')}</span>
+                    </div>
+                  </div>
                 )}
 
                 {!isSelectedServiceAvailable ? (
@@ -5501,14 +5504,6 @@ export default function ClientDashboard({
             </button>
           </div>
         </div>
-      )}
-
-      {moreServicesOpen && (
-        <MoreServicesSheet
-          onSelect={handleSelectBookingService}
-          services={availableBookingServices}
-          onClose={() => setMoreServicesOpen(false)}
-        />
       )}
 
       {showDogNameSheet && (
@@ -7214,6 +7209,32 @@ const bookingCardStyle: React.CSSProperties = {
   borderRadius: 28,
   padding: '4px 4px 2px',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.44) 0%, rgba(248,250,252,0.24) 100%)',
+}
+
+const launchServicesSelectorWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 5,
+}
+
+const launchServicesHintStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  paddingInline: 8,
+  minHeight: 18,
+  color: '#2563EB',
+  fontSize: 11.5,
+  fontWeight: 700,
+  lineHeight: 1.2,
+  opacity: 0.96,
+  userSelect: 'none',
+  pointerEvents: 'none',
+}
+
+const launchServicesHintIconStyle: React.CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1,
+  opacity: 0.9,
 }
 
 
