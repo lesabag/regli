@@ -12,6 +12,7 @@ type SmokeContext = {
   createdUserIds: string[]
   createdRequestIds: string[]
   providerId: string
+  providerOwnedByTest: boolean
   asapClientId: string
   scheduledClientId: string
 }
@@ -71,6 +72,8 @@ const REQUIRED_ENV_VARS = [
   'SUPABASE_ANON_KEY',
 ] as const
 
+const DISPATCH_SMOKE_GUARD_ENV = 'ALLOW_BOOKING_DISPATCH_SMOKE'
+const ISOLATED_PROVIDER_ID_ENV = 'BOOKING_DISPATCH_SMOKE_PROVIDER_ID'
 const TEST_PASSWORD = 'RegliSmoke123!'
 const TEST_SERVICE_TYPE = 'baby_sitter'
 const TEST_LAT = 32.0853
@@ -81,9 +84,60 @@ const PLATFORM_FEE_ILS = 7
 const WALKER_AMOUNT_ILS = 28
 const REQUEST_TIMEOUT_MS = 30_000
 const POLL_INTERVAL_MS = 1_000
+const SAFE_HOST_KEYWORDS = ['localhost', '127.0.0.1', '0.0.0.0', '.local', 'test', 'dev', 'smoke', 'sandbox', 'preview']
+
+type SmokeEnvironmentSafety = {
+  safe: boolean
+  isLocal: boolean
+  reason: string
+}
 
 function getMissingRequiredEnvVars(): string[] {
   return REQUIRED_ENV_VARS.filter((name) => !process.env[name])
+}
+
+function isDispatchSmokeExplicitlyEnabled(): boolean {
+  return process.env[DISPATCH_SMOKE_GUARD_ENV] === 'true'
+}
+
+function evaluateSmokeEnvironmentSafety(supabaseUrl: string): SmokeEnvironmentSafety {
+  try {
+    const parsed = new URL(supabaseUrl)
+    const hostname = parsed.hostname.toLowerCase()
+    const isLocal =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname.endsWith('.local')
+
+    if (isLocal) {
+      return {
+        safe: true,
+        isLocal: true,
+        reason: `Local Supabase host detected (${hostname})`,
+      }
+    }
+
+    if (SAFE_HOST_KEYWORDS.some((keyword) => hostname.includes(keyword))) {
+      return {
+        safe: true,
+        isLocal: false,
+        reason: `Safe test-like Supabase host detected (${hostname})`,
+      }
+    }
+
+    return {
+      safe: false,
+      isLocal: false,
+      reason: `Refusing to run smoke dispatch against production-like Supabase host (${hostname})`,
+    }
+  } catch (error) {
+    return {
+      safe: false,
+      isLocal: false,
+      reason: `Refusing to run smoke dispatch because SUPABASE_URL is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
 }
 
 function requireEnv(name: (typeof REQUIRED_ENV_VARS)[number]): string {
@@ -170,6 +224,46 @@ async function upsertProfile(
   if (error) {
     throw new Error(`Failed to upsert ${input.role} profile ${input.id}: ${error.message}`)
   }
+}
+
+async function assertIsolatedSmokeProvider(
+  admin: SupabaseClient,
+  providerId: string,
+): Promise<void> {
+  const { data, error } = await admin
+    .from('profiles')
+    .select('id, role, service_type, service_types, service_attributes')
+    .eq('id', providerId)
+    .maybeSingle()
+
+  if (error || !data) {
+    throw new Error(`Failed to load isolated smoke provider ${providerId}: ${error?.message ?? 'not found'}`)
+  }
+
+  const row = data as {
+    id: string
+    role: string | null
+    service_type?: string | null
+    service_types?: string[] | string | null
+    service_attributes?: Record<string, unknown> | null
+  }
+  const rawServiceAttributes = row.service_attributes ?? null
+  const serviceScope =
+    rawServiceAttributes &&
+    typeof rawServiceAttributes === 'object' &&
+    TEST_SERVICE_TYPE in rawServiceAttributes
+      ? rawServiceAttributes[TEST_SERVICE_TYPE]
+      : null
+
+  const hasSmokeMarker =
+    !!(rawServiceAttributes && typeof rawServiceAttributes === 'object' && 'smoke_test' in rawServiceAttributes && rawServiceAttributes.smoke_test === true) ||
+    !!(serviceScope && typeof serviceScope === 'object' && 'smoke_test' in serviceScope && serviceScope.smoke_test === true)
+
+  assert.equal(row.role, 'walker', `Configured smoke provider ${providerId} must be a walker profile`)
+  assert.ok(
+    hasSmokeMarker,
+    `Configured smoke provider ${providerId} must include a smoke_test marker in service_attributes`,
+  )
 }
 
 async function seedProviderAvailability(admin: SupabaseClient, providerId: string): Promise<void> {
@@ -543,18 +637,29 @@ async function assertCronHealth(admin: SupabaseClient): Promise<void> {
 }
 
 async function cleanup(context: SmokeContext): Promise<void> {
-  const { admin, createdRequestIds, providerId, createdUserIds } = context
+  const { admin, createdRequestIds, providerId, createdUserIds, providerOwnedByTest, runId } = context
 
-  if (createdRequestIds.length > 0) {
-    const ids = Array.from(new Set(createdRequestIds))
+  const requestIds = new Set(createdRequestIds)
+  const { data: runRequests } = await admin
+    .from('walk_requests')
+    .select('id')
+    .or(`dog_name.ilike.%${runId}%,notes.ilike.%${runId}%`)
+
+  for (const row of (runRequests as Array<{ id: string }> | null) ?? []) {
+    requestIds.add(row.id)
+  }
+
+  const ids = Array.from(requestIds)
+  if (ids.length > 0) {
     await admin.from('notifications').delete().in('related_job_id', ids)
+    await admin.from('matching_logs').delete().in('request_id', ids)
     await admin.from('dispatch_events').delete().in('request_id', ids)
     await admin.from('dispatch_attempts').delete().in('request_id', ids)
     await admin.from('dispatch_candidates').delete().in('request_id', ids)
     await admin.from('walk_requests').delete().in('id', ids)
   }
 
-  if (providerId) {
+  if (providerId && providerOwnedByTest) {
     await admin.from('provider_availability').delete().eq('provider_id', providerId)
   }
 
@@ -568,6 +673,13 @@ async function cleanup(context: SmokeContext): Promise<void> {
 }
 
 test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled dispatch', { timeout: 180_000 }, async (t) => {
+  if (!isDispatchSmokeExplicitlyEnabled()) {
+    const message = `[booking-dispatch-smoke] skipped: set ${DISPATCH_SMOKE_GUARD_ENV}=true to allow this smoke test`
+    console.warn(message)
+    t.skip(message)
+    return
+  }
+
   const missingEnvVars = getMissingRequiredEnvVars()
   if (missingEnvVars.length > 0) {
     t.skip(`Booking smoke env not configured: ${missingEnvVars.join(', ')}`)
@@ -575,6 +687,22 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
   }
 
   const { admin, supabaseUrl, serviceRoleKey } = buildAdminClient()
+  const safety = evaluateSmokeEnvironmentSafety(supabaseUrl)
+  if (!safety.safe) {
+    console.warn(`[booking-dispatch-smoke] skipped: ${safety.reason}`)
+    t.skip(safety.reason)
+    return
+  }
+
+  const isolatedProviderId = process.env[ISOLATED_PROVIDER_ID_ENV]?.trim() || null
+  if (!safety.isLocal && !isolatedProviderId) {
+    const message =
+      `[booking-dispatch-smoke] skipped: ${ISOLATED_PROVIDER_ID_ENV} is required outside localhost to avoid dispatching to shared providers`
+    console.warn(message)
+    t.skip(message)
+    return
+  }
+
   const runId = `smoke-${Date.now()}`
 
   const context: SmokeContext = {
@@ -585,172 +713,186 @@ test('booking dispatch smoke covers cron health, ASAP dispatch, and scheduled di
     createdUserIds: [],
     createdRequestIds: [],
     providerId: '',
+    providerOwnedByTest: false,
     asapClientId: '',
     scheduledClientId: '',
   }
 
-  t.after(async () => {
-    await cleanup(context)
-  })
+  try {
+    await assertCronHealth(admin)
 
-  await assertCronHealth(admin)
+    let providerId = isolatedProviderId
+    if (providerId) {
+      await assertIsolatedSmokeProvider(admin, providerId)
+      context.providerId = providerId
+      context.providerOwnedByTest = false
+    } else {
+      const provider = await createTestUser(admin, runId, 'walker', 'provider')
+      context.createdUserIds.push(provider.id)
+      context.providerId = provider.id
+      context.providerOwnedByTest = true
+      providerId = provider.id
 
-  const provider = await createTestUser(admin, runId, 'walker', 'provider')
-  const asapClient = await createTestUser(admin, runId, 'client', 'client-asap')
-  const scheduledClient = await createTestUser(admin, runId, 'client', 'client-scheduled')
-  context.createdUserIds.push(provider.id, asapClient.id, scheduledClient.id)
-  context.providerId = provider.id
-  context.asapClientId = asapClient.id
-  context.scheduledClientId = scheduledClient.id
+      await upsertProfile(admin, {
+        id: provider.id,
+        email: provider.email,
+        fullName: `Smoke Provider ${runId}`,
+        role: 'walker',
+        isOnline: true,
+      })
+      await seedProviderAvailability(admin, provider.id)
+    }
 
-  await upsertProfile(admin, {
-    id: provider.id,
-    email: provider.email,
-    fullName: 'Smoke Provider',
-    role: 'walker',
-    isOnline: true,
-  })
-  await upsertProfile(admin, {
-    id: asapClient.id,
-    email: asapClient.email,
-    fullName: 'Smoke Client ASAP',
-    role: 'client',
-  })
-  await upsertProfile(admin, {
-    id: scheduledClient.id,
-    email: scheduledClient.email,
-    fullName: 'Smoke Client Scheduled',
-    role: 'client',
-  })
+    const asapClient = await createTestUser(admin, runId, 'client', 'client-asap')
+    const scheduledClient = await createTestUser(admin, runId, 'client', 'client-scheduled')
+    context.createdUserIds.push(asapClient.id, scheduledClient.id)
+    context.asapClientId = asapClient.id
+    context.scheduledClientId = scheduledClient.id
 
-  await seedProviderAvailability(admin, provider.id)
-
-  const providerFixture = await fetchDispatchDebugSnapshot(admin, '00000000-0000-0000-0000-000000000000', provider.id)
-  assert.equal(providerFixture.providerProfile?.role, 'walker')
-  assert.equal(providerFixture.providerProfile?.is_online, true)
-  assert.equal(providerFixture.providerProfile?.service_type, TEST_SERVICE_TYPE)
-  assert.ok(
-    Array.isArray(providerFixture.providerAvailability) && providerFixture.providerAvailability.length >= 7,
-    'Expected smoke provider availability rows for all weekdays',
-  )
-
-  const asapRequest = await createAuthorizedRequest(admin, {
-    clientId: asapClient.id,
-    dogName: `Smoke ASAP ${runId}`,
-    bookingTiming: 'asap',
-  })
-  context.createdRequestIds.push(asapRequest.id)
-
-  assert.equal(asapRequest.booking_timing, 'asap')
-  assert.ok(
-    asapRequest.dispatch_state === 'queued' || asapRequest.dispatch_state === 'dispatched',
-    `ASAP smoke request should start queued or already dispatched, got ${asapRequest.dispatch_state ?? 'null'}`,
-  )
-  if (asapRequest.dispatch_state === 'queued') {
-    assert.equal(asapRequest.smart_dispatch_state, 'idle')
-  }
-  assert.ok(asapRequest.stripe_payment_intent_id, 'ASAP smoke request should have a fake authorized payment intent id')
-
-  if (asapRequest.dispatch_state !== 'dispatched') {
-    const asapStart = await invokeFunction<{
-      ok?: boolean
-      attemptId?: string
-      insertedCandidatesCount?: number
-      error?: string
-      details?: string
-    }>(supabaseUrl, serviceRoleKey, 'start-dispatch', {
-      requestId: asapRequest.id,
-      resetExisting: true,
-      rankedCandidates: [
-        {
-          walkerId: provider.id,
-          score: 0.99,
-          meta: {
-            source: 'booking-smoke',
-            base_score: 0.99,
-            attribute_score: 0,
-            attribute_reason: 'smoke_test',
-            attribute_matches: [],
-          },
-        },
-      ],
+    await upsertProfile(admin, {
+      id: asapClient.id,
+      email: asapClient.email,
+      fullName: `Smoke Client ASAP ${runId}`,
+      role: 'client',
+    })
+    await upsertProfile(admin, {
+      id: scheduledClient.id,
+      email: scheduledClient.email,
+      fullName: `Smoke Client Scheduled ${runId}`,
+      role: 'client',
     })
 
-    assert.equal(
-      asapStart.ok,
-      true,
-      `start-dispatch ASAP should succeed: ${JSON.stringify(asapStart)}`,
+    const providerFixture = await fetchDispatchDebugSnapshot(admin, '00000000-0000-0000-0000-000000000000', providerId)
+    assert.equal(providerFixture.providerProfile?.role, 'walker')
+    assert.equal(providerFixture.providerProfile?.service_type, TEST_SERVICE_TYPE)
+    if (context.providerOwnedByTest) {
+      assert.equal(providerFixture.providerProfile?.is_online, true)
+      assert.ok(
+        Array.isArray(providerFixture.providerAvailability) && providerFixture.providerAvailability.length >= 7,
+        'Expected smoke provider availability rows for all weekdays',
+      )
+    }
+
+    const asapRequest = await createAuthorizedRequest(admin, {
+      clientId: asapClient.id,
+      dogName: `Smoke ASAP ${runId}`,
+      bookingTiming: 'asap',
+    })
+    context.createdRequestIds.push(asapRequest.id)
+
+    assert.equal(asapRequest.booking_timing, 'asap')
+    assert.ok(
+      asapRequest.dispatch_state === 'queued' || asapRequest.dispatch_state === 'dispatched',
+      `ASAP smoke request should start queued or already dispatched, got ${asapRequest.dispatch_state ?? 'null'}`,
     )
-    assert.ok(asapStart.attemptId, 'ASAP start-dispatch should return a pending attempt id')
-  }
+    if (asapRequest.dispatch_state === 'queued') {
+      assert.equal(asapRequest.smart_dispatch_state, 'idle')
+    }
+    assert.ok(asapRequest.stripe_payment_intent_id, 'ASAP smoke request should have a fake authorized payment intent id')
 
-  const asapDispatch = await waitForDispatchState(admin, asapRequest.id, provider.id)
-  assert.equal(asapDispatch.request.booking_timing, 'asap')
-  assert.equal(asapDispatch.request.status, 'open')
-  assert.equal(
-    asapDispatch.request.dispatch_state,
-    'dispatched',
-    'ASAP request should only become dispatched once live dispatch rows exist',
-  )
-  assert.equal(asapDispatch.request.smart_dispatch_state, 'dispatching')
-  assert.ok(asapDispatch.candidates.length > 0, 'ASAP dispatch should create dispatch_candidates rows')
-  assert.ok(asapDispatch.attempts.length > 0, 'ASAP dispatch should create dispatch_attempts rows')
-  assert.equal(asapDispatch.attempts[0]?.status, 'pending')
-  assertDispatchWinnerAlignment(asapDispatch, {
-    seededProviderId: provider.id,
-    flowLabel: 'ASAP',
-  })
+    if (asapRequest.dispatch_state !== 'dispatched') {
+      const asapStart = await invokeFunction<{
+        ok?: boolean
+        attemptId?: string
+        insertedCandidatesCount?: number
+        error?: string
+        details?: string
+      }>(supabaseUrl, serviceRoleKey, 'start-dispatch', {
+        requestId: asapRequest.id,
+        resetExisting: true,
+        rankedCandidates: [
+          {
+            walkerId: providerId,
+            score: 0.99,
+            meta: {
+              source: 'booking-smoke',
+              base_score: 0.99,
+              attribute_score: 0,
+              attribute_reason: 'smoke_test',
+              attribute_matches: [],
+            },
+          },
+        ],
+      })
 
-  const scheduledForDate = new Date(Date.now() + 5 * 60 * 1000)
-  const scheduledRequest = await createAuthorizedRequest(admin, {
-    clientId: scheduledClient.id,
-    dogName: `Smoke Scheduled ${runId}`,
-    bookingTiming: 'scheduled',
-    scheduledFor: scheduledForDate.toISOString(),
-  })
-  context.createdRequestIds.push(scheduledRequest.id)
+      assert.equal(
+        asapStart.ok,
+        true,
+        `start-dispatch ASAP should succeed: ${JSON.stringify(asapStart)}`,
+      )
+      assert.ok(asapStart.attemptId, 'ASAP start-dispatch should return a pending attempt id')
+    }
 
-  assert.equal(scheduledRequest.booking_timing, 'scheduled')
-  assert.ok(scheduledRequest.scheduled_for, 'Scheduled smoke request should persist scheduled_for')
-  assert.ok(
-    scheduledRequest.dispatch_state === 'queued' || scheduledRequest.dispatch_state === 'dispatched',
-    `Scheduled smoke request should start queued or already dispatched, got ${scheduledRequest.dispatch_state ?? 'null'}`,
-  )
-  if (scheduledRequest.dispatch_state === 'queued') {
-    assert.equal(scheduledRequest.smart_dispatch_state, 'idle')
-  }
-
-  if (scheduledRequest.dispatch_state !== 'dispatched') {
-    const scheduledRun = await invokeFunction<{
-      ok?: boolean
-      scanned?: number
-      eligible?: number
-      started?: number
-      noCandidates?: number
-      error?: string
-      details?: string
-    }>(supabaseUrl, serviceRoleKey, 'run-scheduled-dispatch')
-
+    const asapDispatch = await waitForDispatchState(admin, asapRequest.id, providerId)
+    assert.equal(asapDispatch.request.booking_timing, 'asap')
+    assert.equal(asapDispatch.request.status, 'open')
     assert.equal(
-      scheduledRun.ok,
-      true,
-      `run-scheduled-dispatch should succeed: ${JSON.stringify(scheduledRun)}`,
+      asapDispatch.request.dispatch_state,
+      'dispatched',
+      'ASAP request should only become dispatched once live dispatch rows exist',
     )
-  }
+    assert.equal(asapDispatch.request.smart_dispatch_state, 'dispatching')
+    assert.ok(asapDispatch.candidates.length > 0, 'ASAP dispatch should create dispatch_candidates rows')
+    assert.ok(asapDispatch.attempts.length > 0, 'ASAP dispatch should create dispatch_attempts rows')
+    assert.equal(asapDispatch.attempts[0]?.status, 'pending')
+    assertDispatchWinnerAlignment(asapDispatch, {
+      seededProviderId: providerId,
+      flowLabel: 'ASAP',
+    })
 
-  const scheduledDispatch = await waitForDispatchState(admin, scheduledRequest.id, provider.id)
-  assert.equal(scheduledDispatch.request.booking_timing, 'scheduled')
-  assert.ok(scheduledDispatch.request.scheduled_for, 'Scheduled request should still have scheduled_for after dispatch')
-  assert.ok(scheduledDispatch.candidates.length > 0, 'Scheduled dispatch should create dispatch_candidates rows')
-  assert.ok(scheduledDispatch.attempts.length > 0, 'Scheduled dispatch should create dispatch_attempts rows')
-  assert.equal(
-    scheduledDispatch.request.dispatch_state,
-    'dispatched',
-    'Scheduled request should only become dispatched once a live attempt exists',
-  )
-  assert.equal(scheduledDispatch.request.smart_dispatch_state, 'dispatching')
-  assertDispatchWinnerAlignment(scheduledDispatch, {
-    seededProviderId: provider.id,
-    flowLabel: 'scheduled',
-  })
+    const scheduledForDate = new Date(Date.now() + 5 * 60 * 1000)
+    const scheduledRequest = await createAuthorizedRequest(admin, {
+      clientId: scheduledClient.id,
+      dogName: `Smoke Scheduled ${runId}`,
+      bookingTiming: 'scheduled',
+      scheduledFor: scheduledForDate.toISOString(),
+    })
+    context.createdRequestIds.push(scheduledRequest.id)
+
+    assert.equal(scheduledRequest.booking_timing, 'scheduled')
+    assert.ok(scheduledRequest.scheduled_for, 'Scheduled smoke request should persist scheduled_for')
+    assert.ok(
+      scheduledRequest.dispatch_state === 'queued' || scheduledRequest.dispatch_state === 'dispatched',
+      `Scheduled smoke request should start queued or already dispatched, got ${scheduledRequest.dispatch_state ?? 'null'}`,
+    )
+    if (scheduledRequest.dispatch_state === 'queued') {
+      assert.equal(scheduledRequest.smart_dispatch_state, 'idle')
+    }
+
+    if (scheduledRequest.dispatch_state !== 'dispatched') {
+      const scheduledRun = await invokeFunction<{
+        ok?: boolean
+        scanned?: number
+        eligible?: number
+        started?: number
+        noCandidates?: number
+        error?: string
+        details?: string
+      }>(supabaseUrl, serviceRoleKey, 'run-scheduled-dispatch')
+
+      assert.equal(
+        scheduledRun.ok,
+        true,
+        `run-scheduled-dispatch should succeed: ${JSON.stringify(scheduledRun)}`,
+      )
+    }
+
+    const scheduledDispatch = await waitForDispatchState(admin, scheduledRequest.id, providerId)
+    assert.equal(scheduledDispatch.request.booking_timing, 'scheduled')
+    assert.ok(scheduledDispatch.request.scheduled_for, 'Scheduled request should still have scheduled_for after dispatch')
+    assert.ok(scheduledDispatch.candidates.length > 0, 'Scheduled dispatch should create dispatch_candidates rows')
+    assert.ok(scheduledDispatch.attempts.length > 0, 'Scheduled dispatch should create dispatch_attempts rows')
+    assert.equal(
+      scheduledDispatch.request.dispatch_state,
+      'dispatched',
+      'Scheduled request should only become dispatched once a live attempt exists',
+    )
+    assert.equal(scheduledDispatch.request.smart_dispatch_state, 'dispatching')
+    assertDispatchWinnerAlignment(scheduledDispatch, {
+      seededProviderId: providerId,
+      flowLabel: 'scheduled',
+    })
+  } finally {
+    await cleanup(context)
+  }
 })
