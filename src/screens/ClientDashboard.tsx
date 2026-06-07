@@ -3200,12 +3200,12 @@ export default function ClientDashboard({
 
   const openScheduleSheet = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-schedule')
-    setScheduleDraft(clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput()))
-    setScheduleMode(repeatType === 'weekly' ? 'repeat' : 'later')
+    setScheduleDraft(clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput()))
+    setScheduleMode('later')
     setShowSchedulePage(true)
     markFirstInteractionVisual('client-dashboard:open-schedule')
     void hapticLight()
-  }, [flow.scheduledFor, repeatType])
+  }, [])
 
   const openAddressPicker = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-address-picker')
@@ -3297,6 +3297,10 @@ export default function ClientDashboard({
       )
     },
     [scheduleMinValue],
+  )
+  const selectedScheduleDateLabel = useMemo(
+    () => dateWheelOptions.find((option) => option.value === scheduleDraftParts.date)?.label ?? scheduleDraftParts.date,
+    [dateWheelOptions, scheduleDraftParts.date],
   )
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
@@ -4667,9 +4671,6 @@ export default function ClientDashboard({
                 <div style={scheduleSheetTitleStyle}>
                   {isRtl ? 'קביעת זמן לשירות' : 'Schedule Order'}
                 </div>
-                <div style={scheduleSheetSubtitleStyle}>
-                  {isRtl ? 'בחרו מתי לבצע את ההזמנה.' : 'Choose when this booking should happen.'}
-                </div>
               </div>
               <button
                 type="button"
@@ -4714,7 +4715,14 @@ export default function ClientDashboard({
 
                 {scheduleMode === 'later' && (
                   <div style={scheduleModeBodyStyle}>
-                    <div style={schedulePickerCardStyle}>
+                    <div style={scheduleCompactCardStyle}>
+                      <div style={scheduleSelectionSummaryRowStyle}>
+                        <span style={{ ...scheduleSelectionSummaryChipStyle, ...scheduleSelectionSummaryChipWideStyle }}>
+                          {selectedScheduleDateLabel}
+                        </span>
+                        <span style={scheduleSelectionSummaryChipStyle}>{scheduleDraftParts.time.slice(0, 2)}</span>
+                        <span style={scheduleSelectionSummaryChipStyle}>{scheduleDraftParts.time.slice(3, 5)}</span>
+                      </div>
                       <div style={scheduleWheelHeaderRowStyle}>
                         <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
                         <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
@@ -4765,13 +4773,12 @@ export default function ClientDashboard({
 
                 {scheduleMode === 'repeat' && (
                   <div style={scheduleModeBodyStyle}>
-                    {repeatSelectorBlock}
+                    <div style={scheduleCompactCardStyle}>
+                      {repeatSelectorBlock}
+                    </div>
                   </div>
                 )}
 
-                <div style={scheduleInlineCaptionStyle}>
-                  {isRtl ? 'החיפוש מתחיל 15 דקות לפני' : 'Search starts 15 min before'}
-                </div>
                 {scheduleOverlapWarning && (
                   <div style={scheduleInlineWarningStyle}>{scheduleOverlapWarning}</div>
                 )}
@@ -4779,6 +4786,9 @@ export default function ClientDashboard({
             </div>
 
             <div style={scheduleSheetFooterStyle}>
+              <div style={scheduleInlineCaptionStyle}>
+                {isRtl ? 'החיפוש מתחיל 15 דקות לפני' : 'Search starts 15 min before'}
+              </div>
               <ActionButton
                 label={
                   scheduleMode === 'repeat'
@@ -9513,7 +9523,7 @@ const scheduleSheetStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  padding: '18px 16px calc(14px + env(safe-area-inset-bottom))',
+  padding: '12px 14px calc(16px + env(safe-area-inset-bottom))',
   backdropFilter: 'blur(18px)',
   WebkitBackdropFilter: 'blur(18px)',
 }
@@ -9523,24 +9533,26 @@ const scheduleSheetHandleStyle: React.CSSProperties = {
   height: 5,
   borderRadius: 999,
   background: 'rgba(148, 163, 184, 0.45)',
-  margin: '0 auto 14px',
+  margin: '0 auto 8px',
   flexShrink: 0,
 }
 
 const scheduleSheetHeaderStyle: React.CSSProperties = {
+  position: 'relative',
   display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
+  alignItems: 'center',
+  justifyContent: 'center',
   gap: 10,
-  marginBottom: 8,
+  marginBottom: 12,
 }
 
 const scheduleSheetHeaderCopyStyle: React.CSSProperties = {
-  flex: 1,
+  width: '100%',
   minWidth: 0,
   display: 'grid',
   gap: 2,
   textAlign: 'center',
+  paddingTop: 2,
 }
 
 const scheduleSheetTitleStyle: React.CSSProperties = {
@@ -9552,12 +9564,15 @@ const scheduleSheetTitleStyle: React.CSSProperties = {
 }
 
 const scheduleSheetSubtitleStyle: React.CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.35,
+  fontSize: 11.5,
+  lineHeight: 1.3,
   color: '#64748B',
 }
 
 const scheduleSheetCloseButtonStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 0,
+  right: 0,
   width: 32,
   height: 32,
   borderRadius: 11,
@@ -9575,9 +9590,9 @@ const scheduleSheetCloseButtonStyle: React.CSSProperties = {
 const scheduleSheetScrollStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
-  maxHeight: 'min(80vh, 660px)',
-  minHeight: 220,
+  gap: 8,
+  maxHeight: 'min(76vh, 552px)',
+  minHeight: 244,
   overflowY: 'auto',
   scrollbarWidth: 'none',
   msOverflowStyle: 'none',
@@ -9590,11 +9605,11 @@ const schedulePageContentStyle: React.CSSProperties = {
   margin: '0 auto',
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
+  gap: 10,
 }
 
 const scheduleModeBodyStyle: React.CSSProperties = {
-  minHeight: 154,
+  minHeight: 150,
   display: 'flex',
   alignItems: 'stretch',
 }
@@ -9606,13 +9621,13 @@ const schedulePresetRowStyle: React.CSSProperties = {
 }
 
 const schedulePresetButtonStyle: React.CSSProperties = {
-  borderRadius: 14,
+  borderRadius: 999,
   border: '1px solid rgba(203, 213, 225, 0.95)',
   background: 'rgba(248, 250, 252, 0.96)',
   color: '#0F172A',
-  minHeight: 42,
-  padding: '8px 10px',
-  fontSize: 12,
+  minHeight: 34,
+  padding: '6px 10px',
+  fontSize: 11.5,
   fontWeight: 800,
   cursor: 'pointer',
   display: 'flex',
@@ -9637,17 +9652,24 @@ const schedulePickerCardStyle: React.CSSProperties = {
   boxShadow: '0 10px 20px rgba(15, 23, 42, 0.05)',
 }
 
-const WHEEL_ROW_HEIGHT = 28
+const scheduleCompactCardStyle: React.CSSProperties = {
+  ...schedulePickerCardStyle,
+  width: '100%',
+  padding: 7,
+  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.035)',
+}
+
+const WHEEL_ROW_HEIGHT = 24
 
 const scheduleWheelHeaderRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 8,
-  marginBottom: 6,
+  gap: 6,
+  marginBottom: 3,
 }
 
 const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 10,
   lineHeight: 1.2,
   fontWeight: 800,
   color: '#64748B',
@@ -9656,13 +9678,13 @@ const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
 
 const scheduleWheelWrapStyle: React.CSSProperties = {
   position: 'relative',
-  height: 108,
+  height: 76,
 }
 
 const scheduleWheelColumnsStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 8,
+  gap: 6,
   height: '100%',
 }
 
@@ -9684,8 +9706,37 @@ const scheduleInlineCaptionStyle: React.CSSProperties = {
   fontSize: 10.5,
   lineHeight: 1.2,
   fontWeight: 600,
-  color: '#64748B',
+  color: '#2563EB',
   textAlign: 'center',
+  marginBottom: 6,
+}
+
+const scheduleSelectionSummaryRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
+  gap: 6,
+  marginBottom: 5,
+}
+
+const scheduleSelectionSummaryChipStyle: React.CSSProperties = {
+  minHeight: 26,
+  borderRadius: 999,
+  border: '1px solid rgba(203, 213, 225, 0.9)',
+  background: 'rgba(248,250,252,0.94)',
+  color: '#0F172A',
+  fontSize: 11,
+  fontWeight: 800,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0 8px',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const scheduleSelectionSummaryChipWideStyle: React.CSSProperties = {
+  justifyContent: 'flex-start',
 }
 
 const scheduleInlineWarningStyle: React.CSSProperties = {
