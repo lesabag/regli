@@ -70,12 +70,12 @@ type ServiceOption = {
   description: string
 }
 
-type DogSize = 'S' | 'M' | 'L' | 'XL'
+type DogSize = 'S' | 'M' | 'L'
 type EnergyLevel = 'low' | 'medium' | 'high'
 type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
 type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
-type ProviderDetailsSection = 'experience' | 'bio' | 'languages' | 'dog' | 'babysitter'
+type ProviderDetailsSection = 'experience' | 'languages' | 'dog' | 'babysitter'
 
 interface DogWalkerAttrs {
   petName: string
@@ -91,7 +91,6 @@ interface BabySitterAttrs {
 
 interface ProviderDogWalkerAttrs {
   supportedDogSizes: DogSize[]
-  supportedEnergyLevels: EnergyLevel[]
 }
 
 interface ProviderBabySitterAttrs {
@@ -104,11 +103,10 @@ interface ProviderIdentityAttrs {
   languages: ProviderLanguage[]
 }
 
-const DOG_SIZE_OPTIONS: { value: DogSize; label: string; desc: string }[] = [
-  { value: 'S', label: 'S', desc: '<10kg' },
-  { value: 'M', label: 'M', desc: '10–25kg' },
-  { value: 'L', label: 'L', desc: '25–40kg' },
-  { value: 'XL', label: 'XL', desc: '40kg+' },
+const DOG_SIZE_OPTIONS: { value: DogSize }[] = [
+  { value: 'S' },
+  { value: 'M' },
+  { value: 'L' },
 ]
 
 const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
@@ -177,6 +175,30 @@ async function reverseGeocodeLocation(lat: number, lng: number, language: Suppor
 
 function getNormalizedExperienceYears(range: ProviderExperienceRange | ''): number {
   return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.normalizedYears ?? 0
+}
+
+function getDogSizeLabel(size: DogSize, language: SupportedLanguage): string {
+  if (language === 'he') {
+    if (size === 'S') return 'קטן'
+    if (size === 'M') return 'בינוני'
+    return 'גדול'
+  }
+
+  if (size === 'S') return 'Small'
+  if (size === 'M') return 'Medium'
+  return 'Large'
+}
+
+function getDogSizeGuidance(size: DogSize, language: SupportedLanguage): string {
+  if (language === 'he') {
+    if (size === 'S') return 'עד 10 ק״ג'
+    if (size === 'M') return '10–25 ק״ג'
+    return '25–40 ק״ג'
+  }
+
+  if (size === 'S') return 'Up to 10 kg'
+  if (size === 'M') return '10–25 kg'
+  return '25–40 kg'
 }
 
 function readPersistedSignupStep(): SignupStep | null {
@@ -255,7 +277,7 @@ export default function AuthScreen({
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
-  const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [], supportedEnergyLevels: [] })
+  const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [] })
   const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [] })
   const [activeProviderDetailsSection, setActiveProviderDetailsSection] = useState<ProviderDetailsSection>('experience')
   const [providerIdentity, setProviderIdentity] = useState<ProviderIdentityAttrs>({
@@ -321,11 +343,9 @@ export default function AuthScreen({
     locationHint: isHebrew ? 'מפה עדינה עוזרת להתאים תוצאות ושירותים קרובים.' : 'A subtle map preview helps personalize nearby services.',
     useCurrentLocation: isHebrew ? 'השתמש במיקום הנוכחי' : 'Use current location',
     refreshingLocation: isHebrew ? 'מרענן מיקום...' : 'Refreshing location...',
-    detailsProvider: isHebrew ? 'הגדירו יכולות והעדפות כדי שנוכל לחבר אתכם ללקוחות מתאימים.' : 'Define your capabilities so we can match you with the right clients.',
+    detailsProvider: isHebrew ? 'בחרו כמה הגדרות מהירות כדי שנוכל לחבר אתכם ללקוחות מתאימים.' : 'Choose a few quick setup details so we can match you with the right clients.',
     detailsClient: isHebrew ? 'שתפו כמה פרטים כדי שנוכל להתאים את החוויה לצרכים שלכם.' : 'Share a few details so we can personalize your experience.',
     yearsExperience: isHebrew ? 'שנות ניסיון' : 'Years of experience',
-    shortBio: isHebrew ? 'תיאור קצר' : 'Short bio',
-    shortBioPlaceholder: isHebrew ? 'תיאור קצר על עצמך, תוכל לשנות אח״כ.' : 'A brief description about yourself, you can change it later.',
     languagesSpoken: isHebrew ? 'שפות מדוברות' : 'Languages spoken',
     dogPreferences: isHebrew ? 'העדפות לכלבים' : 'Dog preferences',
     babysitterPreferences: isHebrew ? 'טווחי גילאים' : 'Age ranges',
@@ -362,7 +382,6 @@ export default function AuthScreen({
     dogWalking: isHebrew ? 'טיול כלבים' : 'Dog walking',
     babySitting: isHebrew ? 'בייביסיטר' : 'Baby sitting',
     dogSizesHandle: isHebrew ? 'גדלי כלבים שאתם מטפלים בהם' : 'Dog sizes you handle',
-    energyLevelsManage: isHebrew ? 'רמות אנרגיה שאתם מנהלים' : 'Energy levels you manage',
     ageRangesCover: isHebrew ? 'טווחי גילאים שאתם מכסים' : 'Age ranges you cover',
     petName: isHebrew ? 'שם חיית המחמד' : 'Pet name',
     petNamePlaceholder: isHebrew ? 'למשל: בוקי' : 'e.g. Boki',
@@ -424,6 +443,14 @@ export default function AuthScreen({
     () => serviceOptions.find((service) => service.id === selectedServices[0]) ?? serviceOptions[0],
     [selectedServices, serviceOptions],
   )
+  const dogSizeOptions = useMemo(
+    () => DOG_SIZE_OPTIONS.map((option) => ({
+      value: option.value,
+      label: getDogSizeLabel(option.value, language),
+      guidance: getDogSizeGuidance(option.value, language),
+    })),
+    [language],
+  )
   const selectedPrimaryService = selectedServices[0] ?? null
   const selectedServiceIllustration = selectedPrimaryService === 'dog_walker'
     ? welcomeHeroImage
@@ -445,12 +472,11 @@ export default function AuthScreen({
   const providerDetailSections = useMemo(
     () => [
       { id: 'experience' as const, label: copy.yearsExperience },
-      { id: 'bio' as const, label: copy.shortBio },
       { id: 'languages' as const, label: copy.languagesSpoken },
       ...(isProviderDogWalker ? [{ id: 'dog' as const, label: copy.dogPreferences }] : []),
       ...(isProviderBabySitter ? [{ id: 'babysitter' as const, label: copy.babysitterPreferences }] : []),
     ],
-    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.shortBio, copy.yearsExperience, isProviderBabySitter, isProviderDogWalker],
+    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.yearsExperience, isProviderBabySitter, isProviderDogWalker],
   )
 
   const dogValid = isProvider
@@ -626,7 +652,6 @@ export default function AuthScreen({
           role,
           primaryService: isProvider ? selectedServiceMeta.label : undefined,
           locationAddress: locationLabel,
-          shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
           serviceTypes: onboardingServiceTypes,
           serviceAttributes: buildServiceAttributes(),
         }
@@ -638,13 +663,11 @@ export default function AuthScreen({
           canContinue,
           hasLocation: locationLabel.trim().length > 0,
           serviceTypeCount: onboardingServiceTypes.length,
-          hasShortBio: providerIdentity.shortBio.trim().length > 0,
         })
         console.log('[provider-onboarding-ui] profile payload', {
           role: completeOnboardingPayload.role,
           primaryService: completeOnboardingPayload.primaryService,
           locationAddress: completeOnboardingPayload.locationAddress,
-          shortBio: completeOnboardingPayload.shortBio,
           serviceTypes: completeOnboardingPayload.serviceTypes,
         })
         console.log('[provider-onboarding-ui] provider capabilities payload', completeOnboardingPayload.serviceAttributes)
@@ -671,7 +694,6 @@ export default function AuthScreen({
         if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
           attrs.dog_walker = {
             supportedDogSizes: provDogAttrs.supportedDogSizes,
-            supportedEnergyLevels: provDogAttrs.supportedEnergyLevels,
             experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
           }
         }
@@ -689,7 +711,6 @@ export default function AuthScreen({
         role,
         primaryService: isProvider ? selectedServiceMeta.label : undefined,
         locationAddress: locationLabel,
-        shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
         serviceTypes: onboardingServiceTypes,
         serviceAttributes: isProvider && Object.keys(attrs).length > 0 ? attrs : null,
       })
@@ -714,7 +735,6 @@ export default function AuthScreen({
       if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
         attrs.dog_walker = {
           supportedDogSizes: provDogAttrs.supportedDogSizes,
-          supportedEnergyLevels: provDogAttrs.supportedEnergyLevels,
           experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
         }
       }
@@ -758,7 +778,6 @@ export default function AuthScreen({
       role,
       primaryService: isProvider ? selectedServiceMeta.label : undefined,
       locationAddress: mode === 'signup' ? locationLabel : undefined,
-      shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
       serviceTypes: onboardingServiceTypes,
       serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
     })
@@ -786,7 +805,6 @@ export default function AuthScreen({
       role,
       primaryService: isProvider ? selectedServiceMeta.label : undefined,
       locationAddress: mode === 'signup' ? locationLabel : undefined,
-      shortBio: isProvider ? providerIdentity.shortBio.trim() : undefined,
       serviceTypes: onboardingServiceTypes,
       serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
     })
@@ -1211,23 +1229,6 @@ export default function AuthScreen({
                         </div>
                       )}
 
-                      {activeProviderDetailsSection === 'bio' && (
-                        <div style={chipFieldCardStyle}>
-                          <div style={chipFieldHeaderStyle}>
-                            <label style={labelStyle}>{copy.shortBio}</label>
-                          </div>
-                          <div style={chipInputShellStyle}>
-                            <textarea
-                              value={providerIdentity.shortBio}
-                              onChange={(e) => setProviderIdentity((prev) => ({ ...prev, shortBio: e.target.value }))}
-                              placeholder={copy.shortBioPlaceholder}
-                              rows={2}
-                              style={compactTextareaStyle}
-                            />
-                          </div>
-                        </div>
-                      )}
-
                       {activeProviderDetailsSection === 'languages' && (
                         <div style={chipFieldCardStyle}>
                           <div style={chipFieldHeaderStyle}>
@@ -1266,7 +1267,7 @@ export default function AuthScreen({
                             <label style={labelStyle}>{copy.dogSizesHandle}</label>
                           </div>
                           <div style={chipRowStyle}>
-                            {DOG_SIZE_OPTIONS.map((opt) => {
+                            {dogSizeOptions.map((opt) => {
                               const selected = provDogAttrs.supportedDogSizes.includes(opt.value)
                               return (
                                 <button
@@ -1285,34 +1286,7 @@ export default function AuthScreen({
                                   }}
                                 >
                                   <span style={compactChipLabelStyle}>{opt.label}</span>
-                                  <span style={chipDescStyle}>{opt.desc}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                          <div style={chipFieldHeaderStyle}>
-                            <label style={labelStyle}>{copy.energyLevelsManage}</label>
-                          </div>
-                          <div style={chipRowStyle}>
-                            {ENERGY_OPTIONS.map((opt) => {
-                              const selected = provDogAttrs.supportedEnergyLevels.includes(opt.value)
-                              return (
-                                <button
-                                  key={opt.value}
-                                  type="button"
-                                  onClick={() => setProvDogAttrs((prev) => ({
-                                    ...prev,
-                                    supportedEnergyLevels: selected
-                                      ? prev.supportedEnergyLevels.filter((s) => s !== opt.value)
-                                      : [...prev.supportedEnergyLevels, opt.value],
-                                  }))}
-                                  style={{
-                                    ...chipStyle,
-                                    ...compactChipStyle,
-                                    ...(selected ? chipSelectedStyle : null),
-                                  }}
-                                >
-                                  <span style={compactChipLabelStyle}>{opt.label}</span>
+                                  <span style={chipDescStyle}>{opt.guidance}</span>
                                 </button>
                               )
                             })}
@@ -1371,7 +1345,7 @@ export default function AuthScreen({
                         <div style={detailsFieldBlockStyle}>
                           <label style={labelStyle}>{copy.dogSize}</label>
                           <div style={chipRowStyle}>
-                            {DOG_SIZE_OPTIONS.map((opt) => (
+                            {dogSizeOptions.map((opt) => (
                               <button
                                 key={opt.value}
                                 type="button"
@@ -1383,7 +1357,6 @@ export default function AuthScreen({
                                 }}
                               >
                                 <span style={compactChipLabelStyle}>{opt.label}</span>
-                                <span style={chipDescStyle}>{opt.desc}</span>
                               </button>
                             ))}
                           </div>
@@ -1920,7 +1893,7 @@ const cardStyle: CSSProperties = {
   backdropFilter: 'blur(16px)',
   border: '1px solid rgba(255,255,255,0.70)',
   boxShadow: '0 24px 60px rgba(45, 68, 126, 0.14)',
-  padding: 16,
+  padding: 14,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -1928,7 +1901,7 @@ const cardStyle: CSSProperties = {
 
 const cardContentStyle: CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 8,
   alignContent: 'start',
   minHeight: 0,
 }
@@ -1938,7 +1911,7 @@ const cardContentScrollableStyle: CSSProperties = {
   overflowY: 'auto',
   overscrollBehavior: 'contain',
   paddingRight: 2,
-  paddingBottom: 24,
+  paddingBottom: 12,
 }
 
 const eyebrowStyle: CSSProperties = {
@@ -2528,6 +2501,8 @@ const authErrorStyle: CSSProperties = {
 const footerStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
+  flexShrink: 0,
+  paddingTop: 6,
 }
 
 const buttonRowStyle: CSSProperties = {
@@ -2589,13 +2564,13 @@ const textLinkStyle: CSSProperties = {
 
 const detailsSectionsStyle: CSSProperties = {
   display: 'grid',
-  gap: 18,
+  gap: 12,
 }
 
 const providerIdentityCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 10,
-  padding: '14px 14px 12px',
+  gap: 8,
+  padding: '12px 12px 10px',
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
@@ -2614,8 +2589,8 @@ const providerIdentityTitleStyle: CSSProperties = {
 }
 
 const providerIdentitySubtitleStyle: CSSProperties = {
-  fontSize: 12.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.35,
   color: '#64748B',
 }
 
@@ -2638,11 +2613,11 @@ const detailsFieldBlockStyle: CSSProperties = {
 
 const detailsSelectorRowStyle: CSSProperties = {
   display: 'flex',
-  gap: 8,
+  gap: 6,
   flexWrap: 'nowrap',
   overflowX: 'auto',
   overscrollBehaviorX: 'contain',
-  paddingBottom: 2,
+  paddingBottom: 1,
 }
 
 const detailsSelectorPillStyle: CSSProperties = {
@@ -2651,7 +2626,7 @@ const detailsSelectorPillStyle: CSSProperties = {
   background: 'rgba(255,255,255,0.82)',
   color: '#475569',
   minHeight: 34,
-  padding: '0 12px',
+  padding: '0 11px',
   borderRadius: 999,
   fontSize: 12.5,
   fontWeight: 800,
@@ -2670,7 +2645,7 @@ const detailsSelectorPillActiveStyle: CSSProperties = {
 const chipFieldCardStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
-  padding: '12px 12px 13px',
+  padding: '10px 10px 11px',
   borderRadius: 18,
   background: 'rgba(255,255,255,0.84)',
   border: '1px solid rgba(145, 164, 196, 0.16)',
@@ -2685,7 +2660,7 @@ const chipFieldHeaderStyle: CSSProperties = {
 
 const chipRowStyle: CSSProperties = {
   display: 'flex',
-  gap: 6,
+  gap: 5,
   flexWrap: 'wrap',
 }
 
@@ -2748,22 +2723,4 @@ const textareaStyle: CSSProperties = {
   outline: 'none',
   resize: 'vertical',
   fontFamily: 'inherit',
-}
-
-const compactTextareaStyle: CSSProperties = {
-  ...textareaStyle,
-  minHeight: 56,
-  maxHeight: 80,
-  lineHeight: 1.45,
-  resize: 'none',
-  border: 'none',
-  background: 'transparent',
-  padding: '0',
-}
-
-const chipInputShellStyle: CSSProperties = {
-  padding: '10px 12px',
-  borderRadius: 16,
-  background: 'rgba(248,251,255,0.96)',
-  border: '1px solid rgba(145, 164, 196, 0.18)',
 }

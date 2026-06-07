@@ -379,6 +379,10 @@ function providerAutoOnlineStorageKey(profileId: string) {
   return `regli_provider_auto_online_${profileId}`
 }
 
+function providerAutoOnlineCompletedStorageKey(profileId: string) {
+  return `regli_provider_auto_online_completed_${profileId}`
+}
+
 function getPreferredCustomerKey(input: {
   clientId?: string | null
   clientName?: string | null
@@ -801,6 +805,8 @@ export default function WalkerDashboard({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const handledWowTokenRef = useRef(0)
   const autoOnlineInFlightRef = useRef(false)
+  const previousStripeReadyForOnlineRef = useRef(false)
+  const handledStripeReturnAutoOnlineTokenRef = useRef(0)
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -810,7 +816,14 @@ export default function WalkerDashboard({
   const serviceSelectionRequiredLabel = isHebrew
     ? 'יש לבחור לפחות שירות אחד בהגדרות לפני מעבר לאונליין.'
     : 'Please choose at least one service in Settings before going online.'
+  const availabilitySelectionRequiredLabel = isHebrew
+    ? 'יש להגדיר לפחות חלון זמינות אחד לפני מעבר לאונליין.'
+    : 'Please add at least one availability window before going online.'
   const hasSelectedProfileService = profileServiceTypes.length > 0
+  const hasLaunchEnabledProfileService = useMemo(
+    () => profileServiceTypes.some((serviceType) => isLaunchEnabledProfileService(serviceType)),
+    [profileServiceTypes],
+  )
   const capabilitySections = useMemo<Array<{ id: CapabilitySectionId; label: string }>>(() => {
     const sections: Array<{ id: CapabilitySectionId; label: string }> = [
       { id: 'profile', label: isHebrew ? 'פרופיל' : 'Profile' },
@@ -1619,6 +1632,12 @@ export default function WalkerDashboard({
     profileServiceTypes.length > 0 &&
     lastSavedAvailabilitySignature.length > 0 &&
     currentAvailabilitySignature !== lastSavedAvailabilitySignature
+  const hasConfiguredAvailability = useMemo(
+    () => profileServiceTypes.some((serviceType) =>
+      availabilityRows[serviceType].some((row) => row.isActive),
+    ),
+    [availabilityRows, profileServiceTypes],
+  )
   const todayAvailabilityRows = useMemo(
     () =>
       profileServiceTypes.map((serviceType) => {
@@ -2386,38 +2405,125 @@ export default function WalkerDashboard({
   }, [stripeReturnNotice])
 
   useEffect(() => {
+    const previousStripeReady = previousStripeReadyForOnlineRef.current
+    const setupBecameReady = !previousStripeReady && flow.stripeReadyForOnline
+    previousStripeReadyForOnlineRef.current = flow.stripeReadyForOnline
+
     let pendingAutoOnline = false
+    let autoOnlineAlreadyCompleted = false
     try {
       pendingAutoOnline = window.localStorage.getItem(providerAutoOnlineStorageKey(profile.id)) === '1'
+      autoOnlineAlreadyCompleted = window.localStorage.getItem(providerAutoOnlineCompletedStorageKey(profile.id)) === '1'
     } catch {
       pendingAutoOnline = false
+      autoOnlineAlreadyCompleted = false
     }
 
-    if (!pendingAutoOnline || !flow.stripeReadyForOnline || flow.isOnline || autoOnlineInFlightRef.current) {
+    const triggeredByStripeReturn =
+      stripeReturnToken > 0 && handledStripeReturnAutoOnlineTokenRef.current !== stripeReturnToken
+    const shouldEvaluateAutoOnline = pendingAutoOnline || setupBecameReady || triggeredByStripeReturn
+
+    if (triggeredByStripeReturn) {
+      handledStripeReturnAutoOnlineTokenRef.current = stripeReturnToken
+    }
+
+    if (!shouldEvaluateAutoOnline || !flow.stripeReadyForOnline) {
       return
     }
 
-    if (!hasSelectedProfileService) {
+    if (flow.isOnline) {
+      console.log('[provider-online] auto-online skipped reason=already_online', {
+        profileId: profile.id,
+      })
+      if (pendingAutoOnline) {
+        try {
+          window.localStorage.removeItem(providerAutoOnlineStorageKey(profile.id))
+          window.localStorage.setItem(providerAutoOnlineCompletedStorageKey(profile.id), '1')
+        } catch {
+          // noop
+        }
+      }
+      return
+    }
+
+    if (autoOnlineAlreadyCompleted) {
+      console.log('[provider-online] auto-online skipped reason=already_completed', {
+        profileId: profile.id,
+      })
+      return
+    }
+
+    if (autoOnlineInFlightRef.current) {
+      console.log('[provider-online] auto-online skipped reason=in_flight', {
+        profileId: profile.id,
+      })
+      return
+    }
+
+    if (!hasLaunchEnabledProfileService) {
+      console.log('[provider-online] auto-online skipped reason=no_launch_enabled_service', {
+        profileId: profile.id,
+      })
       setServiceTypeSaveError(serviceSelectionRequiredLabel)
-      setBurgerOpen(true)
-      setMenuPage('settings')
+      openSettingsSection('serviceType')
       return
     }
 
+    if (!hasConfiguredAvailability) {
+      console.log('[provider-online] auto-online skipped reason=no_availability', {
+        profileId: profile.id,
+      })
+      setAvailabilityError(availabilitySelectionRequiredLabel)
+      setStripeReturnNotice(
+        isHebrew
+          ? 'השלימו לפחות חלון זמינות אחד כדי לעלות לאונליין.'
+          : 'Add at least one availability window before going online.'
+      )
+      openSettingsSection('availability')
+      return
+    }
+
+    console.log('[provider-online] stripe setup complete auto-online attempted', {
+      profileId: profile.id,
+      stripeReturnToken,
+    })
     autoOnlineInFlightRef.current = true
     void (async () => {
       const ok = await flow.toggleOnline()
       autoOnlineInFlightRef.current = false
-      if (!ok) return
+      if (!ok) {
+        console.log('[provider-online] auto-online skipped reason=toggle_failed', {
+          profileId: profile.id,
+        })
+        return
+      }
       try {
         window.localStorage.removeItem(providerAutoOnlineStorageKey(profile.id))
+        window.localStorage.setItem(providerAutoOnlineCompletedStorageKey(profile.id), '1')
       } catch {
         // noop
       }
       setShowOnboardingWow(false)
       setShowStripeGate(false)
+      setStripeReturnNotice(
+        isHebrew
+          ? 'החשבון מוכן, ועליתם לאונליין.'
+          : 'Your account is ready and you are now online.'
+      )
     })()
-  }, [flow.isOnline, flow.stripeReadyForOnline, flow.toggleOnline, hasSelectedProfileService, profile.id, serviceSelectionRequiredLabel])
+  }, [
+    availabilitySelectionRequiredLabel,
+    flow.isOnline,
+    flow.stripeReadyForOnline,
+    flow.toggleOnline,
+    hasConfiguredAvailability,
+    hasLaunchEnabledProfileService,
+    isHebrew,
+    openSettingsSection,
+    profile.id,
+    serviceSelectionRequiredLabel,
+    stripeReturnToken,
+  ])
 
   const handleOnboardingWowPrimary = useCallback(async () => {
     if (isCheckingPayout) return
