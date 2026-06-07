@@ -18,13 +18,13 @@ import CardSetupForm from '../components/CardSetupForm'
 import type { DurationType } from '../lib/payments'
 import {
   type ServiceType,
-  PRIMARY_SERVICES,
   SERVICE_ICONS,
   SERVICE_I18N_KEYS,
   getBookingPricingModelForService,
   isServiceAvailable as checkServiceAvailable,
   mapBookingServiceTypeToRequestServiceType,
 } from '../lib/serviceTypes'
+import { launchEnabledBookingServices } from '../lib/launchServices'
 import {
   applyDogCountPricing,
   getGuidanceServiceTypeAliases,
@@ -746,7 +746,7 @@ export default function ClientDashboard({
     [flow.savedCards, paymentDeleteConfirmCardId],
   )
   const availableBookingServices = useMemo(
-    () => [...PRIMARY_SERVICES] as ServiceType[],
+    () => [...launchEnabledBookingServices] as ServiceType[],
     [],
   )
   const shouldShowProfileServicePicker = availableBookingServices.length > 1

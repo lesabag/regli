@@ -100,6 +100,14 @@ Avoid:
 
 ---
 
+## Launch Service Visibility
+
+- Launch-visible services must be controlled from one shared allowlist.
+- Hidden future services may remain in code and existing records.
+- Future services must stay non-selectable in launch-facing UI until explicitly enabled.
+- Client and provider service selectors must derive visible services from the same launch configuration.
+
+
 ## Development Rules
 
 Unless explicitly requested:

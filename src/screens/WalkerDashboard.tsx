@@ -39,6 +39,7 @@ import {
   type ProviderCapabilityRow,
 } from '../lib/providerCapabilities'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
+import { isLaunchEnabledProfileService } from '../lib/launchServices'
 import { normalizeAgeRangeValue } from '../lib/dispatchRanking'
 import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 import { hasProviderIssue } from '../utils/completionReview'
@@ -555,7 +556,10 @@ export default function WalkerDashboard({
   const isHebrew = i18n.resolvedLanguage === 'he'
   const greetingLabel = isRtl ? `היי, ${walkerName}` : `Hey, ${walkerName}`
   const preferredCustomersLabel = isRtl ? 'לקוחות מועדפים' : 'Preferred customers'
-  const profileServiceOptions = useMemo(() => getProfileServiceOptions(isHebrew), [isHebrew])
+  const profileServiceOptions = useMemo(
+    () => getProfileServiceOptions(isHebrew).filter((option) => isLaunchEnabledProfileService(option.value)),
+    [isHebrew],
+  )
   const serviceTypeSectionTitle = isHebrew ? 'סוג שירות' : 'Service type'
   const serviceTypeSectionSubtitle = isHebrew
     ? 'בחר את סוג השירות הראשי שאתה מציע.'

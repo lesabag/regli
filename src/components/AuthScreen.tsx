@@ -6,6 +6,7 @@ import {
   getProfileServiceOptions,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
+import { isLaunchEnabledProfileService } from '../lib/launchServices'
 import i18n, { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
 import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
@@ -278,12 +279,14 @@ export default function AuthScreen({
         : [],
   })
   const serviceOptions = useMemo<ServiceOption[]>(
-    () => getProfileServiceOptions(language === 'he').map((option) => ({
-      id: option.value,
-      icon: option.icon,
-      label: option.label,
-      description: option.description,
-    })),
+    () => getProfileServiceOptions(language === 'he')
+      .filter((option) => isLaunchEnabledProfileService(option.value))
+      .map((option) => ({
+        id: option.value,
+        icon: option.icon,
+        label: option.label,
+        description: option.description,
+      })),
     [language],
   )
   const signupSteps = useMemo(() => getSignupSteps(role), [role])
