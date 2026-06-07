@@ -278,9 +278,14 @@ export function useAuth() {
   const [authError, setAuthError] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const profileRequestRef = useRef(0)
+  const profileStateRef = useRef<Profile | null>(null)
   const appleBootstrapPromiseRef = useRef<Promise<Profile | null> | null>(null)
   const appleBootstrapUserIdRef = useRef<string | null>(null)
   const pendingOAuthProviderRef = useRef<'google' | 'apple' | null>(readPendingOAuthProvider())
+
+  useEffect(() => {
+    profileStateRef.current = profile
+  }, [profile])
 
   // ✅ יצירה/טעינה של פרופיל
   const loadProfile = useCallback(async (currentUser: User) => {
@@ -481,14 +486,41 @@ export function useAuth() {
     } catch (err) {
       if (!isCurrentRequest()) return null
 
+      const errorMessage = getErrorMessage(err, 'Failed to load profile')
+      const isRecoverableTimeout = errorMessage.toLowerCase().includes('timed out')
+      const currentProfileState = profileStateRef.current
+      const canReuseLocalProfile =
+        !!currentProfileState &&
+        currentProfileState.id === currentUser.id &&
+        isProfileOnboardingComplete(currentProfileState)
+
       console.warn('[useAuth] loadProfile:error', {
         requestId,
         userId: currentUser.id,
-        message: getErrorMessage(err, 'Failed to load profile'),
+        message: errorMessage,
+        recoverable: isRecoverableTimeout && canReuseLocalProfile,
       })
+
+      if (isRecoverableTimeout && canReuseLocalProfile) {
+        clearPendingOAuthProvider()
+        pendingOAuthProviderRef.current = null
+        const onboardingComplete = isProfileOnboardingComplete(currentProfileState)
+        setProfile(currentProfileState)
+        setProfileReady(onboardingComplete)
+        setNeedsOnboarding(!onboardingComplete)
+        setAuthError(null)
+        if (typeof window !== 'undefined') {
+          window.setTimeout(() => {
+            if (!mountedRef.current) return
+            void loadProfile(currentUser)
+          }, 1500)
+        }
+        return currentProfileState
+      }
+
       clearPendingOAuthProvider()
       pendingOAuthProviderRef.current = null
-      setAuthError(getErrorMessage(err, 'Failed to load profile'))
+      setAuthError(errorMessage)
       setProfile(null)
       setProfileReady(false)
       setNeedsOnboarding(false)

@@ -120,6 +120,11 @@ const WalkerDashboard = lazy(() => import('./screens/WalkerDashboard'))
 const LOCAL_UNLOCK_RELOCK_AFTER_MS = 30 * 60 * 1000
 const isNativeIos = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios'
 
+function safeCloseBrowser() {
+  if (!Capacitor.isNativePlatform()) return
+  void Browser.close().catch(() => undefined)
+}
+
 function LocalUnlockScreen(props: {
   busy: boolean
   errorMessage: string | null
@@ -516,7 +521,7 @@ export default function App() {
         } catch (error) {
           console.warn('[App] OAuth callback handling failed', error)
         } finally {
-          void Browser.close().catch(() => undefined)
+          safeCloseBrowser()
         }
         return
       }
@@ -524,13 +529,13 @@ export default function App() {
       const pushRoute = parsePushDeepLink(value)
       if (pushRoute) {
         emitPushDeepLink(pushRoute)
-        void Browser.close().catch(() => undefined)
+        safeCloseBrowser()
         return
       }
 
       const nativeStripeHandled = await handleNativeStripeURLCallback(value)
       if (nativeStripeHandled) {
-        void Browser.close().catch(() => undefined)
+        safeCloseBrowser()
         return
       }
 

@@ -594,6 +594,9 @@ export default function WalkerDashboard({
   const availabilityUnavailableLabel = isHebrew ? 'לא זמין' : 'Unavailable'
   const availabilityEditLabel = isHebrew ? 'ערוך שעות' : 'Edit hours'
   const availabilityAutoEnableLabel = isHebrew ? 'הפעל יום זה כדי לקבוע שעות.' : 'Turn this day on to set hours.'
+  const availabilityEmptyActionLabel = isHebrew
+    ? 'עדיין לא הוגדרו חלונות זמינות פעילים. אפשר לבחור יום ולהפעיל אותו כאן.'
+    : 'No active availability windows yet. Choose a day and turn it on here.'
   const availabilityAvailableNowLabel = isHebrew ? 'זמין להזמנות' : 'Available for bookings'
   const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
   const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות' : 'Manage availability'
@@ -2405,6 +2408,11 @@ export default function WalkerDashboard({
   }, [stripeReturnNotice])
 
   useEffect(() => {
+    if (!flow.isOnline || !availabilityError) return
+    setAvailabilityError(null)
+  }, [availabilityError, flow.isOnline])
+
+  useEffect(() => {
     const previousStripeReady = previousStripeReadyForOnlineRef.current
     const setupBecameReady = !previousStripeReady && flow.stripeReadyForOnline
     previousStripeReadyForOnlineRef.current = flow.stripeReadyForOnline
@@ -4118,12 +4126,13 @@ export default function WalkerDashboard({
 
                       {availabilityLoading ? (
                         <div style={availabilityLoadingStyle}>{isHebrew ? 'טוען שעות עבודה...' : 'Loading working hours...'}</div>
-                      ) : availabilityError ? (
-                        <div style={availabilityEmptyStyle}>{availabilityError}</div>
                       ) : profileServiceTypes.length === 0 ? (
                         <div style={availabilityEmptyStyle}>{availabilitySelectServiceLabel}</div>
                       ) : (
                         <>
+                          {!hasConfiguredAvailability ? (
+                            <div style={availabilityEmptyStyle}>{availabilityEmptyActionLabel}</div>
+                          ) : null}
                           {profileServiceTypes.map((serviceType) => (
                             <div key={serviceType} style={availabilityServiceCardStyle}>
                               <div style={availabilityServiceHeaderStyle}>
