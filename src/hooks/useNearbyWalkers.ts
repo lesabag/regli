@@ -14,6 +14,9 @@ export interface NearbyWalker {
   lat: number
   lng: number
   bearing: number | null
+  avatarUrl: string | null
+  fullName: string | null
+  rating: number | null
 }
 
 const POLL_INTERVAL_MS = 15_000
@@ -148,7 +151,7 @@ export function useNearbyWalkers(
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, last_lat, last_lng, is_online, service_type, service_types')
+      .select('id, full_name, last_lat, last_lng, is_online, service_type, service_types, avatar_url')
       .eq('role', 'walker')
       .eq('is_online', true)
       .not('last_lat', 'is', null)
@@ -164,9 +167,34 @@ export function useNearbyWalkers(
     const expectedServiceType = serviceTypeFilterRef.current
     const availabilityReferenceAt = availabilityAtRef.current ?? new Date().toISOString()
     const providerIds = data.map((row) => row.id).filter((value): value is string => typeof value === 'string' && value.length > 0)
+    let ratingsByProvider = new Map<string, number | null>()
     try {
-      const availabilityRows = await fetchProviderAvailabilityRows(providerIds, expectedServiceType)
+      const [availabilityRows, ratingsResult] = await Promise.all([
+        fetchProviderAvailabilityRows(providerIds, expectedServiceType),
+        supabase
+          .from('ratings')
+          .select('to_user_id, rating')
+          .in('to_user_id', providerIds),
+      ])
       availabilityByProviderRef.current = groupProviderAvailabilityRows(availabilityRows)
+
+      const ratingBuckets = new Map<string, number[]>()
+      ;((ratingsResult.data as Array<{ to_user_id: string | null; rating: number | null }> | null) ?? []).forEach((row) => {
+        if (!row.to_user_id || typeof row.rating !== 'number' || !Number.isFinite(row.rating)) return
+        const existing = ratingBuckets.get(row.to_user_id) ?? []
+        existing.push(row.rating)
+        ratingBuckets.set(row.to_user_id, existing)
+      })
+
+      ratingsByProvider = new Map(
+        providerIds.map((providerId) => {
+          const values = ratingBuckets.get(providerId) ?? []
+          const average = values.length > 0
+            ? Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
+            : null
+          return [providerId, average]
+        }),
+      )
     } catch (availabilityError) {
       console.warn('[useNearbyWalkers] availability lookup failed:', availabilityError)
       availabilityByProviderRef.current = new Map()
@@ -192,6 +220,9 @@ export function useNearbyWalkers(
           lat: w.last_lat,
           lng: w.last_lng,
           bearing: resolveBearing(w.id, w.last_lat, w.last_lng),
+          avatarUrl: ('avatar_url' in w ? (w.avatar_url as string | null) : null) ?? null,
+          fullName: ('full_name' in w ? (w.full_name as string | null) : null) ?? null,
+          rating: ratingsByProvider.get(w.id) ?? null,
         })
       }
     }
@@ -214,8 +245,10 @@ export function useNearbyWalkers(
       last_lat?: number | null
       last_lng?: number | null
       role?: string
+      full_name?: string | null
       service_type?: string | null
       service_types?: string[] | null
+      avatar_url?: string | null
     }) => {
       const loc = userLocRef.current
       if (!loc) return
@@ -252,6 +285,9 @@ export function useNearbyWalkers(
             lat: row.last_lat!,
             lng: row.last_lng!,
             bearing,
+            avatarUrl: row.avatar_url ?? (idx >= 0 ? prev[idx]?.avatarUrl ?? null : null),
+            fullName: row.full_name ?? (idx >= 0 ? prev[idx]?.fullName ?? null : null),
+            rating: idx >= 0 ? prev[idx]?.rating ?? null : null,
           }
 
           if (idx >= 0) {
@@ -295,11 +331,13 @@ export function useNearbyWalkers(
           const row = payload.new as {
             id: string
             role?: string
+            full_name?: string | null
             is_online?: boolean
             last_lat?: number | null
             last_lng?: number | null
             service_type?: string | null
             service_types?: string[] | null
+            avatar_url?: string | null
           }
           applyRealtimeUpdate(row)
         },

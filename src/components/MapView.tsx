@@ -6,8 +6,9 @@ import {
   Polyline,
   Marker,
   useMap,
+  useMapEvents,
 } from 'react-leaflet'
-import { Fragment, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpsQuality, ProximityLevel } from '../hooks/useJobTracking'
@@ -17,6 +18,9 @@ interface NearbyWalkerMarker {
   lat: number
   lng: number
   bearing: number | null
+  avatarUrl?: string | null
+  fullName?: string | null
+  rating?: number | null
 }
 
 interface MapViewProps {
@@ -620,8 +624,212 @@ function walkerTooltipBg(gpsQuality: GpsQuality, arrived: boolean): React.CSSPro
   return { ...base, background: 'rgba(15, 23, 42, 0.85)' }
 }
 
-const NB_SIZE = 22
-const NB_OUTER = 30
+const NB_SIZE = 28
+const NB_OUTER = 38
+const NB_DOT = 10
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function getMarkerAvatarUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+
+  try {
+    const parsed = new URL(url)
+    if (parsed.pathname.includes('/storage/v1/object/public/')) {
+      parsed.pathname = parsed.pathname.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')
+      parsed.searchParams.set('width', '96')
+      parsed.searchParams.set('height', '96')
+      parsed.searchParams.set('resize', 'cover')
+      parsed.searchParams.set('quality', '70')
+      return parsed.toString()
+    }
+  } catch {
+    return url
+  }
+
+  return url
+}
+
+function createNearbyWalkerAvatarIcon(params: {
+  avatarUrl: string | null | undefined
+  previewName?: string | null
+  previewMeta?: string | null
+  selected?: boolean
+}): L.DivIcon {
+  const { avatarUrl, previewName = null, previewMeta = null, selected = false } = params
+  const resolvedAvatarUrl = getMarkerAvatarUrl(avatarUrl)
+  const safePreviewName = previewName ? escapeHtmlAttribute(previewName.trim() || 'Provider') : 'Provider'
+  const safePreviewMeta = previewMeta ? escapeHtmlAttribute(previewMeta) : ''
+  const hasPreview = selected && (!!safePreviewName || !!safePreviewMeta)
+  const previewBubbleHeight = hasPreview ? (safePreviewMeta ? 50 : 36) : 0
+  const previewGap = hasPreview ? 6 : 0
+  const totalHeight = previewBubbleHeight + previewGap + NB_OUTER
+
+  if (!resolvedAvatarUrl) {
+    if (!hasPreview) return nearbyWalkerIcon
+    return L.divIcon({
+      html: `<div style="
+        position:relative;
+        width:220px;
+        height:${totalHeight}px;
+        display:flex;
+        align-items:flex-end;
+        justify-content:center;
+      ">
+        <div style="
+          position:absolute;
+          left:50%;
+          top:0;
+          transform:translateX(-50%);
+          min-width:98px;
+          max-width:200px;
+          padding:8px 11px;
+          border-radius:16px;
+          background:rgba(15,23,42,0.72);
+          border:1px solid rgba(255,255,255,0.14);
+          box-shadow:0 14px 30px rgba(15,23,42,0.22);
+          backdrop-filter:blur(16px) saturate(1.05);
+          -webkit-backdrop-filter:blur(16px) saturate(1.05);
+          color:#fff;
+          text-align:center;
+          box-sizing:border-box;
+          white-space:nowrap;
+        ">
+          <div style="font-size:12px;line-height:1.15;font-weight:900;overflow:hidden;text-overflow:ellipsis;">${safePreviewName}</div>
+          ${safePreviewMeta ? `<div style="margin-top:3px;font-size:10.5px;line-height:1.15;font-weight:800;color:rgba(255,255,255,0.9);overflow:hidden;text-overflow:ellipsis;">${safePreviewMeta}</div>` : ''}
+          <div style="
+            position:absolute;
+            left:50%;
+            bottom:-6px;
+            width:12px;
+            height:12px;
+            border-radius:3px;
+            transform:translateX(-50%) rotate(45deg);
+            background:rgba(15,23,42,0.72);
+            border-right:1px solid rgba(255,255,255,0.10);
+            border-bottom:1px solid rgba(255,255,255,0.10);
+          "></div>
+        </div>
+        ${nearbyWalkerIcon.options.html}
+      </div>`,
+      className: '',
+      iconSize: [220, totalHeight],
+      iconAnchor: [110, totalHeight - (NB_OUTER / 2)],
+    })
+  }
+
+  const safeUrl = escapeHtmlAttribute(resolvedAvatarUrl)
+
+  return L.divIcon({
+    html: `<div style="
+      position:relative;
+      width:220px;
+      height:${totalHeight}px;
+      display:flex;
+      align-items:flex-end;
+      justify-content:center;
+    ">
+      ${hasPreview ? `
+        <div style="
+          position:absolute;
+          left:50%;
+          top:0;
+          transform:translateX(-50%);
+          min-width:98px;
+          max-width:200px;
+          padding:8px 11px;
+          border-radius:16px;
+          background:rgba(15,23,42,0.72);
+          border:1px solid rgba(255,255,255,0.14);
+          box-shadow:0 14px 30px rgba(15,23,42,0.22);
+          backdrop-filter:blur(16px) saturate(1.05);
+          -webkit-backdrop-filter:blur(16px) saturate(1.05);
+          color:#fff;
+          text-align:center;
+          box-sizing:border-box;
+          white-space:nowrap;
+        ">
+          <div style="font-size:12px;line-height:1.15;font-weight:900;overflow:hidden;text-overflow:ellipsis;">${safePreviewName}</div>
+          ${safePreviewMeta ? `<div style="margin-top:3px;font-size:10.5px;line-height:1.15;font-weight:800;color:rgba(255,255,255,0.9);overflow:hidden;text-overflow:ellipsis;">${safePreviewMeta}</div>` : ''}
+          <div style="
+            position:absolute;
+            left:50%;
+            bottom:-6px;
+            width:12px;
+            height:12px;
+            border-radius:3px;
+            transform:translateX(-50%) rotate(45deg);
+            background:rgba(15,23,42,0.72);
+            border-right:1px solid rgba(255,255,255,0.10);
+            border-bottom:1px solid rgba(255,255,255,0.10);
+          "></div>
+        </div>
+      ` : ''}
+      <div class="nearby-walker-halo" style="
+        position:absolute;
+        left:50%;
+        bottom:0;
+        transform:translateX(-50%);
+        width:${NB_OUTER}px;
+        height:${NB_OUTER}px;
+        border-radius:50%;
+        background:rgba(59,130,246,0.12);
+      "></div>
+      <div style="
+        position:relative;
+        width:${NB_OUTER}px;
+        height:${NB_OUTER}px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      ">
+        <div style="
+          position:relative;
+        width:${NB_SIZE}px;
+        height:${NB_SIZE}px;
+        border-radius:50%;
+        overflow:hidden;
+        background:#E2E8F0;
+        border:2px solid #FFFFFF;
+        box-shadow:0 6px 14px rgba(15,23,42,0.22);
+        ">
+          <img
+            src="${safeUrl}"
+            alt=""
+            draggable="false"
+            style="
+              width:100%;
+              height:100%;
+              object-fit:cover;
+              display:block;
+            "
+          />
+        </div>
+        <div style="
+          position:absolute;
+          right:2px;
+          bottom:2px;
+          width:${NB_DOT}px;
+          height:${NB_DOT}px;
+          border-radius:50%;
+          background:#22C55E;
+          border:2px solid #FFFFFF;
+          box-shadow:0 2px 5px rgba(15,23,42,0.18);
+        "></div>
+      </div>
+    </div>`,
+    className: '',
+    iconSize: [220, totalHeight],
+    iconAnchor: [110, totalHeight - (NB_OUTER / 2)],
+  })
+}
 
 const nearbyWalkerIcon = L.divIcon({
   html: `<div style="
@@ -642,10 +850,10 @@ const nearbyWalkerIcon = L.divIcon({
     <div style="
       width:${NB_SIZE}px;
       height:${NB_SIZE}px;
-      border-radius:7px;
+      border-radius:50%;
       background:#1E293B;
-      border:1.5px solid rgba(255,255,255,0.12);
-      box-shadow:0 2px 8px rgba(0,0,0,0.3);
+      border:2px solid #FFFFFF;
+      box-shadow:0 6px 14px rgba(15,23,42,0.22);
       display:flex;
       align-items:center;
       justify-content:center;
@@ -711,8 +919,46 @@ function NearbyWalkerArrow({ center, bearing }: { center: [number, number]; bear
   return <Marker position={center} icon={icon} interactive={false} zIndexOffset={690} />
 }
 
+function DismissNearbyPreview({ onDismiss }: { onDismiss: () => void }) {
+  useMapEvents({
+    click() {
+      onDismiss()
+    },
+  })
+
+  return null
+}
+
 function isSamePoint(a: [number, number], b: [number, number], epsilon = 0.00002) {
   return Math.abs(a[0] - b[0]) < epsilon && Math.abs(a[1] - b[1]) < epsilon
+}
+
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function distanceBetweenKm(a: [number, number], b: [number, number]): number {
+  return haversineKm(a[0], a[1], b[0], b[1])
+}
+
+function formatNearbyDistance(distanceKm: number): string {
+  const isHebrew = typeof document !== 'undefined' && document?.documentElement?.dir === 'rtl'
+  if (!Number.isFinite(distanceKm)) return ''
+  if (distanceKm < 1) return `${Math.max(100, Math.round(distanceKm * 1000))} m`
+  return `${distanceKm.toFixed(1)} ${isHebrew ? 'ק״מ' : 'km'}`
 }
 
 export default function MapView({
@@ -760,9 +1006,22 @@ export default function MapView({
     ? `walker-${walkerLocation[0]}-${walkerLocation[1]}-${walkerBearing ?? 'none'}-${gpsQuality}-${isArrived ? 'arrived' : 'moving'}`
     : 'walker-none'
   const isSearchingMapMode = isSearching && !walkerLocation
+  const [selectedNearbyWalkerId, setSelectedNearbyWalkerId] = useState<string | null>(null)
   const tileUrl = isSearchingMapMode
     ? 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
     : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+
+  const selectedNearbyWalker = useMemo(
+    () => filteredNearbyWalkers.find((item) => item.id === selectedNearbyWalkerId) ?? null,
+    [filteredNearbyWalkers, selectedNearbyWalkerId],
+  )
+
+  useEffect(() => {
+    if (selectedNearbyWalkerId == null) return
+    if (!filteredNearbyWalkers.some((item) => item.id === selectedNearbyWalkerId)) {
+      setSelectedNearbyWalkerId(null)
+    }
+  }, [filteredNearbyWalkers, selectedNearbyWalkerId])
 
   return (
     <div style={mapShellStyle}>
@@ -795,6 +1054,7 @@ export default function MapView({
           bottomViewportPadding={bottomViewportPadding}
           onRecenter={onRecenter}
         />
+        <DismissNearbyPreview onDismiss={() => setSelectedNearbyWalkerId(null)} />
 
         <RouteLine routePolyline={routePolyline} />
 
@@ -812,12 +1072,35 @@ export default function MapView({
             {w.bearing != null && (
               <NearbyWalkerArrow center={[w.lat, w.lng]} bearing={w.bearing} />
             )}
+            {(() => {
+              const metaItems: string[] = []
+              if (typeof w.rating === 'number') {
+                metaItems.push(`⭐ ${w.rating.toFixed(1)}`)
+              }
+              const distanceKm = distanceBetweenKm(userLocation, [w.lat, w.lng])
+              if (Number.isFinite(distanceKm)) {
+                metaItems.push(`📍 ${formatNearbyDistance(distanceKm)}`)
+              }
+              const previewMeta = metaItems.length > 0 ? metaItems.join(' • ') : null
+              return (
             <Marker
               position={[w.lat, w.lng]}
-              icon={nearbyWalkerIcon}
-              interactive={false}
+              icon={createNearbyWalkerAvatarIcon({
+                avatarUrl: w.avatarUrl ?? null,
+                previewName: selectedNearbyWalker?.id === w.id ? (w.fullName?.trim() || 'Provider') : null,
+                previewMeta,
+                selected: selectedNearbyWalker?.id === w.id,
+              })}
+              interactive={true}
               zIndexOffset={700}
+              eventHandlers={{
+                click: () => {
+                  setSelectedNearbyWalkerId((current) => (current === w.id ? null : w.id))
+                },
+              }}
             />
+              )
+            })()}
           </Fragment>
         ))}
 
