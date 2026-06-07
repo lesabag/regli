@@ -69,19 +69,31 @@ function toInt(value: number | string | null | undefined): number {
 
 function normalizeSnapshot(row: ProviderInsightsRow | null | undefined): ProviderInsightsSnapshot {
   if (!row) return EMPTY_INSIGHTS
+  const requestsReceived = toInt(row.requests_received)
+  const requestsAccepted = toInt(row.requests_accepted)
+  const requestsDeclined = toInt(row.requests_declined)
+  const requestsExpired = toInt(row.requests_expired)
+  const requestsReceivedWhileOffline = toInt(row.requests_received_while_offline)
+  const requestsOutsideAvailability = toInt(row.requests_outside_availability)
+  const missedOpportunityCount =
+    requestsDeclined +
+    requestsExpired +
+    requestsReceivedWhileOffline +
+    requestsOutsideAvailability
+
   return {
     periodStart: row.period_start ?? null,
     periodEnd: row.period_end ?? null,
     acceptanceRate: toNumber(row.acceptance_rate),
     completionRate: toNumber(row.completion_rate),
     averageRating: toNumber(row.average_rating),
-    requestsReceived: toInt(row.requests_received),
-    requestsAccepted: toInt(row.requests_accepted),
-    requestsDeclined: toInt(row.requests_declined),
-    requestsExpired: toInt(row.requests_expired),
-    requestsReceivedWhileOffline: toInt(row.requests_received_while_offline),
-    requestsOutsideAvailability: toInt(row.requests_outside_availability),
-    estimatedMissedEarnings: toNumber(row.estimated_missed_earnings) ?? 0,
+    requestsReceived,
+    requestsAccepted,
+    requestsDeclined,
+    requestsExpired,
+    requestsReceivedWhileOffline,
+    requestsOutsideAvailability,
+    estimatedMissedEarnings: missedOpportunityCount > 0 ? Math.max(0, toNumber(row.estimated_missed_earnings) ?? 0) : 0,
     mostActiveWeekday: toNumber(row.most_active_weekday),
     mostActiveHour: toNumber(row.most_active_hour),
   }
@@ -123,8 +135,38 @@ export function useProviderInsights(providerId: string, refreshKey: number) {
       const row = Array.isArray(data)
         ? (data[0] as ProviderInsightsRow | undefined)
         : (data as ProviderInsightsRow | null)
+      const normalizedSnapshot = normalizeSnapshot(row)
+      const hasDirectProviderActivity =
+        normalizedSnapshot.requestsReceived > 0 ||
+        normalizedSnapshot.requestsAccepted > 0 ||
+        normalizedSnapshot.requestsDeclined > 0 ||
+        normalizedSnapshot.requestsExpired > 0
+      const hasCompletionSignals =
+        normalizedSnapshot.acceptanceRate != null ||
+        normalizedSnapshot.completionRate != null ||
+        normalizedSnapshot.averageRating != null
 
-      setSnapshot(normalizeSnapshot(row))
+      if (!hasDirectProviderActivity && !hasCompletionSignals) {
+        if (
+          normalizedSnapshot.requestsReceivedWhileOffline > 0 ||
+          normalizedSnapshot.requestsOutsideAvailability > 0 ||
+          normalizedSnapshot.estimatedMissedEarnings > 0
+        ) {
+          console.log('[provider-insights] no provider-scoped missed data, using zero', {
+            providerId,
+          })
+        }
+        setSnapshot({
+          ...normalizedSnapshot,
+          requestsReceivedWhileOffline: 0,
+          requestsOutsideAvailability: 0,
+          estimatedMissedEarnings: 0,
+        })
+        setLoading(false)
+        return
+      }
+
+      setSnapshot(normalizedSnapshot)
       setLoading(false)
     }
 

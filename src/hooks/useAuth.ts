@@ -209,7 +209,6 @@ function isProfileOnboardingComplete(profile: Profile): boolean {
     const normalizedServiceTypes = normalizeProfileServiceTypes(profile.service_types ?? profile.service_type)
     return (
       hasText(profile.location_address) &&
-      hasText(profile.short_bio) &&
       normalizedServiceTypes.length > 0 &&
       hasProviderProfileDetails(profile.service_attributes)
     )
@@ -1100,24 +1099,7 @@ export function useAuth() {
           shortBio: shortBio ?? null,
         })
       : null
-    const validationOk = safeRole !== 'walker' || (
-      hasText(locationAddress) &&
-      hasText(shortBio) &&
-      normalizedServiceTypes.length > 0 &&
-      !!normalizedProviderCapabilities &&
-      Object.keys(normalizedProviderCapabilities).length > 0
-    )
-    console.log('[provider-onboarding] validation result', {
-      userId: currentUser.id,
-      safeRole,
-      validationOk,
-      hasLocation: hasText(locationAddress),
-      hasShortBio: hasText(shortBio),
-      serviceTypeCount: normalizedServiceTypes.length,
-      hasCapabilities: !!normalizedProviderCapabilities && Object.keys(normalizedProviderCapabilities).length > 0,
-    })
-
-    const profilePayload: Profile = {
+    const onboardingCandidateProfile: Profile = {
       id: currentUser.id,
       email: currentUser.email ?? profile?.email ?? null,
       full_name: getUserDisplayName(currentUser) ?? profile?.full_name ?? null,
@@ -1131,6 +1113,25 @@ export function useAuth() {
       service_types: normalizedServiceTypes,
       service_attributes: normalizedProviderCapabilities ?? serviceAttributes ?? null,
     }
+    const validationOk = isProfileOnboardingComplete(onboardingCandidateProfile)
+    console.log('[provider-onboarding] validation result', {
+      userId: currentUser.id,
+      safeRole,
+      validationOk,
+      hasLocation: hasText(locationAddress),
+      serviceTypeCount: normalizedServiceTypes.length,
+      hasCapabilities: !!normalizedProviderCapabilities && Object.keys(normalizedProviderCapabilities).length > 0,
+    })
+    if (!validationOk) {
+      setAuthError('Your provider profile is still missing required details. Please review and try again.')
+      return { ok: false }
+    }
+    console.log('[provider-onboarding] completion gate passed', {
+      userId: currentUser.id,
+      role: safeRole,
+    })
+
+    const profilePayload: Profile = onboardingCandidateProfile
     console.log('[provider-onboarding] profile payload', profilePayload)
 
     try {
@@ -1189,6 +1190,19 @@ export function useAuth() {
         }
       }
 
+      const normalizedLocalProfile = normalizeLoadedProfile(profilePayload)
+      setProfile(normalizedLocalProfile)
+      setProfileReady(true)
+      setNeedsOnboarding(false)
+      setAuthError(null)
+      console.log('[provider-onboarding] local profile updated after save', {
+        userId: currentUser.id,
+        serviceTypes: normalizedLocalProfile.service_types ?? null,
+      })
+      console.log('[provider-onboarding] navigation target=provider_dashboard/connect', {
+        userId: currentUser.id,
+      })
+
       const refreshedProfile = await loadProfile(currentUser)
       console.log('[provider-onboarding] profile refresh result', {
         userId: currentUser.id,
@@ -1199,13 +1213,15 @@ export function useAuth() {
         serviceTypes: refreshedProfile?.service_types ?? null,
       })
       if (!refreshedProfile) {
-        setAuthError('We saved your setup, but could not refresh your profile. Please try again.')
         console.log('[provider-onboarding] navigation/app unlock decision', {
           userId: currentUser.id,
-          allowDashboard: false,
-          reason: 'profile_refresh_failed',
+          allowDashboard: true,
+          reason: 'using_local_profile_after_refresh_failure',
         })
-        return { ok: false }
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+        }
+        return { ok: true }
       }
 
       const refreshedComplete = isProfileOnboardingComplete(refreshedProfile)
