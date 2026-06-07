@@ -2534,7 +2534,11 @@ export default function ClientDashboard({
   const isDogNameGuided = guidedBookingField === 'dogName'
   const isDurationGuided = guidedBookingField === 'duration'
   const isPaymentGuided = guidedBookingField === 'payment'
-  const shouldShowGuidanceCtaHelper = guidedBookingField !== null && !flow.loading && !flow.cardLoading
+  const shouldShowGuidanceCtaHelper =
+    guidedBookingField !== null &&
+    guidedBookingField !== 'payment' &&
+    !flow.loading &&
+    !flow.cardLoading
   const showNearbyWalkers = flow.screenState === 'idle' || flow.screenState === 'searching'
 
   useEffect(() => {
@@ -4136,6 +4140,16 @@ export default function ClientDashboard({
         </div>
       </button>
     ) : null
+  const missingPaymentMethodTitle = flow.cardLoading
+    ? (isRtl ? 'טוען אמצעי תשלום...' : 'Loading payment method...')
+    : flow.cardError && !flow.savedCard
+      ? (isRtl ? 'נסה שוב להוסיף אמצעי תשלום' : 'Try adding a payment method again')
+      : (isRtl ? 'הוסף אמצעי תשלום' : 'Add payment method')
+  const missingPaymentMethodSubtitle = flow.cardLoading
+    ? (isRtl ? 'נא להמתין רגע' : 'Please wait a moment')
+    : flow.cardError && !flow.savedCard
+      ? (isRtl ? 'לא הצלחנו לטעון את פרטי התשלום. הקש כדי לנסות שוב.' : 'We could not load payment details. Tap to try again.')
+      : (isRtl ? 'הוסף כרטיס כדי להמשיך' : 'Add card to continue')
 
   const sharedPricingRows = (
     <div style={dogWalkerPricingStackStyle}>
@@ -4257,34 +4271,24 @@ export default function ClientDashboard({
         setPaymentSheetOpen(true)
         markFirstInteractionVisual('client-dashboard:open-payment-row')
       }}
-      style={compactSavedCardRowStyle}
+      style={{
+        ...compactSavedCardRowStyle,
+        ...compactAddPaymentMethodCtaRowStyle,
+      }}
       disabled={flow.cardLoading}
     >
-      <div style={compactSavedCardMainStyle}>
-        <span style={compactSavedCardBrandStyle}>
-          {flow.cardLoading
-            ? isRtl
-              ? 'טוען כרטיס...'
-              : 'Loading card...'
-            : flow.cardError && !flow.savedCard
-              ? isRtl
-                ? 'נסה שוב'
-                : 'Retry'
-              : flow.showApplePayInPaymentSheet && !flow.savedCard
-                ? 'Apple Pay'
-                : flow.setupClientSecret
-                ? isRtl
-                  ? 'הוסף כרטיס'
-                  : 'Add card'
-                : isRtl
-                  ? 'הוסף כרטיס'
-                  : 'Add card'}
-        </span>
+      <div style={compactAddPaymentMethodCtaMainStyle}>
+        <div style={compactAddPaymentMethodTextWrapStyle}>
+          <span style={compactAddPaymentMethodTitleStyle}>{missingPaymentMethodTitle}</span>
+          <span style={compactAddPaymentMethodSubtitleStyle}>{missingPaymentMethodSubtitle}</span>
+        </div>
         <span style={compactPaymentMethodIconWrapStyle} aria-hidden="true">
           {flow.showApplePayInPaymentSheet && !flow.savedCard ? (
             <span style={compactPaymentMethodApplePayStyle}></span>
           ) : (
-            <CreditCard size={12} color="#2563EB" style={{ flexShrink: 0, opacity: 0.9 }} />
+            <span style={compactAddPaymentMethodIconShellStyle}>
+              <CreditCard size={16} color="#1D4ED8" style={{ flexShrink: 0 }} />
+            </span>
           )}
         </span>
       </div>
@@ -5253,8 +5257,6 @@ export default function ClientDashboard({
                           : t('booking.ordering')
                         : t('booking.loadingPayment')}
                     </>
-                  ) : !flow.savedCard ? (
-                    t('booking.addCard')
                   ) : (
                     t('booking.orderNow')
                   )}
@@ -8212,6 +8214,45 @@ const compactSavedCardMainStyle: React.CSSProperties = {
   padding: '2px 0',
 }
 
+const compactAddPaymentMethodCtaRowStyle: React.CSSProperties = {
+  borderRadius: 18,
+  padding: '10px 12px',
+  border: '1px solid rgba(96, 165, 250, 0.28)',
+  background: 'linear-gradient(180deg, rgba(239,246,255,0.96) 0%, rgba(248,250,252,0.98) 100%)',
+  boxShadow: '0 10px 22px rgba(37, 99, 235, 0.08), inset 0 1px 0 rgba(255,255,255,0.72)',
+}
+
+const compactAddPaymentMethodCtaMainStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+  minHeight: 42,
+}
+
+const compactAddPaymentMethodTextWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  flex: 1,
+}
+
+const compactAddPaymentMethodTitleStyle: React.CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 900,
+  color: '#1D4ED8',
+  lineHeight: 1.2,
+  minWidth: 0,
+}
+
+const compactAddPaymentMethodSubtitleStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#64748B',
+  lineHeight: 1.25,
+  minWidth: 0,
+}
+
 const compactSavedCardBrandStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 800,
@@ -8230,6 +8271,18 @@ const compactPaymentMethodIconWrapStyle: React.CSSProperties = {
   marginInlineStart: 'auto',
   paddingInlineStart: 6,
   flexShrink: 0,
+}
+
+const compactAddPaymentMethodIconShellStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'rgba(219, 234, 254, 0.96)',
+  border: '1px solid rgba(96, 165, 250, 0.2)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.72)',
 }
 
 const compactPaymentMethodApplePayStyle: React.CSSProperties = {
