@@ -625,6 +625,7 @@ export default function ClientDashboard({
   const [recentBabysitterNames, setRecentBabysitterNames] = useState<string[]>([])
   const [dogNameDraft, setDogNameDraft] = useState('')
   const [dogSizeDraft, setDogSizeDraft] = useState<DogSize | null>(null)
+  const [recipientEditorOpen, setRecipientEditorOpen] = useState(false)
   const [dogNameSheetSaving, setDogNameSheetSaving] = useState(false)
   const [dogNameSheetError, setDogNameSheetError] = useState<string | null>(null)
   const [babysitterServiceDetails, setBabysitterServiceDetails] = useState('')
@@ -2066,12 +2067,14 @@ export default function ClientDashboard({
     setShowDogNameSheet(true)
     setDogNameDraft(isBabysitterRequest ? babysitterServiceDetails : '')
     setDogSizeDraft(null)
+    setRecipientEditorOpen(false)
   }, [babysitterServiceDetails, requestServiceType])
 
   const closeDogNameSheet = useCallback(() => {
     if (dogNameSheetSaving) return
     setDogNameSheetError(null)
     setShowDogNameSheet(false)
+    setRecipientEditorOpen(false)
   }, [dogNameSheetSaving])
 
   const submitDogNameSheet = useCallback(async () => {
@@ -3839,22 +3842,27 @@ export default function ClientDashboard({
     ? isRtl ? 'הוסף שם מקבל שירות' : 'Add recipient name'
     : t(serviceKeys.inputLabel)
   const bookingSubjectSheetTitle = isBabySitterMode
-    ? isRtl ? 'שם מקבל השירות' : 'Service recipient name'
-    : t(serviceKeys.sheetTitle)
+    ? isRtl ? '👶 נמענים' : '👶 Recipients'
+    : isRtl ? '🐾 הכלבים שלי' : '🐾 My Dogs'
   const bookingSubjectSheetSubtitle = isBabySitterMode
     ? isRtl
-      ? 'בחר שם אחרון או הקלד שם חדש.'
-      : 'Pick a recent name or type a new one.'
-    : t(serviceKeys.sheetSubtitle)
+      ? 'בחרו נמען קיים או הוסיפו חדש.'
+      : 'Choose a saved recipient or add a new one.'
+    : isRtl
+      ? 'בחרו כלבים שממשיכים להזמנה או הוסיפו כלב חדש.'
+      : 'Choose dogs for this booking or add a new one.'
   const bookingSubjectInputLabel = isBabySitterMode
-    ? 'ADD NEW'
-    : t('dogNameSheet.addNew')
+    ? (isRtl ? 'שם הנמען' : 'Recipient name')
+    : (isRtl ? 'שם הכלב' : 'Dog name')
   const bookingSubjectInputPlaceholder = isBabySitterMode
     ? isRtl ? 'לדוגמה: נועה, גיל 4' : 'For example: Maya, age 4'
     : t('dogNameSheet.typePlaceholder')
   const dogSizeSectionLabel = isRtl ? 'גודל הכלב' : 'Dog size'
   const existingDogsLabel = isRtl ? 'הכלבים שלי' : 'My dogs'
   const recentSubjectsLabel = isRtl ? 'אחרונים' : 'Recent'
+  const addRecipientLabel = isBabySitterMode
+    ? (isRtl ? '+ הוסף נמען' : '+ Add recipient')
+    : (isRtl ? '+ הוסף כלב' : '+ Add dog')
   const canSaveDogNameSheet = isBabySitterMode
     ? !!normalizeDogName(dogNameDraft)
     : (!!normalizeDogName(dogNameDraft) && !!dogSizeDraft) || selectedDogPetIds.length > 0
@@ -5516,8 +5524,8 @@ export default function ClientDashboard({
             </div>
 
             {!isBabySitterMode && activeDogPets.length > 0 && (
-              <div style={dogNameInputCardStyle}>
-                <div style={dogNameInputLabelStyle}>{existingDogsLabel}</div>
+              <div style={recipientSectionStyle}>
+                <div style={recipientSectionLabelStyle}>{existingDogsLabel}</div>
                 <div style={dogNameSuggestionsWrapStyle}>
                   {activeDogPets.map((pet) => {
                     const isSelected = selectedDogPetIds.includes(pet.id)
@@ -5556,26 +5564,29 @@ export default function ClientDashboard({
               </div>
             )}
 
-            {showBookingSubjectSuggestions && !!currentRecentSubjectNames.length && (
-              <div style={dogNameInputCardStyle}>
-                <div style={dogNameInputLabelStyle}>{recentSubjectsLabel}</div>
-                <div style={dogNameSuggestionsWrapStyle}>
-                  {currentRecentSubjectNames.map((name) => {
-                    const matchingPet = !isBabySitterMode ? findDogPetByName(name) : null
-                    const isSelected = !!matchingPet && selectedDogPetIds.includes(matchingPet.id)
-                    if (isBabySitterMode) {
+            {isBabySitterMode && (
+              <div style={recipientSectionStyle}>
+                <div style={recipientSectionLabelStyle}>{bookingSubjectSheetTitle}</div>
+                {currentRecentSubjectNames.length > 0 ? (
+                  <div style={dogNameSuggestionsWrapStyle}>
+                    {currentRecentSubjectNames.map((name) => {
+                      const isSelected = normalizeDogName(babysitterServiceDetails) === normalizeDogName(name)
                       return (
                         <div key={name} style={dogNameChipWrapStyle}>
                           <button
                             type="button"
                             onClick={() => {
                               setDogNameDraft(name)
+                              setRecipientEditorOpen(true)
                               setDogSizeDraft(null)
                               setDogNameSheetError(null)
                             }}
-                            style={dogNameChipStyle}
+                            style={{
+                              ...dogNameChipStyle,
+                              ...(isSelected ? dogNameChipActiveStyle : null),
+                            }}
                           >
-                            <span>🧸</span>
+                            <span>👶</span>
                             <span>{name}</span>
                           </button>
                           <button
@@ -5594,8 +5605,82 @@ export default function ClientDashboard({
                           </button>
                         </div>
                       )
-                    }
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            )}
 
+            <div style={recipientSectionStyle}>
+              {!recipientEditorOpen ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientEditorOpen(true)
+                    setDogNameSheetError(null)
+                  }}
+                  style={recipientExpandButtonStyle}
+                >
+                  {addRecipientLabel}
+                </button>
+              ) : (
+                <div style={recipientInlineEditorStyle}>
+                  <div style={recipientSectionLabelStyle}>{bookingSubjectInputLabel}</div>
+                  <input
+                    value={dogNameDraft}
+                    onChange={(e) => {
+                      setDogNameDraft(e.target.value)
+                      setDogNameSheetError(null)
+                    }}
+                    placeholder={bookingSubjectInputPlaceholder}
+                    style={dogNameSheetInputStyle}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void submitDogNameSheet()
+                      }
+                    }}
+                  />
+
+                  {!isBabySitterMode && (
+                    <div style={recipientInlineEditorStyle}>
+                      <div style={recipientSectionLabelStyle}>{dogSizeSectionLabel}</div>
+                      <div style={dogSizeSelectorStyle}>
+                        {DOG_SIZE_OPTIONS.map((size) => {
+                          const selected = dogSizeDraft === size
+                          return (
+                            <button
+                              key={size}
+                              type="button"
+                              onClick={() => {
+                                setDogSizeDraft(size)
+                                setDogNameSheetError(null)
+                              }}
+                              style={{
+                                ...dogSizeOptionStyle,
+                                ...(selected ? dogSizeOptionActiveStyle : null),
+                              }}
+                              aria-pressed={selected}
+                            >
+                              {getDogSizeLabel(size, isRtl)}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+            </div>
+
+            {!isBabySitterMode && showBookingSubjectSuggestions && !!currentRecentSubjectNames.length && (
+              <div style={recipientSectionStyle}>
+                <div style={recipientSectionLabelMutedStyle}>{recentSubjectsLabel}</div>
+                <div style={dogNameSuggestionsWrapStyle}>
+                  {currentRecentSubjectNames.map((name) => {
+                    const matchingPet = findDogPetByName(name)
+                    const isSelected = !!matchingPet && selectedDogPetIds.includes(matchingPet.id)
                     return (
                       <button
                         key={name}
@@ -5606,11 +5691,13 @@ export default function ClientDashboard({
                             return
                           }
                           setDogNameDraft(name)
+                          setRecipientEditorOpen(true)
                           setDogSizeDraft(null)
                           setDogNameSheetError(null)
                         }}
                         style={{
                           ...dogNameChipStyle,
+                          ...dogNameChipMutedStyle,
                           ...(isSelected ? dogNameChipActiveStyle : null),
                         }}
                       >
@@ -5621,53 +5708,6 @@ export default function ClientDashboard({
                       </button>
                     )
                   })}
-                </div>
-              </div>
-            )}
-
-            <div style={dogNameInputCardStyle}>
-              <div style={dogNameInputLabelStyle}>{bookingSubjectInputLabel}</div>
-              <input
-                value={dogNameDraft}
-                onChange={(e) => {
-                  setDogNameDraft(e.target.value)
-                  setDogNameSheetError(null)
-                }}
-                placeholder={bookingSubjectInputPlaceholder}
-                style={dogNameSheetInputStyle}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    void submitDogNameSheet()
-                  }
-                }}
-              />
-            </div>
-
-            {!isBabySitterMode && (
-              <div style={dogNameInputCardStyle}>
-                <div style={dogNameInputLabelStyle}>{dogSizeSectionLabel}</div>
-                <div style={dogSizeSelectorStyle}>
-                  {DOG_SIZE_OPTIONS.map((size) => {
-                  const selected = dogSizeDraft === size
-                  return (
-                    <button
-                        key={size}
-                        type="button"
-                        onClick={() => {
-                          setDogSizeDraft(size)
-                          setDogNameSheetError(null)
-                        }}
-                        style={{
-                          ...dogSizeOptionStyle,
-                          ...(selected ? dogSizeOptionActiveStyle : null),
-                        }}
-                        aria-pressed={selected}
-                      >
-                        {getDogSizeLabel(size, isRtl)}
-                      </button>
-                  )
-                })}
                 </div>
               </div>
             )}
@@ -7928,15 +7968,32 @@ const dogNameSheetTitleStyle: React.CSSProperties = {
 }
 
 const dogNameSheetSubtitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.35,
   color: '#64748B',
+}
+
+const recipientSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+}
+
+const recipientSectionLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#475569',
+}
+
+const recipientSectionLabelMutedStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 800,
+  color: '#94A3B8',
 }
 
 const dogNameSuggestionsWrapStyle: React.CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: 10,
+  gap: 8,
 }
 
 const dogNameChipWrapStyle: React.CSSProperties = {
@@ -7945,17 +8002,17 @@ const dogNameChipWrapStyle: React.CSSProperties = {
 }
 
 const dogNameChipStyle: React.CSSProperties = {
-  minHeight: 36,
+  minHeight: 32,
   borderRadius: 999,
   border: '1px solid #DBEAFE',
   background: '#EFF6FF',
   color: '#1D4ED8',
-  fontSize: 14,
+  fontSize: 12.5,
   fontWeight: 800,
-  padding: '0 28px 0 12px',
+  padding: '0 26px 0 10px',
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
   cursor: 'pointer',
 }
 
@@ -7970,8 +8027,8 @@ const dogNameChipDeleteStyle: React.CSSProperties = {
   position: 'absolute',
   top: -4,
   right: -4,
-  width: 20,
-  height: 20,
+  width: 18,
+  height: 18,
   borderRadius: 999,
   border: '1.5px solid #DBEAFE',
   background: '#FFFFFF',
@@ -7982,32 +8039,40 @@ const dogNameChipDeleteStyle: React.CSSProperties = {
   padding: 0,
 }
 
-const dogNameInputCardStyle: React.CSSProperties = {
-  borderRadius: 14,
-  border: '1px solid #E2E8F0',
-  background: '#FFFFFF',
-  padding: '8px 12px',
+const dogNameChipMutedStyle: React.CSSProperties = {
+  borderColor: 'rgba(203, 213, 225, 0.9)',
+  background: 'rgba(248,250,252,0.9)',
+  color: '#475569',
+}
+
+const recipientExpandButtonStyle: React.CSSProperties = {
+  minHeight: 34,
+  borderRadius: 999,
+  border: '1px solid rgba(203, 213, 225, 0.9)',
+  background: 'rgba(248,250,252,0.92)',
+  color: '#2563EB',
+  fontSize: 12.5,
+  fontWeight: 800,
+  textAlign: 'start',
+  padding: '0 12px',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+}
+
+const recipientInlineEditorStyle: React.CSSProperties = {
   display: 'grid',
   gap: 6,
 }
 
-const dogNameInputLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: 0.4,
-  textTransform: 'uppercase',
-  color: '#64748B',
-}
-
 const dogNameSheetInputStyle: React.CSSProperties = {
   width: '100%',
-  height: 44,
+  height: 40,
   borderRadius: 12,
   border: '1px solid #E2E8F0',
   background: '#FFFFFF',
   outline: 'none',
   padding: '0 12px',
-  fontSize: 16,
+  fontSize: 14,
   color: '#0F172A',
   boxSizing: 'border-box',
 }
@@ -8015,18 +8080,18 @@ const dogNameSheetInputStyle: React.CSSProperties = {
 const dogSizeSelectorStyle: React.CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: 8,
+  gap: 6,
 }
 
 const dogSizeOptionStyle: React.CSSProperties = {
   minWidth: 44,
-  height: 38,
-  padding: '0 14px',
+  height: 34,
+  padding: '0 12px',
   borderRadius: 999,
   border: '1px solid rgba(148, 163, 184, 0.24)',
   background: '#F8FAFC',
   color: '#334155',
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 900,
   cursor: 'pointer',
   fontFamily: 'inherit',
@@ -8044,10 +8109,10 @@ const dogNameSheetErrorStyle: React.CSSProperties = {
   borderRadius: 12,
   background: 'rgba(254, 242, 242, 0.92)',
   color: '#B91C1C',
-  fontSize: 12.5,
+  fontSize: 12,
   fontWeight: 700,
-  lineHeight: 1.45,
-  padding: '10px 12px',
+  lineHeight: 1.35,
+  padding: '8px 10px',
 }
 
 const dogNameSheetActionsStyle: React.CSSProperties = {
