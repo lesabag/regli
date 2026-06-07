@@ -112,6 +112,12 @@ Avoid:
 - Future services must stay non-selectable in launch-facing UI until explicitly enabled.
 - Client and provider service selectors must derive visible services from the same launch configuration.
 
+## State & Realtime
+
+- Merge partial realtime updates into existing state.
+- Never replace valid state with empty or null realtime payloads.
+- Prefer realtime and foreground refresh over aggressive polling.
+- Keep background polling paused when possible.
 
 ## Development Rules
 
@@ -226,6 +232,12 @@ Dog size is not entered for every booking.
 Selected dogs are the source of truth.
 
 Name text fields must not become the source of truth for dog selection.
+
+## Service Scoping
+
+- Drafts, recents, selections, and lightweight persistence must be scoped by service type.
+- Do not allow data from one service to appear inside another service flow.
+- Multi-service behavior is service-specific by default.
 
 ---
 
