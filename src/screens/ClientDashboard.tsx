@@ -3965,6 +3965,32 @@ export default function ClientDashboard({
     </div>
   ) : null
 
+  const mapCalloutItems = useMemo(() => {
+    const items: Array<{ key: 'pickup' | 'eta'; icon: string; label: string; value: string }> = []
+    const pickupValue = flow.location.trim()
+
+    if (pickupValue) {
+      items.push({
+        key: 'pickup',
+        icon: '📍',
+        label: isRtl ? 'איסוף' : 'Pickup',
+        value: pickupValue,
+      })
+    }
+
+    const etaValue = formatEta(flow.etaMinutes, flow.displayEtaSeconds, flow.isArrived)
+    if (etaValue !== '—' && !isIdleState) {
+      items.push({
+        key: 'eta',
+        icon: '⏱',
+        label: isRtl ? 'הגעה' : 'ETA',
+        value: etaValue,
+      })
+    }
+
+    return items
+  }, [flow.displayEtaSeconds, flow.etaMinutes, flow.isArrived, flow.location, isIdleState, isRtl])
+
   const repeatSelectorBlock = (
     <div style={repeatSectionStyle}>
       <div style={repeatHeaderRowStyle}>
@@ -4298,7 +4324,6 @@ export default function ClientDashboard({
   const unifiedPricingPaymentCard = (
     <div style={unifiedPricingPaymentCardInnerStyle}>
       {isFixedVisitBookingMode ? fixedVisitPricingRows : sharedPricingRows}
-      <div style={unifiedPaymentRowWrapStyle}>{compactPaymentCardContent}</div>
     </div>
   )
 
@@ -4420,6 +4445,19 @@ export default function ClientDashboard({
         ) : (
           <div style={deferredMapPlaceholderStyle} />
         )}
+        {mapCalloutItems.length > 0 ? (
+          <div style={{ ...mapCalloutsWrapStyle, flexDirection: isRtl ? 'row-reverse' : 'row' }}>
+            {mapCalloutItems.map((item) => (
+              <div key={item.key} style={mapCalloutPillStyle}>
+                <span style={mapCalloutIconStyle} aria-hidden="true">{item.icon}</span>
+                <div style={mapCalloutTextWrapStyle}>
+                  <span style={mapCalloutLabelStyle}>{item.label}</span>
+                  <span style={mapCalloutValueStyle}>{item.value}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {burgerOpen && (
@@ -5228,110 +5266,113 @@ export default function ClientDashboard({
               ...(isBabySitterMode ? stickyCtaWrapBabysitterStyle : stickyCtaWrapDogWalkerStyle),
             }}
           >
-            {shouldShowGuidanceCtaHelper && (
-              <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
-            )}
-            <div
-              style={{
-                ...stickyActionRowStyle,
-                flexDirection: isRtl ? 'row-reverse' : 'row',
-              }}
-            >
-              <div style={stickyMainActionStyle}>
-                <button
-                  type="button"
-                  onClick={handleFindWalker}
-                  disabled={!canSubmitBooking || flow.loading || (flow.cardLoading && !flow.savedCard)}
-                  style={{
-                    ...bookingPrimaryButtonStyle,
-                    ...(!canSubmitBooking ? bookingPrimaryButtonDisabledStyle : null),
-                    ...(flow.loading || (flow.cardLoading && !flow.savedCard) ? bookingPrimaryButtonLoadingStyle : null),
-                  }}
-                >
-                  {flow.loading || (flow.cardLoading && !flow.savedCard) ? (
-                    <>
-                      <span style={bookingPrimarySpinnerStyle} />
-                      {flow.loading
-                        ? flow.bookingTiming === 'scheduled'
-                          ? t('booking.scheduling')
-                          : t('booking.ordering')
-                        : t('booking.loadingPayment')}
-                    </>
-                  ) : (
-                    t('booking.orderNow')
-                  )}
-                </button>
-                <div style={stickyPaymentNoticeStyle}>
-                  <span style={paymentInfoIconStyle} aria-hidden="true">i</span>
-                  <span>{compactPaymentAuthorizationNotice}</span>
-                </div>
-                {!flow.location.trim() && !flow.locationLoading ? (
-                  <div
-                    onClick={openAddressPicker}
+            <div style={stickyActionZoneStyle}>
+              <div style={unifiedPaymentRowWrapStyle}>{compactPaymentCardContent}</div>
+              {shouldShowGuidanceCtaHelper && (
+                <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
+              )}
+              <div
+                style={{
+                  ...stickyActionRowStyle,
+                  flexDirection: isRtl ? 'row-reverse' : 'row',
+                }}
+              >
+                <div style={stickyMainActionStyle}>
+                  <button
+                    type="button"
+                    onClick={handleFindWalker}
+                    disabled={!canSubmitBooking || flow.loading || (flow.cardLoading && !flow.savedCard)}
                     style={{
-                      marginTop: 10,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '10px 12px',
-                      borderRadius: 16,
-                      background: 'rgba(255,255,255,0.96)',
-                      border: '1px solid rgba(59,130,246,0.25)',
-                      color: '#1E40AF',
-                      fontSize: 13,
-                      lineHeight: 1.45,
-                      cursor: 'pointer',
+                      ...bookingPrimaryButtonStyle,
+                      ...(!canSubmitBooking ? bookingPrimaryButtonDisabledStyle : null),
+                      ...(flow.loading || (flow.cardLoading && !flow.savedCard) ? bookingPrimaryButtonLoadingStyle : null),
                     }}
                   >
-                    <span>📍</span>
-                    <span>{t('booking.addPickupToContinue')}</span>
+                    {flow.loading || (flow.cardLoading && !flow.savedCard) ? (
+                      <>
+                        <span style={bookingPrimarySpinnerStyle} />
+                        {flow.loading
+                          ? flow.bookingTiming === 'scheduled'
+                            ? t('booking.scheduling')
+                            : t('booking.ordering')
+                          : t('booking.loadingPayment')}
+                      </>
+                    ) : (
+                      t('booking.orderNow')
+                    )}
+                  </button>
+                  <div style={stickyPaymentNoticeStyle}>
+                    <span style={paymentInfoIconStyle} aria-hidden="true">i</span>
+                    <span>{compactPaymentAuthorizationNotice}</span>
                   </div>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                data-control="calendar-button"
-                disabled={!canSubmitBooking}
-                onClick={() => {
-                  if (!canSubmitBooking) {
-                    console.log('[ClientDashboard] schedule entry CTA blocked by shared validation', {
-                      canSubmitBooking,
-                      bookingBlockedReasons,
-                      requestServiceType: effectiveRequestServiceType,
-                      currentBookingPriceILS,
-                    })
-                    return
-                  }
-                  markFirstInteractionHandler('client-dashboard:calendar-button')
-                  openScheduleSheet()
-                }}
-                style={{
-                  ...stickyCalendarButtonStyle,
-                  ...(flow.bookingTiming === 'scheduled' || hasFutureOrders || showSchedulePage ? stickyCalendarButtonActiveStyle : null),
-                  ...(!canSubmitBooking ? stickyCalendarButtonDisabledStyle : null),
-                  position: 'relative' as const,
-                }}
-                aria-label={t('booking.schedule')}
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+                  {!flow.location.trim() && !flow.locationLoading ? (
+                    <div
+                      onClick={openAddressPicker}
+                      style={{
+                        marginTop: 10,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '10px 12px',
+                        borderRadius: 16,
+                        background: 'rgba(255,255,255,0.96)',
+                        border: '1px solid rgba(59,130,246,0.25)',
+                        color: '#1E40AF',
+                        fontSize: 13,
+                        lineHeight: 1.45,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span>📍</span>
+                      <span>{t('booking.addPickupToContinue')}</span>
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  data-control="calendar-button"
+                  disabled={!canSubmitBooking}
+                  onClick={() => {
+                    if (!canSubmitBooking) {
+                      console.log('[ClientDashboard] schedule entry CTA blocked by shared validation', {
+                        canSubmitBooking,
+                        bookingBlockedReasons,
+                        requestServiceType: effectiveRequestServiceType,
+                        currentBookingPriceILS,
+                      })
+                      return
+                    }
+                    markFirstInteractionHandler('client-dashboard:calendar-button')
+                    openScheduleSheet()
+                  }}
+                  style={{
+                    ...stickyCalendarButtonStyle,
+                    ...(flow.bookingTiming === 'scheduled' || hasFutureOrders || showSchedulePage ? stickyCalendarButtonActiveStyle : null),
+                    ...(!canSubmitBooking ? stickyCalendarButtonDisabledStyle : null),
+                    position: 'relative' as const,
+                  }}
+                  aria-label={t('booking.schedule')}
                 >
-                  <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
-                  <line x1="8" y1="3.75" x2="8" y2="7.25" />
-                  <line x1="16" y1="3.75" x2="16" y2="7.25" />
-                  <line x1="3.5" y1="9" x2="20.5" y2="9" />
-                </svg>
-                {hasFutureOrders && (
-                  <span style={stickyCalendarDotStyle} aria-hidden="true" />
-                )}
-              </button>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
+                    <line x1="8" y1="3.75" x2="8" y2="7.25" />
+                    <line x1="16" y1="3.75" x2="16" y2="7.25" />
+                    <line x1="3.5" y1="9" x2="20.5" y2="9" />
+                  </svg>
+                  {hasFutureOrders && (
+                    <span style={stickyCalendarDotStyle} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -8585,9 +8626,9 @@ const fixedVisitGuidanceTextStyle: React.CSSProperties = {
 }
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
-  borderTop: '1px solid rgba(226, 232, 240, 0.58)',
-  paddingTop: 6,
-  marginTop: 6,
+  borderTop: '1px solid rgba(191, 219, 254, 0.52)',
+  paddingTop: 8,
+  marginTop: 0,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
@@ -8613,8 +8654,20 @@ const stickyCtaWrapStyle: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(24px)',
 }
 
+const stickyActionZoneStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginInlineStart: 'calc(-16px - env(safe-area-inset-left, 0px))',
+  marginInlineEnd: 'calc(-16px - env(safe-area-inset-right, 0px))',
+  padding: '10px calc(26px + env(safe-area-inset-right, 0px)) 8px calc(26px + env(safe-area-inset-left, 0px))',
+  borderRadius: 24,
+  background: 'linear-gradient(180deg, rgba(239,246,255,0.98) 0%, rgba(248,250,252,0.94) 100%)',
+  border: '1px solid rgba(147, 197, 253, 0.26)',
+  boxShadow: '0 12px 26px rgba(37, 99, 235, 0.08), inset 0 1px 0 rgba(255,255,255,0.72)',
+}
+
 const guidedCtaHelperStyle: React.CSSProperties = {
-  marginBottom: 5,
+  marginBottom: 0,
   fontSize: 12,
   fontWeight: 700,
   lineHeight: 1.35,
@@ -8628,14 +8681,14 @@ const stickyMainActionStyle: React.CSSProperties = {
 }
 
 const stickyPaymentNoticeStyle: React.CSSProperties = {
-  marginTop: 8,
+  marginTop: 7,
   width: '100%',
   boxSizing: 'border-box',
-  padding: '4px 6px',
-  borderRadius: 12,
-  background: 'rgba(239, 246, 255, 0.92)',
-  border: '1px solid rgba(96, 165, 250, 0.22)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
+  padding: '2px 2px 0',
+  borderRadius: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -8671,6 +8724,72 @@ const stickyActionRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 10,
+}
+
+const mapCalloutsWrapStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 14,
+  right: 14,
+  top: 'calc(72px + env(safe-area-inset-top, 0px))',
+  zIndex: 2,
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  pointerEvents: 'none',
+  alignItems: 'flex-start',
+}
+
+const mapCalloutPillStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+  maxWidth: 'min(100%, 240px)',
+  padding: '8px 10px',
+  borderRadius: 16,
+  background: 'rgba(255,255,255,0.94)',
+  border: '1px solid rgba(226, 232, 240, 0.86)',
+  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.10)',
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
+}
+
+const mapCalloutIconStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 22,
+  height: 22,
+  minWidth: 22,
+  borderRadius: 999,
+  background: 'rgba(219, 234, 254, 0.92)',
+  fontSize: 11,
+  lineHeight: 1,
+}
+
+const mapCalloutTextWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 1,
+  minWidth: 0,
+}
+
+const mapCalloutLabelStyle: React.CSSProperties = {
+  fontSize: 9.5,
+  fontWeight: 800,
+  lineHeight: 1.1,
+  color: '#2563EB',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+}
+
+const mapCalloutValueStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 800,
+  lineHeight: 1.2,
+  color: '#0F172A',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const stickyCalendarButtonStyle: React.CSSProperties = {
