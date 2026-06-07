@@ -8360,12 +8360,15 @@ const unifiedBudgetSliderStyle: React.CSSProperties = {
   accentColor: '#2563EB',
   minWidth: 0,
   maxWidth: '100%',
-  height: 34,
-  padding: '7px 0',
+  height: 42,
+  minHeight: 42,
+  padding: '11px 0',
   cursor: 'pointer',
   touchAction: 'pan-x',
   WebkitTapHighlightColor: 'transparent',
   boxSizing: 'border-box',
+  position: 'relative',
+  zIndex: 2,
 }
 
 const unifiedBudgetScaleRowStyle: React.CSSProperties = {
@@ -8375,6 +8378,8 @@ const unifiedBudgetScaleRowStyle: React.CSSProperties = {
   gap: 8,
   marginTop: 0,
   paddingInline: 12,
+  pointerEvents: 'none',
+  userSelect: 'none',
 }
 
 const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
@@ -8455,6 +8460,9 @@ const dogWalkerSliderInlineStyle: React.CSSProperties = {
   display: 'grid',
   gap: 0,
   minWidth: 0,
+  position: 'relative',
+  zIndex: 1,
+  paddingBlock: 2,
 }
 
 const dogWalkerSliderOnlyRowStyle: React.CSSProperties = {
@@ -8481,6 +8489,7 @@ const budgetGuidanceInlineRowStyle: React.CSSProperties = {
   gap: 8,
   minWidth: 0,
   paddingTop: 0,
+  pointerEvents: 'none',
 }
 
 const budgetGuidanceInlineTextStyle: React.CSSProperties = {

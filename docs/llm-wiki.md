@@ -99,6 +99,11 @@ Avoid:
 * Excessive vertical spacing
 
 ---
+## Mobile UX
+
+- Compact mobile sliders should keep a generous touch target.
+- Nearby summary labels must not intercept slider pointer events.
+- Prefer touch reliability over visual compactness.
 
 ## Launch Service Visibility
 
@@ -238,6 +243,14 @@ Avoid introducing new UI patterns when existing Regli patterns already solve the
 
 ---
 
+## Test Safety
+
+- Smoke tests that can create live dispatch, payment, or notification side effects must require an explicit opt-in environment guard.
+- Side-effecting integration tests must refuse to run against production-like service URLs and should default to safe skip behavior.
+- Tests that create marketplace rows in shared infrastructure must clean up related records in `finally`, using a run-scoped identifier.
+
+---
+
 ## QA Expectations
 
 Required before completion:
@@ -253,4 +266,3 @@ Return:
 FULL updated files only.
 
 No partial snippets.
-
