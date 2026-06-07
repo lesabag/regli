@@ -4,6 +4,8 @@ import {
   type NativePaymentSheetCapability,
 } from '../lib/nativeStripe'
 
+const APPLE_PAY_CAPABILITY_CACHE_MS = 5 * 60 * 1000
+
 const FALLBACK_CAPABILITY: NativePaymentSheetCapability = {
   supported: false,
   initialized: false,
@@ -17,6 +19,10 @@ const FALLBACK_CAPABILITY: NativePaymentSheetCapability = {
   blockerReason: null,
 }
 
+let cachedCapability: NativePaymentSheetCapability | null = null
+let cachedCapabilityAt = 0
+let capabilityRequestInFlight: Promise<NativePaymentSheetCapability> | null = null
+
 export default function useNativePaymentSheet(): NativePaymentSheetCapability {
   const [capability, setCapability] = useState<NativePaymentSheetCapability>(FALLBACK_CAPABILITY)
 
@@ -24,8 +30,29 @@ export default function useNativePaymentSheet(): NativePaymentSheetCapability {
     let cancelled = false
     let retryTimeoutId: ReturnType<typeof setTimeout> | null = null
 
-    const refreshCapability = () => {
-      void getNativePaymentSheetCapability()
+    const refreshCapability = (reason: string, force = false) => {
+      const now = Date.now()
+      if (!force && cachedCapability && now - cachedCapabilityAt < APPLE_PAY_CAPABILITY_CACHE_MS) {
+        console.log('[ApplePay] availability reused from cache', { reason })
+        if (!cancelled) {
+          setCapability(cachedCapability)
+        }
+        return
+      }
+
+      if (!capabilityRequestInFlight) {
+        capabilityRequestInFlight = getNativePaymentSheetCapability()
+          .then((next) => {
+            cachedCapability = next
+            cachedCapabilityAt = Date.now()
+            return next
+          })
+          .finally(() => {
+            capabilityRequestInFlight = null
+          })
+      }
+
+      void capabilityRequestInFlight
         .then((next) => {
           if (!cancelled) {
             setCapability(next)
@@ -38,28 +65,25 @@ export default function useNativePaymentSheet(): NativePaymentSheetCapability {
         })
     }
 
-    refreshCapability()
+    refreshCapability('initial')
     retryTimeoutId = setTimeout(() => {
-      refreshCapability()
+      refreshCapability('initial_retry', true)
     }, 1500)
 
-    const handleVisibilityOrFocus = () => {
-      refreshCapability()
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      refreshCapability('document_visible')
     }
 
     if (typeof window !== 'undefined') {
-      window.addEventListener('focus', handleVisibilityOrFocus)
-      window.addEventListener('pageshow', handleVisibilityOrFocus)
-      document.addEventListener('visibilitychange', handleVisibilityOrFocus)
+      document.addEventListener('visibilitychange', handleVisibility)
     }
 
     return () => {
       cancelled = true
       if (retryTimeoutId) clearTimeout(retryTimeoutId)
       if (typeof window !== 'undefined') {
-        window.removeEventListener('focus', handleVisibilityOrFocus)
-        window.removeEventListener('pageshow', handleVisibilityOrFocus)
-        document.removeEventListener('visibilitychange', handleVisibilityOrFocus)
+        document.removeEventListener('visibilitychange', handleVisibility)
       }
     }
   }, [])

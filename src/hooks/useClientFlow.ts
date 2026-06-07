@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
+import { App as CapacitorApp } from '@capacitor/app'
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { distanceKm, evaluateDogSizeCompatibility, rankWalkerCandidates } from '../lib/dispatchRanking'
 import { startDispatch } from '../lib/startDispatch'
@@ -38,19 +39,6 @@ import {
   toApplePayPaymentMethod,
   toSavedCardPaymentMethod,
 } from '../lib/paymentMethods'
-
-interface CapacitorAppState {
-  isActive: boolean
-}
-
-interface CapacitorAppPlugin {
-  addListener(
-    eventName: 'appStateChange',
-    listenerFunc: (state: CapacitorAppState) => void,
-  ): Promise<PluginListenerHandle>
-}
-
-const NativeApp = registerPlugin<CapacitorAppPlugin>('App')
 
 type ScreenState = 'idle' | 'searching' | 'accepted' | 'tracking' | 'active'
 type GpsQuality = 'live' | 'delayed' | 'offline' | 'last_known'
@@ -280,8 +268,9 @@ const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const CANCEL_SUPPRESS_MS = 2 * 60 * 1000
 const LOCATION_REFRESH_METERS = 50
 const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
-const IDLE_HYDRATION_POLL_MS = 45_000
+const IDLE_HYDRATION_POLL_MS = 60_000
 const ACTIVE_HYDRATION_POLL_MS = 10_000
+const FOREGROUND_HYDRATION_DEDUPE_MS = 2_500
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
 
@@ -857,12 +846,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const sentPushEventAtRef = useRef<Map<string, number>>(new Map())
   const currentJobRef = useRef<WalkRequestRow | null>(null)
   const screenStateRef = useRef<ScreenState>('idle')
+  const nativeAppActiveRef = useRef(true)
+  const lastIdleHydrationAtRef = useRef(0)
+  const lastForegroundHydrationAtRef = useRef(0)
   const previousScreenStateRef = useRef<ScreenState>('idle')
   const previousScreenPhaseRef = useRef<ServicePhase>('idle')
   const optimisticSearchingJobIdRef = useRef<string | null>(null)
   const walkerNameByIdRef = useRef<Map<string, string>>(new Map())
   const ratedJobIdsRef = useRef<Set<string>>(new Set())
   const fetchCurrentAndListsRef = useRef<(reason?: string) => Promise<void>>(async () => {})
+  const fetchCurrentJobStateRef = useRef<(reason?: string) => Promise<void>>(async () => {})
   const hydrateSearchAttemptFromDispatchRef = useRef<(requestId: string, reason: string) => Promise<void>>(async () => {})
   const loadWalkerNameRef = useRef<(walkerId: string) => Promise<void>>(async () => {})
   const clearActiveStateRef = useRef<() => void>(() => {})
@@ -2459,6 +2452,79 @@ function mergeClientDogSizeAttributes(
     hiddenHistoryIds,
   ])
 
+  const requestHydrationRefresh = useCallback((reason: string) => {
+    const documentVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
+    if (!documentVisible || !nativeAppActiveRef.current) {
+      return
+    }
+
+    const currentScreenState = screenStateRef.current
+    const isTrueIdle =
+      currentScreenState === 'idle' &&
+      !currentJobIdRef.current &&
+      !currentJobRef.current &&
+      !optimisticSearchingJobIdRef.current
+    const isForegroundReason =
+      reason === 'document_visible' ||
+      reason === 'window_focus_pageshow' ||
+      reason === 'native_foreground_resume'
+    const now = Date.now()
+
+    if (isForegroundReason) {
+      if (now - lastForegroundHydrationAtRef.current < FOREGROUND_HYDRATION_DEDUPE_MS) {
+        logRecovery('[ForegroundResume]', 'client foreground refresh deduped', {
+          profileId,
+          reason,
+          screenState: currentScreenState,
+        })
+        return
+      }
+      lastForegroundHydrationAtRef.current = now
+      logRecovery('[ForegroundResume]', 'client foreground refresh run', {
+        profileId,
+        reason,
+        screenState: currentScreenState,
+        currentJobId: currentJobIdRef.current,
+      })
+    }
+
+    if (currentScreenState === 'idle') {
+      if (fullRefreshInFlightRef.current || currentOnlyRefreshInFlightRef.current) {
+        logRecovery('[Hydration]', 'client idle hydration skipped because another hydration is in flight', {
+          profileId,
+          reason,
+        })
+        return
+      }
+
+      if (isTrueIdle && reason === 'poll_idle' && now - lastIdleHydrationAtRef.current < IDLE_HYDRATION_POLL_MS) {
+        logRecovery('[Hydration]', 'client idle hydration skipped/throttled', {
+          profileId,
+          reason,
+          sinceLastMs: now - lastIdleHydrationAtRef.current,
+        })
+        return
+      }
+
+      if (isTrueIdle) {
+        lastIdleHydrationAtRef.current = now
+      }
+
+      void fetchCurrentAndListsRef.current(reason)
+      return
+    }
+
+    if (fullRefreshInFlightRef.current || currentOnlyRefreshInFlightRef.current) {
+      logRecovery('[Hydration]', 'client active hydration skipped because another hydration is in flight', {
+        profileId,
+        reason,
+      })
+      return
+    }
+
+    void fetchCurrentJobStateRef.current(reason)
+  }, [profileId])
+
   useEffect(() => {
     currentJobIdRef.current = currentJobId
     currentJobRef.current = currentJob
@@ -2466,6 +2532,7 @@ function mergeClientDogSizeAttributes(
     walkerNameByIdRef.current = walkerNameById
     ratedJobIdsRef.current = ratedJobIds
     fetchCurrentAndListsRef.current = fetchCurrentAndLists
+    fetchCurrentJobStateRef.current = fetchCurrentJobState
     hydrateSearchAttemptFromDispatchRef.current = hydrateSearchAttemptFromDispatch
     loadWalkerNameRef.current = loadWalkerName
     clearActiveStateRef.current = clearActiveState
@@ -2508,38 +2575,19 @@ function mergeClientDogSizeAttributes(
   }, [profileId])
 
   useEffect(() => {
-    const refresh = (reason: string) => {
-      if (document.visibilityState === 'hidden') return
-      if (screenState === 'idle') {
-        void fetchCurrentAndLists(reason)
-        return
-      }
-      void fetchCurrentJobState(reason)
-    }
-
     const pollId = window.setInterval(
-      () => refresh(screenState === 'idle' ? 'poll_idle' : 'poll_active'),
+      () => requestHydrationRefresh(screenStateRef.current === 'idle' ? 'poll_idle' : 'poll_active'),
       screenState === 'idle' ? IDLE_HYDRATION_POLL_MS : ACTIVE_HYDRATION_POLL_MS,
     )
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') {
-        logRecovery('[ForegroundResume]', 'client document became visible', {
-          profileId,
-          screenState,
-          currentJobId,
-        })
-        refresh('document_visible')
+        requestHydrationRefresh('document_visible')
       }
     }
 
     const refreshOnFocus = () => {
-      logRecovery('[ForegroundResume]', 'client window focus/pageshow refresh', {
-        profileId,
-        screenState,
-        currentJobId,
-      })
-      refresh('window_focus_pageshow')
+      requestHydrationRefresh('window_focus_pageshow')
     }
 
     window.addEventListener('focus', refreshOnFocus)
@@ -2552,7 +2600,7 @@ function mergeClientDogSizeAttributes(
       window.removeEventListener('pageshow', refreshOnFocus)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
-  }, [currentJobId, fetchCurrentAndLists, fetchCurrentJobState, profileId, screenState])
+  }, [requestHydrationRefresh, screenState])
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
@@ -2560,20 +2608,18 @@ function mergeClientDogSizeAttributes(
     let cancelled = false
     let handle: PluginListenerHandle | null = null
 
-    NativeApp.addListener('appStateChange', (state) => {
-      logRecovery('[ForegroundResume]', 'client native app state changed', {
-        profileId,
-        isActive: state.isActive,
-        screenState,
-        currentJobId,
-      })
-      if (!state.isActive) return
-
-      if (screenState === 'idle') {
-        void fetchCurrentAndLists('native_foreground_resume')
+    CapacitorApp.addListener('appStateChange', (state) => {
+      nativeAppActiveRef.current = state.isActive
+      if (!state.isActive) {
+        logRecovery('[ForegroundResume]', 'client background polling paused', {
+          profileId,
+          reason: 'native_background',
+          screenState: screenStateRef.current,
+        })
         return
       }
-      void fetchCurrentJobState('native_foreground_resume')
+
+      requestHydrationRefresh('native_foreground_resume')
     })
       .then((listener) => {
         if (cancelled) {
@@ -2590,7 +2636,7 @@ function mergeClientDogSizeAttributes(
       cancelled = true
       if (handle) void handle.remove()
     }
-  }, [currentJobId, fetchCurrentAndLists, fetchCurrentJobState, profileId, screenState])
+  }, [profileId, requestHydrationRefresh])
 
   useEffect(() => {
     let isCleaningUp = false
