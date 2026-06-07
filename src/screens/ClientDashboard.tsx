@@ -3967,16 +3967,6 @@ export default function ClientDashboard({
 
   const mapCalloutItems = useMemo(() => {
     const items: Array<{ key: 'pickup' | 'eta'; icon: string; label: string; value: string }> = []
-    const pickupValue = flow.location.trim()
-
-    if (pickupValue) {
-      items.push({
-        key: 'pickup',
-        icon: '📍',
-        label: isRtl ? 'איסוף' : 'Pickup',
-        value: pickupValue,
-      })
-    }
 
     const etaValue = formatEta(flow.etaMinutes, flow.displayEtaSeconds, flow.isArrived)
     if (etaValue !== '—' && !isIdleState) {
@@ -3989,7 +3979,7 @@ export default function ClientDashboard({
     }
 
     return items
-  }, [flow.displayEtaSeconds, flow.etaMinutes, flow.isArrived, flow.location, isIdleState, isRtl])
+  }, [flow.displayEtaSeconds, flow.etaMinutes, flow.isArrived, isIdleState, isRtl])
 
   const repeatSelectorBlock = (
     <div style={repeatSectionStyle}>
