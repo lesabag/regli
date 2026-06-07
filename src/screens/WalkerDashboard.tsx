@@ -639,6 +639,7 @@ export default function WalkerDashboard({
   const [stripeReturnNotice, setStripeReturnNotice] = useState<string | null>(null)
   const [dashboardCardNotice, setDashboardCardNotice] = useState<string | null>(null)
   const [activeOptionalHomeCard, setActiveOptionalHomeCard] = useState<ProviderDashboardCardKey | null>(null)
+  const [activeAvailabilityService, setActiveAvailabilityService] = useState<ProfileServiceType | null>(null)
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
   const [payoutCtaNudgeActive, setPayoutCtaNudgeActive] = useState(false)
@@ -1630,53 +1631,71 @@ export default function WalkerDashboard({
       }),
     [availabilityRows, isHebrew, profileServiceTypes, todayDayOfWeek, unavailableTodayLabel],
   )
-  const weeklyOverviewServiceType = profileServiceTypes[0] ?? null
-  const primaryTodayAvailability = todayAvailabilityRows[0] ?? null
-  const weeklyAvailabilityHealth = useMemo(() => {
-    if (!weeklyOverviewServiceType) return null
-    const rows = availabilityRows[weeklyOverviewServiceType]
+  const weeklyAvailabilityByService = useMemo(() => {
     const nowMinutes = businessNowParts?.minutesOfDay ?? null
-    const days = rows.map((row) => {
-      const startMinutes = parseAvailabilityInputMinutes(row.startTime)
-      const endMinutes = parseAvailabilityInputMinutes(row.endTime)
+    return profileServiceTypes.reduce((acc, serviceType) => {
+      const rows = availabilityRows[serviceType]
+      const days = AVAILABILITY_DAY_ORDER.map((dayOfWeek) => {
+        const row = rows.find((entry) => entry.dayOfWeek === dayOfWeek) ?? null
+        const startMinutes = parseAvailabilityInputMinutes(row?.startTime ?? '')
+        const endMinutes = parseAvailabilityInputMinutes(row?.endTime ?? '')
 
-      let status: 'available' | 'upcoming' | 'off' = 'off'
+        let status: 'available' | 'upcoming' | 'off' = 'off'
 
-      if (row.dayOfWeek < todayDayOfWeek) {
-        status = 'off'
-      } else if (row.dayOfWeek === todayDayOfWeek) {
-        if (!row.isActive || startMinutes == null || endMinutes == null || endMinutes <= startMinutes || nowMinutes == null) {
+        if (dayOfWeek < todayDayOfWeek) {
           status = 'off'
-        } else if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
+        } else if (dayOfWeek === todayDayOfWeek) {
+          if (!row?.isActive || startMinutes == null || endMinutes == null || endMinutes <= startMinutes || nowMinutes == null) {
+            status = 'off'
+          } else if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
+            status = 'available'
+          } else if (nowMinutes < startMinutes) {
+            status = 'upcoming'
+          } else {
+            status = 'off'
+          }
+        } else if (row?.isActive) {
           status = 'available'
-        } else if (nowMinutes < startMinutes) {
-          status = 'upcoming'
-        } else {
-          status = 'off'
         }
-      } else if (row.isActive) {
-        status = 'available'
+
+        return {
+          dayOfWeek,
+          dayLabel: availabilityDayLabels[dayOfWeek],
+          isToday: dayOfWeek === todayDayOfWeek,
+          status,
+        }
+      })
+
+      acc[serviceType] = {
+        availableDaysCount: days.reduce((count, day) => (
+          day.status === 'available' || day.status === 'upcoming'
+            ? count + 1
+            : count
+        ), 0),
+        days,
       }
-
-      return {
-        dayOfWeek: row.dayOfWeek,
-        dayLabel: availabilityDayLabels[row.dayOfWeek],
-        isToday: row.dayOfWeek === todayDayOfWeek,
-        status,
-      }
-    })
-
-    const availableDaysCount = days.reduce((count, day) => (
-      day.status === 'available' || day.status === 'upcoming'
-        ? count + 1
-        : count
-    ), 0)
-
-    return {
-      availableDaysCount,
-      days,
+      return acc
+    }, {} as Record<ProfileServiceType, { availableDaysCount: number; days: Array<{ dayOfWeek: number; dayLabel: string; isToday: boolean; status: 'available' | 'upcoming' | 'off' }> }>)
+  }, [availabilityDayLabels, availabilityRows, businessNowParts, profileServiceTypes, todayDayOfWeek])
+  const defaultAvailabilityService = useMemo(() => (
+    todayAvailabilityRows.find((item) => item.isAvailable)?.serviceType
+    ?? profileServiceTypes[0]
+    ?? null
+  ), [profileServiceTypes, todayAvailabilityRows])
+  const selectedAvailabilityService = useMemo(() => {
+    if (!profileServiceTypes.length) return null
+    if (activeAvailabilityService && profileServiceTypes.includes(activeAvailabilityService)) {
+      return activeAvailabilityService
     }
-  }, [availabilityDayLabels, availabilityRows, businessNowParts, todayDayOfWeek, weeklyOverviewServiceType])
+    return defaultAvailabilityService
+  }, [activeAvailabilityService, defaultAvailabilityService, profileServiceTypes])
+  const selectedTodayAvailability = useMemo(
+    () => todayAvailabilityRows.find((item) => item.serviceType === selectedAvailabilityService) ?? null,
+    [selectedAvailabilityService, todayAvailabilityRows],
+  )
+  const selectedWeeklyAvailabilityHealth = selectedAvailabilityService
+    ? weeklyAvailabilityByService[selectedAvailabilityService] ?? null
+    : null
   const walletPayoutReady =
     !!flow.connectStatus?.connected &&
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
@@ -2415,7 +2434,7 @@ export default function WalkerDashboard({
   }, [flow.stripeReadyForOnline, flow.toggleOnline, handleStripeSetup, hasSelectedProfileService, isCheckingPayout, serviceSelectionRequiredLabel])
 
   const renderTodayAvailabilityCard = useCallback(() => {
-    if (!primaryTodayAvailability || !weeklyAvailabilityHealth) return null
+    if (!selectedTodayAvailability || !selectedWeeklyAvailabilityHealth) return null
 
     return (
       <div style={todayAvailabilityCardStyle}>
@@ -2426,16 +2445,44 @@ export default function WalkerDashboard({
             <span style={todayAvailabilityManageChevronStyle}>›</span>
           </button>
         </div>
-        <div style={todayAvailabilityPrimaryWrapStyle}>
-          {primaryTodayAvailability.isAvailable ? (
-            <span style={todayAvailabilityPrimaryTimeStyle}>{primaryTodayAvailability.summary}</span>
-          ) : (
-            <span style={todayAvailabilityPrimaryUnavailableStyle}>{primaryTodayAvailability.summary}</span>
-          )}
-        </div>
+        {profileServiceTypes.length > 1 ? (
+          <div style={capSelectorRowStyle}>
+            {todayAvailabilityRows.map((item) => (
+              <button
+                key={item.serviceType}
+                type="button"
+                onClick={() => setActiveAvailabilityService(item.serviceType)}
+                style={{
+                  ...capSelectorPillStyle,
+                  ...(selectedAvailabilityService === item.serviceType ? capSelectorPillActiveStyle : null),
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {profileServiceTypes.length === 1 ? (
+          <div style={todayAvailabilityPrimaryWrapStyle}>
+            {selectedTodayAvailability.isAvailable ? (
+              <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
+            ) : (
+              <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
+            )}
+          </div>
+        ) : (
+          <div style={todayAvailabilitySelectedServiceCardStyle}>
+            <div style={todayAvailabilitySelectedServiceLabelStyle}>{selectedTodayAvailability.label}</div>
+            {selectedTodayAvailability.isAvailable ? (
+              <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
+            ) : (
+              <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
+            )}
+          </div>
+        )}
 
         <div style={weeklyAvailabilityGridStyle}>
-          {weeklyAvailabilityHealth.days.map((day) => (
+          {selectedWeeklyAvailabilityHealth.days.map((day) => (
             <div
               key={`weekly-health-${day.dayOfWeek}`}
               style={{
@@ -2466,16 +2513,19 @@ export default function WalkerDashboard({
         </div>
 
         <div style={weeklyAvailabilitySummaryStyle}>
-          {weeklyAvailabilitySummaryLabel(weeklyAvailabilityHealth.availableDaysCount)}
+          {weeklyAvailabilitySummaryLabel(selectedWeeklyAvailabilityHealth.availableDaysCount)}
         </div>
       </div>
     )
   }, [
     handleManageAvailability,
-    primaryTodayAvailability,
+    profileServiceTypes.length,
+    selectedAvailabilityService,
+    selectedTodayAvailability,
+    selectedWeeklyAvailabilityHealth,
+    todayAvailabilityRows,
     todayAvailabilityManageLabel,
     todayAvailabilityTitle,
-    weeklyAvailabilityHealth,
     weeklyAvailabilitySummaryLabel,
   ])
 
@@ -2913,6 +2963,17 @@ export default function WalkerDashboard({
       return nextDefault
     })
   }, [visibleOptionalHomeCards])
+
+  useEffect(() => {
+    if (!profileServiceTypes.length) {
+      setActiveAvailabilityService(null)
+      return
+    }
+    setActiveAvailabilityService((current) => {
+      if (current && profileServiceTypes.includes(current)) return current
+      return defaultAvailabilityService
+    })
+  }, [defaultAvailabilityService, profileServiceTypes])
 
   const renderHomeDashboard = useCallback((connected: boolean) => (
     <div className="sheet-state-enter" style={homeDashboardShellStyle}>
@@ -3808,20 +3869,6 @@ export default function WalkerDashboard({
                                 </div>
                               </div>
 
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות / ביוגרפיה' : 'Bio / notes'}</div>
-                                <textarea
-                                  value={providerBio}
-                                  onChange={(event) => {
-                                    setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
-                                    setCapSavedAt(0)
-                                    setCapError(null)
-                                  }}
-                                  placeholder={isHebrew ? 'ספרו בקצרה על הניסיון והסגנון שלכם' : 'Share a quick note about your experience and style'}
-                                  rows={3}
-                                  style={capTextareaStyle}
-                                />
-                              </div>
                             </div>
                           </div>
                         )}
@@ -3870,16 +3917,6 @@ export default function WalkerDashboard({
                                 </div>
                               </div>
 
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות' : 'Notes'}</div>
-                                <textarea
-                                  value={provDogNotes}
-                                  onChange={(e) => setProvDogNotes(e.target.value)}
-                                  placeholder={isHebrew ? 'לדוגמה: נוח עם כלבים גדולים' : 'e.g. Comfortable with large dogs'}
-                                  rows={2}
-                                  style={capTextareaStyle}
-                                />
-                              </div>
                             </div>
                           </div>
                         )}
@@ -3929,16 +3966,6 @@ export default function WalkerDashboard({
                                 </div>
                               </div>
 
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'הערות' : 'Notes'}</div>
-                                <textarea
-                                  value={provSitterNotes}
-                                  onChange={(e) => setProvSitterNotes(e.target.value)}
-                                  placeholder={isHebrew ? 'לדוגמה: מנוסה עם תינוקות' : 'e.g. Experienced with infants'}
-                                  rows={2}
-                                  style={capTextareaStyle}
-                                />
-                              </div>
                             </div>
                           </div>
                         )}
@@ -6764,6 +6791,17 @@ const todayAvailabilityPrimaryUnavailableStyle: React.CSSProperties = {
   color: '#94A3B8',
 }
 
+const todayAvailabilitySelectedServiceCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
+const todayAvailabilitySelectedServiceLabelStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: '#64748B',
+}
+
 const todayAvailabilityRowStyle: React.CSSProperties = {
   minHeight: 40,
   display: 'flex',
@@ -7859,21 +7897,6 @@ const capChipSelectedStyle: React.CSSProperties = {
   background: '#F0F4FF',
   boxShadow: '0 6px 16px rgba(91, 124, 250, 0.12)',
   color: '#3152C8',
-}
-
-const capTextareaStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 56,
-  borderRadius: 14,
-  border: '1px solid rgba(145, 164, 196, 0.24)',
-  background: '#FFFFFF',
-  padding: '10px 14px',
-  fontSize: 14,
-  color: '#0F172A',
-  boxSizing: 'border-box',
-  outline: 'none',
-  resize: 'vertical',
-  fontFamily: 'inherit',
 }
 
 const capSaveButtonStyle: React.CSSProperties = {
