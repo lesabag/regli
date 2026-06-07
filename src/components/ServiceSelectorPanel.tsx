@@ -43,7 +43,6 @@ export default function ServiceSelectorPanel({
 
   return (
     <div style={wrapStyle}>
-      <div style={titleStyle}>{t('booking.chooseService')}</div>
       <div className="service-panel-scroll" style={rowStyle}>
         {visiblePrimaryServices.map((svc) => {
           const isActive = selected === svc
@@ -88,21 +87,14 @@ export default function ServiceSelectorPanel({
 const wrapStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-}
-
-const titleStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: '#64748B',
-  letterSpacing: 0.1,
+  gap: 0,
 }
 
 const rowStyle: CSSProperties = {
   display: 'flex',
-  gap: 8,
+  gap: 6,
   width: '100%',
-  padding: '1px 1px 2px',
+  padding: '0 1px 1px',
 }
 
 const itemStyle: CSSProperties = {
@@ -114,9 +106,9 @@ const itemStyle: CSSProperties = {
   flexDirection: 'row',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 6,
-  height: 38,
-  padding: '0 12px',
+  gap: 5,
+  height: 32,
+  padding: '0 10px',
   cursor: 'pointer',
   fontFamily: 'inherit',
   WebkitTapHighlightColor: 'transparent',
@@ -124,7 +116,7 @@ const itemStyle: CSSProperties = {
   minWidth: 0,
   flex: '1 1 0',
   borderRadius: 999,
-  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255,255,255,0.82)',
+  boxShadow: '0 4px 10px rgba(15, 23, 42, 0.035), inset 0 1px 0 rgba(255,255,255,0.82)',
 }
 
 const itemActiveStyle: CSSProperties = {
@@ -134,8 +126,8 @@ const itemActiveStyle: CSSProperties = {
 }
 
 const iconWrapStyle: CSSProperties = {
-  width: 20,
-  height: 20,
+  width: 18,
+  height: 18,
   borderRadius: 999,
   background: 'transparent',
   display: 'grid',
@@ -151,7 +143,7 @@ const iconWrapActiveStyle: CSSProperties = {
 }
 
 const iconStyle: CSSProperties = {
-  fontSize: 14,
+  fontSize: 12,
   lineHeight: 1,
   display: 'inline-flex',
   alignItems: 'center',
@@ -159,7 +151,7 @@ const iconStyle: CSSProperties = {
 }
 
 const labelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11.5,
   fontWeight: 700,
   color: '#64748B',
   lineHeight: 1.2,
@@ -171,7 +163,7 @@ const labelStyle: CSSProperties = {
 }
 
 const labelActiveStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11.5,
   fontWeight: 800,
   color: '#F8FAFC',
   lineHeight: 1.2,
@@ -183,7 +175,7 @@ const labelActiveStyle: CSSProperties = {
 }
 
 const chevronStyle: CSSProperties = {
-  fontSize: 10,
+  fontSize: 9,
   lineHeight: 1,
   color: '#64748B',
   flexShrink: 0,

@@ -3952,66 +3952,6 @@ export default function ClientDashboard({
     </div>
   ) : null
 
-  const dogCountSelectorBlock = shouldShowDogCountControl ? (
-    <div style={dogCountInlineRowStyle}>
-      <div style={dogSummaryInlineGroupStyle}>
-        <span style={dogSummaryInlineLabelStyle}>{isRtl ? 'שם' : 'Name'}</span>
-        <button
-          type="button"
-          onClick={() => {
-            if (Date.now() < suppressDogNameOpenUntilRef.current) return
-            openDogNameSheet()
-          }}
-          style={{
-            ...dogSummaryInlineButtonStyle,
-            ...(isDogNameGuided ? guidedFieldButtonStyle : null),
-            ...(isDogNameGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-          }}
-        >
-          <span style={dogSummaryInlineIconStyle}>{SERVICE_ICONS[resolvedBookingService]}</span>
-          <span
-            style={
-              compactBookingSubjectDisplayValue
-                ? dogSummaryInlineValueStyle
-                : dogSummaryInlinePlaceholderStyle
-            }
-          >
-            <span>{compactBookingSubjectDisplayValue || bookingSubjectPlaceholder}</span>
-          </span>
-        </button>
-      </div>
-      <div style={dogCountScrollWrapStyle}>
-        <div style={dogCountSegmentedStyle}>
-        {activeDogPets.map((pet) => {
-          const selected = selectedDogPetIds.includes(pet.id)
-          return (
-            <button
-              key={pet.id}
-              type="button"
-              onClick={() => {
-                setSelectedDogPetIds((current) => {
-                  const isSelected = current.includes(pet.id)
-                  if (isSelected) {
-                    return current.filter((id) => id !== pet.id)
-                  }
-                  return [...current, pet.id]
-                })
-              }}
-              style={{
-                ...dogCountChipStyle,
-                ...(selected ? dogCountChipActiveStyle : null),
-              }}
-              aria-pressed={selected}
-            >
-              <span>{formatDogDisplayLabel(pet.normalizedName, pet.dog_size, { includeEmoji: true, isHebrew: isRtl })}</span>
-            </button>
-          )
-        })}
-        </div>
-      </div>
-    </div>
-  ) : null
-
   const repeatSelectorBlock = (
     <div style={repeatSectionStyle}>
       <div style={repeatHeaderRowStyle}>
@@ -4174,28 +4114,27 @@ export default function ClientDashboard({
         style={compactSavedCardRowStyle}
       >
         <div style={compactSavedCardMainStyle}>
-          <CreditCard size={15} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.95 }} />
           <span style={compactSavedCardBrandStyle}>
             {getPaymentMethodLabel(flow.activePaymentMethod).replace(/\s+(\d{4})$/, ' •••• $1')}
           </span>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          <span style={compactPaymentMethodIconWrapStyle} aria-hidden="true">
+            {flow.activePaymentMethod.type === 'apple_pay' ? (
+              <span style={compactPaymentMethodApplePayStyle}></span>
+            ) : (
+              <CreditCard size={12} color="#2563EB" style={{ flexShrink: 0, opacity: 0.9 }} />
+            )}
+          </span>
         </div>
       </button>
     ) : null
 
   const sharedPricingRows = (
     <div style={dogWalkerPricingStackStyle}>
-      <div style={dogWalkerPriceRowStyle}>
-        <span aria-hidden="true" />
-        <div style={dogWalkerPriceValueWrapStyle}>
-          <span style={dogWalkerPriceValueStyle}>₪{activeBudgetValue}</span>
-        </div>
-      </div>
       <div style={dogWalkerDurationSliderRowStyle}>
         <div style={dogWalkerDurationInlineStyle}>
-          <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+          <div style={pricingMetaRowStyle}>
+            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+          </div>
           <div
             style={{
               ...babysitterDurationStepperStyle,
@@ -4239,7 +4178,7 @@ export default function ClientDashboard({
           />
           <div style={unifiedBudgetScaleRowStyle}>
             <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
-            <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
+            <span style={unifiedBudgetScaleValueStyle}>₪{activeBudgetValue}</span>
           </div>
         </div>
       </div>
@@ -4259,11 +4198,8 @@ export default function ClientDashboard({
 
   const fixedVisitPricingRows = (
     <div style={dogWalkerPricingStackStyle}>
-      <div style={dogWalkerPriceRowStyle}>
-        <span aria-hidden="true" />
-        <div style={dogWalkerPriceValueWrapStyle}>
-          <span style={dogWalkerPriceValueStyle}>₪{activeBudgetValue}</span>
-        </div>
+      <div style={pricingMetaRowStyle}>
+        <span style={dogWalkerPlannerLabelStyle}>{isRtl ? 'מחיר' : 'Price'}</span>
       </div>
       <div style={fixedVisitSliderWrapStyle}>
         <div style={dogWalkerSliderOnlyRowStyle}>
@@ -4280,7 +4216,7 @@ export default function ClientDashboard({
         </div>
         <div style={unifiedBudgetScaleRowStyle}>
           <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
-          <span style={unifiedBudgetScaleLabelStyle}>₪500</span>
+          <span style={unifiedBudgetScaleValueStyle}>₪{activeBudgetValue}</span>
         </div>
       </div>
       <div style={fixedVisitGuidanceStackStyle}>
@@ -4316,7 +4252,6 @@ export default function ClientDashboard({
       disabled={flow.cardLoading}
     >
       <div style={compactSavedCardMainStyle}>
-        <CreditCard size={15} color="#3B82F6" style={{ flexShrink: 0, opacity: 0.95 }} />
         <span style={compactSavedCardBrandStyle}>
           {flow.cardLoading
             ? isRtl
@@ -4326,7 +4261,9 @@ export default function ClientDashboard({
               ? isRtl
                 ? 'נסה שוב'
                 : 'Retry'
-              : flow.setupClientSecret
+              : flow.showApplePayInPaymentSheet && !flow.savedCard
+                ? 'Apple Pay'
+                : flow.setupClientSecret
                 ? isRtl
                   ? 'הוסף כרטיס'
                   : 'Add card'
@@ -4334,9 +4271,13 @@ export default function ClientDashboard({
                   ? 'הוסף כרטיס'
                   : 'Add card'}
         </span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginInlineStart: 'auto', opacity: 0.8 }}>
-          <polyline points="9 18 15 12 9 6" />
-        </svg>
+        <span style={compactPaymentMethodIconWrapStyle} aria-hidden="true">
+          {flow.showApplePayInPaymentSheet && !flow.savedCard ? (
+            <span style={compactPaymentMethodApplePayStyle}></span>
+          ) : (
+            <CreditCard size={12} color="#2563EB" style={{ flexShrink: 0, opacity: 0.9 }} />
+          )}
+        </span>
       </div>
     </button>
   )
@@ -5109,9 +5050,8 @@ export default function ClientDashboard({
                     </>
                   ) : (
                     <>
-                      {dogCountSelectorBlock}
-                      {shouldShowDogCountControl ? pickupSelectorBlock : dogSelectorBlock}
-                      {!shouldShowDogCountControl && pickupSelectorBlock}
+                      {dogSelectorBlock}
+                      {pickupSelectorBlock}
                     </>
                   )}
 
@@ -7220,7 +7160,7 @@ const idleSheetContentStyle: React.CSSProperties = {
 
 const bookingCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 6,
   borderRadius: 28,
   padding: '4px 4px 2px',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.44) 0%, rgba(248,250,252,0.24) 100%)',
@@ -7229,7 +7169,7 @@ const bookingCardStyle: React.CSSProperties = {
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 7,
+  gap: 5,
 }
 
 const repeatSectionStyle: React.CSSProperties = {
@@ -7664,123 +7604,6 @@ const timePickerPrimaryButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
-const dogCountInlineRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  minHeight: 24,
-  minWidth: 0,
-}
-
-const dogSummaryInlineGroupStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 8,
-  minWidth: 0,
-  flexShrink: 0,
-}
-
-const dogSummaryInlineLabelStyle: React.CSSProperties = {
-  fontSize: 11.5,
-  fontWeight: 700,
-  color: '#64748B',
-  whiteSpace: 'nowrap',
-}
-
-const dogSummaryInlineButtonStyle: React.CSSProperties = {
-  minWidth: 0,
-  maxWidth: 168,
-  height: 27,
-  borderRadius: 999,
-  border: 'none',
-  background: 'rgba(248,250,252,0.78)',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '0 9px 0 7px',
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-}
-
-const dogSummaryInlineIconStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-  width: 18,
-  height: 18,
-  fontSize: 11,
-}
-
-const dogSummaryInlineValueStyle: React.CSSProperties = {
-  minWidth: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  fontSize: 12,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const dogSummaryInlinePlaceholderStyle: React.CSSProperties = {
-  ...dogSummaryInlineValueStyle,
-  color: '#94A3B8',
-}
-
-const dogCountScrollWrapStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  alignItems: 'center',
-  minWidth: 0,
-  flex: 1,
-  overflowX: 'auto',
-  overflowY: 'hidden',
-  WebkitOverflowScrolling: 'touch',
-  scrollbarWidth: 'none',
-}
-
-const dogCountSegmentedStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  minWidth: 'max-content',
-  justifyContent: 'flex-end',
-  paddingInlineStart: 10,
-}
-
-const dogCountChipStyle: React.CSSProperties = {
-  minWidth: 0,
-  maxWidth: 104,
-  minHeight: 30,
-  borderRadius: 999,
-  border: '1px solid rgba(148, 163, 184, 0.18)',
-  background: 'rgba(255,255,255,0.9)',
-  color: '#475569',
-  fontSize: 12,
-  fontWeight: 800,
-  padding: '0 10px',
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255,255,255,0.76)',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-}
-
-const dogCountChipActiveStyle: React.CSSProperties = {
-  borderColor: 'rgba(15, 23, 42, 0.06)',
-  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
-  color: '#FFFFFF',
-  boxShadow: '0 10px 18px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255,255,255,0.08)',
-}
-
 const comingSoonOverlayStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -7825,7 +7648,7 @@ const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
 
 const compactFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 3,
+  gap: 2,
 }
 
 const fixedVisitSectionStyle: React.CSSProperties = {
@@ -7904,23 +7727,23 @@ const compactFieldLabelMutedStyle: React.CSSProperties = {
 }
 
 const pickupSelectorShellStyle: React.CSSProperties = {
-  minHeight: 43,
+  minHeight: 42,
   borderRadius: 14,
   border: '1px solid rgba(226, 232, 240, 0.72)',
   background: 'rgba(248,250,252,0.78)',
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 7,
   width: '100%',
   boxSizing: 'border-box',
   minWidth: 0,
-  padding: '0 10px 0 8px',
+  padding: '0 9px 0 7px',
   cursor: 'pointer',
 }
 
 const pickupSelectorShellCompactStyle: React.CSSProperties = {
-  minHeight: 41,
-  padding: '0 9px',
+  minHeight: 40,
+  padding: '0 8px',
 }
 
 const pickupSelectorInlineIconStyle: React.CSSProperties = {
@@ -7928,19 +7751,19 @@ const pickupSelectorInlineIconStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   flexShrink: 0,
-  width: 20,
-  height: 20,
+  width: 18,
+  height: 18,
   borderRadius: 8,
   background: 'rgba(59,130,246,0.08)',
   color: '#2563EB',
-  fontSize: 11,
+  fontSize: 10.5,
   lineHeight: 1,
 }
 
 const pickupSelectorValueStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.25,
+  fontSize: 12,
   color: '#0F172A',
   fontWeight: 700,
   lineHeight: 'normal',
@@ -7950,7 +7773,7 @@ const pickupSelectorValueStyle: React.CSSProperties = {
 }
 
 const pickupSelectorValueCompactStyle: React.CSSProperties = {
-  fontSize: 11.75,
+  fontSize: 11.5,
   fontWeight: 700,
   lineHeight: 'normal',
 }
@@ -7958,7 +7781,7 @@ const pickupSelectorValueCompactStyle: React.CSSProperties = {
 const pickupSelectorPlaceholderStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontSize: 12.25,
+  fontSize: 12,
   color: '#94A3B8',
   fontWeight: 600,
   lineHeight: 'normal',
@@ -7970,7 +7793,7 @@ const pickupSelectorPlaceholderStyle: React.CSSProperties = {
 
 
 const dogInputShellStyle: React.CSSProperties = {
-  minHeight: 44,
+  minHeight: 40,
   borderRadius: 14,
   border: '1px solid rgba(226, 232, 240, 0.72)',
   background: 'rgba(248,250,252,0.78)',
@@ -7980,27 +7803,27 @@ const dogInputShellStyle: React.CSSProperties = {
 }
 
 const dogInputShellCompactStyle: React.CSSProperties = {
-  minHeight: 42,
+  minHeight: 40,
 }
 
 const dogThumbStyle: React.CSSProperties = {
-  width: 24,
-  height: 24,
+  width: 22,
+  height: 22,
   borderRadius: 10,
-  marginLeft: 8,
+  marginLeft: 7,
   marginRight: 4,
   background: 'linear-gradient(180deg, rgba(59,130,246,0.08) 0%, rgba(96,165,250,0.12) 100%)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: 13,
+  fontSize: 12,
   flexShrink: 0,
 }
 
 const dogThumbCompactStyle: React.CSSProperties = {
-  width: 22,
-  height: 22,
-  fontSize: 12,
+  width: 20,
+  height: 20,
+  fontSize: 11,
 }
 
 const dogInputButtonStyle: React.CSSProperties = {
@@ -8023,7 +7846,7 @@ const dogInputValueTextStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  fontSize: 12.5,
+  fontSize: 12,
   color: '#0F172A',
   fontWeight: 800,
   whiteSpace: 'nowrap',
@@ -8035,7 +7858,7 @@ const dogInputPlaceholderTextStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  fontSize: 12.5,
+  fontSize: 12,
   color: '#94A3B8',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
@@ -8043,9 +7866,9 @@ const dogInputPlaceholderTextStyle: React.CSSProperties = {
 }
 
 const dogInputChevronStyle: React.CSSProperties = {
-  paddingRight: 10,
+  paddingRight: 9,
   color: '#94A3B8',
-  fontSize: 18,
+  fontSize: 16,
   lineHeight: 1,
   flexShrink: 0,
 }
@@ -8271,36 +8094,60 @@ const compactPaymentWrapStyle: React.CSSProperties = {
 
 const compactSavedCardRowStyle: React.CSSProperties = {
   appearance: 'none',
-  border: '1px solid rgba(203, 213, 225, 0.7)',
-  background: 'rgba(255,255,255,0.92)',
-  borderRadius: 14,
+  border: 'none',
+  background: 'transparent',
+  borderRadius: 0,
   padding: 0,
   width: '100%',
   display: 'grid',
   gap: 0,
   cursor: 'pointer',
   fontFamily: 'inherit',
-  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.045)',
+  boxShadow: 'none',
   overflow: 'hidden',
 }
 
 const compactSavedCardMainStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 6,
   minWidth: 0,
-  minHeight: 42,
-  padding: '8px 12px',
+  minHeight: 32,
+  padding: '2px 0',
 }
 
 const compactSavedCardBrandStyle: React.CSSProperties = {
-  fontSize: 12.25,
+  fontSize: 12,
   fontWeight: 800,
-  color: '#0F172A',
+  color: '#2563EB',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   minWidth: 0,
+}
+
+const compactPaymentMethodIconWrapStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 14,
+  marginInlineStart: 'auto',
+  paddingInlineStart: 6,
+  flexShrink: 0,
+}
+
+const compactPaymentMethodApplePayStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minHeight: 14,
+  padding: '0 4px',
+  borderRadius: 999,
+  color: '#2563EB',
+  fontSize: 9.5,
+  fontWeight: 900,
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
 }
 
 const babysitterPlannerCardStyle: React.CSSProperties = {
@@ -8441,6 +8288,14 @@ const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
   lineHeight: 1,
 }
 
+const unifiedBudgetScaleValueStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 900,
+  color: '#0F172A',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+}
+
 const budgetGuidanceChipStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -8475,50 +8330,34 @@ const budgetGuidanceChipHighStyle: React.CSSProperties = {
 
 const dogWalkerPricingStackStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 0,
+  gap: 2,
 }
 
-const dogWalkerPriceRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(88px, auto) minmax(0, 1fr)',
-  gap: 14,
-  alignItems: 'center',
-  minWidth: 0,
-}
-
-const dogWalkerPriceValueWrapStyle: React.CSSProperties = {
+const pricingMetaRowStyle: React.CSSProperties = {
   display: 'flex',
-  justifyContent: 'center',
   alignItems: 'center',
-  minHeight: 14,
+  justifyContent: 'space-between',
+  gap: 10,
   minWidth: 0,
-}
-
-const dogWalkerPriceValueStyle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  lineHeight: 1,
-  color: '#0F172A',
-  whiteSpace: 'nowrap',
 }
 
 const dogWalkerDurationSliderRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(88px, auto) minmax(0, 1fr)',
-  gap: 14,
+  gap: 10,
   alignItems: 'center',
 }
 
 const dogWalkerDurationInlineStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 4,
   minWidth: 0,
   alignContent: 'start',
 }
 
 const dogWalkerSliderInlineStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 2,
+  gap: 0,
   minWidth: 0,
 }
 
@@ -8541,26 +8380,24 @@ const fixedVisitSliderWrapStyle: React.CSSProperties = {
 
 const budgetGuidanceInlineRowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'flex-start',
+  alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
   minWidth: 0,
-  paddingTop: 2,
+  paddingTop: 0,
 }
 
 const budgetGuidanceInlineTextStyle: React.CSSProperties = {
   minWidth: 0,
   flex: 1,
   textAlign: 'right',
-  fontSize: 10.5,
-  lineHeight: 1.25,
-  fontWeight: 700,
+  fontSize: 10,
+  lineHeight: 1.2,
+  fontWeight: 600,
   color: '#64748B',
-  whiteSpace: 'normal',
   overflow: 'hidden',
-  display: '-webkit-box',
-  WebkitLineClamp: 2,
-  WebkitBoxOrient: 'vertical',
+  whiteSpace: 'nowrap',
+  textOverflow: 'ellipsis',
 }
 
 const fixedVisitGuidanceStackStyle: React.CSSProperties = {
