@@ -18,8 +18,12 @@ export type StartDispatchResponse = {
   error?: string
   details?: string
   requestId?: string
+  timeoutSeconds?: number
   candidateCount?: number
+  attemptId?: string
+  attemptStatus?: string
   advanceResult?: unknown
+  version?: number
 }
 
 function normalizeCandidates(rankedCandidates: RankedDispatchCandidate[]) {

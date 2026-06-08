@@ -14,6 +14,8 @@ type AdvanceDispatchBody = {
 
 type PendingAttemptRow = {
   request_id: string
+  expires_at?: string | null
+  status?: string | null
 }
 
 serve(async (req) => {
@@ -79,10 +81,9 @@ serve(async (req) => {
     const nowIso = new Date().toISOString()
 
     const { data: expiredRows, error: expiredQueryError } = await supabase
-      .from('active_dispatch_offers')
-      .select('request_id, expires_at, request_status')
+      .from('dispatch_attempts')
+      .select('request_id, expires_at, status')
       .eq('status', 'pending')
-      .eq('request_status', 'open')
       .lte('expires_at', nowIso)
       .order('expires_at', { ascending: true })
       .limit(limit)
@@ -102,6 +103,14 @@ serve(async (req) => {
     const uniqueRequestIds = [
       ...new Set((expiredRows ?? []).map((row: PendingAttemptRow) => row.request_id)),
     ]
+
+    console.log('[advance-dispatch] expired pending attempts scanned', {
+      nowIso,
+      timeoutSeconds,
+      rawExpiredRowCount: (expiredRows ?? []).length,
+      uniqueRequestCount: uniqueRequestIds.length,
+      requestIds: uniqueRequestIds,
+    })
 
     const results: Array<Record<string, unknown>> = []
 

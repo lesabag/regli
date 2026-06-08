@@ -32,6 +32,7 @@ import useExpressCheckout from './useExpressCheckout'
 import useNativePaymentSheet from './useNativePaymentSheet'
 import { presentNativeApplePay, presentNativePaymentSheet } from '../lib/nativeStripe'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
+import { getSearchAttemptAutoAdvanceDecision } from '../lib/dispatchAttemptAutoAdvance'
 import {
   type SavedCard as StoredSavedCard,
   type ActivePaymentMethod,
@@ -276,6 +277,8 @@ const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
 const IDLE_HYDRATION_POLL_MS = 60_000
 const ACTIVE_HYDRATION_POLL_MS = 10_000
 const FOREGROUND_HYDRATION_DEDUPE_MS = 2_500
+const SEARCH_ATTEMPT_AUTO_ADVANCE_BUFFER_MS = 1_500
+const SEARCH_ATTEMPT_AUTO_ADVANCE_DEDUPE_MS = 5_000
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
 
@@ -860,6 +863,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const lastForegroundHydrationAtRef = useRef(0)
   const lastFullHydrationStartedAtRef = useRef(0)
   const lastFullHydrationCompletedAtRef = useRef(0)
+  const searchAttemptAutoAdvanceKeyRef = useRef<string | null>(null)
+  const searchAttemptAutoAdvanceTriggeredAtRef = useRef<Map<string, number>>(new Map())
   const previousScreenStateRef = useRef<ScreenState>('idle')
   const previousScreenPhaseRef = useRef<ServicePhase>('idle')
   const optimisticSearchingJobIdRef = useRef<string | null>(null)
@@ -1424,6 +1429,87 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     return () => window.clearInterval(id)
   }, [screenState, searchStartTime])
+
+  useEffect(() => {
+    if (screenState !== 'searching' || !searchStartTime) return
+
+    const requestId = searchTimerRequestIdRef.current
+    const attemptId = searchTimerAttemptIdRef.current
+    const expiresAt = searchTimerAttemptExpiresAtRef.current
+    if (!requestId || !attemptId || !expiresAt) return
+
+    const now = Date.now()
+    const decision = getSearchAttemptAutoAdvanceDecision({
+      requestId,
+      attemptId,
+      expiresAt,
+      nowMs: now,
+      bufferMs: SEARCH_ATTEMPT_AUTO_ADVANCE_BUFFER_MS,
+      dedupeMs: SEARCH_ATTEMPT_AUTO_ADVANCE_DEDUPE_MS,
+      currentInFlightKey: searchAttemptAutoAdvanceKeyRef.current,
+      lastTriggeredAtMs:
+        searchAttemptAutoAdvanceTriggeredAtRef.current.get(`${requestId}:${attemptId}:${expiresAt}`) ?? 0,
+    })
+    if (!decision.shouldAdvance || !decision.key) return
+
+    let cancelled = false
+    searchAttemptAutoAdvanceKeyRef.current = decision.key
+    searchAttemptAutoAdvanceTriggeredAtRef.current.set(decision.key, now)
+
+    console.log('[SearchingTimer] auto-advance dispatch attempt', {
+      requestId,
+      attemptId,
+      expiresAt,
+      nowIso: new Date(now).toISOString(),
+      bufferMs: SEARCH_ATTEMPT_AUTO_ADVANCE_BUFFER_MS,
+      advanceAtIso: decision.advanceAtMs ? new Date(decision.advanceAtMs).toISOString() : null,
+    })
+
+    void (async () => {
+      try {
+        const { data, error } = await invokeEdgeFunction<{
+          ok?: boolean
+          mode?: string
+          requestId?: string
+          result?: unknown
+          error?: string
+          details?: string
+        }>('advance-dispatch', {
+          body: { requestId },
+        })
+
+        if (cancelled) return
+
+        if (error) {
+          console.warn('[SearchingTimer] auto-advance dispatch attempt failed', {
+            requestId,
+            attemptId,
+            error,
+          })
+        } else {
+          console.log('[SearchingTimer] auto-advance dispatch attempt result', {
+            requestId,
+            attemptId,
+            result: data,
+          })
+        }
+
+        void hydrateSearchAttemptFromDispatchRef.current(requestId, 'search_attempt_auto_advance')
+        void fetchCurrentAndListsRef.current('search_attempt_auto_advance')
+      } finally {
+        if (!cancelled && searchAttemptAutoAdvanceKeyRef.current === decision.key) {
+          searchAttemptAutoAdvanceKeyRef.current = null
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (searchAttemptAutoAdvanceKeyRef.current === decision.key) {
+        searchAttemptAutoAdvanceKeyRef.current = null
+      }
+    }
+  }, [screenState, searchClockNow, searchStartTime])
 
   const refreshLocation = useCallback(async () => {
     if (!navigator.geolocation) {
@@ -4539,6 +4625,20 @@ function mergeClientDogSizeAttributes(
           requestId: createdJob.id,
           dispatchResult,
         })
+        if (dispatchResult.attemptId && dispatchResult.timeoutSeconds) {
+          const optimisticAttemptExpiresAt = new Date(
+            Date.now() + Math.max(3, dispatchResult.timeoutSeconds) * 1000,
+          ).toISOString()
+          setSearchAttemptStartedAt(
+            searchStartTimeRef.current ?? Date.now(),
+            'start_dispatch_response',
+            {
+              requestId: createdJob.id,
+              attemptId: dispatchResult.attemptId,
+              expiresAt: optimisticAttemptExpiresAt,
+            },
+          )
+        }
 
         setSuccessMessage('Searching for a walker...')
       } else {
