@@ -8474,11 +8474,14 @@ const unifiedBudgetScaleLabelStyle: React.CSSProperties = {
 }
 
 const unifiedBudgetScaleValueStyle: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 12.5,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#1D4ED8',
   lineHeight: 1,
   whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+  minWidth: 46,
+  textAlign: 'end',
 }
 
 const budgetGuidanceChipStyle: React.CSSProperties = {
@@ -8617,16 +8620,16 @@ const fixedVisitGuidanceTextStyle: React.CSSProperties = {
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(191, 219, 254, 0.52)',
-  paddingTop: 8,
+  paddingTop: 5,
   marginTop: 0,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
-  paddingTop: 8,
+  paddingTop: 6,
 }
 
 const stickyCtaWrapDogWalkerStyle: React.CSSProperties = {
-  paddingTop: 8,
+  paddingTop: 6,
 }
 
 const paymentGuidedFieldShellStyle: React.CSSProperties = {
