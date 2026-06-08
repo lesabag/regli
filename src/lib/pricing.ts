@@ -383,7 +383,7 @@ export function getBudgetGuidanceFromProviderPreferences(params: {
   }
 
   const relevant = params.preferences.filter((row) => {
-    if (!row || row.is_enabled !== true) return false
+    if (!row) return false
     if (normalizeGuidanceServiceType(row.service_type) !== normalizedServiceType) return false
     if ((row.booking_type ?? '').toString().toLowerCase() !== params.bookingType) return false
 

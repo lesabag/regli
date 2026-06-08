@@ -3445,7 +3445,6 @@ export default function ClientDashboard({
         .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, accepts_multi_item, max_item_count')
         .in('provider_id', nearbyProviderIdsForGuidance)
         .eq('booking_type', bookingTypeForGuidance)
-        .eq('is_enabled', true)
 
       if (serviceTypeAliases.length > 1) {
         query = query.in('service_type', serviceTypeAliases)

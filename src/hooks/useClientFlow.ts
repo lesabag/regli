@@ -4256,7 +4256,6 @@ function mergeClientDogSizeAttributes(
             .in('provider_id', availableWalkers.map((walker) => walker.id))
             .eq('service_type', requestedProviderServiceType ?? '')
             .eq('booking_type', createdJob.booking_timing === 'scheduled' ? 'scheduled' : 'asap')
-            .eq('is_enabled', true)
 
           if (providerPreferencesError) {
             throw new Error(providerPreferencesError.message)

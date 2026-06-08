@@ -79,7 +79,7 @@ function toFormRow(providerId: string, row: PreferenceDbRow): PreferenceRow {
     service_type: row.service_type,
     pricing_model: normalizePricingModel(row.pricing_model),
     booking_type: row.booking_type,
-    is_enabled: row.is_enabled,
+    is_enabled: true,
     hourly_rate_min: toInputValue(row.hourly_rate_min),
     hourly_rate_preferred: toInputValue(row.hourly_rate_preferred),
     visit_fee_min: toInputValue(row.visit_fee_min),
@@ -149,7 +149,6 @@ function buildRowsSignature(rows: PreferenceRow[]): string {
         service_type: row.service_type,
         pricing_model: row.pricing_model,
         booking_type: row.booking_type,
-        is_enabled: row.is_enabled,
         hourly_rate_min: row.hourly_rate_min.trim(),
         hourly_rate_preferred: row.hourly_rate_preferred.trim(),
         visit_fee_min: row.visit_fee_min.trim(),
@@ -324,7 +323,7 @@ export default function ProviderPricingPreferences({
       service_type: row.service_type,
       pricing_model: getBookingPricingModelForService(row.service_type),
       booking_type: row.booking_type,
-      is_enabled: row.is_enabled,
+      is_enabled: true,
       hourly_rate_min: parseOptionalNumber(row.hourly_rate_min),
       hourly_rate_preferred: parseOptionalNumber(row.hourly_rate_preferred),
       visit_fee_min: parseOptionalNumber(row.visit_fee_min),
@@ -451,25 +450,6 @@ export default function ProviderPricingPreferences({
 
                 return (
                   <div key={`${row.service_type}:${row.booking_type}`} style={bookingCardStyle}>
-                    <div style={bookingHeaderStyle}>
-                      <button
-                        type="button"
-                        onClick={() => updateRow(row.service_type, row.booking_type, { is_enabled: !row.is_enabled })}
-                        style={{
-                          ...toggleStyle,
-                          ...(row.is_enabled ? toggleActiveStyle : null),
-                        }}
-                        aria-pressed={row.is_enabled}
-                      >
-                        <span
-                          style={{
-                            ...toggleThumbStyle,
-                            ...(row.is_enabled ? toggleThumbActiveStyle : null),
-                          }}
-                        />
-                      </button>
-                    </div>
-
                     <div style={sectionSelectorRowStyle}>
                       {sectionOptions.map((section) => (
                         <button
@@ -812,44 +792,6 @@ const bookingCardStyle: React.CSSProperties = {
   padding: 11,
   display: 'grid',
   gap: 9,
-}
-
-const bookingHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 10,
-}
-
-const toggleStyle: React.CSSProperties = {
-  width: 42,
-  height: 24,
-  borderRadius: 999,
-  border: '1px solid rgba(203, 213, 225, 0.95)',
-  background: 'rgba(226,232,240,0.9)',
-  padding: 2,
-  cursor: 'pointer',
-  position: 'relative',
-  transition: 'all 160ms ease',
-}
-
-const toggleActiveStyle: React.CSSProperties = {
-  background: '#0F172A',
-  borderColor: '#0F172A',
-}
-
-const toggleThumbStyle: React.CSSProperties = {
-  width: 18,
-  height: 18,
-  borderRadius: 999,
-  background: '#FFFFFF',
-  display: 'block',
-  transition: 'transform 160ms ease',
-  transform: 'translateX(0)',
-}
-
-const toggleThumbActiveStyle: React.CSSProperties = {
-  transform: 'translateX(18px)',
 }
 
 const fieldGridStyle: React.CSSProperties = {

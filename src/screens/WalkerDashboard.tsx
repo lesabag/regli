@@ -1938,7 +1938,7 @@ export default function WalkerDashboard({
     }
     return (
       profileServiceTypes.find((serviceType) =>
-        pricingSummaryRows.some((row) => row.service_type === serviceType && row.is_enabled === true),
+        pricingSummaryRows.some((row) => row.service_type === serviceType),
       )
       ?? profileServiceTypes[0]
       ?? null
@@ -3227,7 +3227,6 @@ export default function WalkerDashboard({
 
   const pricingSummaryCardRows = useMemo(() => {
     const hasValidConfiguredPricing = (row: ProviderPricingSummaryPreferenceRow) => {
-      if (row.is_enabled !== true) return false
       const normalizedPricingModel =
         row.pricing_model === 'fixed_visit' || row.pricing_model === 'visit_based' ? 'fixed_visit' : 'time_based'
       const min = normalizedPricingModel === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min
@@ -3250,7 +3249,7 @@ export default function WalkerDashboard({
     const scopedConfiguredRows = scopedRows.filter(hasValidConfiguredPricing)
     const sourceRows = scopedConfiguredRows.length > 0
       ? scopedConfiguredRows
-      : scopedRows.filter((row) => row.is_enabled)
+      : scopedRows
     const rowsByBookingType = new Map(
       sourceRows.map((row) => [row.booking_type, row] as const),
     )
@@ -3461,7 +3460,7 @@ export default function WalkerDashboard({
         ? current
         : (
           profileServiceTypes.find((serviceType) =>
-            pricingSummaryRows.some((row) => row.service_type === serviceType && row.is_enabled === true),
+            pricingSummaryRows.some((row) => row.service_type === serviceType),
           )
           ?? profileServiceTypes[0]
           ?? null

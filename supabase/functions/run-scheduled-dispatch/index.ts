@@ -419,7 +419,6 @@ serve(async (req) => {
             .in('provider_id', onlineWalkers.map((walker) => walker.id))
             .eq('service_type', requestedProviderServiceType ?? '')
             .eq('booking_type', 'scheduled')
-            .eq('is_enabled', true)
 
           if (providerPreferencesError) {
             await supabase.rpc('log_dispatch_event', {

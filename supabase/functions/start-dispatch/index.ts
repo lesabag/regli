@@ -550,7 +550,6 @@ serve(async (req) => {
           .from('provider_service_preferences')
           .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, service_radius_km, accepts_multi_item, max_item_count')
           .in('provider_id', candidateWalkerIds)
-          .eq('is_enabled', true)
           .eq('pricing_model', 'time_based'),
       ])
 

@@ -194,7 +194,6 @@ export function useNearbyWalkers(
               .in('provider_id', providerIds)
               .eq('service_type', expectedServiceType)
               .eq('booking_type', expectedBookingType)
-              .eq('is_enabled', true)
           : Promise.resolve({ data: null, error: null }),
       ])
       availabilityByProviderRef.current = groupProviderAvailabilityRows(availabilityRows)

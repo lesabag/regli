@@ -96,7 +96,7 @@ export function evaluatePricingEligibility(input: PricingEligibilityInput): Pric
       : 0
 
   const relevantRows = input.preferences.filter((row) => {
-    if (!row?.provider_id || row.is_enabled !== true) return false
+    if (!row?.provider_id) return false
     if ((row.pricing_model ?? '').toString().toLowerCase() !== 'time_based') return false
     if ((row.booking_type ?? '').toString().toLowerCase() !== input.bookingType) return false
     return normalizeServiceType(row.service_type) === normalizedServiceType
