@@ -1,3 +1,6 @@
+import { useEffect, useMemo, useState } from 'react'
+import { getAvatarInitials, markBrokenAvatarUrl, resolveAvatarImageUrl } from '../utils/avatarImage'
+
 interface ProfileAvatarProps {
   url: string | null
   name: string
@@ -31,7 +34,17 @@ export default function ProfileAvatar({
     placeItems: 'center',
   }
 
-  if (url) {
+  const resolvedUrl = useMemo(
+    () => resolveAvatarImageUrl(url, { size: Math.max(96, size * 2) }),
+    [size, url],
+  )
+  const [imageErrored, setImageErrored] = useState(false)
+
+  useEffect(() => {
+    setImageErrored(false)
+  }, [resolvedUrl])
+
+  if (resolvedUrl && !imageErrored) {
     return (
       <div
         style={containerStyle}
@@ -40,8 +53,12 @@ export default function ProfileAvatar({
         aria-label={name}
       >
         <img
-          src={url}
+          src={resolvedUrl}
           alt={name}
+          onError={() => {
+            markBrokenAvatarUrl(resolvedUrl)
+            setImageErrored(true)
+          }}
           style={{
             width: '100%',
             height: '100%',
@@ -53,8 +70,7 @@ export default function ProfileAvatar({
     )
   }
 
-  // Default person icon (white on dark)
-  const iconSize = Math.round(size * 0.5)
+  const initials = getAvatarInitials(name)
   return (
     <div
       style={containerStyle}
@@ -62,18 +78,21 @@ export default function ProfileAvatar({
       role={onClick ? 'button' : undefined}
       aria-label={name}
     >
-      <svg
-        width={iconSize}
-        height={iconSize}
-        viewBox="0 0 24 24"
-        fill="none"
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'grid',
+          placeItems: 'center',
+          background: 'linear-gradient(180deg, #E2E8F0 0%, #CBD5E1 100%)',
+          color: '#334155',
+          fontSize: Math.max(12, Math.round(size * 0.32)),
+          fontWeight: 900,
+          letterSpacing: '0.04em',
+        }}
       >
-        <circle cx="12" cy="8" r="4" fill="#FFFFFF" />
-        <path
-          d="M12 14c-5 0-8 2.5-8 5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-2.5-3-5-8-5z"
-          fill="#FFFFFF"
-        />
-      </svg>
+        {initials}
+      </div>
     </div>
   )
 }

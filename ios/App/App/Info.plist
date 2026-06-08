@@ -41,6 +41,12 @@
 	<string>Regli needs your location to find walkers near you and show your position on the map.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Regli uses Face ID to unlock your app securely.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Regli needs camera access so you can take and upload a profile photo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Regli needs photo library access so you can choose and upload a profile photo.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Regli needs permission to save photos when you update your profile image.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

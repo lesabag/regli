@@ -12,6 +12,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpsQuality, ProximityLevel } from '../hooks/useJobTracking'
+import { getAvatarInitials, resolveAvatarImageUrl } from '../utils/avatarImage'
 
 interface NearbyWalkerMarker {
   id: string
@@ -638,35 +639,21 @@ function escapeHtmlAttribute(value: string): string {
 }
 
 function getMarkerAvatarUrl(url: string | null | undefined): string | null {
-  if (!url) return null
-
-  try {
-    const parsed = new URL(url)
-    if (parsed.pathname.includes('/storage/v1/object/public/')) {
-      parsed.pathname = parsed.pathname.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/')
-      parsed.searchParams.set('width', '96')
-      parsed.searchParams.set('height', '96')
-      parsed.searchParams.set('resize', 'cover')
-      parsed.searchParams.set('quality', '70')
-      return parsed.toString()
-    }
-  } catch {
-    return url
-  }
-
-  return url
+  return resolveAvatarImageUrl(url, { size: 96 })
 }
 
 function createNearbyWalkerAvatarIcon(params: {
   avatarUrl: string | null | undefined
+  fallbackName?: string | null
   previewName?: string | null
   previewMeta?: string | null
   selected?: boolean
 }): L.DivIcon {
-  const { avatarUrl, previewName = null, previewMeta = null, selected = false } = params
+  const { avatarUrl, fallbackName = null, previewName = null, previewMeta = null, selected = false } = params
   const resolvedAvatarUrl = getMarkerAvatarUrl(avatarUrl)
   const safePreviewName = previewName ? escapeHtmlAttribute(previewName.trim() || 'Provider') : 'Provider'
   const safePreviewMeta = previewMeta ? escapeHtmlAttribute(previewMeta) : ''
+  const safeInitials = escapeHtmlAttribute(getAvatarInitials(fallbackName || previewName))
   const hasPreview = selected && (!!safePreviewName || !!safePreviewMeta)
   const previewBubbleHeight = hasPreview ? (safePreviewMeta ? 50 : 36) : 0
   const previewGap = hasPreview ? 6 : 0
@@ -726,6 +713,9 @@ function createNearbyWalkerAvatarIcon(params: {
   }
 
   const safeUrl = escapeHtmlAttribute(resolvedAvatarUrl)
+  const safeFallbackScriptUrl = safeUrl
+    .replaceAll('\\', '\\\\')
+    .replaceAll("'", "\\'")
 
   return L.divIcon({
     html: `<div style="
@@ -792,18 +782,34 @@ function createNearbyWalkerAvatarIcon(params: {
       ">
         <div style="
           position:relative;
-        width:${NB_SIZE}px;
-        height:${NB_SIZE}px;
-        border-radius:50%;
-        overflow:hidden;
-        background:#E2E8F0;
-        border:2px solid #FFFFFF;
-        box-shadow:0 6px 14px rgba(15,23,42,0.22);
+          width:${NB_SIZE}px;
+          height:${NB_SIZE}px;
+          border-radius:50%;
+          overflow:hidden;
+          background:#E2E8F0;
+          border:2px solid #FFFFFF;
+          box-shadow:0 6px 14px rgba(15,23,42,0.22);
         ">
+          <div
+            data-fallback="true"
+            style="
+              position:absolute;
+              inset:0;
+              display:none;
+              align-items:center;
+              justify-content:center;
+              background:linear-gradient(180deg, #E2E8F0 0%, #CBD5E1 100%);
+              color:#334155;
+              font-size:10px;
+              font-weight:900;
+              letter-spacing:0.04em;
+            "
+          >${safeInitials}</div>
           <img
             src="${safeUrl}"
             alt=""
             draggable="false"
+            onerror="this.onerror=null; this.style.display='none'; var fallback=this.parentNode && this.parentNode.querySelector('[data-fallback=true]'); if (fallback) { fallback.style.display='flex'; } window.__regliBrokenAvatarUrls = window.__regliBrokenAvatarUrls || {}; window.__regliBrokenAvatarUrls['${safeFallbackScriptUrl}']=true;"
             style="
               width:100%;
               height:100%;
@@ -1087,6 +1093,7 @@ export default function MapView({
               position={[w.lat, w.lng]}
               icon={createNearbyWalkerAvatarIcon({
                 avatarUrl: w.avatarUrl ?? null,
+                fallbackName: w.fullName?.trim() || 'Provider',
                 previewName: selectedNearbyWalker?.id === w.id ? (w.fullName?.trim() || 'Provider') : null,
                 previewMeta,
                 selected: selectedNearbyWalker?.id === w.id,

@@ -635,10 +635,16 @@ export default function ClientDashboard({
   const [babysitterBudgetFixed, setBabysitterBudgetFixed] = useState(
     String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
   )
+  const [babysitterBudgetGuidanceFixed, setBabysitterBudgetGuidanceFixed] = useState(
+    String(BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
+  )
   const [dogWalkerDurationHours, setDogWalkerDurationHours] = useState(
     String(DOG_WALKER_DEFAULT_DURATION_HOURS),
   )
   const [dogWalkerBudgetFixed, setDogWalkerBudgetFixed] = useState(
+    String(DOG_WALKER_DEFAULT_BUDGET_ILS),
+  )
+  const [dogWalkerBudgetGuidanceFixed, setDogWalkerBudgetGuidanceFixed] = useState(
     String(DOG_WALKER_DEFAULT_BUDGET_ILS),
   )
   const [clientPets, setClientPets] = useState<ClientPetRow[]>([])
@@ -1229,9 +1235,11 @@ export default function ClientDashboard({
 
     if (typeof nextBabysitterBudget === 'string' && nextBabysitterBudget.trim()) {
       setBabysitterBudgetFixed(nextBabysitterBudget)
+      setBabysitterBudgetGuidanceFixed(nextBabysitterBudget)
     }
     if (typeof nextDogWalkerBudget === 'string' && nextDogWalkerBudget.trim()) {
       setDogWalkerBudgetFixed(nextDogWalkerBudget)
+      setDogWalkerBudgetGuidanceFixed(nextDogWalkerBudget)
     }
 
     setBudgetDraftHydrated(true)
@@ -1239,16 +1247,33 @@ export default function ClientDashboard({
 
   useEffect(() => {
     if (!budgetDraftHydrated) return
-    console.debug('[ClientDashboard] budget draft persist', {
-      profileId: profile.id,
-      babysitterBudgetFixed,
-      dogWalkerBudgetFixed,
-    })
-    mergeClientBookingBudgetDraft(profile.id, {
-      babysitterBudgetFixed,
-      dogWalkerBudgetFixed,
-    })
+    const timeoutId = window.setTimeout(() => {
+      console.debug('[ClientDashboard] budget draft persist', {
+        profileId: profile.id,
+        babysitterBudgetFixed,
+        dogWalkerBudgetFixed,
+      })
+      mergeClientBookingBudgetDraft(profile.id, {
+        babysitterBudgetFixed,
+        dogWalkerBudgetFixed,
+      })
+    }, 220)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
   }, [babysitterBudgetFixed, budgetDraftHydrated, dogWalkerBudgetFixed, profile.id])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setBabysitterBudgetGuidanceFixed(babysitterBudgetFixed)
+      setDogWalkerBudgetGuidanceFixed(dogWalkerBudgetFixed)
+    }, 140)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [babysitterBudgetFixed, dogWalkerBudgetFixed])
 
   useEffect(() => {
     if (!showDogNameSheet) return
@@ -1364,6 +1389,11 @@ export default function ClientDashboard({
     BABYSITTER_BUDGET_MIN_ILS,
     BABYSITTER_BUDGET_MAX_ILS,
   )
+  const babysitterGuidanceBudgetValue = clampNumber(
+    parseNumberOrFallback(babysitterBudgetGuidanceFixed, BABYSITTER_DEFAULT_FIXED_BUDGET_ILS),
+    BABYSITTER_BUDGET_MIN_ILS,
+    BABYSITTER_BUDGET_MAX_ILS,
+  )
   const babysitterDurationMinutes =
     Number.isFinite(babysitterDurationValue) && babysitterDurationValue > 0
       ? Math.round(babysitterDurationValue * 60)
@@ -1375,6 +1405,11 @@ export default function ClientDashboard({
   )
   const dogWalkerBudgetValue = clampNumber(
     parseNumberOrFallback(dogWalkerBudgetFixed, DOG_WALKER_DEFAULT_BUDGET_ILS),
+    DOG_WALKER_BUDGET_MIN_ILS,
+    DOG_WALKER_BUDGET_MAX_ILS,
+  )
+  const dogWalkerGuidanceBudgetValue = clampNumber(
+    parseNumberOrFallback(dogWalkerBudgetGuidanceFixed, DOG_WALKER_DEFAULT_BUDGET_ILS),
     DOG_WALKER_BUDGET_MIN_ILS,
     DOG_WALKER_BUDGET_MAX_ILS,
   )
@@ -3413,11 +3448,11 @@ export default function ClientDashboard({
         ? dogWalkerBudgetValue
         : flow.adjustedPriceILS
   const currentBudgetForGuidanceILS = isBabysitterRequest
-    ? babysitterFixedBudgetValue
+    ? babysitterGuidanceBudgetValue
     : isDogWalkerRequest
-      ? dogWalkerBudgetValue
+      ? dogWalkerGuidanceBudgetValue
       : isFixedVisitBookingMode
-        ? dogWalkerBudgetValue
+        ? dogWalkerGuidanceBudgetValue
         : flow.adjustedPriceILS
   const currentBookingDurationMinutes = isBabysitterRequest
     ? babysitterDurationMinutes

@@ -858,6 +858,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const nativeAppActiveRef = useRef(true)
   const lastIdleHydrationAtRef = useRef(0)
   const lastForegroundHydrationAtRef = useRef(0)
+  const lastFullHydrationStartedAtRef = useRef(0)
+  const lastFullHydrationCompletedAtRef = useRef(0)
   const previousScreenStateRef = useRef<ScreenState>('idle')
   const previousScreenPhaseRef = useRef<ServicePhase>('idle')
   const optimisticSearchingJobIdRef = useRef<string | null>(null)
@@ -2254,200 +2256,202 @@ function mergeClientDogSizeAttributes(
     }
 
     const run = (async () => {
-    if (currentOnlyRefreshInFlightRef.current) {
-      logRecovery('[Hydration]', 'client full hydration waiting for current hydration', {
-        profileId,
-        reason,
-      })
-      await currentOnlyRefreshInFlightRef.current
-    }
-
-    const runId = ++hydrationRunIdRef.current
-    logRecovery('[Hydration]', 'client full hydration started', {
-      profileId,
-      reason,
-      runId,
-    })
-
-    const [
-      currentResult,
-      upcomingResult,
-      completedResult,
-      ratingsResult,
-      ratingsReceivedResult,
-      tipsResult,
-    ] = await Promise.allSettled([
-      supabase
-        .from('walk_requests')
-        .select(JOB_SELECT)
-        .eq('client_id', profileId)
-        .in('status', ['awaiting_payment', 'open', 'accepted'])
-        .or('booking_timing.is.null,booking_timing.eq.asap,dispatch_state.eq.dispatched')
-        .order('created_at', { ascending: false })
-        .limit(10),
-      supabase
-        .from('walk_requests')
-        .select(JOB_SELECT)
-        .eq('client_id', profileId)
-        .eq('booking_timing', 'scheduled')
-        .in('status', ['open', 'accepted', 'awaiting_payment'])
-        .order('scheduled_for', { ascending: true }),
-      supabase
-        .from('walk_requests')
-        .select(JOB_SELECT)
-        .eq('client_id', profileId)
-        .in('status', ['completed', 'cancelled'])
-        .order('created_at', { ascending: false })
-        .limit(50),
-      supabase
-        .from('ratings')
-        .select('*')
-        .eq('from_user_id', profileId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('ratings')
-        .select('*')
-        .eq('to_user_id', profileId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('walker_tips')
-        .select('*')
-        .eq('client_id', profileId)
-        .order('created_at', { ascending: false }),
-    ])
-
-    const currentRes = settledQuery<WalkRequestRow[]>(currentResult, 'current request')
-    const upcomingRes = settledQuery<WalkRequestRow[]>(upcomingResult, 'upcoming requests')
-    const completedRes = settledQuery<WalkRequestRow[]>(completedResult, 'completed requests')
-    const ratingsRes = settledQuery<RatingRow[]>(ratingsResult, 'ratings given')
-    const ratingsReceivedRes = settledQuery<RatingRow[]>(ratingsReceivedResult, 'ratings received')
-    const tipsRes = settledQuery<TipRow[]>(tipsResult, 'walker tips')
-
-    if (currentRes.error) {
-      console.warn('[Hydration] client current request unavailable:', {
-        profileId,
-        reason,
-        message: currentRes.error.message,
-      })
-    }
-    if (upcomingRes.error) {
-      console.warn('[useClientFlow] upcoming requests unavailable:', upcomingRes.error.message)
-    }
-    if (completedRes.error) {
-      console.warn('[useClientFlow] completed requests unavailable:', completedRes.error.message)
-    }
-    if (ratingsRes.error) {
-      console.warn('[useClientFlow] ratings given unavailable:', ratingsRes.error.message)
-    }
-    if (ratingsReceivedRes.error) {
-      console.warn('[useClientFlow] ratings received unavailable:', ratingsReceivedRes.error.message)
-    }
-    if (tipsRes.error) {
-      console.warn('[useClientFlow] walker tips unavailable:', tipsRes.error.message)
-    }
-
-    if (currentRes.error) {
-      // Preserve the current UI state on transient read failures.
-    } else {
-      applyCurrentRows((currentRes.data as WalkRequestRow[] | null) ?? [], reason)
-    }
-
-    const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
-    upcoming.forEach((job) => {
-      lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
-    })
-    setUpcomingJobs(upcoming)
-
-    const tipByJobId = new Map<string, number>()
-    for (const tip of (tipsRes.data as TipRow[] | null) ?? []) {
-      if (!tipByJobId.has(tip.walk_request_id)) {
-        tipByJobId.set(tip.walk_request_id, tip.amount)
+      if (currentOnlyRefreshInFlightRef.current) {
+        logRecovery('[Hydration]', 'client full hydration waiting for current hydration', {
+          profileId,
+          reason,
+        })
+        await currentOnlyRefreshInFlightRef.current
       }
-    }
 
-    const completed = ((completedRes.data as WalkRequestRow[] | null) ?? []).map((job) => ({
-      ...job,
-      hidden_by_client: hiddenHistoryIds.has(job.id),
-      tip_amount: tipByJobId.get(job.id) ?? null,
-    }))
-    completed.forEach((job) => {
-      lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
-    })
-    const lastActiveCompleted = completed.find(
-      (job) => job.status === 'completed' && job.id === lastActiveJobIdRef.current,
-    )
-    if (lastActiveCompleted) {
-      flowCompletedJobIdsRef.current.add(lastActiveCompleted.id)
-    }
-    setCompletedJobs(completed)
-
-    const nextRatings = (ratingsRes.data as RatingRow[] | null) ?? []
-    setRatings(nextRatings)
-    setRatingsReceived((ratingsReceivedRes.data as RatingRow[] | null) ?? [])
-
-    const nextRatedJobIds = new Set(nextRatings.map((r) => r.job_id))
-    const pendingCompletion = getCompletionPromptJob(
-      completed,
-      nextRatedJobIds,
-      dismissedCompletionIdsRef.current,
-      flowCompletedJobIdsRef.current,
-    )
-
-    if (pendingCompletion) {
-      const walkerLabel = pendingCompletion.walker_id
-        ? walkerNameById.get(pendingCompletion.walker_id) || 'Walker'
-        : 'Walker'
-      setCompletionJob((prev) => {
-        if (dismissedCompletionIdsRef.current.has(pendingCompletion.id)) {
-          return prev ?? null
-        }
-        const next = {
-          jobId: pendingCompletion.id,
-          walkerId: pendingCompletion.walker_id,
-          walkerName: walkerLabel,
-        }
-        if (
-          prev?.jobId === next.jobId &&
-          prev.walkerId === next.walkerId &&
-          prev.walkerName === next.walkerName
-        ) {
-          return prev
-        }
-        return next
+      const runId = ++hydrationRunIdRef.current
+      lastFullHydrationStartedAtRef.current = Date.now()
+      logRecovery('[Hydration]', 'client full hydration started', {
+        profileId,
+        reason,
+        runId,
       })
-    } else {
-      setCompletionJob((prev) => {
-        if (
-          prev &&
-          flowCompletedJobIdsRef.current.has(prev.jobId) &&
-          !nextRatedJobIds.has(prev.jobId) &&
-          !dismissedCompletionIdsRef.current.has(prev.jobId)
-        ) {
-          return prev
-        }
-        return null
-      })
-    }
 
-    const walkerIds = new Set<string>()
-    for (const row of [
-      ...upcoming,
-      ...completed,
-      ...(((currentRes.data as WalkRequestRow[] | null) ?? [])),
-    ]) {
-      if (row.walker_id) walkerIds.add(row.walker_id)
-    }
-    walkerIds.forEach((id) => {
-      void loadWalkerName(id)
-    })
-    logRecovery('[Hydration]', 'client full hydration completed', {
-      profileId,
-      reason,
-      runId,
-      currentCount: ((currentRes.data as WalkRequestRow[] | null) ?? []).length,
-      upcomingCount: upcoming.length,
-      completedCount: completed.length,
-    })
+      const [
+        currentResult,
+        upcomingResult,
+        completedResult,
+        ratingsResult,
+        ratingsReceivedResult,
+        tipsResult,
+      ] = await Promise.allSettled([
+        supabase
+          .from('walk_requests')
+          .select(JOB_SELECT)
+          .eq('client_id', profileId)
+          .in('status', ['awaiting_payment', 'open', 'accepted'])
+          .or('booking_timing.is.null,booking_timing.eq.asap,dispatch_state.eq.dispatched')
+          .order('created_at', { ascending: false })
+          .limit(10),
+        supabase
+          .from('walk_requests')
+          .select(JOB_SELECT)
+          .eq('client_id', profileId)
+          .eq('booking_timing', 'scheduled')
+          .in('status', ['open', 'accepted', 'awaiting_payment'])
+          .order('scheduled_for', { ascending: true }),
+        supabase
+          .from('walk_requests')
+          .select(JOB_SELECT)
+          .eq('client_id', profileId)
+          .in('status', ['completed', 'cancelled'])
+          .order('created_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('ratings')
+          .select('*')
+          .eq('from_user_id', profileId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('ratings')
+          .select('*')
+          .eq('to_user_id', profileId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('walker_tips')
+          .select('*')
+          .eq('client_id', profileId)
+          .order('created_at', { ascending: false }),
+      ])
+
+      const currentRes = settledQuery<WalkRequestRow[]>(currentResult, 'current request')
+      const upcomingRes = settledQuery<WalkRequestRow[]>(upcomingResult, 'upcoming requests')
+      const completedRes = settledQuery<WalkRequestRow[]>(completedResult, 'completed requests')
+      const ratingsRes = settledQuery<RatingRow[]>(ratingsResult, 'ratings given')
+      const ratingsReceivedRes = settledQuery<RatingRow[]>(ratingsReceivedResult, 'ratings received')
+      const tipsRes = settledQuery<TipRow[]>(tipsResult, 'walker tips')
+
+      if (currentRes.error) {
+        console.warn('[Hydration] client current request unavailable:', {
+          profileId,
+          reason,
+          message: currentRes.error.message,
+        })
+      }
+      if (upcomingRes.error) {
+        console.warn('[useClientFlow] upcoming requests unavailable:', upcomingRes.error.message)
+      }
+      if (completedRes.error) {
+        console.warn('[useClientFlow] completed requests unavailable:', completedRes.error.message)
+      }
+      if (ratingsRes.error) {
+        console.warn('[useClientFlow] ratings given unavailable:', ratingsRes.error.message)
+      }
+      if (ratingsReceivedRes.error) {
+        console.warn('[useClientFlow] ratings received unavailable:', ratingsReceivedRes.error.message)
+      }
+      if (tipsRes.error) {
+        console.warn('[useClientFlow] walker tips unavailable:', tipsRes.error.message)
+      }
+
+      if (currentRes.error) {
+        // Preserve the current UI state on transient read failures.
+      } else {
+        applyCurrentRows((currentRes.data as WalkRequestRow[] | null) ?? [], reason)
+      }
+
+      const upcoming = ((upcomingRes.data as WalkRequestRow[] | null) ?? []).filter(isFutureScheduledJob)
+      upcoming.forEach((job) => {
+        lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
+      })
+      setUpcomingJobs(upcoming)
+
+      const tipByJobId = new Map<string, number>()
+      for (const tip of (tipsRes.data as TipRow[] | null) ?? []) {
+        if (!tipByJobId.has(tip.walk_request_id)) {
+          tipByJobId.set(tip.walk_request_id, tip.amount)
+        }
+      }
+
+      const completed = ((completedRes.data as WalkRequestRow[] | null) ?? []).map((job) => ({
+        ...job,
+        hidden_by_client: hiddenHistoryIds.has(job.id),
+        tip_amount: tipByJobId.get(job.id) ?? null,
+      }))
+      completed.forEach((job) => {
+        lifecyclePhaseRef.current.set(job.id, getServicePhase(job))
+      })
+      const lastActiveCompleted = completed.find(
+        (job) => job.status === 'completed' && job.id === lastActiveJobIdRef.current,
+      )
+      if (lastActiveCompleted) {
+        flowCompletedJobIdsRef.current.add(lastActiveCompleted.id)
+      }
+      setCompletedJobs(completed)
+
+      const nextRatings = (ratingsRes.data as RatingRow[] | null) ?? []
+      setRatings(nextRatings)
+      setRatingsReceived((ratingsReceivedRes.data as RatingRow[] | null) ?? [])
+
+      const nextRatedJobIds = new Set(nextRatings.map((r) => r.job_id))
+      const pendingCompletion = getCompletionPromptJob(
+        completed,
+        nextRatedJobIds,
+        dismissedCompletionIdsRef.current,
+        flowCompletedJobIdsRef.current,
+      )
+
+      if (pendingCompletion) {
+        const walkerLabel = pendingCompletion.walker_id
+          ? walkerNameById.get(pendingCompletion.walker_id) || 'Walker'
+          : 'Walker'
+        setCompletionJob((prev) => {
+          if (dismissedCompletionIdsRef.current.has(pendingCompletion.id)) {
+            return prev ?? null
+          }
+          const next = {
+            jobId: pendingCompletion.id,
+            walkerId: pendingCompletion.walker_id,
+            walkerName: walkerLabel,
+          }
+          if (
+            prev?.jobId === next.jobId &&
+            prev.walkerId === next.walkerId &&
+            prev.walkerName === next.walkerName
+          ) {
+            return prev
+          }
+          return next
+        })
+      } else {
+        setCompletionJob((prev) => {
+          if (
+            prev &&
+            flowCompletedJobIdsRef.current.has(prev.jobId) &&
+            !nextRatedJobIds.has(prev.jobId) &&
+            !dismissedCompletionIdsRef.current.has(prev.jobId)
+          ) {
+            return prev
+          }
+          return null
+        })
+      }
+
+      const walkerIds = new Set<string>()
+      for (const row of [
+        ...upcoming,
+        ...completed,
+        ...(((currentRes.data as WalkRequestRow[] | null) ?? [])),
+      ]) {
+        if (row.walker_id) walkerIds.add(row.walker_id)
+      }
+      walkerIds.forEach((id) => {
+        void loadWalkerName(id)
+      })
+      lastFullHydrationCompletedAtRef.current = Date.now()
+      logRecovery('[Hydration]', 'client full hydration completed', {
+        profileId,
+        reason,
+        runId,
+        currentCount: ((currentRes.data as WalkRequestRow[] | null) ?? []).length,
+        upcomingCount: upcoming.length,
+        completedCount: completed.length,
+      })
     })().finally(() => {
       fullRefreshInFlightRef.current = null
     })
@@ -2480,12 +2484,37 @@ function mergeClientDogSizeAttributes(
     const now = Date.now()
 
     if (isForegroundReason) {
+      const sinceLastStartedMs = now - lastFullHydrationStartedAtRef.current
+      const sinceLastCompletedMs = now - lastFullHydrationCompletedAtRef.current
       if (now - lastForegroundHydrationAtRef.current < FOREGROUND_HYDRATION_DEDUPE_MS) {
         logRecovery('[ForegroundResume]', 'client foreground refresh deduped', {
           profileId,
           reason,
           screenState: currentScreenState,
         })
+        return
+      }
+      if (fullRefreshInFlightRef.current || currentOnlyRefreshInFlightRef.current) {
+        logRecovery('[ForegroundResume]', 'client foreground refresh deduped recent hydration', {
+          profileId,
+          reason,
+          screenState: currentScreenState,
+          inFlight: Boolean(fullRefreshInFlightRef.current || currentOnlyRefreshInFlightRef.current),
+        })
+        return
+      }
+      if (
+        (lastFullHydrationStartedAtRef.current > 0 && sinceLastStartedMs < FOREGROUND_HYDRATION_DEDUPE_MS) ||
+        (lastFullHydrationCompletedAtRef.current > 0 && sinceLastCompletedMs < FOREGROUND_HYDRATION_DEDUPE_MS)
+      ) {
+        logRecovery('[ForegroundResume]', 'client foreground refresh deduped recent hydration', {
+          profileId,
+          reason,
+          screenState: currentScreenState,
+          sinceLastStartedMs: lastFullHydrationStartedAtRef.current > 0 ? sinceLastStartedMs : null,
+          sinceLastCompletedMs: lastFullHydrationCompletedAtRef.current > 0 ? sinceLastCompletedMs : null,
+        })
+        lastForegroundHydrationAtRef.current = now
         return
       }
       lastForegroundHydrationAtRef.current = now
