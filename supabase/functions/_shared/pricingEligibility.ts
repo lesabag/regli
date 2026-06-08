@@ -6,6 +6,7 @@ export type ProviderPricingPreferenceRow = {
   is_enabled: boolean | null | undefined
   hourly_rate_min: number | string | null | undefined
   hourly_rate_preferred: number | string | null | undefined
+  service_radius_km?: number | string | null | undefined
   visit_fee_min?: number | string | null | undefined
   visit_fee_preferred?: number | string | null | undefined
   accepts_multi_item?: boolean | null | undefined
@@ -20,12 +21,14 @@ export type PricingEligibilityInput = {
   budgetILS: number | null | undefined
   durationMinutes: number | null | undefined
   dogCount?: number | null | undefined
+  distanceByWalkerId?: Record<string, number | null | undefined> | null | undefined
 }
 
 export type PricingEligibilityResult = {
   eligibleWalkerIds: string[]
   filteredByPriceWalkerIds: string[]
   filteredByMultiItemWalkerIds: string[]
+  filteredByRadiusWalkerIds: string[]
   relevantPreferenceRowsCount: number
   effectiveHourlyRate: number | null
   aggregatedMinHourly: number | null
@@ -76,6 +79,7 @@ export function evaluatePricingEligibility(input: PricingEligibilityInput): Pric
       eligibleWalkerIds: [...input.candidateWalkerIds],
       filteredByPriceWalkerIds: [],
       filteredByMultiItemWalkerIds: [],
+      filteredByRadiusWalkerIds: [],
       relevantPreferenceRowsCount: 0,
       effectiveHourlyRate: null,
       aggregatedMinHourly: null,
@@ -135,11 +139,24 @@ export function evaluatePricingEligibility(input: PricingEligibilityInput): Pric
   const eligibleWalkerIds: string[] = []
   const filteredByPriceWalkerIds: string[] = []
   const filteredByMultiItemWalkerIds: string[] = []
+  const filteredByRadiusWalkerIds: string[] = []
 
   for (const walkerId of input.candidateWalkerIds) {
     const preference = preferencesByProviderId.get(walkerId)
     if (!preference) {
       eligibleWalkerIds.push(walkerId)
+      continue
+    }
+
+    const serviceRadiusKm = toFiniteNumber(preference.service_radius_km)
+    const candidateDistanceKm = toFiniteNumber(input.distanceByWalkerId?.[walkerId] ?? null)
+    if (
+      serviceRadiusKm != null &&
+      serviceRadiusKm > 0 &&
+      candidateDistanceKm != null &&
+      candidateDistanceKm > serviceRadiusKm
+    ) {
+      filteredByRadiusWalkerIds.push(walkerId)
       continue
     }
 
@@ -173,6 +190,7 @@ export function evaluatePricingEligibility(input: PricingEligibilityInput): Pric
     eligibleWalkerIds,
     filteredByPriceWalkerIds,
     filteredByMultiItemWalkerIds,
+    filteredByRadiusWalkerIds,
     relevantPreferenceRowsCount: relevantRows.length,
     effectiveHourlyRate: Number.isFinite(effectiveHourlyRate) ? Math.round(effectiveHourlyRate * 100) / 100 : null,
     aggregatedMinHourly: averageMinRate != null ? Math.round(averageMinRate * 100) / 100 : null,

@@ -10,7 +10,7 @@ import {
   isProviderAvailableAt,
   type ProviderAvailabilityRow,
 } from '../_shared/providerAvailability.ts'
-import { evaluateDogSizeCompatibility, rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
+import { distanceKm, evaluateDogSizeCompatibility, rankWalkerCandidates } from '../_shared/dispatchRanking.ts'
 import { loadSelectedDogSizesForRequest, mergeSelectedDogSizesIntoClientAttributes } from '../_shared/requestDogSizes.ts'
 
 function getScheduledDispatchLeadMinutes(): number {
@@ -47,6 +47,10 @@ type StartDispatchResponse = {
   requestId?: string
   candidateCount?: number
   advanceResult?: unknown
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function normalizeProviderServiceType(value: string | null | undefined): 'dog_walker' | 'baby_sitter' | null {
@@ -118,6 +122,8 @@ serve(async (req) => {
       .select(`
         id,
         client_id,
+        client_lat,
+        client_lng,
         status,
         service_type,
         scheduled_for,
@@ -401,7 +407,74 @@ serve(async (req) => {
             job.scheduled_for!,
           ),
         )
-        const walkerIds = onlineWalkers.map((walker) => walker.id)
+        const requestClientLat = toFiniteNumber((job as { client_lat?: unknown }).client_lat)
+        const requestClientLng = toFiniteNumber((job as { client_lng?: unknown }).client_lng)
+        const hasRequestCoordinates = requestClientLat != null && requestClientLng != null
+
+        let radiusCompatibleWalkers = onlineWalkers
+        if (onlineWalkers.length > 0) {
+          const { data: providerPreferenceRows, error: providerPreferencesError } = await supabase
+            .from('provider_service_preferences')
+            .select('provider_id, service_type, booking_type, is_enabled, service_radius_km')
+            .in('provider_id', onlineWalkers.map((walker) => walker.id))
+            .eq('service_type', requestedProviderServiceType ?? '')
+            .eq('booking_type', 'scheduled')
+            .eq('is_enabled', true)
+
+          if (providerPreferencesError) {
+            await supabase.rpc('log_dispatch_event', {
+              p_request_id: job.id,
+              p_attempt_id: null,
+              p_event_type: 'scheduled_provider_radius_lookup_failed',
+              p_payload: { error: providerPreferencesError.message, retry_later: true },
+            })
+            continue
+          }
+
+          const radiusByProviderId = new Map<string, number | null>()
+          ;((providerPreferenceRows as Array<{ provider_id?: string | null; service_radius_km?: number | null }> | null) ?? []).forEach((row) => {
+            if (!row.provider_id) return
+            radiusByProviderId.set(row.provider_id, toFiniteNumber(row.service_radius_km))
+          })
+
+          radiusCompatibleWalkers = onlineWalkers.filter((walker) => {
+            const serviceRadiusKm = radiusByProviderId.get(walker.id) ?? null
+            if (serviceRadiusKm == null || serviceRadiusKm <= 0) return true
+            if (!hasRequestCoordinates) {
+              console.log('[run-scheduled-dispatch] radius filter skipped without request coordinates', {
+                requestId: job.id,
+                walkerId: walker.id,
+                serviceRadiusKm,
+                bookingType: 'scheduled',
+              })
+              return true
+            }
+            if (walker.last_lat == null || walker.last_lng == null) return true
+
+            const candidateDistanceKm = distanceKm(
+              requestClientLat!,
+              requestClientLng!,
+              walker.last_lat,
+              walker.last_lng,
+            )
+            const withinRadius = candidateDistanceKm <= serviceRadiusKm
+
+            if (!withinRadius) {
+              console.log('[run-scheduled-dispatch] provider excluded by service radius', {
+                requestId: job.id,
+                walkerId: walker.id,
+                distanceKm: Number(candidateDistanceKm.toFixed(2)),
+                serviceRadiusKm,
+                bookingType: 'scheduled',
+                serviceType: requestedProviderServiceType,
+              })
+            }
+
+            return withinRadius
+          })
+        }
+
+        const walkerIds = radiusCompatibleWalkers.map((walker) => walker.id)
 
         console.log('[run-scheduled-dispatch] candidates after service_type filtering', {
           requestId: job.id,
@@ -410,9 +483,11 @@ serve(async (req) => {
           onlineWalkerCount: (walkers as WalkerRow[] | null)?.length ?? 0,
           serviceTypeCandidateCount: matchingServiceWalkers.length,
           availabilityCandidateCount: onlineWalkers.length,
+          radiusCandidateCount: radiusCompatibleWalkers.length,
+          hasRequestCoordinates,
         })
 
-        if (onlineWalkers.length === 0) {
+        if (radiusCompatibleWalkers.length === 0) {
           const { error: updateError } = await supabase
             .from('walk_requests')
             .update({
@@ -431,7 +506,8 @@ serve(async (req) => {
                 request_service_type: job.service_type ?? null,
                 normalized_provider_service_type: requestedProviderServiceType,
                 service_type_candidate_count: matchingServiceWalkers.length,
-                availability_candidate_count: 0,
+                availability_candidate_count: onlineWalkers.length,
+                radius_candidate_count: radiusCompatibleWalkers.length,
               },
             })
             noCandidates++
@@ -470,7 +546,7 @@ serve(async (req) => {
         let clientServiceAttributes: Record<string, unknown> | null = null
 
         const walkerServiceAttrsById = new Map<string, Record<string, unknown>>()
-        for (const walker of onlineWalkers) {
+        for (const walker of radiusCompatibleWalkers) {
           if (walker.service_attributes && typeof walker.service_attributes === 'object') {
             walkerServiceAttrsById.set(walker.id, walker.service_attributes)
           }
@@ -537,7 +613,7 @@ serve(async (req) => {
           }
         }
 
-        const dogSizeCompatibleWalkers = onlineWalkers.filter((walker) => {
+        const dogSizeCompatibleWalkers = radiusCompatibleWalkers.filter((walker) => {
           const compatibility = evaluateDogSizeCompatibility(
             requestedProviderServiceType,
             clientServiceAttributes,
@@ -566,9 +642,15 @@ serve(async (req) => {
         const ranked = rankWalkerCandidates(
           dogSizeCompatibleWalkers.map((walker) => {
             const ratingStats = ratingsByWalker.get(walker.id)
+            const candidateDistanceKm =
+              hasRequestCoordinates &&
+              walker.last_lat != null &&
+              walker.last_lng != null
+                ? distanceKm(requestClientLat!, requestClientLng!, walker.last_lat, walker.last_lng)
+                : null
             return {
               walkerId: walker.id,
-              distanceKm: null,
+              distanceKm: candidateDistanceKm,
               avgRating:
                 ratingStats && ratingStats.count > 0
                   ? ratingStats.total / ratingStats.count

@@ -6362,20 +6362,20 @@ const availabilityEmptyStyle: React.CSSProperties = {
 }
 
 const availabilityServiceCardStyle: React.CSSProperties = {
-  marginBottom: 12,
-  padding: '12px 14px',
-  borderRadius: 24,
+  marginBottom: 10,
+  padding: '10px 12px',
+  borderRadius: 20,
   border: '1px solid #E7EDF4',
   background: '#FFFFFF',
-  boxShadow: '0 14px 34px rgba(15, 23, 42, 0.06)',
+  boxShadow: '0 12px 28px rgba(15, 23, 42, 0.05)',
 }
 
 const availabilityServiceHeaderStyle: React.CSSProperties = {
-  marginBottom: 8,
+  marginBottom: 6,
 }
 
 const availabilityServiceTitleStyle: React.CSSProperties = {
-  fontSize: 16,
+  fontSize: 15,
   fontWeight: 800,
   color: '#0F172A',
 }
@@ -6383,21 +6383,21 @@ const availabilityServiceTitleStyle: React.CSSProperties = {
 const availabilitySelectorRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-  gap: 8,
-  marginBottom: 12,
+  gap: 6,
+  marginBottom: 10,
 }
 
 const availabilityDaySelectorButtonStyle: React.CSSProperties = {
-  minHeight: 54,
-  borderRadius: 18,
+  minHeight: 44,
+  borderRadius: 15,
   border: '1px solid transparent',
   background: '#F8FAFC',
   display: 'grid',
   justifyItems: 'center',
   alignContent: 'center',
-  gap: 5,
+  gap: 4,
   cursor: 'pointer',
-  padding: '6px 2px',
+  padding: '5px 2px',
 }
 
 const availabilityDaySelectorButtonSelectedStyle: React.CSSProperties = {
@@ -6407,20 +6407,20 @@ const availabilityDaySelectorButtonSelectedStyle: React.CSSProperties = {
 }
 
 const availabilityDaySelectorLabelStyle: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 800,
   color: '#334155',
 }
 
 const availabilityDaySelectorDotStyle: React.CSSProperties = {
-  width: 10,
-  height: 10,
+  width: 8,
+  height: 8,
   borderRadius: '50%',
 }
 
 const availabilityDaySelectorDotActiveStyle: React.CSSProperties = {
   background: '#22C55E',
-  boxShadow: '0 0 0 3px rgba(34, 197, 94, 0.14)',
+  boxShadow: '0 0 0 2px rgba(34, 197, 94, 0.14)',
 }
 
 const availabilityDaySelectorDotInactiveStyle: React.CSSProperties = {
@@ -6428,19 +6428,19 @@ const availabilityDaySelectorDotInactiveStyle: React.CSSProperties = {
 }
 
 const availabilitySelectedEditorCardStyle: React.CSSProperties = {
-  borderRadius: 18,
+  borderRadius: 16,
   border: '1px solid #E7EDF4',
   background: '#FBFCFE',
-  padding: '12px 12px 10px',
+  padding: '10px 10px 8px',
   display: 'grid',
-  gap: 10,
+  gap: 8,
 }
 
 const availabilitySelectedEditorHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 10,
+  gap: 8,
 }
 
 const availabilitySelectedEditorTitleWrapStyle: React.CSSProperties = {
@@ -6449,19 +6449,19 @@ const availabilitySelectedEditorTitleWrapStyle: React.CSSProperties = {
 }
 
 const availabilitySelectedEditorDayStyle: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 800,
   color: '#0F172A',
 }
 
 const availabilitySelectedEditorMetaActiveStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 700,
   color: '#15803D',
 }
 
 const availabilitySelectedEditorMetaInactiveStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 700,
   color: '#94A3B8',
 }
@@ -6470,8 +6470,8 @@ const availabilityToggleShellStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  width: 54,
-  height: 34,
+  width: 50,
+  height: 30,
   cursor: 'pointer',
 }
 
@@ -6482,8 +6482,8 @@ const availabilityToggleShellStaticStyle: React.CSSProperties = {
 
 const availabilityToggleTrackStyle: React.CSSProperties = {
   position: 'relative',
-  width: 46,
-  height: 28,
+  width: 42,
+  height: 24,
   borderRadius: 999,
   background: '#D5DDE7',
   transition: 'background 160ms ease',
@@ -6496,10 +6496,10 @@ const availabilityToggleTrackActiveStyle: React.CSSProperties = {
 
 const availabilityToggleThumbStyle: React.CSSProperties = {
   position: 'absolute',
-  top: 3,
-  left: 3,
-  width: 22,
-  height: 22,
+  top: 2,
+  left: 2,
+  width: 20,
+  height: 20,
   borderRadius: '50%',
   background: '#FFFFFF',
   boxShadow: '0 2px 6px rgba(15, 23, 42, 0.18)',
@@ -6515,7 +6515,7 @@ const availabilityEditorStyle: React.CSSProperties = {
 }
 
 const availabilityEditorHeaderStyle: React.CSSProperties = {
-  marginBottom: 6,
+  marginBottom: 5,
   fontSize: 11,
   fontWeight: 800,
   color: '#64748B',
@@ -6525,22 +6525,22 @@ const availabilityEditorHeaderStyle: React.CSSProperties = {
 
 const availabilityEditorHintStyle: React.CSSProperties = {
   padding: '0 0 2px',
-  fontSize: 12,
+  fontSize: 11,
   lineHeight: 1.45,
   color: '#94A3B8',
 }
 
 const availabilityTimeInputsStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))',
-  gap: 10,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+  gap: 8,
   width: '100%',
   alignItems: 'stretch',
 }
 
 const availabilityTimeFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 5,
+  gap: 4,
   minWidth: 0,
   width: '100%',
 }
@@ -6555,14 +6555,14 @@ const availabilityTimeLabelStyle: React.CSSProperties = {
 
 const availabilityTimeInputStyle: React.CSSProperties = {
   width: '100%',
-  minHeight: 40,
-  borderRadius: 14,
+  minHeight: 38,
+  borderRadius: 12,
   border: '1px solid #E7EDF4',
   background: '#FBFCFE',
   color: '#0F172A',
-  fontSize: 14,
+  fontSize: 13,
   fontWeight: 600,
-  padding: '0 11px',
+  padding: '0 10px',
   boxSizing: 'border-box',
   minWidth: 0,
   appearance: 'none',
@@ -6571,7 +6571,7 @@ const availabilityTimeInputStyle: React.CSSProperties = {
 const availabilitySaveButtonStyle: React.CSSProperties = {
   width: '100%',
   minHeight: 48,
-  marginTop: 12,
+  marginTop: 10,
   borderRadius: 16,
   border: 'none',
   background: '#08153B',

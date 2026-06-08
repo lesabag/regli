@@ -19,6 +19,11 @@ export interface NearbyWalker {
   rating: number | null
 }
 
+type ProviderRadiusPreferenceRow = {
+  provider_id: string | null
+  service_radius_km: number | null
+}
+
 const POLL_INTERVAL_MS = 15_000
 const MAX_DISTANCE_KM = 100
 const MIN_MOVE_DEG = 0.00004
@@ -67,6 +72,7 @@ export function useNearbyWalkers(
   enabled: boolean,
   serviceTypeFilter?: string | ProfileServiceType | null,
   availabilityAt?: string | null,
+  bookingType: 'asap' | 'scheduled' = 'asap',
 ): NearbyWalker[] {
   const [walkers, setWalkers] = useState<NearbyWalker[]>([])
   const userLocRef = useRef(userLocation)
@@ -75,11 +81,14 @@ export function useNearbyWalkers(
   serviceTypeFilterRef.current = serviceTypeFilter ?? null
   const availabilityAtRef = useRef(availabilityAt ?? null)
   availabilityAtRef.current = availabilityAt ?? null
+  const bookingTypeRef = useRef<'asap' | 'scheduled'>(bookingType)
+  bookingTypeRef.current = bookingType
 
   const prevPosRef = useRef<Map<string, [number, number]>>(new Map())
   const lastSeenPosRef = useRef<Map<string, [number, number]>>(new Map())
   const bearingRef = useRef<Map<string, BearingEntry>>(new Map())
   const availabilityByProviderRef = useRef<Map<string, ProviderAvailabilityRow[]>>(new Map())
+  const radiusByProviderRef = useRef<Map<string, number | null>>(new Map())
 
   const removeWalker = useCallback((id: string) => {
     prevPosRef.current.delete(id)
@@ -145,6 +154,7 @@ export function useNearbyWalkers(
     const loc = userLocRef.current
     if (!loc) {
       availabilityByProviderRef.current = new Map()
+      radiusByProviderRef.current = new Map()
       setWalkers([])
       return
     }
@@ -160,23 +170,45 @@ export function useNearbyWalkers(
 
     if (error || !data) {
       availabilityByProviderRef.current = new Map()
+      radiusByProviderRef.current = new Map()
       setWalkers([])
       return
     }
 
     const expectedServiceType = serviceTypeFilterRef.current
     const availabilityReferenceAt = availabilityAtRef.current ?? new Date().toISOString()
+    const expectedBookingType = bookingTypeRef.current
     const providerIds = data.map((row) => row.id).filter((value): value is string => typeof value === 'string' && value.length > 0)
     let ratingsByProvider = new Map<string, number | null>()
     try {
-      const [availabilityRows, ratingsResult] = await Promise.all([
+      const [availabilityRows, ratingsResult, providerPreferencesResult] = await Promise.all([
         fetchProviderAvailabilityRows(providerIds, expectedServiceType),
         supabase
           .from('ratings')
           .select('to_user_id, rating')
           .in('to_user_id', providerIds),
+        expectedServiceType
+          ? supabase
+              .from('provider_service_preferences')
+              .select('provider_id, service_radius_km')
+              .in('provider_id', providerIds)
+              .eq('service_type', expectedServiceType)
+              .eq('booking_type', expectedBookingType)
+              .eq('is_enabled', true)
+          : Promise.resolve({ data: null, error: null }),
       ])
       availabilityByProviderRef.current = groupProviderAvailabilityRows(availabilityRows)
+      radiusByProviderRef.current = new Map(
+        (
+          (providerPreferencesResult.data as ProviderRadiusPreferenceRow[] | null) ??
+          []
+        ).map<[string, number | null]>((row) => [
+          row.provider_id ?? '',
+          typeof row.service_radius_km === 'number' && Number.isFinite(row.service_radius_km) && row.service_radius_km > 0
+            ? row.service_radius_km
+            : null,
+        ]).filter((entry): entry is [string, number | null] => entry[0].length > 0),
+      )
 
       const ratingBuckets = new Map<string, number[]>()
       ;((ratingsResult.data as Array<{ to_user_id: string | null; rating: number | null }> | null) ?? []).forEach((row) => {
@@ -198,6 +230,7 @@ export function useNearbyWalkers(
     } catch (availabilityError) {
       console.warn('[useNearbyWalkers] availability lookup failed:', availabilityError)
       availabilityByProviderRef.current = new Map()
+      radiusByProviderRef.current = new Map()
       setWalkers([])
       return
     }
@@ -213,7 +246,20 @@ export function useNearbyWalkers(
         continue
       }
 
-      if (haversineKm(loc[0], loc[1], w.last_lat, w.last_lng) <= MAX_DISTANCE_KM) {
+      const candidateDistanceKm = haversineKm(loc[0], loc[1], w.last_lat, w.last_lng)
+      const serviceRadiusKm = radiusByProviderRef.current.get(w.id) ?? null
+      if (serviceRadiusKm != null && candidateDistanceKm > serviceRadiusKm) {
+        console.log('[useNearbyWalkers] provider excluded by service radius', {
+          providerId: w.id,
+          bookingType: expectedBookingType,
+          serviceType: expectedServiceType,
+          distanceKm: Number(candidateDistanceKm.toFixed(2)),
+          serviceRadiusKm,
+        })
+        continue
+      }
+
+      if (candidateDistanceKm <= MAX_DISTANCE_KM) {
         activeIds.add(w.id)
         nearby.push({
           id: w.id,
@@ -272,9 +318,15 @@ export function useNearbyWalkers(
       }
 
       const hasCoords = row.last_lat != null && row.last_lng != null
+      const serviceRadiusKm = radiusByProviderRef.current.get(row.id) ?? null
+      const candidateDistanceKm =
+        hasCoords
+          ? haversineKm(loc[0], loc[1], row.last_lat!, row.last_lng!)
+          : null
       const inRange =
         hasCoords &&
-        haversineKm(loc[0], loc[1], row.last_lat!, row.last_lng!) <= MAX_DISTANCE_KM
+        candidateDistanceKm! <= MAX_DISTANCE_KM &&
+        (serviceRadiusKm == null || candidateDistanceKm! <= serviceRadiusKm)
 
       if (inRange) {
         const bearing = resolveBearing(row.id, row.last_lat!, row.last_lng!)
@@ -308,6 +360,7 @@ export function useNearbyWalkers(
   useEffect(() => {
     if (!enabled) {
       availabilityByProviderRef.current = new Map()
+      radiusByProviderRef.current = new Map()
       setWalkers([])
       return
     }
@@ -353,7 +406,7 @@ export function useNearbyWalkers(
   useEffect(() => {
     if (!enabled) return
     void fetchNearby()
-  }, [availabilityAt, enabled, fetchNearby, serviceTypeFilter])
+  }, [availabilityAt, bookingType, enabled, fetchNearby, serviceTypeFilter])
 
   return walkers
 }

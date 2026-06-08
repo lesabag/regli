@@ -2612,6 +2612,7 @@ export default function ClientDashboard({
     flow.hasUserLocation && showNearbyWalkers,
     requestServiceType,
     flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
+    flow.bookingTiming === 'scheduled' ? 'scheduled' : 'asap',
   )
   const nearbyProviderIdsForGuidance = useMemo(
     () => Array.from(new Set(nearbyWalkers.map((walker) => walker.id).filter((value) => value.length > 0))).sort(),

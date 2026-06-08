@@ -277,7 +277,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, duration_minutes, price')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, duration_minutes, price, client_lat, client_lng')
       .eq('id', requestId)
       .single()
 
@@ -548,7 +548,7 @@ serve(async (req) => {
           : Promise.resolve({ data: null, error: null }),
         supabase
           .from('provider_service_preferences')
-          .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, accepts_multi_item, max_item_count')
+          .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, service_radius_km, accepts_multi_item, max_item_count')
           .in('provider_id', candidateWalkerIds)
           .eq('is_enabled', true)
           .eq('pricing_model', 'time_based'),
@@ -775,6 +775,14 @@ serve(async (req) => {
       budgetILS: typeof requestRow.price === 'number' ? requestRow.price : null,
       durationMinutes: typeof requestRow.duration_minutes === 'number' ? requestRow.duration_minutes : null,
       dogCount: typeof requestRow.dog_count === 'number' ? requestRow.dog_count : 1,
+      distanceByWalkerId: Object.fromEntries(
+        affinityRankedCandidates.map((candidate) => [
+          candidate.walkerId,
+          typeof candidate.meta?.distance_km === 'number' && Number.isFinite(candidate.meta.distance_km)
+            ? candidate.meta.distance_km
+            : null,
+        ]),
+      ),
     })
 
     const eligibleWalkerIdSet = new Set(pricingEligibility.eligibleWalkerIds)
@@ -799,6 +807,7 @@ serve(async (req) => {
       candidate_count_after_pricing_filter: pricingFilteredCandidates.length,
       filtered_by_price_count: pricingEligibility.filteredByPriceWalkerIds.length,
       filtered_by_multi_item_count: pricingEligibility.filteredByMultiItemWalkerIds.length,
+      filtered_by_radius_count: pricingEligibility.filteredByRadiusWalkerIds.length,
       availability_filtered_count:
         rankedCandidates.length >= affinityRankedCandidates.length
           ? rankedCandidates.length - affinityRankedCandidates.length
@@ -832,6 +841,7 @@ serve(async (req) => {
         candidateCountBeforePricingFilter: affinityRankedCandidates.length,
         filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,
         filteredByMultiItemCount: pricingEligibility.filteredByMultiItemWalkerIds.length,
+        filteredByRadiusCount: pricingEligibility.filteredByRadiusWalkerIds.length,
         availabilityFilteredCount:
           rankedCandidates.length >= affinityRankedCandidates.length
             ? rankedCandidates.length - affinityRankedCandidates.length
@@ -885,6 +895,7 @@ serve(async (req) => {
           candidateCount: 0,
           filteredByPriceCount: pricingEligibility.filteredByPriceWalkerIds.length,
           filteredByMultiItemCount: pricingEligibility.filteredByMultiItemWalkerIds.length,
+          filteredByRadiusCount: pricingEligibility.filteredByRadiusWalkerIds.length,
           recommendedMinBudget: pricingEligibility.recommendedMinBudget,
           recommendedPreferredBudget: pricingEligibility.recommendedPreferredBudget,
           requestState: {

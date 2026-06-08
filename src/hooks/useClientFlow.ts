@@ -256,6 +256,11 @@ type DispatchRatingRow = {
   rating: number
 }
 
+type ProviderRadiusPreferenceRow = {
+  provider_id: string | null
+  service_radius_km: number | null
+}
+
 type QueryResult<T> = {
   data: T | null
   error: { message: string } | null
@@ -273,6 +278,10 @@ const ACTIVE_HYDRATION_POLL_MS = 10_000
 const FOREGROUND_HYDRATION_DEDUPE_MS = 2_500
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
+
+function normalizeServiceRadiusKm(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
 
 
 function pad(n: number): string {
@@ -4239,7 +4248,59 @@ function mergeClientDogSizeAttributes(
               )
             : false,
         )
-        const walkerIds = availableWalkers.map((walker) => walker.id)
+        let radiusCompatibleWalkers = availableWalkers
+        if (availableWalkers.length > 0) {
+          const { data: providerPreferencesRows, error: providerPreferencesError } = await supabase
+            .from('provider_service_preferences')
+            .select('provider_id, service_radius_km')
+            .in('provider_id', availableWalkers.map((walker) => walker.id))
+            .eq('service_type', requestedProviderServiceType ?? '')
+            .eq('booking_type', createdJob.booking_timing === 'scheduled' ? 'scheduled' : 'asap')
+            .eq('is_enabled', true)
+
+          if (providerPreferencesError) {
+            throw new Error(providerPreferencesError.message)
+          }
+
+          const radiusByProviderId = new Map(
+            (((providerPreferencesRows as ProviderRadiusPreferenceRow[] | null) ?? [])).map<[string, number | null]>((row) => [
+              row.provider_id ?? '',
+              normalizeServiceRadiusKm(row.service_radius_km),
+            ]).filter((entry): entry is [string, number | null] => entry[0].length > 0),
+          )
+
+          radiusCompatibleWalkers = availableWalkers.filter((walker) => {
+            const serviceRadiusKm = radiusByProviderId.get(walker.id) ?? null
+            if (serviceRadiusKm == null) return true
+            if (!userLocation) return true
+            if (typeof walker.last_lat !== 'number' || !Number.isFinite(walker.last_lat)) return true
+            if (typeof walker.last_lng !== 'number' || !Number.isFinite(walker.last_lng)) return true
+
+            const candidateDistanceKm = distanceKm(
+              userLocation[0],
+              userLocation[1],
+              walker.last_lat,
+              walker.last_lng,
+            )
+            const withinRadius = candidateDistanceKm <= serviceRadiusKm
+
+            if (!withinRadius) {
+              console.log('[useClientFlow] provider excluded by service radius', {
+                profileId,
+                requestId: createdJob.id,
+                walkerId: walker.id,
+                requestServiceType: requestedProviderServiceType,
+                bookingType: createdJob.booking_timing === 'scheduled' ? 'scheduled' : 'asap',
+                distanceKm: Number(candidateDistanceKm.toFixed(2)),
+                serviceRadiusKm,
+              })
+            }
+
+            return withinRadius
+          })
+        }
+
+        const walkerIds = radiusCompatibleWalkers.map((walker) => walker.id)
 
         let ratingsByWalker = new Map<string, { total: number; count: number }>()
         if (walkerIds.length > 0) {
@@ -4300,12 +4361,12 @@ function mergeClientDogSizeAttributes(
         }
 
         const walkerServiceAttrsById = new Map(
-          availableWalkers
+          radiusCompatibleWalkers
             .filter((w) => w.service_attributes)
             .map((w) => [w.id, w.service_attributes as Record<string, unknown>]),
         )
 
-        const dogSizeCompatibleWalkers = availableWalkers.filter((walker) => {
+        const dogSizeCompatibleWalkers = radiusCompatibleWalkers.filter((walker) => {
           const compatibility = evaluateDogSizeCompatibility(
             requestedProviderServiceType,
             clientServiceAttributes,
@@ -4387,6 +4448,7 @@ function mergeClientDogSizeAttributes(
           onlineWalkerCount: allOnlineWalkers.length,
           matchingWalkerCount: matchingWalkers.length,
           availableWalkerCount: availableWalkers.length,
+          radiusCompatibleWalkerCount: radiusCompatibleWalkers.length,
           dogSizeCompatibleWalkerCount: dogSizeCompatibleWalkers.length,
           rankedCandidateCount: ranked.length,
         })
@@ -4404,6 +4466,7 @@ function mergeClientDogSizeAttributes(
             onlineWalkerCount: allOnlineWalkers.length,
             matchingWalkerCount: matchingWalkers.length,
             availableWalkerCount: availableWalkers.length,
+            radiusCompatibleWalkerCount: radiusCompatibleWalkers.length,
           })
         }
 

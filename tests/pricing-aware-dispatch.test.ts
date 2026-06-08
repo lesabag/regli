@@ -247,6 +247,57 @@ test('pricing-aware dispatch excludes multi-item requests when provider does not
   assert.deepEqual(result.filteredByPriceWalkerIds, [])
 })
 
+test('pricing-aware dispatch respects provider service radius when distance is known', () => {
+  const result = evaluatePricingEligibility({
+    candidateWalkerIds: ['walker-a', 'walker-b'],
+    preferences: [
+      {
+        ...pref({ providerId: 'walker-a', bookingType: 'asap', minimum: 20, preferred: 30 }),
+        service_radius_km: 3,
+      },
+      {
+        ...pref({ providerId: 'walker-b', bookingType: 'asap', minimum: 20, preferred: 30 }),
+        service_radius_km: null,
+      },
+    ],
+    serviceType: 'dog_walker',
+    bookingType: 'asap',
+    budgetILS: 50,
+    durationMinutes: 60,
+    dogCount: 1,
+    distanceByWalkerId: {
+      'walker-a': 4.2,
+      'walker-b': 12,
+    },
+  })
+
+  assert.deepEqual(result.eligibleWalkerIds, ['walker-b'])
+  assert.deepEqual(result.filteredByRadiusWalkerIds, ['walker-a'])
+})
+
+test('pricing-aware dispatch does not exclude provider by radius when distance is unknown', () => {
+  const result = evaluatePricingEligibility({
+    candidateWalkerIds: ['walker-a'],
+    preferences: [
+      {
+        ...pref({ providerId: 'walker-a', bookingType: 'scheduled', minimum: 20, preferred: 30 }),
+        service_radius_km: 2,
+      },
+    ],
+    serviceType: 'dog_walker',
+    bookingType: 'scheduled',
+    budgetILS: 50,
+    durationMinutes: 60,
+    dogCount: 1,
+    distanceByWalkerId: {
+      'walker-a': null,
+    },
+  })
+
+  assert.deepEqual(result.eligibleWalkerIds, ['walker-a'])
+  assert.deepEqual(result.filteredByRadiusWalkerIds, [])
+})
+
 test('multi-item eligibility only applies to dog walker requests', () => {
   const fixedVisitResult = evaluatePricingEligibility({
     candidateWalkerIds: ['pro-a', 'pro-b'],
