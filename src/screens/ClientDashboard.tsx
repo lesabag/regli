@@ -101,6 +101,30 @@ function parseBudgetBelowMinimumError(
   }
 }
 
+function serializeProviderPricingPreferenceRows(rows: ProviderPricingPreferenceInput[]): string {
+  return JSON.stringify(
+    [...rows]
+      .map((row) => ({
+        provider_id: row.provider_id ?? null,
+        service_type: row.service_type ?? null,
+        pricing_model: row.pricing_model ?? null,
+        booking_type: row.booking_type ?? null,
+        is_enabled: row.is_enabled ?? null,
+        hourly_rate_min: row.hourly_rate_min ?? null,
+        hourly_rate_preferred: row.hourly_rate_preferred ?? null,
+        visit_fee_min: row.visit_fee_min ?? null,
+        visit_fee_preferred: row.visit_fee_preferred ?? null,
+        accepts_multi_item: row.accepts_multi_item ?? null,
+        max_item_count: row.max_item_count ?? null,
+      }))
+      .sort((a, b) => {
+        const left = `${a.provider_id ?? ''}:${a.service_type ?? ''}:${a.booking_type ?? ''}:${a.pricing_model ?? ''}`
+        const right = `${b.provider_id ?? ''}:${b.service_type ?? ''}:${b.booking_type ?? ''}:${b.pricing_model ?? ''}`
+        return left.localeCompare(right)
+      }),
+  )
+}
+
 function getNowPlus15LocalInput(): string {
   return toLocalDatetimeInputValue(new Date(Date.now() + 15 * 60 * 1000))
 }
@@ -708,6 +732,10 @@ export default function ClientDashboard({
   })
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
   const appViewportHeightRef = useRef(appViewportHeight)
+  const providerPricingPreferencesCacheRef = useRef<Map<string, ProviderPricingPreferenceInput[]>>(new Map())
+  const providerPricingPreferencesInFlightRef = useRef<Map<string, Promise<ProviderPricingPreferenceInput[]>>>(new Map())
+  const activeProviderPricingQueryKeyRef = useRef<string | null>(null)
+  const providerPricingPreferencesSnapshotRef = useRef<string>('[]')
   const clientSettingsPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastOnboardingWowTokenRef = useRef(0)
@@ -2657,6 +2685,21 @@ export default function ClientDashboard({
     () => nearbyProviderIdsForGuidance.join(','),
     [nearbyProviderIdsForGuidance],
   )
+  const providerPricingQueryKey = useMemo(() => {
+    const serviceType = effectiveRequestServiceType ?? resolvedBookingService ?? ''
+    return JSON.stringify({
+      serviceType,
+      bookingType: bookingTypeForGuidance,
+      dogCount: normalizedDogCount,
+      nearbyProviderIdsForGuidanceKey,
+    })
+  }, [
+    bookingTypeForGuidance,
+    effectiveRequestServiceType,
+    nearbyProviderIdsForGuidanceKey,
+    normalizedDogCount,
+    resolvedBookingService,
+  ])
 
   const mapUserLocation: [number, number] =
     flow.userLocation ?? flow.walkerLocation ?? ([32.0853, 34.7818] as [number, number])
@@ -3468,36 +3511,97 @@ export default function ClientDashboard({
 
     async function loadProviderPricingPreferences() {
       const serviceType = effectiveRequestServiceType ?? null
+      activeProviderPricingQueryKeyRef.current = providerPricingQueryKey
       if (!serviceType || nearbyProviderIdsForGuidance.length === 0) {
-        if (!cancelled) setProviderPricingPreferences([])
+        if (!cancelled && providerPricingPreferencesSnapshotRef.current !== '[]') {
+          providerPricingPreferencesSnapshotRef.current = '[]'
+          setProviderPricingPreferences([])
+        }
         return
       }
 
       const serviceTypeAliases = getGuidanceServiceTypeAliases(serviceType)
-
-      let query = supabase
-        .from('provider_service_preferences')
-        .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, accepts_multi_item, max_item_count')
-        .in('provider_id', nearbyProviderIdsForGuidance)
-        .eq('booking_type', bookingTypeForGuidance)
-
-      if (serviceTypeAliases.length > 1) {
-        query = query.in('service_type', serviceTypeAliases)
-      } else {
-        query = query.eq('service_type', serviceTypeAliases[0] ?? serviceType)
-      }
-
-      const { data, error } = await query
-
-      if (cancelled) return
-
-      if (error) {
-        console.warn('[ClientDashboard] provider pricing preferences unavailable:', error.message)
-        setProviderPricingPreferences([])
+      const cachedRows = providerPricingPreferencesCacheRef.current.get(providerPricingQueryKey)
+      if (cachedRows) {
+        console.debug('[ClientDashboard] provider pricing preferences cache reused', {
+          service_type: serviceType,
+          booking_type: bookingTypeForGuidance,
+          dog_count: normalizedDogCount,
+          nearbyProviderCount: nearbyProviderIdsForGuidance.length,
+          queryKey: providerPricingQueryKey,
+        })
+        const cachedSnapshot = serializeProviderPricingPreferenceRows(cachedRows)
+        if (!cancelled && activeProviderPricingQueryKeyRef.current === providerPricingQueryKey) {
+          if (providerPricingPreferencesSnapshotRef.current !== cachedSnapshot) {
+            providerPricingPreferencesSnapshotRef.current = cachedSnapshot
+            setProviderPricingPreferences(cachedRows)
+          }
+        }
         return
       }
 
-      const nextRows = (data as ProviderPricingPreferenceInput[] | null) ?? []
+      let request = providerPricingPreferencesInFlightRef.current.get(providerPricingQueryKey)
+      if (!request) {
+        request = (async () => {
+          let query = supabase
+            .from('provider_service_preferences')
+            .select('provider_id, service_type, pricing_model, booking_type, is_enabled, hourly_rate_min, hourly_rate_preferred, visit_fee_min, visit_fee_preferred, accepts_multi_item, max_item_count')
+            .in('provider_id', nearbyProviderIdsForGuidance)
+            .eq('booking_type', bookingTypeForGuidance)
+
+          if (serviceTypeAliases.length > 1) {
+            query = query.in('service_type', serviceTypeAliases)
+          } else {
+            query = query.eq('service_type', serviceTypeAliases[0] ?? serviceType)
+          }
+
+          const { data, error } = await query
+          if (error) throw error
+          return (data as ProviderPricingPreferenceInput[] | null) ?? []
+        })().finally(() => {
+          providerPricingPreferencesInFlightRef.current.delete(providerPricingQueryKey)
+        })
+        providerPricingPreferencesInFlightRef.current.set(providerPricingQueryKey, request)
+      } else {
+        console.debug('[ClientDashboard] provider pricing preferences in-flight reused', {
+          service_type: serviceType,
+          booking_type: bookingTypeForGuidance,
+          dog_count: normalizedDogCount,
+          nearbyProviderCount: nearbyProviderIdsForGuidance.length,
+          queryKey: providerPricingQueryKey,
+        })
+      }
+
+      let nextRows: ProviderPricingPreferenceInput[] = []
+      try {
+        nextRows = await request
+      } catch (error) {
+        if (cancelled) return
+        console.warn(
+          '[ClientDashboard] provider pricing preferences unavailable:',
+          error instanceof Error ? error.message : String(error),
+        )
+        if (activeProviderPricingQueryKeyRef.current === providerPricingQueryKey) {
+          providerPricingPreferencesSnapshotRef.current = '[]'
+          setProviderPricingPreferences([])
+        }
+        return
+      }
+
+      if (cancelled) return
+      if (activeProviderPricingQueryKeyRef.current !== providerPricingQueryKey) {
+        console.debug('[ClientDashboard] stale provider pricing preferences ignored', {
+          service_type: serviceType,
+          booking_type: bookingTypeForGuidance,
+          dog_count: normalizedDogCount,
+          nearbyProviderCount: nearbyProviderIdsForGuidance.length,
+          queryKey: providerPricingQueryKey,
+          activeQueryKey: activeProviderPricingQueryKeyRef.current,
+        })
+        return
+      }
+
+      providerPricingPreferencesCacheRef.current.set(providerPricingQueryKey, nextRows)
       console.debug('[ClientDashboard] provider pricing preferences fetched', {
         service_type: serviceType,
         service_type_aliases: serviceTypeAliases,
@@ -3516,7 +3620,11 @@ export default function ClientDashboard({
           visit_fee_preferred: row.visit_fee_preferred,
         })),
       })
-      setProviderPricingPreferences(nextRows)
+      const nextSnapshot = serializeProviderPricingPreferenceRows(nextRows)
+      if (providerPricingPreferencesSnapshotRef.current !== nextSnapshot) {
+        providerPricingPreferencesSnapshotRef.current = nextSnapshot
+        setProviderPricingPreferences(nextRows)
+      }
     }
 
     void loadProviderPricingPreferences()
@@ -3524,7 +3632,14 @@ export default function ClientDashboard({
     return () => {
       cancelled = true
     }
-  }, [bookingTypeForGuidance, effectiveRequestServiceType, nearbyProviderIdsForGuidance, nearbyProviderIdsForGuidanceKey, normalizedDogCount])
+  }, [
+    bookingTypeForGuidance,
+    effectiveRequestServiceType,
+    nearbyProviderIdsForGuidance,
+    nearbyProviderIdsForGuidanceKey,
+    normalizedDogCount,
+    providerPricingQueryKey,
+  ])
 
   const budgetGuidance = useMemo(() => {
     const marketGuidance = getBudgetGuidanceFromProviderPreferences({
