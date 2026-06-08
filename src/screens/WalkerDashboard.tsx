@@ -1,6 +1,7 @@
 import { hapticMedium, hapticSuccess } from '../utils/haptics'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { HandCoins, MapPin } from 'lucide-react'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompletionCard from '../components/CompletionCard'
@@ -646,7 +647,6 @@ export default function WalkerDashboard({
   const walletCardLabel = walletTitle
   const onlineLabel = isHebrew ? 'מחובר' : 'Online'
   const readyForOrdersTitle = isHebrew ? 'מוכן להזמנות' : 'Ready for orders'
-  const nearbyRequestsBody = isHebrew ? 'בקשות קרובות יופיעו כאן.' : 'Nearby requests will appear here.'
   const availabilityDayLabels = useMemo(
     () => [
       isHebrew ? 'א׳' : 'Sun',
@@ -668,6 +668,7 @@ export default function WalkerDashboard({
   const [dashboardCardNotice, setDashboardCardNotice] = useState<string | null>(null)
   const [activeOptionalHomeCard, setActiveOptionalHomeCard] = useState<ProviderDashboardCardKey | null>(null)
   const [homeAvailabilityService, setHomeAvailabilityService] = useState<ProfileServiceType | null>(null)
+  const [homePricingService, setHomePricingService] = useState<ProfileServiceType | null>(null)
   const [availabilitySettingsService, setAvailabilitySettingsService] = useState<ProfileServiceType | null>(null)
   const [isCheckingPayout, setIsCheckingPayout] = useState(false)
   const [payoutCtaAnimationStopped, setPayoutCtaAnimationStopped] = useState(false)
@@ -715,11 +716,13 @@ export default function WalkerDashboard({
   const [providerBioError, setProviderBioError] = useState<string | null>(null)
   const [pricingSummaryRows, setPricingSummaryRows] = useState<ProviderPricingSummaryPreferenceRow[]>([])
   const [openPricingSummaryTooltip, setOpenPricingSummaryTooltip] = useState<'asap' | 'scheduled' | null>(null)
+  const [pricingSummaryTooltipInlineStyle, setPricingSummaryTooltipInlineStyle] = useState<React.CSSProperties | null>(null)
   const availabilityRowsRef = useRef(availabilityRows)
   const [availabilityStateVersion, setAvailabilityStateVersion] = useState(0)
   const availabilityStateVersionRef = useRef(0)
   const availabilityLoadRequestIdRef = useRef(0)
   const pricingSummaryTooltipRef = useRef<HTMLSpanElement | null>(null)
+  const pricingSummaryTooltipBubbleRef = useRef<HTMLSpanElement | null>(null)
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<SettingsSectionKey, boolean>>({
     language: false,
     serviceType: false,
@@ -1019,10 +1022,44 @@ export default function WalkerDashboard({
   useEffect(() => {
     if (openPricingSummaryTooltip == null) return undefined
 
+    const updateTooltipPosition = () => {
+      const anchor = pricingSummaryTooltipRef.current
+      const bubble = pricingSummaryTooltipBubbleRef.current
+      if (!anchor || !bubble) return
+
+      const anchorRect = anchor.getBoundingClientRect()
+      const bubbleRect = bubble.getBoundingClientRect()
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+      const viewportPadding = 12
+      const anchorGap = 10
+
+      const maxWidth = Math.min(300, viewportWidth - viewportPadding * 2)
+      const bubbleWidth = Math.min(bubbleRect.width || maxWidth, maxWidth)
+      const bubbleHeight = bubbleRect.height || 0
+
+      let left = anchorRect.left + (anchorRect.width / 2) - (bubbleWidth / 2)
+      left = Math.max(viewportPadding, Math.min(left, viewportWidth - bubbleWidth - viewportPadding))
+
+      let top = anchorRect.bottom + anchorGap
+      if (top + bubbleHeight > viewportHeight - viewportPadding) {
+        top = anchorRect.top - bubbleHeight - anchorGap
+      }
+      top = Math.max(viewportPadding, Math.min(top, viewportHeight - bubbleHeight - viewportPadding))
+
+      setPricingSummaryTooltipInlineStyle({
+        left,
+        top,
+        maxWidth,
+        width: maxWidth < bubbleRect.width ? maxWidth : undefined,
+      })
+    }
+
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
       if (!(target instanceof Node)) return
       if (pricingSummaryTooltipRef.current?.contains(target)) return
+      if (pricingSummaryTooltipBubbleRef.current?.contains(target)) return
       setOpenPricingSummaryTooltip(null)
     }
 
@@ -1032,12 +1069,19 @@ export default function WalkerDashboard({
       }
     }
 
+    setPricingSummaryTooltipInlineStyle(null)
+    const frameId = window.requestAnimationFrame(updateTooltipPosition)
     document.addEventListener('pointerdown', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', updateTooltipPosition)
+    window.addEventListener('scroll', updateTooltipPosition, true)
 
     return () => {
+      window.cancelAnimationFrame(frameId)
       document.removeEventListener('pointerdown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', updateTooltipPosition)
+      window.removeEventListener('scroll', updateTooltipPosition, true)
     }
   }, [openPricingSummaryTooltip])
 
@@ -1784,7 +1828,7 @@ export default function WalkerDashboard({
             ? (isAvailableNow ? availabilityAvailableNowLabel : availabilityScheduledTodayLabel)
             : nextConfiguredRow
               ? availabilityScheduledTodayLabel
-            : unavailableTodayLabel,
+              : '',
           summary: hasConfiguredTodayWindow && todayRow
             ? formatAvailabilityTimeRange(todayRow.startTime, todayRow.endTime)
             : nextConfiguredSummary,
@@ -1887,6 +1931,19 @@ export default function WalkerDashboard({
   const selectedWeeklyAvailabilityHealth = selectedAvailabilityService
     ? weeklyAvailabilityByService[selectedAvailabilityService] ?? null
     : null
+  const selectedPricingService = useMemo(() => {
+    if (!profileServiceTypes.length) return null
+    if (homePricingService && profileServiceTypes.includes(homePricingService)) {
+      return homePricingService
+    }
+    return (
+      profileServiceTypes.find((serviceType) =>
+        pricingSummaryRows.some((row) => row.service_type === serviceType && row.is_enabled === true),
+      )
+      ?? profileServiceTypes[0]
+      ?? null
+    )
+  }, [homePricingService, pricingSummaryRows, profileServiceTypes])
   const walletPayoutReady =
     !!flow.connectStatus?.connected &&
     !!flow.connectStatus?.stripe_connect_onboarding_complete &&
@@ -2761,6 +2818,12 @@ export default function WalkerDashboard({
       })),
     })
 
+    const availabilityTimeDisplay = (
+      <span style={todayAvailabilityPrimaryTimeRowStyle}>
+        <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
+      </span>
+    )
+
     return (
       <div style={todayAvailabilityCardStyle}>
         <div style={todayAvailabilityHeaderStyle}>
@@ -2779,10 +2842,16 @@ export default function WalkerDashboard({
                   onClick={() => setHomeAvailabilityService(item.serviceType)}
                   style={{
                     ...capSelectorPillStyle,
+                    ...(item.hasConfiguredTodayWindow ? todayAvailabilityServicePillAvailableStyle : null),
                     ...(selectedAvailabilityService === item.serviceType ? capSelectorPillActiveStyle : null),
                   }}
               >
-                {item.label}
+                <span style={todayAvailabilityServicePillContentStyle}>
+                  {item.hasConfiguredTodayWindow ? (
+                    <span style={todayAvailabilityServicePillDotStyle} aria-hidden="true" />
+                  ) : null}
+                  <span>{item.label}</span>
+                </span>
               </button>
             ))}
           </div>
@@ -2790,19 +2859,25 @@ export default function WalkerDashboard({
         {profileServiceTypes.length === 1 ? (
           <div style={todayAvailabilityPrimaryWrapStyle}>
             {selectedTodayAvailability.hasConfiguredTodayWindow ? (
-              <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
+              availabilityTimeDisplay
             ) : (
               <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
             )}
           </div>
         ) : (
           <div style={todayAvailabilitySelectedServiceCardStyle}>
-            <div style={todayAvailabilitySelectedServiceLabelStyle}>{selectedTodayAvailability.label}</div>
-            <div style={selectedTodayAvailability.isAvailableNow ? availabilitySelectedEditorMetaActiveStyle : availabilitySelectedEditorMetaInactiveStyle}>
+            <div
+              style={{
+                ...todayAvailabilitySelectedServiceStatusStyle,
+                ...(selectedTodayAvailability.isAvailableNow
+                  ? todayAvailabilitySelectedServiceStatusActiveStyle
+                  : todayAvailabilitySelectedServiceStatusInactiveStyle),
+              }}
+            >
               {selectedTodayAvailability.statusLabel}
             </div>
             {selectedTodayAvailability.hasConfiguredTodayWindow ? (
-              <span style={todayAvailabilityPrimaryTimeStyle}>{selectedTodayAvailability.summary}</span>
+              availabilityTimeDisplay
             ) : (
               <span style={todayAvailabilityPrimaryUnavailableStyle}>{selectedTodayAvailability.summary}</span>
             )}
@@ -2902,6 +2977,23 @@ export default function WalkerDashboard({
         ) : null}
       </div>
       <div style={todayAvailabilityListStyle}>
+        {profileServiceTypes.length > 1 ? (
+          <div style={capSelectorRowStyle}>
+            {profileServiceTypes.map((serviceType) => (
+              <button
+                key={`pricing-service-${serviceType}`}
+                type="button"
+                onClick={() => setHomePricingService(serviceType)}
+                style={{
+                  ...capSelectorPillStyle,
+                  ...(selectedPricingService === serviceType ? capSelectorPillActiveStyle : null),
+                }}
+              >
+                {getProfileServiceTypeLabel(serviceType, isHebrew)}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {pricingSummaryCardRows.length > 0 ? pricingSummaryCardRows.map((item, index) => (
           <div
             key={item.bookingType}
@@ -2912,35 +3004,59 @@ export default function WalkerDashboard({
             }}
           >
             <span style={pricingSummaryBookingTypeStyle}>{item.label}</span>
-            <span style={pricingSummaryPriceStyle}>{item.priceLabel}</span>
+            <div style={pricingSummaryMetaRowStyle}>
+              <span style={pricingSummaryMetaItemStyle}>
+                <HandCoins size={13} strokeWidth={2} style={pricingSummaryPriceIconStyle} aria-hidden="true" />
+                <span style={pricingSummaryPriceStyle}>{item.priceLabel}</span>
+              </span>
+            </div>
             <span
               ref={openPricingSummaryTooltip === item.bookingType ? pricingSummaryTooltipRef : null}
-              style={pricingSummaryRangeWrapStyle}
+              style={pricingSummaryRadiusGroupStyle}
             >
-              <span style={pricingSummaryRangeLabelStyle}>{item.rangeLabel}</span>
-              <button
-                type="button"
-                aria-label={item.tooltipLabel}
-                aria-expanded={openPricingSummaryTooltip === item.bookingType}
-                onClick={() => setOpenPricingSummaryTooltip((current) => (
-                  current === item.bookingType ? null : item.bookingType
-                ))}
-                style={pricingSummaryInfoButtonStyle}
-              >
-                <span style={pricingSummaryInfoIconStyle}>ⓘ</span>
-              </button>
-              {openPricingSummaryTooltip === item.bookingType ? (
-                <span role="tooltip" style={pricingSummaryTooltipBubbleStyle}>
-                  {item.tooltipLabel}
+              <span style={pricingSummaryRangeWrapStyle}>
+                <span style={pricingSummaryMetaItemStyle}>
+                  <MapPin size={13} strokeWidth={2} style={pricingSummaryRadiusIconStyle} aria-hidden="true" />
+                  <span style={pricingSummaryRangeLabelStyle}>{item.rangeLabel}</span>
                 </span>
-              ) : null}
+                <button
+                  type="button"
+                  aria-label={item.tooltipLabel}
+                  aria-expanded={openPricingSummaryTooltip === item.bookingType}
+                  onClick={() => setOpenPricingSummaryTooltip((current) => (
+                    current === item.bookingType ? null : item.bookingType
+                  ))}
+                  style={pricingSummaryInfoButtonStyle}
+                >
+                  <span style={pricingSummaryInfoIconStyle}>ⓘ</span>
+                </button>
+                {openPricingSummaryTooltip === item.bookingType ? (
+                  <span
+                    ref={pricingSummaryTooltipBubbleRef}
+                    role="tooltip"
+                    style={{
+                      ...pricingSummaryTooltipBubbleStyle,
+                      ...(pricingSummaryTooltipInlineStyle ?? pricingSummaryTooltipBubbleHiddenStyle),
+                    }}
+                  >
+                    {item.tooltipLabel}
+                  </span>
+                ) : null}
+              </span>
             </span>
           </div>
         )) : (
-          <div style={todayAvailabilityPricingSubtitleStyle}>
-            {isHebrew
-              ? 'נהלו טווחי מחירים והעדפות שירות לכל סוג הזמנה.'
-              : 'Manage pricing ranges and service preferences for each booking type.'}
+          <div style={pricingSummaryEmptyStateStyle}>
+            <div style={todayAvailabilitySelectedServiceLabelStyle}>
+              {selectedPricingService
+                ? getProfileServiceTypeLabel(selectedPricingService, isHebrew)
+                : pricingCardLabel}
+            </div>
+            <div style={todayAvailabilityPricingSubtitleStyle}>
+              {isHebrew
+                ? 'עדיין לא הוגדר תמחור לשירות הזה.'
+                : 'Pricing is not configured for this service yet.'}
+            </div>
           </div>
         )}
       </div>
@@ -3110,16 +3226,33 @@ export default function WalkerDashboard({
   }
 
   const pricingSummaryCardRows = useMemo(() => {
-    const primaryServiceType = profileServiceTypes[0] ?? null
-    const scopedRows = primaryServiceType
-      ? pricingSummaryRows.filter((row) => row.service_type === primaryServiceType)
+    const hasValidConfiguredPricing = (row: ProviderPricingSummaryPreferenceRow) => {
+      if (row.is_enabled !== true) return false
+      const normalizedPricingModel =
+        row.pricing_model === 'fixed_visit' || row.pricing_model === 'visit_based' ? 'fixed_visit' : 'time_based'
+      const min = normalizedPricingModel === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min
+      const preferred = normalizedPricingModel === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred
+      return typeof min === 'number' || typeof preferred === 'number'
+    }
+
+    const preferredServiceType =
+      selectedPricingService
+      ?? profileServiceTypes.find((serviceType) =>
+        pricingSummaryRows.some((row) => row.service_type === serviceType && hasValidConfiguredPricing(row)),
+      )
+      ?? profileServiceTypes[0]
+      ?? null
+
+    const scopedRows = preferredServiceType
+      ? pricingSummaryRows.filter((row) => row.service_type === preferredServiceType)
       : pricingSummaryRows
 
-    const sourceRows = scopedRows.length > 0 ? scopedRows : pricingSummaryRows
+    const scopedConfiguredRows = scopedRows.filter(hasValidConfiguredPricing)
+    const sourceRows = scopedConfiguredRows.length > 0
+      ? scopedConfiguredRows
+      : scopedRows.filter((row) => row.is_enabled)
     const rowsByBookingType = new Map(
-      sourceRows
-        .filter((row) => row.is_enabled)
-        .map((row) => [row.booking_type, row] as const),
+      sourceRows.map((row) => [row.booking_type, row] as const),
     )
 
     return (['asap', 'scheduled'] as const)
@@ -3138,11 +3271,11 @@ export default function WalkerDashboard({
           rangeLabel: formatProviderServiceRangeLabel({ isHebrew, radiusKm: row.service_radius_km }),
           tooltipLabel: isUnlimited
             ? (isHebrew ? 'מומלץ לספקים חדשים.' : 'Recommended for new providers.')
-            : (isHebrew ? 'לקוחות מחוץ לאזור הזה לא יראו אתכם.' : 'Customers outside this area will not see you.'),
+            : (isHebrew ? 'לקוחות בטווח זה יראו אתכם.' : 'Customers within this range will see you.'),
         }
       })
       .filter((row): row is NonNullable<typeof row> => row != null)
-  }, [isHebrew, pricingSummaryRows, profileServiceTypes])
+  }, [isHebrew, pricingSummaryRows, profileServiceTypes, selectedPricingService])
 
   const insightsSnapshot = insights.snapshot
   const insightsSummaryItems = useMemo(
@@ -3318,6 +3451,24 @@ export default function WalkerDashboard({
     ))
   }, [defaultAvailabilityService, profileServiceTypes])
 
+  useEffect(() => {
+    if (!profileServiceTypes.length) {
+      setHomePricingService(null)
+      return
+    }
+    setHomePricingService((current) => (
+      current && profileServiceTypes.includes(current)
+        ? current
+        : (
+          profileServiceTypes.find((serviceType) =>
+            pricingSummaryRows.some((row) => row.service_type === serviceType && row.is_enabled === true),
+          )
+          ?? profileServiceTypes[0]
+          ?? null
+        )
+    ))
+  }, [pricingSummaryRows, profileServiceTypes])
+
   const renderHomeDashboard = useCallback((connected: boolean) => (
     <div className="sheet-state-enter" style={homeDashboardShellStyle}>
       <div style={homeDashboardStatusSectionStyle}>
@@ -3328,7 +3479,6 @@ export default function WalkerDashboard({
               <span>{connected ? onlineLabel : idleHeroTitle}</span>
             </div>
             <div style={homeStatusTitleStyle}>{readyForOrdersTitle}</div>
-            <div style={homeStatusBodyStyle}>{nearbyRequestsBody}</div>
           </div>
           <div style={homeStatusRightStyle}>
             <div style={homeStatusAccentOrbStyle} />
@@ -3399,7 +3549,6 @@ export default function WalkerDashboard({
     activeVisibleOptionalHomeCard,
     idleHeroTitle,
     isHebrew,
-    nearbyRequestsBody,
     onlineLabel,
     readyForOrdersTitle,
     renderInsightsHomeCard,
@@ -6992,12 +7141,6 @@ const homeStatusTitleStyle: React.CSSProperties = {
   color: '#0F172A',
 }
 
-const homeStatusBodyStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  lineHeight: 1.3,
-  color: '#64748B',
-}
-
 const todayAvailabilityCardStyle: React.CSSProperties = {
   width: '100%',
   borderRadius: 24,
@@ -7107,7 +7250,7 @@ const weeklyAvailabilityDotOffStyle: React.CSSProperties = {
 }
 
 const pricingSummaryRowStyle: React.CSSProperties = {
-  gridTemplateColumns: 'minmax(0, 74px) minmax(0, 1fr) auto',
+  gridTemplateColumns: 'minmax(68px, 1fr) auto minmax(78px, 1fr)',
   alignItems: 'center',
   gap: 10,
 }
@@ -7116,6 +7259,51 @@ const pricingSummaryBookingTypeStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 800,
   color: '#334155',
+  justifySelf: 'start',
+}
+
+const pricingSummaryMetaRowStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifySelf: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  flexWrap: 'nowrap',
+}
+
+const pricingSummaryMetaItemStyle: React.CSSProperties = {
+  minWidth: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  whiteSpace: 'nowrap',
+}
+
+const pricingSummaryMetaIconStyle: React.CSSProperties = {
+  flexShrink: 0,
+}
+
+const pricingSummaryPriceIconStyle: React.CSSProperties = {
+  ...pricingSummaryMetaIconStyle,
+  color: '#2563EB',
+}
+
+const pricingSummaryRadiusGroupStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifySelf: 'end',
+  justifyContent: 'flex-end',
+  gap: 5,
+  minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'visible',
+}
+
+const pricingSummaryRadiusIconStyle: React.CSSProperties = {
+  ...pricingSummaryMetaIconStyle,
+  color: '#0F766E',
 }
 
 const pricingSummaryPriceStyle: React.CSSProperties = {
@@ -7123,16 +7311,13 @@ const pricingSummaryPriceStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 900,
   color: '#0F172A',
+  whiteSpace: 'nowrap',
 }
 
 const pricingSummaryRangeWrapStyle: React.CSSProperties = {
-  position: 'relative',
+  minWidth: 0,
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 5,
-  justifySelf: 'end',
-  maxWidth: '100%',
-  overflow: 'visible',
 }
 
 const pricingSummaryRangeLabelStyle: React.CSSProperties = {
@@ -7166,24 +7351,28 @@ const pricingSummaryInfoIconStyle: React.CSSProperties = {
 }
 
 const pricingSummaryTooltipBubbleStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + 10px)',
-  right: 0,
+  position: 'fixed',
   zIndex: 40,
-  minWidth: 164,
-  maxWidth: 220,
+  minWidth: 220,
+  maxWidth: 300,
   borderRadius: 14,
-  padding: '10px 12px',
-  background: 'rgba(15, 23, 42, 0.96)',
-  color: '#F8FAFC',
-  fontSize: 12,
-  lineHeight: 1.45,
+  padding: '9px 12px',
+  background: 'rgba(219, 234, 254, 0.97)',
+  color: '#0F172A',
+  fontSize: 11,
+  lineHeight: 1.35,
   fontWeight: 600,
-  boxShadow: '0 16px 40px rgba(15, 23, 42, 0.22)',
-  backdropFilter: 'blur(16px)',
-  WebkitBackdropFilter: 'blur(16px)',
-  whiteSpace: 'normal',
+  boxShadow: '0 14px 32px rgba(37, 99, 235, 0.16)',
+  border: '1px solid rgba(147, 197, 253, 0.8)',
+  backdropFilter: 'blur(14px)',
+  WebkitBackdropFilter: 'blur(14px)',
+  whiteSpace: 'nowrap',
   textAlign: 'start',
+}
+
+const pricingSummaryTooltipBubbleHiddenStyle: React.CSSProperties = {
+  opacity: 0,
+  pointerEvents: 'none',
 }
 
 const todayAvailabilityPricingSubtitleStyle: React.CSSProperties = {
@@ -7193,6 +7382,11 @@ const todayAvailabilityPricingSubtitleStyle: React.CSSProperties = {
   fontWeight: 600,
 }
 
+const pricingSummaryEmptyStateStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+}
+
 const todayAvailabilityListStyle: React.CSSProperties = {
   display: 'grid',
 }
@@ -7200,23 +7394,51 @@ const todayAvailabilityListStyle: React.CSSProperties = {
 const todayAvailabilityPrimaryWrapStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  justifyContent: 'center',
   minHeight: 28,
+}
+
+const todayAvailabilityPrimaryTimeRowStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
 }
 
 const todayAvailabilityPrimaryTimeStyle: React.CSSProperties = {
   fontSize: 20,
   lineHeight: 1.1,
   fontWeight: 900,
-  color: '#0F172A',
+  color: '#2563EB',
   letterSpacing: '-0.02em',
   direction: 'ltr',
 }
 
 const todayAvailabilityPrimaryUnavailableStyle: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   lineHeight: 1.35,
-  fontWeight: 700,
+  fontWeight: 600,
   color: '#94A3B8',
+}
+
+const todayAvailabilityServicePillAvailableStyle: React.CSSProperties = {
+  borderColor: 'rgba(34, 197, 94, 0.22)',
+  background: 'rgba(240, 253, 244, 0.92)',
+}
+
+const todayAvailabilityServicePillContentStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const todayAvailabilityServicePillDotStyle: React.CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: 999,
+  background: '#22C55E',
+  boxShadow: '0 0 0 3px rgba(34, 197, 94, 0.14)',
+  flexShrink: 0,
 }
 
 const todayAvailabilitySelectedServiceCardStyle: React.CSSProperties = {
@@ -7228,6 +7450,21 @@ const todayAvailabilitySelectedServiceLabelStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 800,
   color: '#64748B',
+  textAlign: 'start',
+}
+
+const todayAvailabilitySelectedServiceStatusStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  minWidth: 0,
+}
+
+const todayAvailabilitySelectedServiceStatusActiveStyle: React.CSSProperties = {
+  color: '#15803D',
+}
+
+const todayAvailabilitySelectedServiceStatusInactiveStyle: React.CSSProperties = {
+  color: '#94A3B8',
 }
 
 const todayAvailabilityRowStyle: React.CSSProperties = {

@@ -642,10 +642,10 @@ const resources = {
         },
         radiusHelper: {
           unlimited: 'מומלץ לספקים חדשים',
-          limited: 'לקוחות מחוץ לאזור הזה לא יראו אתכם',
+          limited: 'לקוחות בטווח זה יראו אתכם',
         },
-        acceptsMultiItem: 'מקבל הזמנות מרובות פריטים',
-        maxItemCount: 'מספר פריטים מקסימלי',
+        acceptsMultiItem: 'תומך בהזמנות מרובות',
+        maxItemCount: 'מסוגל לטפל ביותר מלקוח אחד בהזמנה',
         save: 'שמירת העדפות תמחור',
         saving: 'שומר...',
         saved: 'העדפות התמחור נשמרו.',

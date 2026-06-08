@@ -7,6 +7,7 @@ import { supabase } from '../services/supabaseClient'
 type BookingType = 'asap' | 'scheduled'
 type PricingModel = 'time_based' | 'fixed_visit'
 type RadiusOptionValue = 'unlimited' | '5' | '10' | '15' | '25' | 'custom'
+type PricingEditorSection = 'price' | 'radius' | 'multi'
 
 type PreferenceRow = {
   id?: string
@@ -105,15 +106,39 @@ function getRadiusOptionValue(value: string): RadiusOptionValue {
   return matchedPreset ? String(matchedPreset) as RadiusOptionValue : 'custom'
 }
 
-function getRadiusDisplayValue(value: RadiusOptionValue, t: (key: string, options?: Record<string, unknown>) => string): string {
-  if (value === 'unlimited') return t('providerPricing.radiusOptions.unlimited')
-  if (value === 'custom') return t('providerPricing.radiusOptions.custom')
-  return t('providerPricing.radiusOptions.kmValue', { value })
-}
-
 function getRadiusHelperText(value: RadiusOptionValue, t: (key: string) => string): string {
   if (value === 'unlimited') return t('providerPricing.radiusHelper.unlimited')
   return t('providerPricing.radiusHelper.limited')
+}
+
+function getMultiCapacityPlaceholder(serviceType: ProfileServiceType, isHebrew: boolean): string {
+  if (serviceType === 'dog_walker') {
+    return isHebrew ? 'מספר הכלבים שעבורם השירות יינתן' : 'Number of dogs for this service'
+  }
+  if (serviceType === 'baby_sitter') {
+    return isHebrew ? 'מספר הילדים שעבורם השירות יינתן' : 'Number of children for this service'
+  }
+  return isHebrew ? 'רשום את מספר הלקוחות בהזמנה' : 'Enter the number of customers in the booking'
+}
+
+function isTwoOptionCapacityService(serviceType: ProfileServiceType): boolean {
+  return serviceType === 'dog_walker' || serviceType === 'baby_sitter'
+}
+
+function getMultiSectionLabel(serviceType: ProfileServiceType, isHebrew: boolean): string {
+  if (serviceType === 'dog_walker') return isHebrew ? 'מס׳ כלבים' : 'Dogs'
+  if (serviceType === 'baby_sitter') return isHebrew ? 'מס׳ ילדים' : 'Children'
+  return isHebrew ? 'ריבוי לקוחות' : 'Multiple bookings'
+}
+
+function getMultiCapacityLabel(serviceType: ProfileServiceType, isHebrew: boolean): string {
+  if (serviceType === 'dog_walker') {
+    return isHebrew ? 'מספר הכלבים שעבורם השירות יינתן' : 'Number of dogs for this service'
+  }
+  if (serviceType === 'baby_sitter') {
+    return isHebrew ? 'מספר הילדים שעבורם השירות יינתן' : 'Number of children for this service'
+  }
+  return isHebrew ? 'מסוגל לטפל ביותר מלקוח אחד בהזמנה' : 'Enter the number of customers in the booking'
 }
 
 function buildRowsSignature(rows: PreferenceRow[]): string {
@@ -161,6 +186,7 @@ export default function ProviderPricingPreferences({
   const [customRadiusKeys, setCustomRadiusKeys] = useState<string[]>([])
   const [activeServiceType, setActiveServiceType] = useState<ProfileServiceType | null>(serviceTypes[0] ?? null)
   const [activeBookingType, setActiveBookingType] = useState<BookingType>('asap')
+  const [activeEditorSection, setActiveEditorSection] = useState<PricingEditorSection>('price')
   const [lastSavedRowsSignature, setLastSavedRowsSignature] = useState('')
   const radiusOptions = useMemo(
     () => [
@@ -291,7 +317,9 @@ export default function ProviderPricingPreferences({
 
     setSaving(true)
 
-    const payload = rows.map((row) => ({
+    const payload = rows.map((row) => {
+      const shouldPersistCapacityValue = isTwoOptionCapacityService(row.service_type)
+      return {
       provider_id: providerId,
       service_type: row.service_type,
       pricing_model: getBookingPricingModelForService(row.service_type),
@@ -306,10 +334,13 @@ export default function ProviderPricingPreferences({
       max_item_count:
         row.pricing_model === 'fixed_visit'
           ? null
-          : row.accepts_multi_item
+          : shouldPersistCapacityValue
             ? parseOptionalNumber(row.max_item_count)
-            : null,
-    }))
+            : row.accepts_multi_item
+              ? parseOptionalNumber(row.max_item_count)
+              : null,
+      }
+    })
 
     const { error } = await supabase
       .from('provider_service_preferences')
@@ -339,6 +370,12 @@ export default function ProviderPricingPreferences({
     rows.length > 0 &&
     lastSavedRowsSignature.length > 0 &&
     buildRowsSignature(rows) !== lastSavedRowsSignature
+
+  useEffect(() => {
+    if (activeRow?.pricing_model !== 'fixed_visit') return
+    if (activeEditorSection !== 'multi') return
+    setActiveEditorSection('price')
+  }, [activeEditorSection, activeRow?.pricing_model])
 
   if (supportedServices.length === 0) {
     return (
@@ -401,13 +438,20 @@ export default function ProviderPricingPreferences({
                 const radiusRowKey = getRadiusRowKey(row.service_type, row.booking_type)
                 const isCustomRadius = customRadiusKeys.includes(radiusRowKey)
                 const radiusOptionValue = isCustomRadius ? 'custom' : getRadiusOptionValue(row.service_radius_km)
+                const capacityPlaceholder = getMultiCapacityPlaceholder(row.service_type, isHebrew)
+                const isCompactCapacityService = isTwoOptionCapacityService(row.service_type)
+                const compactCapacityValue = row.accepts_multi_item ? '2' : '1'
+                const sectionOptions: Array<{ value: PricingEditorSection; label: string }> = [
+                  { value: 'price', label: isHebrew ? 'מחיר' : 'Price' },
+                  { value: 'radius', label: isHebrew ? 'רדיוס שירות' : 'Service radius' },
+                  ...(row.pricing_model !== 'fixed_visit'
+                    ? [{ value: 'multi' as const, label: getMultiSectionLabel(row.service_type, isHebrew) }]
+                    : []),
+                ]
 
                 return (
                   <div key={`${row.service_type}:${row.booking_type}`} style={bookingCardStyle}>
                     <div style={bookingHeaderStyle}>
-                      <div style={bookingTitleStyle}>
-                        {row.booking_type === 'asap' ? t('providerPricing.asap') : t('providerPricing.scheduled')}
-                      </div>
                       <button
                         type="button"
                         onClick={() => updateRow(row.service_type, row.booking_type, { is_enabled: !row.is_enabled })}
@@ -426,49 +470,101 @@ export default function ProviderPricingPreferences({
                       </button>
                     </div>
 
-                    <div style={fieldGridStyle}>
-                      <label style={fieldStyle}>
-                        <span style={fieldLabelStyle}>
-                          {row.pricing_model === 'fixed_visit'
-                            ? t('providerPricing.visitFeeMin')
-                            : t('providerPricing.hourlyRateMin')}
-                        </span>
-                        <input
-                          inputMode="decimal"
-                          value={row.pricing_model === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min}
-                          onChange={(event) => updateRow(
-                            row.service_type,
-                            row.booking_type,
-                            row.pricing_model === 'fixed_visit'
-                              ? { visit_fee_min: event.target.value }
-                              : { hourly_rate_min: event.target.value },
-                          )}
-                          style={inputStyle}
-                          placeholder="0"
-                        />
-                      </label>
+                    <div style={sectionSelectorRowStyle}>
+                      {sectionOptions.map((section) => (
+                        <button
+                          key={`${row.service_type}:${row.booking_type}:${section.value}`}
+                          type="button"
+                          onClick={() => setActiveEditorSection(section.value)}
+                          style={{
+                            ...sectionSelectorPillStyle,
+                            ...(activeEditorSection === section.value ? sectionSelectorPillActiveStyle : null),
+                          }}
+                        >
+                          {section.label}
+                        </button>
+                      ))}
+                    </div>
 
-                      <label style={fieldStyle}>
-                        <span style={fieldLabelStyle}>
-                          {row.pricing_model === 'fixed_visit'
-                            ? t('providerPricing.visitFeePreferred')
-                            : t('providerPricing.hourlyRatePreferred')}
-                        </span>
-                        <input
-                          inputMode="decimal"
-                          value={row.pricing_model === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred}
-                          onChange={(event) => updateRow(
-                            row.service_type,
-                            row.booking_type,
-                            row.pricing_model === 'fixed_visit'
-                              ? { visit_fee_preferred: event.target.value }
-                              : { hourly_rate_preferred: event.target.value },
-                          )}
-                          style={inputStyle}
-                          placeholder="0"
-                        />
-                      </label>
+                    {activeEditorSection === 'price' ? (
+                      <div style={fieldGridStyle}>
+                        <label style={fieldStyle}>
+                          <span style={fieldLabelStyleEmphasized}>
+                            {row.pricing_model === 'fixed_visit' ? (
+                              isHebrew ? (
+                                <>
+                                  מחיר <span style={fieldLabelAccentStyle}>מינימום</span> לביקור
+                                </>
+                              ) : (
+                                <>
+                                  <span style={fieldLabelAccentStyle}>Minimum</span> visit fee
+                                </>
+                              )
+                            ) : isHebrew ? (
+                              <>
+                                מחיר <span style={fieldLabelAccentStyle}>מינימום</span> לשעה
+                              </>
+                            ) : (
+                              <>
+                                <span style={fieldLabelAccentStyle}>Minimum</span> hourly price
+                              </>
+                            )}
+                          </span>
+                          <input
+                            inputMode="decimal"
+                            value={row.pricing_model === 'fixed_visit' ? row.visit_fee_min : row.hourly_rate_min}
+                            onChange={(event) => updateRow(
+                              row.service_type,
+                              row.booking_type,
+                              row.pricing_model === 'fixed_visit'
+                                ? { visit_fee_min: event.target.value }
+                                : { hourly_rate_min: event.target.value },
+                            )}
+                            style={inputStyle}
+                            placeholder="0"
+                          />
+                        </label>
 
+                        <label style={fieldStyle}>
+                          <span style={fieldLabelStyleEmphasized}>
+                            {row.pricing_model === 'fixed_visit' ? (
+                              isHebrew ? (
+                                <>
+                                  מחיר <span style={fieldLabelAccentStyle}>מועדף</span> לביקור
+                                </>
+                              ) : (
+                                <>
+                                  <span style={fieldLabelAccentStyle}>Preferred</span> visit fee
+                                </>
+                              )
+                            ) : isHebrew ? (
+                              <>
+                                מחיר <span style={fieldLabelAccentStyle}>מועדף</span> לשעה
+                              </>
+                            ) : (
+                              <>
+                                <span style={fieldLabelAccentStyle}>Preferred</span> hourly price
+                              </>
+                            )}
+                          </span>
+                          <input
+                            inputMode="decimal"
+                            value={row.pricing_model === 'fixed_visit' ? row.visit_fee_preferred : row.hourly_rate_preferred}
+                            onChange={(event) => updateRow(
+                              row.service_type,
+                              row.booking_type,
+                              row.pricing_model === 'fixed_visit'
+                                ? { visit_fee_preferred: event.target.value }
+                                : { hourly_rate_preferred: event.target.value },
+                            )}
+                            style={inputStyle}
+                            placeholder="0"
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+
+                    {activeEditorSection === 'radius' ? (
                       <label style={fieldStyle}>
                         <span style={fieldLabelStyle}>{t('providerPricing.serviceRadiusKm')}</span>
                         <div style={radiusFieldStackStyle}>
@@ -511,43 +607,64 @@ export default function ProviderPricingPreferences({
                               placeholder={t('providerPricing.radiusOptions.customPlaceholder')}
                               aria-label={t('providerPricing.serviceRadiusKm')}
                             />
-                          ) : (
-                            <div style={radiusPreviewStyle}>
-                              {getRadiusDisplayValue(radiusOptionValue, t)}
-                            </div>
-                          )}
+                          ) : null}
                           <div style={radiusHelperStyle}>
                             {getRadiusHelperText(radiusOptionValue, t)}
                           </div>
                         </div>
                       </label>
-                    </div>
+                    ) : null}
 
-                    {row.pricing_model !== 'fixed_visit' ? (
-                      <div style={multiItemRowStyle}>
-                        <label style={checkboxLabelStyle}>
-                          <input
-                            type="checkbox"
-                            checked={row.accepts_multi_item}
-                            onChange={(event) => updateRow(row.service_type, row.booking_type, { accepts_multi_item: event.target.checked })}
-                          />
-                          <span>{t('providerPricing.acceptsMultiItem')}</span>
-                        </label>
+                    {activeEditorSection === 'multi' && row.pricing_model !== 'fixed_visit' ? (
+                      <div style={multiItemSectionStyle}>
+                        {isCompactCapacityService ? (
+                          <label style={fieldStyle}>
+                            <span style={fieldLabelStyle}>{getMultiCapacityLabel(row.service_type, isHebrew)}</span>
+                            <div style={selectWrapStyle}>
+                              <select
+                                value={compactCapacityValue}
+                                onChange={(event) => {
+                                  const nextValue = event.target.value === '2' ? '2' : '1'
+                                  updateRow(row.service_type, row.booking_type, {
+                                    accepts_multi_item: nextValue === '2',
+                                    max_item_count: nextValue,
+                                  })
+                                }}
+                                style={selectStyle}
+                              >
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                              </select>
+                              <span style={selectChevronStyle}>▼</span>
+                            </div>
+                          </label>
+                        ) : (
+                          <>
+                            <label style={checkboxLabelStyle}>
+                              <input
+                                type="checkbox"
+                                checked={row.accepts_multi_item}
+                                onChange={(event) => updateRow(row.service_type, row.booking_type, { accepts_multi_item: event.target.checked })}
+                              />
+                              <span>{t('providerPricing.acceptsMultiItem')}</span>
+                            </label>
 
-                        <label style={fieldStyleCompact}>
-                          <span style={fieldLabelStyle}>{t('providerPricing.maxItemCount')}</span>
-                          <input
-                            inputMode="numeric"
-                            value={row.max_item_count}
-                            onChange={(event) => updateRow(row.service_type, row.booking_type, { max_item_count: event.target.value })}
-                            style={{
-                              ...inputStyle,
-                              opacity: row.accepts_multi_item ? 1 : 0.6,
-                            }}
-                            placeholder="—"
-                            disabled={!row.accepts_multi_item}
-                          />
-                        </label>
+                            <label style={fieldStyleCompact}>
+                              <span style={fieldLabelStyle}>{t('providerPricing.maxItemCount')}</span>
+                              <input
+                                inputMode="numeric"
+                                value={row.max_item_count}
+                                onChange={(event) => updateRow(row.service_type, row.booking_type, { max_item_count: event.target.value })}
+                                style={{
+                                  ...inputStyle,
+                                  opacity: row.accepts_multi_item ? 1 : 0.6,
+                                }}
+                                placeholder={capacityPlaceholder}
+                                disabled={!row.accepts_multi_item}
+                              />
+                            </label>
+                          </>
+                        )}
                       </div>
                     ) : null}
                   </div>
@@ -644,6 +761,37 @@ const selectorPillActiveStyle: React.CSSProperties = {
   boxShadow: '0 10px 20px rgba(91, 124, 250, 0.10)',
 }
 
+const sectionSelectorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'nowrap',
+  overflowX: 'auto',
+  overscrollBehaviorX: 'contain',
+  paddingBottom: 2,
+}
+
+const sectionSelectorPillStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: '1px solid rgba(145, 164, 196, 0.18)',
+  background: 'rgba(248,250,252,0.88)',
+  color: '#64748B',
+  minHeight: 32,
+  padding: '0 11px',
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flexShrink: 0,
+}
+
+const sectionSelectorPillActiveStyle: React.CSSProperties = {
+  border: '1px solid rgba(91, 124, 250, 0.24)',
+  background: '#EEF4FF',
+  color: '#233B74',
+  boxShadow: '0 8px 18px rgba(91, 124, 250, 0.08)',
+}
+
 const serviceHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -671,12 +819,6 @@ const bookingHeaderStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 10,
-}
-
-const bookingTitleStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  color: '#334155',
 }
 
 const toggleStyle: React.CSSProperties = {
@@ -739,6 +881,15 @@ const fieldLabelStyle: React.CSSProperties = {
   color: '#64748B',
 }
 
+const fieldLabelStyleEmphasized: React.CSSProperties = {
+  ...fieldLabelStyle,
+}
+
+const fieldLabelAccentStyle: React.CSSProperties = {
+  color: '#0F172A',
+  fontWeight: 800,
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%',
   height: 38,
@@ -783,27 +934,18 @@ const selectChevronStyle: React.CSSProperties = {
   pointerEvents: 'none',
 }
 
-const radiusPreviewStyle: React.CSSProperties = {
-  minHeight: 16,
-  fontSize: 12,
-  lineHeight: 1.4,
-  color: '#64748B',
-  paddingInline: 2,
-}
-
 const radiusHelperStyle: React.CSSProperties = {
-  minHeight: 16,
+  minHeight: 14,
   fontSize: 11,
   lineHeight: 1.35,
   color: '#94A3B8',
   paddingInline: 2,
+  whiteSpace: 'nowrap',
 }
 
-const multiItemRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-end',
-  justifyContent: 'space-between',
-  gap: 12,
+const multiItemSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
 }
 
 const checkboxLabelStyle: React.CSSProperties = {
