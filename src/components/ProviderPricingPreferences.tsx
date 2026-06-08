@@ -116,6 +116,29 @@ function getRadiusHelperText(value: RadiusOptionValue, t: (key: string) => strin
   return t('providerPricing.radiusHelper.limited')
 }
 
+function buildRowsSignature(rows: PreferenceRow[]): string {
+  return JSON.stringify(
+    rows
+      .map((row) => ({
+        id: row.id ?? null,
+        service_type: row.service_type,
+        pricing_model: row.pricing_model,
+        booking_type: row.booking_type,
+        is_enabled: row.is_enabled,
+        hourly_rate_min: row.hourly_rate_min.trim(),
+        hourly_rate_preferred: row.hourly_rate_preferred.trim(),
+        visit_fee_min: row.visit_fee_min.trim(),
+        visit_fee_preferred: row.visit_fee_preferred.trim(),
+        service_radius_km: row.service_radius_km.trim(),
+        accepts_multi_item: row.accepts_multi_item,
+        max_item_count: row.max_item_count.trim(),
+      }))
+      .sort((a, b) =>
+        `${a.service_type}:${a.booking_type}`.localeCompare(`${b.service_type}:${b.booking_type}`),
+      ),
+  )
+}
+
 export default function ProviderPricingPreferences({
   providerId,
   serviceTypes,
@@ -138,6 +161,7 @@ export default function ProviderPricingPreferences({
   const [customRadiusKeys, setCustomRadiusKeys] = useState<string[]>([])
   const [activeServiceType, setActiveServiceType] = useState<ProfileServiceType | null>(serviceTypes[0] ?? null)
   const [activeBookingType, setActiveBookingType] = useState<BookingType>('asap')
+  const [lastSavedRowsSignature, setLastSavedRowsSignature] = useState('')
   const radiusOptions = useMemo(
     () => [
       { value: 'unlimited' as const, label: t('providerPricing.radiusOptions.unlimited') },
@@ -186,6 +210,7 @@ export default function ProviderPricingPreferences({
       )
 
       setRows(nextRows)
+      setLastSavedRowsSignature(buildRowsSignature(nextRows))
       setCustomRadiusKeys(
         nextRows
           .filter((row) => getRadiusOptionValue(row.service_radius_km) === 'custom')
@@ -266,7 +291,7 @@ export default function ProviderPricingPreferences({
 
     setSaving(true)
 
-      const payload = rows.map((row) => ({
+    const payload = rows.map((row) => ({
       provider_id: providerId,
       service_type: row.service_type,
       pricing_model: getBookingPricingModelForService(row.service_type),
@@ -297,6 +322,7 @@ export default function ProviderPricingPreferences({
     }
 
     setSaving(false)
+    setLastSavedRowsSignature(buildRowsSignature(rows))
     setSuccess(t('providerPricing.saved'))
   }
 
@@ -309,6 +335,10 @@ export default function ProviderPricingPreferences({
   }))
   const activeServiceRows = groupedRows.find((group) => group.serviceType === activeServiceType) ?? groupedRows[0] ?? null
   const activeRow = activeServiceRows?.rows.find((row) => row.booking_type === activeBookingType) ?? activeServiceRows?.rows[0] ?? null
+  const hasUnsavedChanges =
+    rows.length > 0 &&
+    lastSavedRowsSignature.length > 0 &&
+    buildRowsSignature(rows) !== lastSavedRowsSignature
 
   if (supportedServices.length === 0) {
     return (
@@ -531,10 +561,10 @@ export default function ProviderPricingPreferences({
       <button
         type="button"
         onClick={() => void handleSave()}
-        disabled={saving || loading}
+        disabled={saving || loading || !hasUnsavedChanges}
         style={{
           ...saveButtonStyle,
-          ...(saving || loading ? saveButtonDisabledStyle : null),
+          ...(saving || loading || !hasUnsavedChanges ? saveButtonDisabledStyle : null),
         }}
       >
         {saving ? t('providerPricing.saving') : t('providerPricing.save')}
@@ -798,7 +828,10 @@ const saveButtonStyle: React.CSSProperties = {
 }
 
 const saveButtonDisabledStyle: React.CSSProperties = {
-  opacity: 0.7,
+  opacity: 1,
+  background: '#D7DFEA',
+  color: '#F8FAFC',
+  boxShadow: 'none',
   cursor: 'default',
 }
 
