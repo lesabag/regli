@@ -3,6 +3,12 @@ import { Capacitor } from '@capacitor/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
+import {
+  clearPendingLegalAcceptances,
+  flushPendingLegalAcceptances,
+  queuePendingLegalAcceptances,
+  type PendingLegalAcceptanceContext,
+} from '../lib/legalAcceptances'
 import { normalizeProfileServiceTypes, type ProfileServiceType } from '../lib/profileServiceTypes'
 import {
   buildProviderCapabilityRows,
@@ -372,13 +378,17 @@ export function useAuth() {
         const hydratedProfile = await hydrateProviderProfileFromCapabilities(nextProfileData as Profile)
         if (!isCurrentRequest()) return null
 
-        clearOAuthOnboardingContext()
-        clearPendingOAuthProvider()
-        pendingOAuthProviderRef.current = null
-        const normalizedProfile = normalizeLoadedProfile(hydratedProfile)
-        const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
-        setProfile(normalizedProfile)
-        setProfileReady(onboardingComplete)
+      clearOAuthOnboardingContext()
+      clearPendingOAuthProvider()
+      pendingOAuthProviderRef.current = null
+      const normalizedProfile = normalizeLoadedProfile(hydratedProfile)
+      const legalAcceptanceResult = await flushPendingLegalAcceptances(currentUser.id)
+      if (!legalAcceptanceResult.ok) {
+        console.warn('[useAuth] legal_acceptances flush failed during profile load:', legalAcceptanceResult.error)
+      }
+      const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
+      setProfile(normalizedProfile)
+      setProfileReady(onboardingComplete)
         setNeedsOnboarding(!onboardingComplete)
         setAuthError(null)
         return normalizedProfile
@@ -477,6 +487,10 @@ export function useAuth() {
       clearPendingOAuthProvider()
       pendingOAuthProviderRef.current = null
       const normalizedProfile = normalizeLoadedProfile(hydratedInsertedProfile)
+      const legalAcceptanceResult = await flushPendingLegalAcceptances(currentUser.id)
+      if (!legalAcceptanceResult.ok) {
+        console.warn('[useAuth] legal_acceptances flush failed during oauth profile bootstrap:', legalAcceptanceResult.error)
+      }
       const onboardingComplete = isProfileOnboardingComplete(normalizedProfile)
       setProfile(normalizedProfile)
       setProfileReady(onboardingComplete)
@@ -761,6 +775,7 @@ export function useAuth() {
       shortBio,
       serviceTypes,
       serviceAttributes,
+      legalAcceptance,
     }: {
       email: string
       password: string
@@ -771,6 +786,7 @@ export function useAuth() {
       shortBio?: string
       serviceTypes?: ProfileServiceType[]
       serviceAttributes?: ServiceAttributes | null
+      legalAcceptance?: PendingLegalAcceptanceContext | null
     }) => {
       setAuthError(null)
 
@@ -814,6 +830,10 @@ export function useAuth() {
         if (!newUser) {
           setAuthError('Could not create user')
           return { ok: false }
+        }
+
+        if (legalAcceptance) {
+          queuePendingLegalAcceptances(legalAcceptance)
         }
 
         const profilePayload: Profile = {
@@ -865,6 +885,11 @@ export function useAuth() {
           }
         }
 
+        const legalAcceptanceResult = await flushPendingLegalAcceptances(newUser.id)
+        if (!legalAcceptanceResult.ok) {
+          console.warn('[useAuth] legal_acceptances flush failed during signup:', legalAcceptanceResult.error)
+        }
+
         await loadProfile(newUser)
         return { ok: true }
       } catch (err) {
@@ -911,6 +936,7 @@ export function useAuth() {
     shortBio,
     serviceTypes,
     serviceAttributes,
+    legalAcceptance,
   }: {
     role: AppRole
     primaryService?: string
@@ -918,6 +944,7 @@ export function useAuth() {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => {
     setAuthError(null)
 
@@ -931,6 +958,9 @@ export function useAuth() {
       serviceTypes: normalizedServiceTypes,
       serviceAttributes: serviceAttributes ?? null,
     })
+    if (legalAcceptance) {
+      queuePendingLegalAcceptances(legalAcceptance)
+    }
 
     try {
       const redirectTo = getGoogleOAuthRedirectTo()
@@ -957,6 +987,9 @@ export function useAuth() {
         pendingOAuthProviderRef.current = null
         clearPendingOAuthProvider()
         clearOAuthOnboardingContext()
+        if (legalAcceptance) {
+          clearPendingLegalAcceptances()
+        }
         setAuthError(error.message)
         return { ok: false }
       }
@@ -966,6 +999,9 @@ export function useAuth() {
           pendingOAuthProviderRef.current = null
           clearPendingOAuthProvider()
           clearOAuthOnboardingContext()
+          if (legalAcceptance) {
+            clearPendingLegalAcceptances()
+          }
           setAuthError('Could not start Google sign in')
           return { ok: false }
         }
@@ -978,6 +1014,9 @@ export function useAuth() {
       pendingOAuthProviderRef.current = null
       clearPendingOAuthProvider()
       clearOAuthOnboardingContext()
+      if (legalAcceptance) {
+        clearPendingLegalAcceptances()
+      }
       setAuthError(getErrorMessage(err, 'Failed to sign in with Google'))
       return { ok: false }
     }
@@ -990,6 +1029,7 @@ export function useAuth() {
     shortBio,
     serviceTypes,
     serviceAttributes,
+    legalAcceptance,
   }: {
     role: AppRole
     primaryService?: string
@@ -997,6 +1037,7 @@ export function useAuth() {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => {
     if (!isAppleAuthSupportedOnCurrentPlatform()) {
       setAuthError('Apple sign in is not available on this platform yet')
@@ -1015,6 +1056,9 @@ export function useAuth() {
       serviceTypes: normalizedServiceTypes,
       serviceAttributes: serviceAttributes ?? null,
     })
+    if (legalAcceptance) {
+      queuePendingLegalAcceptances(legalAcceptance)
+    }
 
     try {
       const redirectTo = getGoogleOAuthRedirectTo()
@@ -1037,6 +1081,9 @@ export function useAuth() {
         pendingOAuthProviderRef.current = null
         clearPendingOAuthProvider()
         clearOAuthOnboardingContext()
+        if (legalAcceptance) {
+          clearPendingLegalAcceptances()
+        }
         setAuthError(error.message)
         return { ok: false }
       }
@@ -1046,6 +1093,9 @@ export function useAuth() {
           pendingOAuthProviderRef.current = null
           clearPendingOAuthProvider()
           clearOAuthOnboardingContext()
+          if (legalAcceptance) {
+            clearPendingLegalAcceptances()
+          }
           setAuthError('Could not start Apple sign in')
           return { ok: false }
         }
@@ -1058,6 +1108,9 @@ export function useAuth() {
       pendingOAuthProviderRef.current = null
       clearPendingOAuthProvider()
       clearOAuthOnboardingContext()
+      if (legalAcceptance) {
+        clearPendingLegalAcceptances()
+      }
       setAuthError(getErrorMessage(err, 'Failed to sign in with Apple'))
       return { ok: false }
     }
@@ -1087,6 +1140,7 @@ export function useAuth() {
         window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
         window.sessionStorage.removeItem('regli:onboarding-wow')
       }
+      clearPendingLegalAcceptances()
       setProfile(null)
       setProfileReady(false)
       setNeedsOnboarding(false)
@@ -1099,18 +1153,20 @@ export function useAuth() {
   const completeOnboarding = useCallback(async ({
     role,
     primaryService,
-    locationAddress,
-    shortBio,
-    serviceTypes,
-    serviceAttributes,
-  }: {
-    role: AppRole
-    primaryService?: string
-    locationAddress?: string
-    shortBio?: string
-    serviceTypes?: ProfileServiceType[]
-    serviceAttributes?: ServiceAttributes | null
-  }) => {
+      locationAddress,
+      shortBio,
+      serviceTypes,
+      serviceAttributes,
+      legalAcceptance,
+    }: {
+      role: AppRole
+      primaryService?: string
+      locationAddress?: string
+      shortBio?: string
+      serviceTypes?: ProfileServiceType[]
+      serviceAttributes?: ServiceAttributes | null
+      legalAcceptance?: PendingLegalAcceptanceContext | null
+    }) => {
     const currentUser = user ?? session?.user ?? null
     if (!currentUser) {
       setAuthError('No authenticated user found')
@@ -1167,6 +1223,10 @@ export function useAuth() {
     console.log('[provider-onboarding] profile payload', profilePayload)
 
     try {
+      if (legalAcceptance) {
+        queuePendingLegalAcceptances(legalAcceptance)
+      }
+
       const { error: profileError } = await withTimeout(
         supabase
           .from('profiles')
@@ -1220,6 +1280,11 @@ export function useAuth() {
             })
           }
         }
+      }
+
+      const legalAcceptanceResult = await flushPendingLegalAcceptances(currentUser.id)
+      if (!legalAcceptanceResult.ok) {
+        console.warn('[useAuth] legal_acceptances flush failed during onboarding completion:', legalAcceptanceResult.error)
       }
 
       const normalizedLocalProfile = normalizeLoadedProfile(profilePayload)

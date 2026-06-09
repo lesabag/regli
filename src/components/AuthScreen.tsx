@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
+import type { LegalDocumentType, PendingLegalAcceptanceContext } from '../lib/legalAcceptances'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import {
   getProfileServiceOptions,
@@ -25,6 +26,7 @@ interface AuthScreenProps {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => Promise<{ ok: boolean }>
   onGoogleSignIn: (args: {
     role: AppRole
@@ -33,6 +35,7 @@ interface AuthScreenProps {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => Promise<{ ok: boolean }>
   onAppleSignIn: (args: {
     role: AppRole
@@ -41,6 +44,7 @@ interface AuthScreenProps {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => Promise<{ ok: boolean }>
   onCompleteOnboarding?: (args: {
     role: AppRole
@@ -49,6 +53,7 @@ interface AuthScreenProps {
     shortBio?: string
     serviceTypes?: ProfileServiceType[]
     serviceAttributes?: ServiceAttributes | null
+    legalAcceptance?: PendingLegalAcceptanceContext | null
   }) => Promise<{ ok: boolean }>
   onStartOver?: () => Promise<void> | void
   appleSignInEnabled: boolean
@@ -273,6 +278,9 @@ export default function AuthScreen({
   const [submitting, setSubmitting] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
   const [appleSubmitting, setAppleSubmitting] = useState(false)
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false)
+  const [openLegalDocument, setOpenLegalDocument] = useState<LegalDocumentType | null>(null)
   const locationAutoRequestedRef = useRef(false)
 
   const [dogAttrs, setDogAttrs] = useState<DogWalkerAttrs>({ petName: '', dogSize: '', energyLevel: '' })
@@ -354,6 +362,32 @@ export default function AuthScreen({
     finishSetup: isHebrew ? 'סיימו את ההגדרה כדי להמשיך ל-Regli.' : 'Finish your Regli setup to continue.',
     signInPrompt: isHebrew ? 'התחברו כדי להמשיך מאיפה שהפסקתם.' : 'Log in to continue where you left off.',
     createAccountPrompt: isHebrew ? 'השלימו את יצירת החשבון כדי להתחיל עם Regli.' : 'Finish setting up your account to start with Regli.',
+    legalIntroClient: isHebrew ? 'לפני שמסיימים, צריך לאשר את המסמכים הבסיסיים של Regli.' : 'Before continuing, please accept Regli’s launch legal basics.',
+    legalIntroProvider: isHebrew ? 'לפני שמסיימים, צריך לאשר את המסמכים הבסיסיים של Regli.' : 'Before continuing, please accept Regli’s launch legal basics.',
+    agreeTermsPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
+    agreePrivacyPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
+    termsOfService: isHebrew ? 'תנאי השימוש' : 'Terms of Service',
+    privacyPolicy: isHebrew ? 'מדיניות הפרטיות' : 'Privacy Policy',
+    accountOwnerNotice: isHebrew
+      ? 'אני מבין/ה שבעל/ת החשבון אחראי/ת לתשלומים ולהתחייבויות המשפטיות'
+      : 'I understand that the account owner is responsible for payouts and legal obligations',
+    providerAdultNotice: isHebrew
+      ? 'בעל/ת החשבון חייב/ת להיות מבוגר/ת האחראי/ת לתשלומים ולהסכמים המשפטיים.'
+      : 'The account owner must be an adult responsible for payouts and legal agreements.',
+    legalClose: isHebrew ? 'סגור' : 'Close',
+    legalPlaceholderBadge: isHebrew ? 'טיוטת השקה' : 'Launch placeholder',
+    legalTermsBody: isHebrew
+      ? 'זהו מסמך placeholder זמני לתנאי השימוש של Regli. הנוסח המשפטי הסופי יוחלף לפני ההשקה הציבורית.'
+      : 'This is a temporary launch placeholder for Regli’s Terms of Service. Final legal copy will replace this before public launch.',
+    legalPrivacyBody: isHebrew
+      ? 'זהו מסמך placeholder זמני למדיניות הפרטיות של Regli. הנוסח הסופי יוחלף לפני ההשקה הציבורית.'
+      : 'This is a temporary launch placeholder for Regli’s Privacy Policy. Final privacy language will replace this before public launch.',
+    legalPrivacyExtra: isHebrew
+      ? 'Regli משתמשת בנתוני חשבון, פרופיל, מיקום, הזמנות ותשלום כדי להפעיל את המרקטפלייס ולספק את השירותים שהתבקשו.'
+      : 'Regli uses account, profile, location, booking, and payment-related data to operate the marketplace and deliver requested services.',
+    legalTermsExtra: isHebrew
+      ? 'בהמשך השימוש ב-Regli, המשתמשים מאשרים שהזמנות, תשלומים ואחריות חשבון כפופים לתנאי השימוש הסופיים של Regli לאחר פרסומם.'
+      : 'By continuing with Regli, users acknowledge that bookings, payments, and account responsibilities are governed by Regli’s final Terms of Service once published.',
     useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Use email instead',
     fullName: isHebrew ? 'שם מלא' : 'Full name',
     fullNamePlaceholder: isHebrew ? 'השם המלא שלך' : 'Your full name',
@@ -452,6 +486,8 @@ export default function AuthScreen({
     [language],
   )
   const selectedPrimaryService = selectedServices[0] ?? null
+  const shouldShowLegalAcceptance = currentStep === 'auth' && (mode === 'signup' || authenticatedOnboarding)
+  const legalAcceptanceValid = !shouldShowLegalAcceptance || (acceptedTerms && acceptedPrivacy)
   const selectedServiceIllustration = selectedPrimaryService === 'dog_walker'
     ? welcomeHeroImage
     : selectedPrimaryService === 'baby_sitter'
@@ -492,16 +528,34 @@ export default function AuthScreen({
 
   const providerIdentityValid = !isProvider || providerIdentity.experienceRange !== ''
 
+  const buildLegalAcceptanceContext = (
+    source: PendingLegalAcceptanceContext['source'],
+  ): PendingLegalAcceptanceContext => ({
+    language:
+      normalizeSupportedLanguage(i18n.resolvedLanguage) ??
+      (typeof document !== 'undefined'
+        ? normalizeSupportedLanguage(document.documentElement.lang)
+        : null) ??
+      language,
+    role,
+    source,
+    accountOwnerNoticeShown: isProvider,
+  })
+
+  const activeLegalDocumentTitle = openLegalDocument === 'terms_of_service'
+    ? copy.termsOfService
+    : copy.privacyPolicy
+
   const canContinue = useMemo(() => {
-    if (authenticatedOnboarding && currentStep === 'auth') return true
+    if (authenticatedOnboarding && currentStep === 'auth') return legalAcceptanceValid
     if (mode === 'signin') return !!email && !!password
     if (currentStep === 'role') return !!role
     if (currentStep === 'service') return selectedServices.length > 0
     if (currentStep === 'location') return true
     if (currentStep === 'details') return dogValid && sitterValid && providerIdentityValid
-    if (currentStep === 'auth') return !!email && !!password && !!fullName.trim()
+    if (currentStep === 'auth') return !!email && !!password && !!fullName.trim() && legalAcceptanceValid
     return true
-  }, [authenticatedOnboarding, currentStep, email, fullName, mode, password, role, selectedServices, dogValid, sitterValid, providerIdentityValid])
+  }, [authenticatedOnboarding, currentStep, dogValid, email, fullName, legalAcceptanceValid, mode, password, providerIdentityValid, role, selectedServices, sitterValid])
 
   const roleSummary = role === 'walker' ? copy.provider : copy.customer
 
@@ -654,6 +708,7 @@ export default function AuthScreen({
           locationAddress: locationLabel,
           serviceTypes: onboardingServiceTypes,
           serviceAttributes: buildServiceAttributes(),
+          legalAcceptance: buildLegalAcceptanceContext('authenticated_onboarding'),
         }
         console.log('[provider-onboarding-ui] clicked', {
           role,
@@ -713,6 +768,7 @@ export default function AuthScreen({
         locationAddress: locationLabel,
         serviceTypes: onboardingServiceTypes,
         serviceAttributes: isProvider && Object.keys(attrs).length > 0 ? attrs : null,
+        legalAcceptance: buildLegalAcceptanceContext('email_signup'),
       })
       if (result.ok && typeof window !== 'undefined') {
         window.sessionStorage.setItem(
@@ -780,6 +836,7 @@ export default function AuthScreen({
       locationAddress: mode === 'signup' ? locationLabel : undefined,
       serviceTypes: onboardingServiceTypes,
       serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
+      legalAcceptance: mode === 'signup' ? buildLegalAcceptanceContext('google_oauth_signup') : null,
     })
 
     if (!result.ok && typeof window !== 'undefined' && mode === 'signup') {
@@ -807,6 +864,7 @@ export default function AuthScreen({
       locationAddress: mode === 'signup' ? locationLabel : undefined,
       serviceTypes: onboardingServiceTypes,
       serviceAttributes: mode === 'signup' ? buildServiceAttributes() : null,
+      legalAcceptance: mode === 'signup' ? buildLegalAcceptanceContext('apple_oauth_signup') : null,
     })
 
     if (!result.ok && typeof window !== 'undefined' && mode === 'signup') {
@@ -822,13 +880,15 @@ export default function AuthScreen({
       <button
         type="button"
         onClick={() => {
-          if (googleSubmitting || submitting) return
+          if (googleSubmitting || submitting || !legalAcceptanceValid) return
           void handleGoogleContinue()
         }}
+        disabled={!legalAcceptanceValid || googleSubmitting || submitting}
         aria-busy={googleSubmitting}
         style={{
           ...socialButtonStyle,
           ...googleSocialButtonStyle,
+          ...((!legalAcceptanceValid || googleSubmitting || submitting) ? socialButtonDisabledStyle : null),
           ...(googleSubmitting ? socialButtonLoadingStyle : null),
         }}
       >
@@ -841,14 +901,14 @@ export default function AuthScreen({
       <button
         type="button"
         onClick={() => {
-          if (!appleSignInEnabled || appleSubmitting || googleSubmitting || submitting) return
+          if (!appleSignInEnabled || appleSubmitting || googleSubmitting || submitting || !legalAcceptanceValid) return
           void handleAppleContinue()
         }}
-        disabled={!appleSignInEnabled || appleSubmitting}
+        disabled={!appleSignInEnabled || appleSubmitting || !legalAcceptanceValid}
         aria-busy={appleSubmitting}
         style={{
           ...socialButtonStyle,
-          ...(!appleSignInEnabled ? socialButtonDisabledStyle : null),
+          ...((!appleSignInEnabled || !legalAcceptanceValid) ? socialButtonDisabledStyle : null),
           ...(appleSubmitting ? socialButtonLoadingStyle : null),
         }}
       >
@@ -880,6 +940,7 @@ export default function AuthScreen({
   const shouldShowWelcomeContent = !authenticatedOnboarding && currentStep === 'welcome'
 
   return (
+    <>
     <div dir={direction} style={screenStyle}>
       <style>{`
         @keyframes authStepEnter {
@@ -1486,7 +1547,67 @@ export default function AuthScreen({
                 </div>
               )}
 
-              {!authenticatedOnboarding && renderSocialAuthButtons()}
+              {shouldShowLegalAcceptance && (
+                <div style={legalCardStyle}>
+                  <div style={{ ...legalIntroStyle, textAlign }}>
+                    {isProvider ? copy.legalIntroProvider : copy.legalIntroClient}
+                  </div>
+
+                  <div style={legalAgreementListStyle}>
+                    <label style={legalCheckboxRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={acceptedTerms}
+                        onChange={(event) => setAcceptedTerms(event.target.checked)}
+                        style={legalCheckboxInputStyle}
+                      />
+                      <span style={legalCheckboxTextStyle}>
+                        {copy.agreeTermsPrefix}
+                        <button
+                          type="button"
+                          onClick={() => setOpenLegalDocument('terms_of_service')}
+                          style={legalLinkStyle}
+                        >
+                          {copy.termsOfService}
+                        </button>
+                      </span>
+                    </label>
+
+                    <label style={legalCheckboxRowStyle}>
+                      <input
+                        type="checkbox"
+                        checked={acceptedPrivacy}
+                        onChange={(event) => setAcceptedPrivacy(event.target.checked)}
+                        style={legalCheckboxInputStyle}
+                      />
+                      <span style={legalCheckboxTextStyle}>
+                        {copy.agreePrivacyPrefix}
+                        <button
+                          type="button"
+                          onClick={() => setOpenLegalDocument('privacy_policy')}
+                          style={legalLinkStyle}
+                        >
+                          {copy.privacyPolicy}
+                        </button>
+                      </span>
+                    </label>
+
+                    {isProvider && (
+                      <>
+                        <div style={legalStaticRowStyle}>
+                          <span style={legalStaticCheckStyle}>☑</span>
+                          <span style={legalCheckboxTextStyle}>{copy.accountOwnerNotice}</span>
+                        </div>
+                        <div style={{ ...legalHelperTextStyle, textAlign }}>
+                          {copy.providerAdultNotice}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!authenticatedOnboarding && mode === 'signup' && renderSocialAuthButtons()}
 
               {!authenticatedOnboarding && !shouldShowEmailFields ? (
                 <button
@@ -1636,6 +1757,37 @@ export default function AuthScreen({
         </div>
       </div>
     </div>
+
+    {openLegalDocument && (
+      <div style={legalModalBackdropStyle} onClick={() => setOpenLegalDocument(null)}>
+        <div
+          dir={direction}
+          style={legalModalCardStyle}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div style={{ ...legalModalBadgeStyle, alignSelf: isRtl ? 'flex-end' : 'flex-start' }}>
+            {copy.legalPlaceholderBadge}
+          </div>
+          <div style={{ ...legalModalTitleStyle, textAlign }}>
+            {activeLegalDocumentTitle}
+          </div>
+          <div style={{ ...legalModalBodyStyle, textAlign }}>
+            {openLegalDocument === 'terms_of_service' ? copy.legalTermsBody : copy.legalPrivacyBody}
+          </div>
+          <div style={{ ...legalModalBodyStyle, textAlign }}>
+            {openLegalDocument === 'terms_of_service' ? copy.legalTermsExtra : copy.legalPrivacyExtra}
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpenLegalDocument(null)}
+            style={legalModalCloseButtonStyle}
+          >
+            {copy.legalClose}
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -2463,6 +2615,144 @@ const summaryLocationStyle: CSSProperties = {
   fontSize: 13,
   lineHeight: 1.45,
   color: '#64748B',
+}
+
+const legalCardStyle: CSSProperties = {
+  borderRadius: 20,
+  background: 'rgba(239, 246, 255, 0.78)',
+  border: '1px solid rgba(91, 124, 250, 0.14)',
+  padding: '12px 12px 10px',
+  display: 'grid',
+  gap: 10,
+}
+
+const legalIntroStyle: CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  color: '#475569',
+}
+
+const legalAgreementListStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+}
+
+const legalCheckboxRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  cursor: 'pointer',
+}
+
+const legalCheckboxInputStyle: CSSProperties = {
+  marginTop: 2,
+  width: 16,
+  height: 16,
+  accentColor: '#2563EB',
+  flexShrink: 0,
+}
+
+const legalCheckboxTextStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: '#0F172A',
+}
+
+const legalLinkStyle: CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  color: '#2563EB',
+  fontWeight: 800,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  fontSize: 'inherit',
+  fontFamily: 'inherit',
+}
+
+const legalStaticRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+}
+
+const legalStaticCheckStyle: CSSProperties = {
+  color: '#2563EB',
+  fontSize: 15,
+  lineHeight: 1,
+  marginTop: 2,
+  flexShrink: 0,
+}
+
+const legalHelperTextStyle: CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  color: '#3152C8',
+}
+
+const legalModalBackdropStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.36)',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+  display: 'grid',
+  placeItems: 'center',
+  padding: 20,
+  zIndex: 1000,
+}
+
+const legalModalCardStyle: CSSProperties = {
+  width: 'min(100%, 420px)',
+  maxHeight: '80vh',
+  overflowY: 'auto',
+  borderRadius: 24,
+  background: 'rgba(255,255,255,0.98)',
+  border: '1px solid rgba(91, 124, 250, 0.16)',
+  boxShadow: '0 28px 60px rgba(15, 23, 42, 0.18)',
+  display: 'grid',
+  gap: 12,
+  padding: 18,
+}
+
+const legalModalBadgeStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 999,
+  padding: '6px 10px',
+  background: '#DBEAFE',
+  color: '#1D4ED8',
+  fontSize: 11,
+  fontWeight: 800,
+}
+
+const legalModalTitleStyle: CSSProperties = {
+  fontSize: 20,
+  lineHeight: 1.2,
+  fontWeight: 800,
+  color: '#0F172A',
+}
+
+const legalModalBodyStyle: CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1.65,
+  color: '#334155',
+}
+
+const legalModalCloseButtonStyle: CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  minHeight: 48,
+  borderRadius: 18,
+  padding: '0 18px',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+  marginTop: 4,
 }
 
 const fieldBlockStyle: CSSProperties = {
