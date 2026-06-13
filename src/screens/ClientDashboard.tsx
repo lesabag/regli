@@ -9030,7 +9030,7 @@ const completionOverlayStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
-  padding: '0 0 env(safe-area-inset-bottom)',
+  padding: 0,
   boxSizing: 'border-box',
   pointerEvents: 'auto',
   overflow: 'hidden',

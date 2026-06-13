@@ -227,13 +227,16 @@ serve(async (req: Request) => {
       }
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
       if (earnings > 0) {
-        await supabaseAdmin.rpc('credit_walker_wallet', {
+        const { error: walletCreditError } = await supabaseAdmin.rpc('credit_walker_wallet', {
           p_walker_id: job.walker_id,
           p_job_id: job.id,
           p_amount: earnings,
           p_currency: normalizeCurrency(job.currency) ?? DEFAULT_MARKET_CURRENCY,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
-        }).catch((err: unknown) => console.error('[capture-payment] Wallet credit on idempotent path failed:', err))
+        })
+        if (walletCreditError) {
+          console.error('[capture-payment] Wallet credit on idempotent path failed:', walletCreditError)
+        }
         await notifyWalkerPaymentReceived(
           supabaseAdmin,
           job,
@@ -378,13 +381,16 @@ serve(async (req: Request) => {
 
       const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
       if (earnings > 0) {
-        await supabaseAdmin.rpc('credit_walker_wallet', {
+        const { error: walletCreditError } = await supabaseAdmin.rpc('credit_walker_wallet', {
           p_walker_id: job.walker_id,
           p_job_id: job.id,
           p_amount: earnings,
           p_currency: pi.currency,
           p_description: `Walk completed: ${job.dog_name || 'walk'}`,
-        }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+        })
+        if (walletCreditError) {
+          console.error('[capture-payment] Wallet credit failed:', walletCreditError)
+        }
         await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings, pi.currency).catch((err: unknown) =>
           console.error('[capture-payment] Payment notification failed:', err)
         )
@@ -523,13 +529,16 @@ serve(async (req: Request) => {
 
             const earnings = job.walker_amount ?? job.walker_earnings ?? (job.price != null ? Math.round(job.price * 0.8 * 100) / 100 : 0)
             if (earnings > 0) {
-              await supabaseAdmin.rpc('credit_walker_wallet', {
+              const { error: walletCreditError } = await supabaseAdmin.rpc('credit_walker_wallet', {
                 p_walker_id: job.walker_id,
                 p_job_id: job.id,
                 p_amount: earnings,
                 p_currency: freshPi.currency,
                 p_description: `Walk completed: ${job.dog_name || 'walk'}`,
-              }).catch((err: unknown) => console.error('[capture-payment] Wallet credit failed:', err))
+              })
+              if (walletCreditError) {
+                console.error('[capture-payment] Wallet credit failed:', walletCreditError)
+              }
               await notifyWalkerPaymentReceived(supabaseAdmin, job, earnings, freshPi.currency).catch((err: unknown) =>
                 console.error('[capture-payment] Payment notification failed:', err)
               )

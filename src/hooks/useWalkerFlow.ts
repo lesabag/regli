@@ -436,6 +436,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
   const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
   const [ratingsGiven, setRatingsGiven] = useState<RatingRow[]>([])
+  const [walkerTips, setWalkerTips] = useState<TipRow[]>([])
   const [ratingJobId, setRatingJobId] = useState<string | null>(null)
   const [ratingSubmitting, setRatingSubmitting] = useState(false)
 
@@ -1586,8 +1587,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     if (tipsResult.status === 'fulfilled') {
       if (tipsResult.value.error) {
         console.warn('[useWalkerFlow] walker tips unavailable:', tipsResult.value.error.message)
+        setWalkerTips([])
       } else {
-        for (const tip of ((tipsResult.value.data as TipRow[] | null) ?? [])) {
+        const nextTips = ((tipsResult.value.data as TipRow[] | null) ?? [])
+        setWalkerTips(nextTips)
+        for (const tip of nextTips) {
           if (!tipByJobId.has(tip.walk_request_id)) {
             tipByJobId.set(tip.walk_request_id, tip.amount)
           }
@@ -1595,6 +1599,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       }
     } else {
       console.warn('[useWalkerFlow] walker tips unavailable:', tipsResult.reason)
+      setWalkerTips([])
     }
 
     let newMine = (((mineResult.value.data as Record<string, unknown>[] | null) ?? []).map((row) => ({
@@ -3273,6 +3278,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     avgRating,
     ratingsReceived,
     ratingsGiven,
+    walkerTips,
 
     openJobs: visibleOpenJobs,
     activeOffers,

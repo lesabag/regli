@@ -5,6 +5,9 @@ import { HandCoins, MapPin } from 'lucide-react'
 import NotificationsBell from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompletionCard from '../components/CompletionCard'
+import ProviderCelebrationOverlay, {
+  type ProviderCelebrationPayload,
+} from '../components/ProviderCelebrationOverlay'
 import GroupedHistory from '../components/GroupedHistory'
 import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -227,6 +230,90 @@ function formatCurrencyAmount(
   } catch {
     return `${normalizedCurrency} ${value.toFixed(2)}`
   }
+}
+
+function formatCelebrationTipAmount(value: number, isHebrew: boolean): string {
+  try {
+    return new Intl.NumberFormat(isHebrew ? 'he-IL' : 'en-IL', {
+      style: 'currency',
+      currency: 'ILS',
+      maximumFractionDigits: 0,
+    }).format(value)
+  } catch {
+    return `₪${Math.round(value)}`
+  }
+}
+
+function buildPaymentCelebration({
+  jobId,
+  isHebrew,
+  paidAtMs,
+}: {
+  jobId: string
+  isHebrew: boolean
+  paidAtMs: number
+}): ProviderCelebrationPayload {
+  return {
+    id: `${jobId}:payment:${paidAtMs}`,
+    variant: 'fullscreen-payment',
+    title: isHebrew ? 'התשלום התקבל' : 'Payment received',
+    message: isHebrew ? 'התשלום שלך עודכן בהצלחה.' : 'Your earnings have been updated.',
+  }
+}
+
+function buildRatingCelebration({
+  jobId,
+  ratingId,
+  isHebrew,
+  rating,
+}: {
+  jobId: string
+  ratingId: string
+  isHebrew: boolean
+  rating: number
+}): ProviderCelebrationPayload {
+  const normalizedRating = Math.max(1, Math.min(5, Math.round(rating)))
+  return {
+    id: `${jobId}:rating:${ratingId}`,
+    variant: 'centered-rating',
+    rating: normalizedRating,
+    title: isHebrew ? `דירוג חדש של ${normalizedRating} כוכבים` : `New ${normalizedRating}-star rating received`,
+    message: isHebrew ? 'לקוחות רואים את האיכות שלך. המשך כך.' : 'Your great service is getting noticed.',
+  }
+}
+
+function buildTipCelebration({
+  jobId,
+  tipId,
+  isHebrew,
+  tipAmount,
+}: {
+  jobId: string
+  tipId: string
+  isHebrew: boolean
+  tipAmount: number
+}): ProviderCelebrationPayload {
+  return {
+    id: `${jobId}:tip:${tipId}`,
+    variant: 'centered-tip',
+    tipAmount,
+    title: isHebrew ? 'התקבל טיפ חדש' : 'Tip received',
+    message: isHebrew
+      ? `קיבלת טיפ של ${formatCelebrationTipAmount(tipAmount, true)}`
+      : `You received a ${formatCelebrationTipAmount(tipAmount, false)} tip`,
+  }
+}
+
+function normalizeCelebrationRating(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.max(1, Math.min(5, Math.round(value)))
+    : null
+}
+
+function parseCelebrationTimestamp(value: string | null | undefined): number {
+  if (!value || typeof value !== 'string') return 0
+  const timestamp = new Date(value).getTime()
+  return Number.isNaN(timestamp) ? 0 : timestamp
 }
 
 function getJobCompletedTime(job: {
@@ -677,6 +764,7 @@ export default function WalkerDashboard({
   const [reportIssueOpen, setReportIssueOpen] = useState(false)
   const [reportIssueFeedback, setReportIssueFeedback] = useState<string | null>(null)
   const [reportIssueSubmitting, setReportIssueSubmitting] = useState(false)
+  const [celebrations, setCelebrations] = useState<ProviderCelebrationPayload[]>([])
   const [hiddenHistoryIds, setHiddenHistoryIds] = useState<Set<string>>(new Set())
   const [preferredCustomerIds, setPreferredCustomerIds] = useState<Set<string>>(new Set())
   const [preferredCustomerNames, setPreferredCustomerNames] = useState<Map<string, string>>(new Map())
@@ -717,6 +805,12 @@ export default function WalkerDashboard({
   const [pricingSummaryRows, setPricingSummaryRows] = useState<ProviderPricingSummaryPreferenceRow[]>([])
   const [openPricingSummaryTooltip, setOpenPricingSummaryTooltip] = useState<'asap' | 'scheduled' | null>(null)
   const [pricingSummaryTooltipInlineStyle, setPricingSummaryTooltipInlineStyle] = useState<React.CSSProperties | null>(null)
+  const celebrationBaselineReadyRef = useRef(false)
+  const celebrationBaselineAtRef = useRef(0)
+  const seenRatingsByIdRef = useRef<Map<string, number | null>>(new Map())
+  const seenTipsByIdRef = useRef<Map<string, { amount: number; jobId: string; createdAtMs: number }>>(new Map())
+  const seenPaidAtByJobRef = useRef<Map<string, number>>(new Map())
+  const emittedCelebrationIdsRef = useRef<Set<string>>(new Set())
   const availabilityRowsRef = useRef(availabilityRows)
   const [availabilityStateVersion, setAvailabilityStateVersion] = useState(0)
   const availabilityStateVersionRef = useRef(0)
@@ -835,6 +929,109 @@ export default function WalkerDashboard({
   const autoOnlineInFlightRef = useRef(false)
   const previousStripeReadyForOnlineRef = useRef(false)
   const handledStripeReturnAutoOnlineTokenRef = useRef(0)
+
+  const dismissCelebration = useCallback((celebrationId: string) => {
+    setCelebrations((current) => current.filter((item) => item.id !== celebrationId))
+  }, [])
+
+  const queueCelebration = useCallback((payload: ProviderCelebrationPayload) => {
+    if (emittedCelebrationIdsRef.current.has(payload.id)) return
+    emittedCelebrationIdsRef.current.add(payload.id)
+    setCelebrations((current) => [...current, payload])
+  }, [])
+
+  useEffect(() => {
+    if (flow.loading) return
+
+    if (!celebrationBaselineReadyRef.current) {
+      seenRatingsByIdRef.current = new Map(
+        flow.ratingsReceived.map((rating) => [rating.id, normalizeCelebrationRating(rating.rating)]),
+      )
+      seenTipsByIdRef.current = new Map(
+        flow.walkerTips
+          .filter((tip) => typeof tip.amount === 'number' && Number.isFinite(tip.amount) && tip.amount > 0)
+          .map((tip) => [
+            tip.id,
+            {
+              amount: tip.amount,
+              jobId: tip.walk_request_id,
+              createdAtMs: parseCelebrationTimestamp(tip.created_at),
+            },
+          ]),
+      )
+      seenPaidAtByJobRef.current = new Map(
+        flow.completedJobs.map((job) => [job.id, job.paid_at ? new Date(job.paid_at).getTime() || 0 : 0]),
+      )
+      celebrationBaselineAtRef.current = Date.now()
+      celebrationBaselineReadyRef.current = true
+      return
+    }
+
+    const nextRatingsById = new Map<string, number | null>()
+    for (const rating of flow.ratingsReceived) {
+      const nextRating = normalizeCelebrationRating(rating.rating)
+      const previousRating = seenRatingsByIdRef.current.get(rating.id) ?? null
+      const hadPreviousEntry = seenRatingsByIdRef.current.has(rating.id)
+      const createdAtMs = parseCelebrationTimestamp(rating.created_at)
+      const isNewSinceBaseline =
+        !hadPreviousEntry &&
+        nextRating != null &&
+        createdAtMs > 0 &&
+        createdAtMs >= celebrationBaselineAtRef.current
+
+      if ((hadPreviousEntry && previousRating == null && nextRating != null) || isNewSinceBaseline) {
+        queueCelebration(buildRatingCelebration({
+          jobId: rating.job_id,
+          ratingId: rating.id,
+          isHebrew,
+          rating: nextRating!,
+        }))
+      }
+      nextRatingsById.set(rating.id, nextRating)
+    }
+
+    const nextTipMap = new Map<string, { amount: number; jobId: string; createdAtMs: number }>()
+    for (const tip of flow.walkerTips) {
+      const amount = typeof tip.amount === 'number' && Number.isFinite(tip.amount) ? tip.amount : 0
+      const createdAtMs = parseCelebrationTimestamp(tip.created_at)
+      if (!(amount > 0) || !tip.walk_request_id) continue
+      const nextTip = {
+        amount,
+        jobId: tip.walk_request_id,
+        createdAtMs,
+      }
+      nextTipMap.set(tip.id, nextTip)
+      const previousTip = seenTipsByIdRef.current.get(tip.id)
+      const isNewSinceBaseline =
+        !previousTip &&
+        createdAtMs > 0 &&
+        createdAtMs >= celebrationBaselineAtRef.current
+      if (isNewSinceBaseline) {
+        queueCelebration(buildTipCelebration({
+          jobId: tip.walk_request_id,
+          tipId: tip.id,
+          isHebrew,
+          tipAmount: amount,
+        }))
+      }
+    }
+    const nextPaidAtMap = new Map<string, number>()
+    for (const job of flow.completedJobs) {
+      const nextPaidAt = job.paid_at ? new Date(job.paid_at).getTime() || 0 : 0
+      nextPaidAtMap.set(job.id, nextPaidAt)
+      const previousPaidAt = seenPaidAtByJobRef.current.get(job.id) ?? 0
+      if (nextPaidAt > 0 && nextPaidAt > previousPaidAt) {
+        queueCelebration(buildPaymentCelebration({
+          jobId: job.id,
+          isHebrew,
+          paidAtMs: nextPaidAt,
+        }))
+      }
+    }
+    seenRatingsByIdRef.current = nextRatingsById
+    seenTipsByIdRef.current = nextTipMap
+    seenPaidAtByJobRef.current = nextPaidAtMap
+  }, [flow.completedJobs, flow.loading, flow.ratingsReceived, flow.walkerTips, isHebrew, queueCelebration])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)
@@ -3559,6 +3756,10 @@ export default function WalkerDashboard({
 
   return (
     <>
+      <ProviderCelebrationOverlay
+        celebrations={celebrations}
+        onDismiss={dismissCelebration}
+      />
       <style>{`
         .walker-dashboard-screen {
           scrollbar-width: none;

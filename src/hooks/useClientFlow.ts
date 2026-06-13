@@ -3214,6 +3214,8 @@ function mergeClientDogSizeAttributes(
   }, [currentJob, currentJobId, fetchCurrentAndLists, profileId, sendPushEvent])
 
   const confirmCompletion = useCallback(async () => {
+    if (completionConfirming) return
+
     const pending =
       pendingCompletionConfirmation ??
       (currentJob?.service_completed_at
@@ -3246,53 +3248,20 @@ function mergeClientDogSizeAttributes(
       completedJobs.find((job) => job.id === pending.jobId) ??
       null
 
-    setCompletionConfirming(true)
-    setError(null)
-    setCompletionConfirmError(null)
+    const isCompletionPaid = (job: WalkRequestRow | null | undefined): boolean =>
+      !!job && job.status === 'completed' && (job.payment_status === 'paid' || !!job.paid_at)
 
-    try {
-      const payload = { jobId: pending.jobId }
-      if (import.meta.env.DEV) {
-        console.log('[confirmCompletion] Invoking capture-payment', payload)
-      }
-      const { data, error: captureErr } = await invokeEdgeFunction<CapturePaymentResponse>(
-        'capture-payment',
-        { body: payload },
-      )
+    const isAlreadyCapturedMessage = (value: unknown): boolean => {
+      const normalized = typeof value === 'string' ? value.toLowerCase() : ''
+      return normalized.includes('already been captured') || normalized.includes('already captured')
+    }
 
-      if (captureErr) {
-        if (import.meta.env.DEV) {
-          console.error('[confirmCompletion] Capture error:', captureErr)
-        }
-        const message = String(captureErr)
-        setError(message)
-        setCompletionConfirmError(message)
-        return
-      }
-      if (import.meta.env.DEV) {
-        console.log('[confirmCompletion] capture-payment result', data)
-      }
-      if (data && data.jobId && data.jobId !== pending.jobId) {
-        const mismatchMessage = `Completion returned an unexpected job (${data.jobId}). Please refresh and try again.`
-        if (import.meta.env.DEV) {
-          console.error('[confirmCompletion] Job id mismatch', {
-            expected: pending.jobId,
-            received: data.jobId,
-          })
-        }
-        setError(mismatchMessage)
-        setCompletionConfirmError(mismatchMessage)
-        return
-      }
-      if (data && !data.success && !data.alreadyCompleted && !data.alreadyCaptured) {
-        const message = data.details || data.error || 'Payment capture failed.'
-        setError(message)
-        setCompletionConfirmError(message)
-        return
-      }
-
-      const refreshedJob = await fetchJobById(pending.jobId)
-      const paidAt = data?.paidAt ?? new Date().toISOString()
+    const finalizeCompletionSuccess = async (
+      captureResult?: CapturePaymentResponse | null,
+      refreshedOverride?: WalkRequestRow | null,
+    ) => {
+      const refreshedJob = refreshedOverride ?? await fetchJobById(pending.jobId)
+      const paidAt = captureResult?.paidAt ?? refreshedJob?.paid_at ?? fallbackJob?.paid_at ?? new Date().toISOString()
       const completedJob =
         refreshedJob?.status === 'completed'
           ? refreshedJob
@@ -3344,10 +3313,127 @@ function mergeClientDogSizeAttributes(
       }
 
       void fetchCurrentAndLists()
+    }
+
+    if (isCompletionPaid(fallbackJob)) {
+      console.warn('[confirmCompletion] completion already settled before capture; treating as success', {
+        jobId: pending.jobId,
+        paymentStatus: fallbackJob?.payment_status ?? null,
+        paidAt: fallbackJob?.paid_at ?? null,
+      })
+      setCompletionConfirming(true)
+      setError(null)
+      setCompletionConfirmError(null)
+      try {
+        await finalizeCompletionSuccess({
+          success: true,
+          alreadyCaptured: true,
+          jobId: pending.jobId,
+          paidAt: fallbackJob?.paid_at ?? undefined,
+        }, fallbackJob)
+      } finally {
+        setCompletionConfirming(false)
+      }
+      return
+    }
+
+    setCompletionConfirming(true)
+    setError(null)
+    setCompletionConfirmError(null)
+
+    try {
+      const payload = { jobId: pending.jobId }
+      if (import.meta.env.DEV) {
+        console.log('[confirmCompletion] Invoking capture-payment', payload)
+      }
+      const { data, error: captureErr } = await invokeEdgeFunction<CapturePaymentResponse>(
+        'capture-payment',
+        { body: payload },
+      )
+
+      if (captureErr) {
+        if (import.meta.env.DEV) {
+          console.error('[confirmCompletion] Capture error:', captureErr)
+        }
+        const message = String(captureErr)
+        const refreshedJob = await fetchJobById(pending.jobId)
+        if (isAlreadyCapturedMessage(message) || isCompletionPaid(refreshedJob) || isCompletionPaid(fallbackJob)) {
+          console.warn('[confirmCompletion] duplicate capture detected; treating as success', {
+            jobId: pending.jobId,
+            captureErr: message,
+            refreshedPaymentStatus: refreshedJob?.payment_status ?? null,
+            refreshedPaidAt: refreshedJob?.paid_at ?? null,
+          })
+          await finalizeCompletionSuccess({
+            success: true,
+            alreadyCaptured: true,
+            jobId: pending.jobId,
+            paidAt: refreshedJob?.paid_at ?? fallbackJob?.paid_at ?? undefined,
+          }, refreshedJob)
+          return
+        }
+        setError(message)
+        setCompletionConfirmError(message)
+        return
+      }
+      if (import.meta.env.DEV) {
+        console.log('[confirmCompletion] capture-payment result', data)
+      }
+      if (data && data.jobId && data.jobId !== pending.jobId) {
+        const mismatchMessage = `Completion returned an unexpected job (${data.jobId}). Please refresh and try again.`
+        if (import.meta.env.DEV) {
+          console.error('[confirmCompletion] Job id mismatch', {
+            expected: pending.jobId,
+            received: data.jobId,
+          })
+        }
+        setError(mismatchMessage)
+        setCompletionConfirmError(mismatchMessage)
+        return
+      }
+      if (data && !data.success && !data.alreadyCompleted && !data.alreadyCaptured) {
+        const message = data.details || data.error || 'Payment capture failed.'
+        if (isAlreadyCapturedMessage(message)) {
+          const refreshedJob = await fetchJobById(pending.jobId)
+          console.warn('[confirmCompletion] duplicate capture response; treating as success', {
+            jobId: pending.jobId,
+            responseMessage: message,
+            refreshedPaymentStatus: refreshedJob?.payment_status ?? null,
+            refreshedPaidAt: refreshedJob?.paid_at ?? null,
+          })
+          await finalizeCompletionSuccess({
+            ...data,
+            success: true,
+            alreadyCaptured: true,
+            paidAt: refreshedJob?.paid_at ?? fallbackJob?.paid_at ?? data.paidAt,
+          }, refreshedJob)
+          return
+        }
+        setError(message)
+        setCompletionConfirmError(message)
+        return
+      }
+      await finalizeCompletionSuccess(data ?? null)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Payment capture failed.'
       if (import.meta.env.DEV) {
         console.error('[confirmCompletion] Unhandled error:', err)
+      }
+      if (isAlreadyCapturedMessage(message)) {
+        const refreshedJob = await fetchJobById(pending.jobId)
+        console.warn('[confirmCompletion] duplicate capture exception; treating as success', {
+          jobId: pending.jobId,
+          error: message,
+          refreshedPaymentStatus: refreshedJob?.payment_status ?? null,
+          refreshedPaidAt: refreshedJob?.paid_at ?? null,
+        })
+        await finalizeCompletionSuccess({
+          success: true,
+          alreadyCaptured: true,
+          jobId: pending.jobId,
+          paidAt: refreshedJob?.paid_at ?? fallbackJob?.paid_at ?? undefined,
+        }, refreshedJob)
+        return
       }
       setError(message)
       setCompletionConfirmError(message)
@@ -3355,6 +3441,7 @@ function mergeClientDogSizeAttributes(
       setCompletionConfirming(false)
     }
   }, [
+    completionConfirming,
     pendingCompletionConfirmation,
     currentJob,
     walkerNameById,
