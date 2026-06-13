@@ -180,7 +180,7 @@ export default function ProviderCelebrationOverlay({
             ? renderFullscreenCelebration(celebration, pieces)
             : celebration.variant === 'centered-rating'
               ? renderRatingCelebration(celebration, pieces)
-              : renderCenteredCelebration(celebration, pieces)
+              : renderTipCelebration(celebration, pieces)
         })}
       </div>
     </>
@@ -220,66 +220,87 @@ function renderFullscreenCelebration(
   )
 }
 
-function renderCenteredCelebration(
+function renderTipCelebration(
   celebration: ProviderCelebrationPayload,
   pieces: ConfettiPiece[],
 ) {
+  console.log('[tip-overlay] mounted')
+
   const accent = '#34D399'
   const documentLang = typeof document !== 'undefined' ? document.documentElement.lang : 'en'
   const isHebrew = documentLang === 'he'
-  const tipLabel =
+  const tipAmount =
     typeof celebration.tipAmount === 'number' && Number.isFinite(celebration.tipAmount) && celebration.tipAmount > 0
-      ? `${formatTipAmount(celebration.tipAmount)} ${isHebrew ? 'טיפ' : 'tip'}`
-      : celebration.message ?? ''
+      ? formatTipAmount(celebration.tipAmount)
+      : null
+  const tipTitle = isHebrew ? 'קיבלת טיפ' : 'You received a tip'
+  const tipSubtitle = isHebrew ? 'תודה על השירות הנהדר!' : 'Thanks for the great service!'
+  const tipLabel = tipAmount ? `${tipAmount} ${isHebrew ? 'טיפ' : 'tip'}` : celebration.message ?? ''
 
   return (
     <div
       key={celebration.id}
-      style={centeredLayerStyle}
+      style={tipLayerStyle}
       aria-label={celebration.title ?? 'Celebration'}
     >
-      <div
-        style={{
-          ...centeredGlowStyle,
-          background: `radial-gradient(circle, ${hexToRgba(accent, 0.2)} 0%, ${hexToRgba(accent, 0)} 72%)`,
-        }}
-      />
-      <div
-        style={{
-          ...centeredPulseStyle,
-          borderColor: hexToRgba(accent, 0.26),
-          background: `radial-gradient(circle, ${hexToRgba(accent, 0.22)} 0%, ${hexToRgba(accent, 0.04)} 56%, rgba(15, 23, 42, 0) 100%)`,
-          boxShadow: `0 0 0 1px ${hexToRgba(accent, 0.08)}, 0 24px 50px ${hexToRgba(accent, 0.18)}`,
-        }}
-        aria-hidden="true"
-      />
-      <div
-        style={{
-          ...tipLabelStyle,
-          borderColor: hexToRgba(accent, 0.26),
-          boxShadow: `0 20px 44px ${hexToRgba(accent, 0.18)}`,
-        }}
-      >
-        <span style={tipEmojiStyle} aria-hidden="true">✨</span>
-        <span>{tipLabel}</span>
-      </div>
-      <div style={centeredBurstWrapStyle} aria-hidden="true">
-        {pieces.map((piece) => (
-          <span
-            key={piece.id}
+      <div style={tipSceneStyle}>
+        <div
+          style={{
+            ...tipGlowStyle,
+            background: `radial-gradient(circle, ${hexToRgba(accent, 0.26)} 0%, ${hexToRgba('#6EE7B7', 0.08)} 46%, ${hexToRgba(accent, 0)} 78%)`,
+          }}
+        />
+        <div style={tipCenteredContentStyle}>
+          <div
             style={{
-              ...centeredPieceStyle,
-              width: piece.width,
-              height: piece.height,
-              background: piece.color,
-              animationDelay: `${piece.delay}ms`,
-              animationDuration: `${piece.duration}ms`,
-              ['--provider-confetti-x' as string]: `${piece.x}px`,
-              ['--provider-confetti-y' as string]: `${piece.y}px`,
-              ['--provider-confetti-spin' as string]: `${piece.spin}deg`,
+              ...tipPulseStyle,
+              borderColor: hexToRgba(accent, 0.3),
+              background: `radial-gradient(circle, ${hexToRgba(accent, 0.24)} 0%, ${hexToRgba(accent, 0.06)} 56%, rgba(15, 23, 42, 0) 100%)`,
+              boxShadow: `0 0 0 1px ${hexToRgba(accent, 0.12)}, 0 28px 60px ${hexToRgba(accent, 0.2)}`,
             }}
+            aria-hidden="true"
           />
-        ))}
+          <div
+            style={{
+              ...tipCardStyle,
+              borderColor: hexToRgba(accent, 0.26),
+              boxShadow: `0 28px 72px ${hexToRgba(accent, 0.24)}`,
+            }}
+          >
+            <div style={tipTitleStyle}>
+              <span style={tipEmojiStyle} aria-hidden="true">💰</span>
+              <span>{tipTitle}</span>
+            </div>
+            <div style={tipAmountStyle}>{tipAmount ?? tipLabel}</div>
+            <div style={tipSubtitleStyle}>
+              <span style={tipSparkleStyle} aria-hidden="true">🎉</span>
+              <span>{tipSubtitle}</span>
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            ...tipBurstWrapStyle,
+          }}
+          aria-hidden="true"
+        >
+          {pieces.map((piece) => (
+            <span
+              key={piece.id}
+              style={{
+                ...centeredPieceStyle,
+                width: piece.width,
+                height: piece.height,
+                background: piece.color,
+                animationDelay: `${piece.delay}ms`,
+                animationDuration: `${piece.duration}ms`,
+                ['--provider-confetti-x' as string]: `${piece.x}px`,
+                ['--provider-confetti-y' as string]: `${piece.y}px`,
+                ['--provider-confetti-spin' as string]: `${piece.spin}deg`,
+              }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -417,14 +438,14 @@ function buildCenteredPieces(
 
   return Array.from({ length: 22 }, (_, index) => {
     const angle = (Math.PI * 2 * index) / 22
-    const radius = 54 + (index % 5) * 14
+    const radius = 104 + (index % 5) * 18
     return {
       id: `${seed}-center-${index}`,
       color: TIP_COLORS[index % TIP_COLORS.length],
       delay: (index % 5) * 60,
-      duration: 1700 + (index % 4) * 120,
-      width: 8 + (index % 3) * 2,
-      height: 8 + ((index + 1) % 4) * 3,
+      duration: 1900 + (index % 4) * 140,
+      width: 12 + (index % 3) * 3,
+      height: 12 + ((index + 1) % 4) * 4,
       left: 50,
       x: Math.cos(angle) * radius,
       y: Math.sin(angle) * radius,
@@ -507,57 +528,113 @@ const centeredLayerStyle: React.CSSProperties = {
   animation: `providerCelebrationOverlayFade ${CELEBRATION_DURATION_MS}ms ease-out forwards`,
 }
 
-const centeredGlowStyle: React.CSSProperties = {
-  position: 'absolute',
-  width: 220,
-  height: 220,
-  borderRadius: '50%',
-  filter: 'blur(2px)',
+const tipLayerStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  pointerEvents: 'none',
+  zIndex: 9999,
+  animation: `providerCelebrationOverlayFade ${CELEBRATION_DURATION_MS}ms ease-out forwards`,
 }
 
-const centeredPulseStyle: React.CSSProperties = {
+const tipSceneStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 420,
+  height: 420,
+}
+
+const tipGlowStyle: React.CSSProperties = {
   position: 'absolute',
-  width: 96,
-  height: 96,
+  inset: 0,
+  filter: 'blur(8px)',
+}
+
+const tipCenteredContentStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
+
+const tipPulseStyle: React.CSSProperties = {
+  position: 'absolute',
+  width: 156,
+  height: 156,
   borderRadius: '50%',
   border: '1px solid rgba(255,255,255,0.16)',
   animation: `providerCelebrationPulse ${CELEBRATION_DURATION_MS}ms ease-out forwards`,
 }
 
-const centeredBurstWrapStyle: React.CSSProperties = {
-  position: 'relative',
-  width: 260,
-  height: 260,
+const tipBurstWrapStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
   overflow: 'visible',
 }
 
-const tipLabelStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: '50%',
-  left: '50%',
-  transform: 'translate(-50%, -50%)',
-  minHeight: 48,
-  padding: '0 18px',
-  borderRadius: 999,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 10,
+const tipCardStyle: React.CSSProperties = {
+  position: 'relative',
+  zIndex: 1,
+  width: 'min(82vw, 320px)',
+  minHeight: 208,
+  padding: '22px 22px 24px',
+  borderRadius: 28,
+  display: 'grid',
+  justifyItems: 'center',
+  alignContent: 'center',
+  gap: 12,
   background: 'rgba(15, 23, 42, 0.92)',
   border: '1px solid rgba(52, 211, 153, 0.2)',
   color: '#ECFDF5',
-  fontSize: 20,
-  lineHeight: 1,
-  fontWeight: 900,
-  letterSpacing: '-0.02em',
-  whiteSpace: 'nowrap',
+  textAlign: 'center',
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
   animation: `providerCelebrationCardIn ${CELEBRATION_DURATION_MS}ms cubic-bezier(0.22, 1, 0.36, 1) forwards`,
 }
 
 const tipEmojiStyle: React.CSSProperties = {
+  fontSize: 24,
+  lineHeight: 1,
+  filter: 'drop-shadow(0 8px 18px rgba(110, 231, 183, 0.28))',
+}
+
+const tipTitleStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+  fontSize: 24,
+  lineHeight: 1.1,
+  fontWeight: 900,
+  letterSpacing: '-0.03em',
+  color: '#F8FAFC',
+}
+
+const tipAmountStyle: React.CSSProperties = {
+  fontSize: 52,
+  lineHeight: 0.96,
+  fontWeight: 1000,
+  letterSpacing: '-0.05em',
+  color: '#6EE7B7',
+  textShadow: '0 0 24px rgba(110, 231, 183, 0.26), 0 12px 30px rgba(52, 211, 153, 0.22)',
+}
+
+const tipSubtitleStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  fontSize: 16,
+  lineHeight: 1.4,
+  fontWeight: 700,
+  color: 'rgba(236, 253, 245, 0.86)',
+}
+
+const tipSparkleStyle: React.CSSProperties = {
   fontSize: 18,
   lineHeight: 1,
-  filter: 'drop-shadow(0 6px 16px rgba(110, 231, 183, 0.28))',
 }
 
 const ratingBackdropGlowStyle: React.CSSProperties = {

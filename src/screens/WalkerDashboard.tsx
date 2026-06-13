@@ -2,7 +2,7 @@ import { hapticMedium, hapticSuccess } from '../utils/haptics'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { HandCoins, MapPin } from 'lucide-react'
-import NotificationsBell from '../components/NotificationsBell'
+import NotificationsBell, { PROVIDER_TIP_TOAST_EVENT } from '../components/NotificationsBell'
 import ProfileAvatar from '../components/ProfileAvatar'
 import CompletionCard from '../components/CompletionCard'
 import ProviderCelebrationOverlay, {
@@ -811,6 +811,7 @@ export default function WalkerDashboard({
   const seenTipsByIdRef = useRef<Map<string, { amount: number; jobId: string; createdAtMs: number }>>(new Map())
   const seenPaidAtByJobRef = useRef<Map<string, number>>(new Map())
   const emittedCelebrationIdsRef = useRef<Set<string>>(new Set())
+  const handledRealtimeTipIdsRef = useRef<Set<string>>(new Set())
   const availabilityRowsRef = useRef(availabilityRows)
   const [availabilityStateVersion, setAvailabilityStateVersion] = useState(0)
   const availabilityStateVersionRef = useRef(0)
@@ -941,6 +942,38 @@ export default function WalkerDashboard({
   }, [])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const handleTipToastEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ jobId?: string; tipAmount?: number; dedupeKey?: string; timestamp?: number }>).detail
+      const jobId = typeof detail?.jobId === 'string' ? detail.jobId : null
+      const tipAmount = typeof detail?.tipAmount === 'number' && Number.isFinite(detail.tipAmount) ? detail.tipAmount : 0
+      const dedupeKey = typeof detail?.dedupeKey === 'string' ? detail.dedupeKey : null
+
+      if (!jobId || !(tipAmount > 0) || !dedupeKey) return
+      if (handledRealtimeTipIdsRef.current.has(dedupeKey)) return
+
+      handledRealtimeTipIdsRef.current.add(dedupeKey)
+      console.log('[tip] celebration shown', {
+        jobId,
+        tipAmount,
+        timestamp: Date.now(),
+      })
+      queueCelebration(buildTipCelebration({
+        jobId,
+        tipId: dedupeKey,
+        isHebrew,
+        tipAmount,
+      }))
+    }
+
+    window.addEventListener(PROVIDER_TIP_TOAST_EVENT, handleTipToastEvent as EventListener)
+    return () => {
+      window.removeEventListener(PROVIDER_TIP_TOAST_EVENT, handleTipToastEvent as EventListener)
+    }
+  }, [isHebrew, queueCelebration])
+
+  useEffect(() => {
     if (flow.loading) return
 
     if (!celebrationBaselineReadyRef.current) {
@@ -1001,19 +1034,6 @@ export default function WalkerDashboard({
         createdAtMs,
       }
       nextTipMap.set(tip.id, nextTip)
-      const previousTip = seenTipsByIdRef.current.get(tip.id)
-      const isNewSinceBaseline =
-        !previousTip &&
-        createdAtMs > 0 &&
-        createdAtMs >= celebrationBaselineAtRef.current
-      if (isNewSinceBaseline) {
-        queueCelebration(buildTipCelebration({
-          jobId: tip.walk_request_id,
-          tipId: tip.id,
-          isHebrew,
-          tipAmount: amount,
-        }))
-      }
     }
     const nextPaidAtMap = new Map<string, number>()
     for (const job of flow.completedJobs) {
@@ -2367,7 +2387,7 @@ export default function WalkerDashboard({
 
   useEffect(() => {
     if (!dashboardCardNotice) return
-    const id = window.setTimeout(() => setDashboardCardNotice(null), 3200)
+    const id = window.setTimeout(() => setDashboardCardNotice(null), 3000)
     return () => window.clearTimeout(id)
   }, [dashboardCardNotice])
 
@@ -2831,7 +2851,7 @@ export default function WalkerDashboard({
 
   useEffect(() => {
     if (!stripeReturnNotice) return
-    const id = window.setTimeout(() => setStripeReturnNotice(null), 4000)
+    const id = window.setTimeout(() => setStripeReturnNotice(null), 3000)
     return () => window.clearTimeout(id)
   }, [stripeReturnNotice])
 
@@ -5586,7 +5606,7 @@ export default function WalkerDashboard({
                 setReportIssueOpen(false)
                 if (ok) {
                   setReportIssueFeedback(isHebrew ? 'הדיווח נשלח. צוות התמיכה יבדוק.' : 'Issue reported. Support will review.')
-                  setTimeout(() => setReportIssueFeedback(null), 5000)
+                  setTimeout(() => setReportIssueFeedback(null), 3000)
                 }
               }}
               style={{ ...completeBtnStyle, background: '#DC2626', maxWidth: '100%', width: '100%', opacity: reportIssueSubmitting ? 0.6 : 1 }}

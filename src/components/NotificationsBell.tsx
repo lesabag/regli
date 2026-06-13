@@ -30,7 +30,8 @@ interface Toast {
   createdAt: number
   dedupKey: string
 }
-const TOAST_DURATION = 4000
+const TOAST_DURATION = 3000
+export const PROVIDER_TIP_TOAST_EVENT = 'regli:provider-tip-toast'
 // ─── Notification type config ───────────────────────────────────
 
 interface TypeConfig {
@@ -225,7 +226,7 @@ export default function NotificationsBell({
       const newToasts = [...prev, newToast]
       setTimeout(() => {
         setToasts((current) => current.filter((t) => t.id !== id))
-      }, Math.max(4000, dedupWindowMs))
+      }, TOAST_DURATION)
       return newToasts
     })
   }, [])
@@ -291,6 +292,23 @@ export default function NotificationsBell({
           fetchNotifications(authUserId)
           const row = payload.new as Notification | undefined
           if (row && isBellVisibleNotification(row)) {
+            const tipAmount = parseTipAmountFromMessage(row.message)
+            const receivedAt = Date.now()
+            const isTipNotification =
+              row.type === 'payment_received' &&
+              row.title === 'Tip received' &&
+              !!row.related_job_id &&
+              tipAmount != null &&
+              tipAmount > 0
+
+            if (isTipNotification) {
+              console.log('[tip] realtime event received', {
+                jobId: row.related_job_id,
+                tipAmount,
+                timestamp: receivedAt,
+              })
+            }
+
             addToast(normalizePushPayload({
               type: row.type,
               title: row.title,
@@ -298,6 +316,22 @@ export default function NotificationsBell({
               related_job_id: row.related_job_id,
               created_at: row.created_at,
             }))
+
+            if (isTipNotification) {
+              console.log('[tip] banner shown', {
+                jobId: row.related_job_id,
+                tipAmount,
+                timestamp: Date.now(),
+              })
+              window.dispatchEvent(new CustomEvent(PROVIDER_TIP_TOAST_EVENT, {
+                detail: {
+                  jobId: row.related_job_id,
+                  tipAmount,
+                  dedupeKey: row.id,
+                  timestamp: receivedAt,
+                },
+              }))
+            }
           }
         }
       )
@@ -586,6 +620,14 @@ export default function NotificationsBell({
       )}
     </div>
   )
+}
+
+function parseTipAmountFromMessage(message: string | null | undefined): number | null {
+  if (typeof message !== 'string') return null
+  const match = message.match(/₪\s?(\d+(?:\.\d+)?)/)
+  if (!match?.[1]) return null
+  const amount = Number(match[1])
+  return Number.isFinite(amount) && amount > 0 ? amount : null
 }
 
 // ─── Exported helper ────────────────────────────────────────────

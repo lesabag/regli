@@ -14,7 +14,7 @@ export default function MessageBanner({
   text,
   kind,
   onDismiss,
-  durationMs = 3600,
+  durationMs = 3000,
   title,
   subtitle,
   icon,

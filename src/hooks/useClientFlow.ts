@@ -281,6 +281,7 @@ const SEARCH_ATTEMPT_AUTO_ADVANCE_BUFFER_MS = 1_500
 const SEARCH_ATTEMPT_AUTO_ADVANCE_DEDUPE_MS = 5_000
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
+const TRANSIENT_BANNER_DURATION_MS = 3000
 
 function normalizeServiceRadiusKm(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
@@ -1561,6 +1562,14 @@ export function useClientFlow(profileId: string, _profileName: string) {
   }, [])
   const clearSuccess = useCallback(() => setSuccessMessage(null), [])
   const clearAvailabilityNotice = useCallback(() => setAvailabilityNotice(null), [])
+
+  useEffect(() => {
+    if (!successMessage) return
+    const timeoutId = window.setTimeout(() => {
+      setSuccessMessage(null)
+    }, TRANSIENT_BANNER_DURATION_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [successMessage])
   const dismissExhaustedRequest = useCallback(() => {
     const exhaustedJobId =
       currentJob?.smart_dispatch_state === 'exhausted'

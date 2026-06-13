@@ -318,6 +318,8 @@ function completionReviewDismissStorageKey(profileId: string): string {
   return `regli_walker_completion_review_dismissed_${profileId}`
 }
 
+const TRANSIENT_BANNER_DURATION_MS = 3000
+
 function sendClientLiveOrderEvent(params: {
   clientId: string | null | undefined
   jobId: string
@@ -437,6 +439,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
   const [ratingsReceived, setRatingsReceived] = useState<RatingRow[]>([])
   const [ratingsGiven, setRatingsGiven] = useState<RatingRow[]>([])
   const [walkerTips, setWalkerTips] = useState<TipRow[]>([])
+  const [recentTipEvent, setRecentTipEvent] = useState<TipRow | null>(null)
   const [ratingJobId, setRatingJobId] = useState<string | null>(null)
   const [ratingSubmitting, setRatingSubmitting] = useState(false)
 
@@ -520,6 +523,14 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     shownStateMessagesRef.current.add(key)
     setSuccessMessage(message)
   }, [profileId])
+
+  useEffect(() => {
+    if (!successMessage) return
+    const timeoutId = window.setTimeout(() => {
+      setSuccessMessage(null)
+    }, TRANSIENT_BANNER_DURATION_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [successMessage])
 
   const sendPushEvent = useCallback(({
     type,
@@ -1142,8 +1153,6 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     }
     setPendingClientConfirmation(null)
     flowCompletedJobIdsRef.current.add(confirmed.id)
-    const labels = getServiceLabels(confirmed.service_type)
-    showStateMessage(confirmed.id, 'completed', labels.completedPast)
     setCompletionSuccess({
       jobId: confirmed.id,
       clientId: confirmed.client_id,
@@ -1156,7 +1165,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       serviceCompletedAt: confirmed.service_completed_at ?? null,
       serviceType: confirmed.service_type ?? null,
     })
-  }, [pendingClientConfirmation, completedJobs, myJobs, showStateMessage])
+  }, [pendingClientConfirmation, completedJobs, myJobs])
 
   useEffect(() => {
     if (pendingClientConfirmation) return
@@ -2169,7 +2178,28 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'walker_tips', filter: `walker_id=eq.${profileId}` },
-          () => {
+          (payload) => {
+            if (payload?.eventType === 'INSERT') {
+              const row =
+                typeof payload?.new === 'object' && payload.new
+                  ? (payload.new as Record<string, unknown>)
+                  : null
+              const id = typeof row?.id === 'string' ? row.id : null
+              const walkRequestId = typeof row?.walk_request_id === 'string' ? row.walk_request_id : null
+              const walkerId = typeof row?.walker_id === 'string' ? row.walker_id : null
+              const amount = typeof row?.amount === 'number' && Number.isFinite(row.amount) ? row.amount : null
+              const createdAt = typeof row?.created_at === 'string' ? row.created_at : new Date().toISOString()
+
+              if (id && walkRequestId && walkerId === profileId && amount && amount > 0) {
+                setRecentTipEvent({
+                  id,
+                  walk_request_id: walkRequestId,
+                  walker_id: walkerId,
+                  amount,
+                  created_at: createdAt,
+                })
+              }
+            }
             if (!isDocumentVisibleRef.current) return
             void fetchAllRef.current('realtime_walker_tip_change')
           },
@@ -3279,6 +3309,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
     ratingsReceived,
     ratingsGiven,
     walkerTips,
+    recentTipEvent,
 
     openJobs: visibleOpenJobs,
     activeOffers,

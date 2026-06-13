@@ -345,7 +345,7 @@ export default function AdminDisputes() {
 
   useEffect(() => {
     if (!feedback) return
-    const timer = window.setTimeout(() => setFeedback(null), 4000)
+    const timer = window.setTimeout(() => setFeedback(null), 3000)
     return () => window.clearTimeout(timer)
   }, [feedback])
 
