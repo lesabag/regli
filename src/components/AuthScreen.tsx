@@ -494,12 +494,12 @@ export default function AuthScreen({
   const onboardingServiceTypes = isProvider ? selectedServices : []
   const providerDetailSections = useMemo(
     () => [
-      { id: 'experience' as const, label: copy.yearsExperience },
-      { id: 'languages' as const, label: copy.languagesSpoken },
-      ...(isProviderDogWalker ? [{ id: 'dog' as const, label: copy.dogPreferences }] : []),
+      { id: 'experience' as const, label: isHebrew ? copy.yearsExperience : 'Experience' },
+      { id: 'languages' as const, label: isHebrew ? copy.languagesSpoken : 'Languages' },
+      ...(isProviderDogWalker ? [{ id: 'dog' as const, label: isHebrew ? copy.dogPreferences : 'Dog prefs' }] : []),
       ...(isProviderBabySitter ? [{ id: 'babysitter' as const, label: copy.babysitterPreferences }] : []),
     ],
-    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.yearsExperience, isProviderBabySitter, isProviderDogWalker],
+    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.yearsExperience, isHebrew, isProviderBabySitter, isProviderDogWalker],
   )
 
   const dogValid = isProvider
@@ -1241,6 +1241,12 @@ export default function AuthScreen({
                             onClick={() => setActiveProviderDetailsSection(section.id)}
                             style={{
                               ...detailsSelectorPillStyle,
+                              ...(isHebrew
+                                ? null
+                                : {
+                                    fontSize: 11.5,
+                                    padding: '0 10px',
+                                  }),
                               ...(activeProviderDetailsSection === section.id ? detailsSelectorPillActiveStyle : null),
                             }}
                           >
