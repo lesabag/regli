@@ -47,10 +47,15 @@ function buildLegalAcceptanceMetadata(context: PendingLegalAcceptanceContext) {
   }
 }
 
-export function getLegalDocumentUrl(documentType: LegalDocumentType): string {
-  return documentType === 'terms_of_service'
-    ? '/terms-of-service.html'
-    : '/privacy-policy.html'
+export function getLegalDocumentUrl(
+  documentType: LegalDocumentType,
+  language: SupportedLanguage = 'en',
+): string {
+  const suffix = language === 'he' ? 'he' : 'en'
+  if (documentType === 'terms_of_service') {
+    return `/legal/terms-${suffix}.html`
+  }
+  return `/legal/privacy-${suffix}.html`
 }
 
 export function queuePendingLegalAcceptances(context: PendingLegalAcceptanceContext) {

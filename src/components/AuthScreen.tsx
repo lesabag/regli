@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
 import type { LegalDocumentType, PendingLegalAcceptanceContext } from '../lib/legalAcceptances'
+import LegalDocumentModal from './LegalDocumentModal'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import {
   getProfileServiceOptions,
@@ -362,8 +363,8 @@ export default function AuthScreen({
     finishSetup: isHebrew ? 'סיימו את ההגדרה כדי להמשיך ל-Regli.' : 'Finish your Regli setup to continue.',
     signInPrompt: isHebrew ? 'התחברו כדי להמשיך מאיפה שהפסקתם.' : 'Log in to continue where you left off.',
     createAccountPrompt: isHebrew ? 'השלימו את יצירת החשבון כדי להתחיל עם Regli.' : 'Finish setting up your account to start with Regli.',
-    legalIntroClient: isHebrew ? 'לפני שמסיימים, צריך לאשר את המסמכים הבסיסיים של Regli.' : 'Before continuing, please accept Regli’s launch legal basics.',
-    legalIntroProvider: isHebrew ? 'לפני שמסיימים, צריך לאשר את המסמכים הבסיסיים של Regli.' : 'Before continuing, please accept Regli’s launch legal basics.',
+    legalIntroClient: isHebrew ? 'לפני שממשיכים, צריך לאשר את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
+    legalIntroProvider: isHebrew ? 'לפני שממשיכים, צריך לאשר את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
     agreeTermsPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
     agreePrivacyPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
     termsOfService: isHebrew ? 'תנאי השימוש' : 'Terms of Service',
@@ -374,20 +375,6 @@ export default function AuthScreen({
     providerAdultNotice: isHebrew
       ? 'בעל/ת החשבון חייב/ת להיות מבוגר/ת האחראי/ת לתשלומים ולהסכמים המשפטיים.'
       : 'The account owner must be an adult responsible for payouts and legal agreements.',
-    legalClose: isHebrew ? 'סגור' : 'Close',
-    legalPlaceholderBadge: isHebrew ? 'טיוטת השקה' : 'Launch placeholder',
-    legalTermsBody: isHebrew
-      ? 'זהו מסמך placeholder זמני לתנאי השימוש של Regli. הנוסח המשפטי הסופי יוחלף לפני ההשקה הציבורית.'
-      : 'This is a temporary launch placeholder for Regli’s Terms of Service. Final legal copy will replace this before public launch.',
-    legalPrivacyBody: isHebrew
-      ? 'זהו מסמך placeholder זמני למדיניות הפרטיות של Regli. הנוסח הסופי יוחלף לפני ההשקה הציבורית.'
-      : 'This is a temporary launch placeholder for Regli’s Privacy Policy. Final privacy language will replace this before public launch.',
-    legalPrivacyExtra: isHebrew
-      ? 'Regli משתמשת בנתוני חשבון, פרופיל, מיקום, הזמנות ותשלום כדי להפעיל את המרקטפלייס ולספק את השירותים שהתבקשו.'
-      : 'Regli uses account, profile, location, booking, and payment-related data to operate the marketplace and deliver requested services.',
-    legalTermsExtra: isHebrew
-      ? 'בהמשך השימוש ב-Regli, המשתמשים מאשרים שהזמנות, תשלומים ואחריות חשבון כפופים לתנאי השימוש הסופיים של Regli לאחר פרסומם.'
-      : 'By continuing with Regli, users acknowledge that bookings, payments, and account responsibilities are governed by Regli’s final Terms of Service once published.',
     useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Use email instead',
     fullName: isHebrew ? 'שם מלא' : 'Full name',
     fullNamePlaceholder: isHebrew ? 'השם המלא שלך' : 'Your full name',
@@ -541,10 +528,6 @@ export default function AuthScreen({
     source,
     accountOwnerNoticeShown: isProvider,
   })
-
-  const activeLegalDocumentTitle = openLegalDocument === 'terms_of_service'
-    ? copy.termsOfService
-    : copy.privacyPolicy
 
   const canContinue = useMemo(() => {
     if (authenticatedOnboarding && currentStep === 'auth') return legalAcceptanceValid
@@ -1758,35 +1741,11 @@ export default function AuthScreen({
       </div>
     </div>
 
-    {openLegalDocument && (
-      <div style={legalModalBackdropStyle} onClick={() => setOpenLegalDocument(null)}>
-        <div
-          dir={direction}
-          style={legalModalCardStyle}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div style={{ ...legalModalBadgeStyle, alignSelf: isRtl ? 'flex-end' : 'flex-start' }}>
-            {copy.legalPlaceholderBadge}
-          </div>
-          <div style={{ ...legalModalTitleStyle, textAlign }}>
-            {activeLegalDocumentTitle}
-          </div>
-          <div style={{ ...legalModalBodyStyle, textAlign }}>
-            {openLegalDocument === 'terms_of_service' ? copy.legalTermsBody : copy.legalPrivacyBody}
-          </div>
-          <div style={{ ...legalModalBodyStyle, textAlign }}>
-            {openLegalDocument === 'terms_of_service' ? copy.legalTermsExtra : copy.legalPrivacyExtra}
-          </div>
-          <button
-            type="button"
-            onClick={() => setOpenLegalDocument(null)}
-            style={legalModalCloseButtonStyle}
-          >
-            {copy.legalClose}
-          </button>
-        </div>
-      </div>
-    )}
+    <LegalDocumentModal
+      documentType={openLegalDocument}
+      isHebrew={isRtl}
+      onClose={() => setOpenLegalDocument(null)}
+    />
     </>
   )
 }
@@ -2689,70 +2648,6 @@ const legalHelperTextStyle: CSSProperties = {
   fontSize: 12.5,
   lineHeight: 1.45,
   color: '#3152C8',
-}
-
-const legalModalBackdropStyle: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(15, 23, 42, 0.36)',
-  backdropFilter: 'blur(8px)',
-  WebkitBackdropFilter: 'blur(8px)',
-  display: 'grid',
-  placeItems: 'center',
-  padding: 20,
-  zIndex: 1000,
-}
-
-const legalModalCardStyle: CSSProperties = {
-  width: 'min(100%, 420px)',
-  maxHeight: '80vh',
-  overflowY: 'auto',
-  borderRadius: 24,
-  background: 'rgba(255,255,255,0.98)',
-  border: '1px solid rgba(91, 124, 250, 0.16)',
-  boxShadow: '0 28px 60px rgba(15, 23, 42, 0.18)',
-  display: 'grid',
-  gap: 12,
-  padding: 18,
-}
-
-const legalModalBadgeStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 999,
-  padding: '6px 10px',
-  background: '#DBEAFE',
-  color: '#1D4ED8',
-  fontSize: 11,
-  fontWeight: 800,
-}
-
-const legalModalTitleStyle: CSSProperties = {
-  fontSize: 20,
-  lineHeight: 1.2,
-  fontWeight: 800,
-  color: '#0F172A',
-}
-
-const legalModalBodyStyle: CSSProperties = {
-  fontSize: 14,
-  lineHeight: 1.65,
-  color: '#334155',
-}
-
-const legalModalCloseButtonStyle: CSSProperties = {
-  appearance: 'none',
-  border: 'none',
-  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
-  color: '#FFFFFF',
-  minHeight: 48,
-  borderRadius: 18,
-  padding: '0 18px',
-  fontSize: 15,
-  fontWeight: 800,
-  cursor: 'pointer',
-  marginTop: 4,
 }
 
 const fieldBlockStyle: CSSProperties = {
