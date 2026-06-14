@@ -686,6 +686,8 @@ export default function ClientDashboard({
   const [recurringEditDays, setRecurringEditDays] = useState<number[]>([])
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
   const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
+  const scheduleOverlapWarningRef = useRef<string | null>(null)
+  const bookingTimingRef = useRef(flow.bookingTiming)
   const [providerPricingPreferences, setProviderPricingPreferences] = useState<ProviderPricingPreferenceInput[]>([])
   const [budgetDraftHydrated, setBudgetDraftHydrated] = useState(false)
   const [locallyDismissedCompletionIds, setLocallyDismissedCompletionIds] = useState<Set<string>>(() => new Set())
@@ -1308,11 +1310,40 @@ export default function ClientDashboard({
   }, [flow.dogName, showDogNameSheet])
 
   useEffect(() => {
+    scheduleOverlapWarningRef.current = scheduleOverlapWarning
+  }, [scheduleOverlapWarning])
+
+  useEffect(() => {
+    bookingTimingRef.current = flow.bookingTiming
+  }, [flow.bookingTiming])
+
+  const clearScheduleConflictWarning = useCallback((reason: string) => {
+    if (scheduleOverlapWarningRef.current === null) return
+    scheduleOverlapWarningRef.current = null
+    setScheduleOverlapWarning(null)
+    console.log('[schedule-sheet] conflict warning cleared', {
+      reason,
+      selectedScheduledFor: scheduleDraft,
+      bookingTiming: flow.bookingTiming,
+      activeTab: scheduleMode,
+      timestamp: Date.now(),
+    })
+  }, [flow.bookingTiming, scheduleDraft, scheduleMode])
+
+  useEffect(() => {
     if (!showSchedulePage) return
-    const nextDraft = clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput())
-    setScheduleDraft(nextDraft)
-    setRepeatStartTime(splitScheduledDraft(nextDraft).time)
-  }, [flow.scheduledFor, showSchedulePage])
+    const sourceScheduledFor = flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null
+    const nextDraft = clampScheduledDraft(sourceScheduledFor, getNowPlus15LocalInput())
+    setScheduleDraft((current) => (current === nextDraft ? current : nextDraft))
+    const nextRepeatTime = splitScheduledDraft(nextDraft).time
+    setRepeatStartTime((current) => (current === nextRepeatTime ? current : nextRepeatTime))
+    console.log('[schedule-sheet] open', {
+      selectedScheduledFor: nextDraft,
+      bookingTiming: flow.bookingTiming,
+      activeTab: scheduleMode,
+      timestamp: Date.now(),
+    })
+  }, [flow.bookingTiming, flow.scheduledFor, scheduleMode, showSchedulePage])
 
   const playArrivalBeep = useCallback(() => {
     if (!hasUserInteractedRef.current || typeof window === 'undefined') return
@@ -1621,7 +1652,7 @@ export default function ClientDashboard({
     setRecurringSuccess(t('recurring.createdSeries'))
     setRepeatDays([])
     setRepeatType('one_time')
-    setShowSchedulePage(false)
+    closeScheduleSheet()
     setMenuPage('futureOrders')
     setBurgerOpen(true)
   }
@@ -3283,12 +3314,32 @@ export default function ClientDashboard({
 
   const openScheduleSheet = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-schedule')
-    setScheduleDraft(clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput()))
+    const nextDraft = clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput())
+    setScheduleDraft(nextDraft)
+    setRepeatStartTime(splitScheduledDraft(nextDraft).time)
     setScheduleMode('later')
+    clearScheduleConflictWarning('sheet_open')
     setShowSchedulePage(true)
     markFirstInteractionVisual('client-dashboard:open-schedule')
     void hapticLight()
-  }, [])
+  }, [clearScheduleConflictWarning])
+
+  const closeScheduleSheet = useCallback(() => {
+    clearScheduleConflictWarning('sheet_closed')
+    setShowSchedulePage(false)
+  }, [clearScheduleConflictWarning])
+
+  const handleScheduleTabChange = useCallback((nextMode: ScheduleMode) => {
+    console.log('[schedule-sheet] tab changed', {
+      selectedScheduledFor: scheduleDraft,
+      bookingTiming: flow.bookingTiming,
+      activeTab: nextMode,
+      timestamp: Date.now(),
+    })
+    clearScheduleConflictWarning(`tab_changed:${nextMode}`)
+    setScheduleMode(nextMode)
+    setRepeatType(nextMode === 'repeat' ? 'weekly' : 'one_time')
+  }, [clearScheduleConflictWarning, flow.bookingTiming, scheduleDraft])
 
   const openAddressPicker = useCallback(() => {
     markFirstInteractionHandler('client-dashboard:open-address-picker')
@@ -3384,6 +3435,10 @@ export default function ClientDashboard({
   const selectedScheduleDateLabel = useMemo(
     () => dateWheelOptions.find((option) => option.value === scheduleDraftParts.date)?.label ?? scheduleDraftParts.date,
     [dateWheelOptions, scheduleDraftParts.date],
+  )
+  const selectedScheduledFor = useMemo(
+    () => clampScheduledDraft(scheduleDraft, scheduleMinValue),
+    [scheduleDraft, scheduleMinValue],
   )
 
   const currentSheetStyle: React.CSSProperties = isTrackingState
@@ -3805,7 +3860,7 @@ export default function ClientDashboard({
   ])
   const hasValidPriceForSelectedService = Number.isFinite(currentBookingPriceILS) && currentBookingPriceILS > 0
   const requiresScheduledFor = flow.bookingTiming === 'scheduled'
-  const repeatScheduleSource = clampScheduledDraft(flow.scheduledFor, getNowPlus15LocalInput())
+  const repeatScheduleSource = clampScheduledDraft(scheduleDraft, getNowPlus15LocalInput())
   const repeatScheduleParts = splitScheduledDraft(repeatScheduleSource)
   const effectiveRepeatDays = repeatType === 'weekly'
     ? normalizeRepeatDays(
@@ -3814,6 +3869,25 @@ export default function ClientDashboard({
           : [parseLocalDateTime(repeatScheduleSource)?.getDay() ?? new Date().getDay()],
       )
     : []
+  const repeatWeekdaysLabel = useMemo(
+    () =>
+      normalizeRepeatDays(repeatDays)
+        .map((day) =>
+          new Intl.DateTimeFormat(isRtl ? 'he-IL' : 'en-US', { weekday: 'short' }).format(
+            new Date(Date.UTC(2024, 0, 7 + day)),
+          ),
+        )
+        .join(', '),
+    [isRtl, repeatDays],
+  )
+  const repeatScheduleSummary = useMemo(() => {
+    if (!repeatWeekdaysLabel) {
+      return isRtl ? 'בחרו ימים ושעה קבועה' : 'Choose weekdays and a recurring time'
+    }
+    return isRtl
+      ? `כל ${repeatWeekdaysLabel} בשעה ${repeatStartTime}`
+      : `Every ${repeatWeekdaysLabel} at ${repeatStartTime}`
+  }, [isRtl, repeatStartTime, repeatWeekdaysLabel])
   const canSubmitBooking =
     isSelectedServiceAvailable &&
     !!bookingSubjectValue &&
@@ -3835,32 +3909,47 @@ export default function ClientDashboard({
     effectiveRepeatDays.length > 0
 
   useEffect(() => {
+    if (!showSchedulePage || scheduleMode !== 'later') return
+    console.log('[schedule-sheet] selected time changed', {
+      selectedScheduledFor,
+      bookingTiming: flow.bookingTiming,
+      activeTab: scheduleMode,
+      timestamp: Date.now(),
+    })
+    clearScheduleConflictWarning('selected_time_changed')
+  }, [clearScheduleConflictWarning, flow.bookingTiming, scheduleMode, selectedScheduledFor, showSchedulePage])
+
+  useEffect(() => {
+    if (!showSchedulePage || scheduleMode !== 'later' || !profile.id) {
+      clearScheduleConflictWarning('validation_inactive')
+      return
+    }
+
+    if (flow.bookingTiming !== 'scheduled') {
+      clearScheduleConflictWarning('not_scheduled_mode')
+      return
+    }
+
+    const parsed = parseLocalDateTime(selectedScheduledFor)
+    const occurrenceIso = parsed ? parsed.toISOString() : null
+    if (!occurrenceIso) {
+      clearScheduleConflictWarning('invalid_selected_time')
+      return
+    }
+
     let cancelled = false
-
-    async function checkOverlap() {
-      if (!showSchedulePage || !profile.id) {
-        if (!cancelled) setScheduleOverlapWarning(null)
+    const timeoutId = window.setTimeout(async () => {
+      if (bookingTimingRef.current !== 'scheduled') {
+        clearScheduleConflictWarning('not_scheduled_mode')
         return
       }
 
-      let occurrenceIso: string | null = null
-
-      if (scheduleMode === 'later') {
-        const parsed = parseLocalDateTime(clampScheduledDraft(scheduleDraft, scheduleMinValue))
-        occurrenceIso = parsed ? parsed.toISOString() : null
-      } else {
-        const nextOccurrence = getNextRecurringOccurrence(
-          effectiveRepeatDays,
-          repeatScheduleParts.date,
-          repeatStartTime,
-        )
-        occurrenceIso = nextOccurrence ? nextOccurrence.toISOString() : null
-      }
-
-      if (!occurrenceIso) {
-        if (!cancelled) setScheduleOverlapWarning(null)
-        return
-      }
+      console.log('[schedule-sheet] conflict validation start', {
+        selectedScheduledFor,
+        bookingTiming: bookingTimingRef.current,
+        activeTab: scheduleMode,
+        timestamp: Date.now(),
+      })
 
       const { data, error } = await supabase.rpc('find_client_booking_overlaps', {
         p_client_id: profile.id,
@@ -3869,34 +3958,57 @@ export default function ClientDashboard({
       })
 
       if (cancelled) return
-
-      if (error) {
-        console.warn('[ClientDashboard] overlap warning query failed', error)
-        setScheduleOverlapWarning(null)
+      if (bookingTimingRef.current !== 'scheduled') {
+        console.log('[schedule-sheet] conflict validation result', {
+          selectedScheduledFor,
+          bookingTiming: bookingTimingRef.current,
+          activeTab: scheduleMode,
+          hasConflict: false,
+          ignored: true,
+          timestamp: Date.now(),
+        })
+        clearScheduleConflictWarning('not_scheduled_mode')
         return
       }
 
-      setScheduleOverlapWarning(
+      if (error) {
+        console.warn('[ClientDashboard] overlap warning query failed', error)
+        clearScheduleConflictWarning('validation_error')
+        return
+      }
+
+      const nextWarning =
         Array.isArray(data) && data.length > 0
           ? (isRtl ? 'כבר קיימת אצלך הזמנה סביב השעה הזאת' : 'You already have a booking around this time')
-          : null,
-      )
-    }
+          : null
 
-    void checkOverlap()
+      console.log('[schedule-sheet] conflict validation result', {
+        selectedScheduledFor,
+        bookingTiming: bookingTimingRef.current,
+        activeTab: scheduleMode,
+        hasConflict: !!nextWarning,
+        timestamp: Date.now(),
+      })
+
+      if (nextWarning === null) {
+        clearScheduleConflictWarning('validation_ok')
+        return
+      }
+
+      scheduleOverlapWarningRef.current = nextWarning
+      setScheduleOverlapWarning((current) => (current === nextWarning ? current : nextWarning))
+    }, 180)
 
     return () => {
       cancelled = true
+      window.clearTimeout(timeoutId)
     }
   }, [
-    effectiveRepeatDays,
+    clearScheduleConflictWarning,
     isRtl,
     profile.id,
-    repeatScheduleParts.date,
-    repeatStartTime,
-    scheduleDraft,
-    scheduleMinValue,
     scheduleMode,
+    selectedScheduledFor,
     showSchedulePage,
   ])
   const bookingBlockedReasons = useMemo(() => {
@@ -4134,8 +4246,8 @@ export default function ClientDashboard({
   const repeatSelectorBlock = (
     <div style={repeatSectionStyle}>
       <div style={repeatHeaderRowStyle}>
-        <span style={repeatLabelStyle}>{isRtl ? 'הזמנה חוזרת' : 'Repeat booking'}</span>
-        <span style={repeatSummaryStyle}>{isRtl ? 'כל שבוע' : 'Every week'}</span>
+        <span style={repeatLabelStyle}>{isRtl ? 'הזמנה חוזרת' : 'Recurring booking'}</span>
+        <span style={repeatSummaryStyle}>{repeatScheduleSummary}</span>
       </div>
       <div style={repeatExpandedStyle}>
         <div style={repeatWeekdayRowStyle}>
@@ -4159,16 +4271,47 @@ export default function ClientDashboard({
             )
           })}
         </div>
-        <div style={repeatTimeRowStyle}>
-          <span style={repeatTimeLabelStyle}>{isRtl ? 'שעה' : 'Time'}</span>
-                <button
-                  type="button"
-                  onClick={() => openRecurringTimePicker(repeatStartTime, 'repeat')}
-                  style={repeatTimeInputStyle}
-                >
-                  <span>{formatRecurringDisplayTime(repeatStartTime, isRtl ? 'he' : 'en')}</span>
-                  <span style={repeatTimeChevronStyle}>›</span>
-                </button>
+        <div style={repeatTimeInlineWrapStyle}>
+          <div style={repeatWheelHeaderRowStyle}>
+            <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
+            <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
+          </div>
+          <div style={scheduleWheelWrapStyle}>
+            <div style={scheduleWheelHighlightStyle} />
+            <div style={repeatWheelColumnsStyle}>
+              <WheelPickerColumn
+                options={hourWheelOptions}
+                value={repeatStartTime.slice(0, 2)}
+                onChange={(nextHour) => {
+                  const nextTime = `${nextHour}:${repeatStartTime.slice(3, 5)}`
+                  setRepeatStartTime(nextTime)
+                  updateScheduledDraftFromWheel(
+                    repeatScheduleParts.date,
+                    nextHour,
+                    repeatStartTime.slice(3, 5),
+                  )
+                }}
+                variant="schedule"
+              />
+              <WheelPickerColumn
+                options={minuteWheelOptions}
+                value={repeatStartTime.slice(3, 5)}
+                onChange={(nextMinute) => {
+                  const nextTime = `${repeatStartTime.slice(0, 2)}:${nextMinute}`
+                  setRepeatStartTime(nextTime)
+                  updateScheduledDraftFromWheel(
+                    repeatScheduleParts.date,
+                    repeatStartTime.slice(0, 2),
+                    nextMinute,
+                  )
+                }}
+                variant="schedule"
+              />
+            </div>
+          </div>
+          <div style={repeatTimeInlineSummaryStyle}>
+            {repeatScheduleSummary}
+          </div>
         </div>
       </div>
     </div>
@@ -4765,8 +4908,6 @@ export default function ClientDashboard({
                           setRecurringEditTime(normalizeTime24(item.startTime))
                           setEditingRecurringBooking(item)
                         }}
-                        onPause={(id) => void handleRecurringStatusUpdate(id, 'paused')}
-                        onResume={(id) => void handleRecurringStatusUpdate(id, 'active')}
                         onCancel={(id) => void handleRecurringStatusUpdate(id, 'cancelled')}
                       />
                     </div>
@@ -4844,7 +4985,7 @@ export default function ClientDashboard({
 
       {showSchedulePage && (
         <>
-          <div style={menuOverlayStyle} onClick={() => setShowSchedulePage(false)} />
+          <div style={menuOverlayStyle} onClick={closeScheduleSheet} />
           <div
             style={{
               ...scheduleSheetStyle,
@@ -4856,16 +4997,16 @@ export default function ClientDashboard({
             <div style={scheduleSheetHeaderStyle}>
               <div style={scheduleSheetHeaderCopyStyle}>
                 <div style={scheduleSheetTitleStyle}>
-                  {isRtl ? 'קביעת זמן לשירות' : 'Schedule Order'}
+                  {isRtl ? 'קביעת הזמנה עתידית' : 'Schedule future order'}
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowSchedulePage(false)}
+                onClick={closeScheduleSheet}
                 style={scheduleSheetCloseButtonStyle}
                 aria-label={t('common.close')}
               >
-                ✕
+                ˅
               </button>
             </div>
 
@@ -4874,84 +5015,86 @@ export default function ClientDashboard({
                 <div style={schedulePresetRowStyle}>
                   <button
                     type="button"
-                    onClick={() => {
-                      setScheduleMode('later')
-                      setRepeatType('one_time')
-                    }}
+                    onClick={() => handleScheduleTabChange('later')}
                     style={{
                       ...schedulePresetButtonStyle,
                       ...(scheduleMode === 'later' ? schedulePresetButtonActiveStyle : null),
                     }}
                   >
-                    {isRtl ? 'אחר כך' : 'Later'}
+                    {isRtl ? 'מאוחר יותר' : 'Later'}
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setScheduleMode('repeat')
-                      setRepeatType('weekly')
-                    }}
+                    onClick={() => handleScheduleTabChange('repeat')}
                     style={{
                       ...schedulePresetButtonStyle,
                       ...(scheduleMode === 'repeat' ? schedulePresetButtonActiveStyle : null),
                     }}
                   >
-                    {isRtl ? 'חוזר' : 'Repeat'}
+                    {isRtl ? 'הזמנה חוזרת' : 'Recurring'}
                   </button>
                 </div>
 
                 {scheduleMode === 'later' && (
                   <div style={scheduleModeBodyStyle}>
                     <div style={scheduleCompactCardStyle}>
-                      <div style={scheduleSelectionSummaryRowStyle}>
-                        <span style={{ ...scheduleSelectionSummaryChipStyle, ...scheduleSelectionSummaryChipWideStyle }}>
-                          {selectedScheduleDateLabel}
-                        </span>
-                        <span style={scheduleSelectionSummaryChipStyle}>{scheduleDraftParts.time.slice(0, 2)}</span>
-                        <span style={scheduleSelectionSummaryChipStyle}>{scheduleDraftParts.time.slice(3, 5)}</span>
-                      </div>
-                      <div style={scheduleWheelHeaderRowStyle}>
-                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
-                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
-                        <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
-                      </div>
-                      <div style={scheduleWheelWrapStyle}>
-                        <div style={scheduleWheelHighlightStyle} />
-                        <div style={scheduleWheelColumnsStyle}>
-                          <WheelPickerColumn
-                            options={dateWheelOptions}
-                            value={scheduleDraftParts.date}
-                            onChange={(nextDate) =>
-                              updateScheduledDraftFromWheel(
-                                nextDate,
-                                scheduleDraftParts.time.slice(0, 2),
-                                scheduleDraftParts.time.slice(3, 5),
-                              )
-                            }
-                            isWide
-                          />
-                          <WheelPickerColumn
-                            options={hourWheelOptions}
-                            value={scheduleDraftParts.time.slice(0, 2)}
-                            onChange={(nextHour) =>
-                              updateScheduledDraftFromWheel(
-                                scheduleDraftParts.date,
-                                nextHour,
-                                scheduleDraftParts.time.slice(3, 5),
-                              )
-                            }
-                          />
-                          <WheelPickerColumn
-                            options={minuteWheelOptions}
-                            value={scheduleDraftParts.time.slice(3, 5)}
-                            onChange={(nextMinute) =>
-                              updateScheduledDraftFromWheel(
-                                scheduleDraftParts.date,
-                                scheduleDraftParts.time.slice(0, 2),
-                                nextMinute,
-                              )
-                            }
-                          />
+                      <div style={scheduleSharedInnerCardStyle}>
+                        <div style={scheduleLaterSummaryStyle}>
+                          <div style={scheduleLaterSummaryValueStyle}>
+                            {selectedScheduleDateLabel}
+                          </div>
+                          <div style={scheduleLaterSummaryHelperStyle}>
+                            {isRtl
+                              ? `בשעה ${scheduleDraftParts.time.slice(0, 2)}:${scheduleDraftParts.time.slice(3, 5)}`
+                              : `at ${scheduleDraftParts.time.slice(0, 2)}:${scheduleDraftParts.time.slice(3, 5)}`}
+                          </div>
+                        </div>
+                        <div style={scheduleWheelHeaderRowStyle}>
+                          <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'תאריך' : 'Date'}</div>
+                          <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'שעה' : 'Hour'}</div>
+                          <div style={scheduleWheelHeaderLabelStyle}>{isRtl ? 'דקות' : 'Minute'}</div>
+                        </div>
+                        <div style={scheduleWheelWrapStyle}>
+                          <div style={scheduleWheelHighlightStyle} />
+                          <div style={scheduleWheelColumnsStyle}>
+                            <WheelPickerColumn
+                              options={dateWheelOptions}
+                              value={scheduleDraftParts.date}
+                              onChange={(nextDate) =>
+                                updateScheduledDraftFromWheel(
+                                  nextDate,
+                                  scheduleDraftParts.time.slice(0, 2),
+                                  scheduleDraftParts.time.slice(3, 5),
+                                )
+                              }
+                              isWide
+                              variant="schedule"
+                            />
+                            <WheelPickerColumn
+                              options={hourWheelOptions}
+                              value={scheduleDraftParts.time.slice(0, 2)}
+                              onChange={(nextHour) =>
+                                updateScheduledDraftFromWheel(
+                                  scheduleDraftParts.date,
+                                  nextHour,
+                                  scheduleDraftParts.time.slice(3, 5),
+                                )
+                              }
+                              variant="schedule"
+                            />
+                            <WheelPickerColumn
+                              options={minuteWheelOptions}
+                              value={scheduleDraftParts.time.slice(3, 5)}
+                              onChange={(nextMinute) =>
+                                updateScheduledDraftFromWheel(
+                                  scheduleDraftParts.date,
+                                  scheduleDraftParts.time.slice(0, 2),
+                                  nextMinute,
+                                )
+                              }
+                              variant="schedule"
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -4966,7 +5109,7 @@ export default function ClientDashboard({
                   </div>
                 )}
 
-                {scheduleOverlapWarning && (
+                {scheduleMode === 'later' && scheduleOverlapWarning && (
                   <div style={scheduleInlineWarningStyle}>{scheduleOverlapWarning}</div>
                 )}
               </div>
@@ -4980,7 +5123,7 @@ export default function ClientDashboard({
                 label={
                   scheduleMode === 'repeat'
                     ? t('recurring.createWeeklyBooking')
-                    : (isRtl ? 'תזמון הזמנה' : 'Schedule order')
+                    : (isRtl ? 'יצירת הזמנה עתידית' : 'Schedule future order')
                 }
                 disabled={
                   scheduleMode === 'repeat'
@@ -5010,6 +5153,7 @@ export default function ClientDashboard({
                   flow.setScheduledFor(nextValue)
                   setScheduleDraft(nextValue)
                   setRepeatType('one_time')
+                  clearScheduleConflictWarning('scheduled_submit_success')
                   flow.setBookingTiming('scheduled')
                   setShowSchedulePage(false)
                   void hapticSuccess()
@@ -5083,13 +5227,6 @@ export default function ClientDashboard({
               <div style={recurringActionStackStyle}>
                 <button type="button" onClick={() => void handleSaveRecurringEdit()} style={recurringPrimaryActionStyle}>
                   {t('recurring.saveChanges')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleRecurringStatusUpdate(editingRecurringBooking.id, editingRecurringBooking.status === 'active' ? 'paused' : 'active')}
-                  style={recurringSecondaryWideActionStyle}
-                >
-                  {editingRecurringBooking.status === 'active' ? t('recurring.pause') : t('recurring.resume')}
                 </button>
                 <button
                   type="button"
@@ -6365,13 +6502,16 @@ function WheelPickerColumn({
   value,
   onChange,
   isWide = false,
+  variant = 'default',
 }: {
   options: WheelOption[]
   value: string
   onChange: (value: string) => void
   isWide?: boolean
+  variant?: 'default' | 'schedule'
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const rowHeight = variant === 'schedule' ? SCHEDULE_WHEEL_ROW_HEIGHT : WHEEL_ROW_HEIGHT
   const scrollTimeoutRef = useRef<number | null>(null)
   const selectedIndex = Math.max(
     0,
@@ -6381,11 +6521,11 @@ function WheelPickerColumn({
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
-    const targetTop = selectedIndex * WHEEL_ROW_HEIGHT
+    const targetTop = selectedIndex * rowHeight
     if (Math.abs(node.scrollTop - targetTop) > 2) {
       safeScrollTo(node, { top: targetTop, behavior: 'smooth' })
     }
-  }, [selectedIndex])
+  }, [rowHeight, selectedIndex])
 
   useEffect(() => {
     return () => {
@@ -6413,20 +6553,20 @@ function WheelPickerColumn({
         scrollTimeoutRef.current = window.setTimeout(() => {
           const nextIndex = Math.max(
             0,
-            Math.min(options.length - 1, Math.round(nextTop / WHEEL_ROW_HEIGHT)),
+            Math.min(options.length - 1, Math.round(nextTop / rowHeight)),
           )
           const nextValue = options[nextIndex]?.value
           if (nextValue && nextValue !== value) {
             onChange(nextValue)
           }
           safeScrollTo(scrollRef.current, {
-            top: nextIndex * WHEEL_ROW_HEIGHT,
+            top: nextIndex * rowHeight,
             behavior: 'smooth',
           })
         }, 70)
       }}
     >
-      <div style={wheelPickerSpacerStyle} />
+      <div style={{ ...wheelPickerSpacerStyle, height: rowHeight * 2 }} />
       {options.map((option, index) => {
         const distance = Math.abs(index - selectedIndex)
         return (
@@ -6436,8 +6576,10 @@ function WheelPickerColumn({
             onClick={() => onChange(option.value)}
             style={{
               ...wheelPickerOptionStyle,
+              ...(variant === 'schedule' ? scheduleWheelPickerOptionStyle : null),
+              height: rowHeight,
               opacity: distance === 0 ? 1 : distance === 1 ? 0.72 : distance === 2 ? 0.42 : 0.22,
-              transform: distance === 0 ? 'scale(1)' : 'scale(0.96)',
+              transform: distance === 0 ? 'scale(1)' : variant === 'schedule' ? 'scale(0.94)' : 'scale(0.96)',
               fontWeight: distance === 0 ? 900 : 700,
               color: distance === 0 ? '#0F172A' : '#64748B',
             }}
@@ -6446,7 +6588,7 @@ function WheelPickerColumn({
           </button>
         )
       })}
-      <div style={wheelPickerSpacerStyle} />
+      <div style={{ ...wheelPickerSpacerStyle, height: rowHeight * 2 }} />
     </div>
   )
 }
@@ -6700,15 +6842,11 @@ function BurgerRecurringList({
   items,
   loading,
   onEdit,
-  onPause,
-  onResume,
   onCancel,
 }: {
   items: RecurringBookingItem[]
   loading: boolean
   onEdit: (item: RecurringBookingItem) => void
-  onPause: (id: string) => void
-  onResume: (id: string) => void
   onCancel: (id: string) => void
 }) {
   const { t } = useTranslation()
@@ -6749,9 +6887,7 @@ function BurgerRecurringList({
             <div style={recurringCardMetaItemStyle}>
               <div style={recurringCardMetaLabelStyle}>{isRtl ? 'הביקור הבא' : 'Next visit'}</div>
               <div style={recurringCardMetaValueStyle}>
-              {item.nextOccurrenceLabel
-                ? t('recurring.nextOccurrence', { date: item.nextOccurrenceLabel })
-                : t('recurring.noNextOccurrence')}
+              {item.nextOccurrenceLabel ?? t('recurring.noNextOccurrence')}
               </div>
             </div>
           </div>
@@ -6759,15 +6895,6 @@ function BurgerRecurringList({
             <button type="button" onClick={() => onEdit(item)} style={recurringSecondaryActionStyle}>
               {t('recurring.edit')}
             </button>
-            {item.status === 'active' ? (
-              <button type="button" onClick={() => onPause(item.id)} style={recurringSecondaryActionStyle}>
-                {t('recurring.pause')}
-              </button>
-            ) : (
-              <button type="button" onClick={() => onResume(item.id)} style={recurringSecondaryActionStyle}>
-                {t('recurring.resume')}
-              </button>
-            )}
             <button type="button" onClick={() => onCancel(item.id)} style={recurringDangerActionStyle}>
               {t('recurring.cancelSeries')}
             </button>
@@ -7426,10 +7553,20 @@ const compactFormGridStyle: React.CSSProperties = {
   gap: 5,
 }
 
-const repeatSectionStyle: React.CSSProperties = {
+const scheduleSharedInnerCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
-  padding: '1px 0',
+  gap: 10,
+  minHeight: 284,
+  padding: '14px 14px 12px',
+  borderRadius: 22,
+  border: '1px solid rgba(96, 165, 250, 0.26)',
+  background: 'linear-gradient(180deg, rgba(239, 246, 255, 0.96) 0%, rgba(248, 250, 252, 0.98) 100%)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8)',
+  boxSizing: 'border-box',
+}
+
+const repeatSectionStyle: React.CSSProperties = {
+  ...scheduleSharedInnerCardStyle,
 }
 
 const repeatHeaderRowStyle: React.CSSProperties = {
@@ -7440,21 +7577,21 @@ const repeatHeaderRowStyle: React.CSSProperties = {
 }
 
 const repeatLabelStyle: React.CSSProperties = {
-  fontSize: 11.5,
+  fontSize: 12,
   fontWeight: 800,
-  color: '#475569',
+  color: '#1E3A8A',
 }
 
 const repeatSummaryStyle: React.CSSProperties = {
-  fontSize: 10.5,
-  fontWeight: 600,
-  color: '#64748B',
+  fontSize: 11,
+  fontWeight: 700,
+  color: '#2563EB',
   whiteSpace: 'nowrap',
 }
 
 const repeatExpandedStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 10,
 }
 
 const repeatWeekdayRowStyle: React.CSSProperties = {
@@ -7477,9 +7614,10 @@ const repeatDayChipStyle: React.CSSProperties = {
 }
 
 const repeatDayChipActiveStyle: React.CSSProperties = {
-  background: 'linear-gradient(180deg, #172554 0%, #0F172A 100%)',
-  borderColor: 'rgba(15, 23, 42, 0.08)',
-  color: '#FFFFFF',
+  background: 'linear-gradient(180deg, rgba(220, 252, 231, 0.98) 0%, rgba(187, 247, 208, 0.98) 100%)',
+  borderColor: 'rgba(34, 197, 94, 0.42)',
+  color: '#166534',
+  boxShadow: '0 6px 14px rgba(34, 197, 94, 0.14)',
 }
 
 const repeatTimeRowStyle: React.CSSProperties = {
@@ -9927,16 +10065,14 @@ const scheduleSheetStyle: React.CSSProperties = {
   right: 0,
   bottom: 0,
   zIndex: 40002,
-  background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #FFFFFF 100%)',
-  borderTopLeftRadius: 32,
-  borderTopRightRadius: 32,
-  boxShadow: '0 -20px 50px rgba(15, 23, 42, 0.16)',
+  background: '#FFFFFF',
+  borderTopLeftRadius: 30,
+  borderTopRightRadius: 30,
+  boxShadow: '0 -20px 56px rgba(15, 23, 42, 0.18)',
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  padding: '12px 14px calc(16px + env(safe-area-inset-bottom))',
-  backdropFilter: 'blur(18px)',
-  WebkitBackdropFilter: 'blur(18px)',
+  padding: '12px 16px calc(18px + env(safe-area-inset-bottom))',
 }
 
 const scheduleSheetHandleStyle: React.CSSProperties = {
@@ -9954,7 +10090,7 @@ const scheduleSheetHeaderStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   gap: 10,
-  marginBottom: 12,
+  marginBottom: 14,
 }
 
 const scheduleSheetHeaderCopyStyle: React.CSSProperties = {
@@ -9967,11 +10103,11 @@ const scheduleSheetHeaderCopyStyle: React.CSSProperties = {
 }
 
 const scheduleSheetTitleStyle: React.CSSProperties = {
-  fontSize: 18,
+  fontSize: 22,
   lineHeight: 1.2,
   fontWeight: 900,
   color: '#0F172A',
-  letterSpacing: '-0.02em',
+  letterSpacing: '-0.03em',
 }
 
 const scheduleSheetSubtitleStyle: React.CSSProperties = {
@@ -9984,13 +10120,13 @@ const scheduleSheetCloseButtonStyle: React.CSSProperties = {
   position: 'absolute',
   top: 0,
   right: 0,
-  width: 32,
-  height: 32,
-  borderRadius: 11,
+  width: 36,
+  height: 36,
+  borderRadius: 14,
   border: '1px solid rgba(203, 213, 225, 0.9)',
-  background: 'rgba(255,255,255,0.9)',
+  background: '#F8FAFC',
   color: '#0F172A',
-  fontSize: 15,
+  fontSize: 16,
   fontWeight: 800,
   cursor: 'pointer',
   flexShrink: 0,
@@ -10001,9 +10137,9 @@ const scheduleSheetCloseButtonStyle: React.CSSProperties = {
 const scheduleSheetScrollStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
-  maxHeight: 'min(76vh, 552px)',
-  minHeight: 244,
+  gap: 10,
+  maxHeight: 'min(78vh, 620px)',
+  minHeight: 332,
   overflowY: 'auto',
   scrollbarWidth: 'none',
   msOverflowStyle: 'none',
@@ -10016,11 +10152,11 @@ const schedulePageContentStyle: React.CSSProperties = {
   margin: '0 auto',
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
+  gap: 14,
 }
 
 const scheduleModeBodyStyle: React.CSSProperties = {
-  minHeight: 150,
+  minHeight: 312,
   display: 'flex',
   alignItems: 'stretch',
 }
@@ -10028,7 +10164,7 @@ const scheduleModeBodyStyle: React.CSSProperties = {
 const schedulePresetRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 6,
+  gap: 8,
 }
 
 const schedulePresetButtonStyle: React.CSSProperties = {
@@ -10036,9 +10172,9 @@ const schedulePresetButtonStyle: React.CSSProperties = {
   border: '1px solid rgba(203, 213, 225, 0.95)',
   background: 'rgba(248, 250, 252, 0.96)',
   color: '#0F172A',
-  minHeight: 34,
-  padding: '6px 10px',
-  fontSize: 11.5,
+  minHeight: 46,
+  padding: '10px 14px',
+  fontSize: 13.5,
   fontWeight: 800,
   cursor: 'pointer',
   display: 'flex',
@@ -10066,21 +10202,47 @@ const schedulePickerCardStyle: React.CSSProperties = {
 const scheduleCompactCardStyle: React.CSSProperties = {
   ...schedulePickerCardStyle,
   width: '100%',
-  padding: 7,
-  boxShadow: '0 6px 14px rgba(15, 23, 42, 0.035)',
+  padding: 14,
+  borderRadius: 26,
+  boxShadow: '0 14px 28px rgba(15, 23, 42, 0.06)',
 }
 
 const WHEEL_ROW_HEIGHT = 24
+const SCHEDULE_WHEEL_ROW_HEIGHT = 44
+
+const scheduleLaterSummaryStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 6,
+  marginBottom: 16,
+  padding: '6px 2px 2px',
+  textAlign: 'center',
+}
+
+const scheduleLaterSummaryValueStyle: React.CSSProperties = {
+  fontSize: 24,
+  lineHeight: 1.15,
+  fontWeight: 900,
+  color: '#2563EB',
+  letterSpacing: '-0.04em',
+}
+
+const scheduleLaterSummaryHelperStyle: React.CSSProperties = {
+  fontSize: 13.5,
+  lineHeight: 1.35,
+  fontWeight: 800,
+  color: '#2563EB',
+}
 
 const scheduleWheelHeaderRowStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 6,
-  marginBottom: 3,
+  gridTemplateColumns: '1.8fr 0.8fr 0.8fr',
+  gap: 10,
+  marginBottom: 10,
+  paddingInline: 8,
 }
 
 const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11.5,
   lineHeight: 1.2,
   fontWeight: 800,
   color: '#64748B',
@@ -10089,65 +10251,52 @@ const scheduleWheelHeaderLabelStyle: React.CSSProperties = {
 
 const scheduleWheelWrapStyle: React.CSSProperties = {
   position: 'relative',
-  height: 76,
+  height: SCHEDULE_WHEEL_ROW_HEIGHT * 5,
+  borderRadius: 24,
+  background: 'linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)',
+  border: '1px solid rgba(226, 232, 240, 0.95)',
+  overflow: 'hidden',
 }
 
 const scheduleWheelColumnsStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 6,
+  gridTemplateColumns: '1.8fr 0.8fr 0.8fr',
+  gap: 10,
   height: '100%',
+  padding: '0 8px',
+}
+
+const repeatWheelHeaderRowStyle: React.CSSProperties = {
+  ...scheduleWheelHeaderRowStyle,
+  gridTemplateColumns: '1fr 1fr',
+}
+
+const repeatWheelColumnsStyle: React.CSSProperties = {
+  ...scheduleWheelColumnsStyle,
+  gridTemplateColumns: '1fr 1fr',
 }
 
 const scheduleWheelHighlightStyle: React.CSSProperties = {
   position: 'absolute',
-  left: 0,
-  right: 0,
+  left: 8,
+  right: 8,
   top: '50%',
-  height: WHEEL_ROW_HEIGHT,
+  height: SCHEDULE_WHEEL_ROW_HEIGHT,
   transform: 'translateY(-50%)',
-  borderRadius: 12,
-  background: 'rgba(248, 250, 252, 0.98)',
-  border: '1px solid rgba(203, 213, 225, 0.92)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.92), 0 4px 10px rgba(148, 163, 184, 0.08)',
+  borderRadius: 18,
+  background: 'linear-gradient(180deg, rgba(37, 99, 235, 0.1) 0%, rgba(59, 130, 246, 0.14) 100%)',
+  border: '1px solid rgba(96, 165, 250, 0.34)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9), 0 10px 24px rgba(59, 130, 246, 0.12)',
   pointerEvents: 'none',
 }
 
 const scheduleInlineCaptionStyle: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 12,
   lineHeight: 1.2,
-  fontWeight: 600,
+  fontWeight: 700,
   color: '#2563EB',
   textAlign: 'center',
-  marginBottom: 6,
-}
-
-const scheduleSelectionSummaryRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1.7fr 0.65fr 0.65fr',
-  gap: 6,
-  marginBottom: 5,
-}
-
-const scheduleSelectionSummaryChipStyle: React.CSSProperties = {
-  minHeight: 26,
-  borderRadius: 999,
-  border: '1px solid rgba(203, 213, 225, 0.9)',
-  background: 'rgba(248,250,252,0.94)',
-  color: '#0F172A',
-  fontSize: 11,
-  fontWeight: 800,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '0 8px',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-}
-
-const scheduleSelectionSummaryChipWideStyle: React.CSSProperties = {
-  justifyContent: 'flex-start',
+  marginBottom: 8,
 }
 
 const scheduleInlineWarningStyle: React.CSSProperties = {
@@ -10196,6 +10345,26 @@ const wheelPickerOptionStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+}
+
+const scheduleWheelPickerOptionStyle: React.CSSProperties = {
+  padding: '0 12px',
+  fontSize: 17,
+  letterSpacing: '-0.02em',
+}
+
+const repeatTimeInlineWrapStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+  marginTop: 12,
+}
+
+const repeatTimeInlineSummaryStyle: React.CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.35,
+  fontWeight: 700,
+  color: '#334155',
+  textAlign: 'center',
 }
 
 const burgerListStyle: React.CSSProperties = {
