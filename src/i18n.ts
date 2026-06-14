@@ -528,7 +528,7 @@ const resources = {
         schedule: 'תזמון',
         scheduleOrder: 'הזמנה עתידית',
         scheduleWalk: 'תזמון הזמנה',
-        orderNow: 'הזמנה',
+        orderNow: 'הזמן עכשיו',
         bookingLabel: 'הזמנה',
         now: 'עכשיו',
         change: 'שינוי',
