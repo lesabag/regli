@@ -8,6 +8,8 @@ import CompletionCard from '../components/CompletionCard'
 import ProviderCelebrationOverlay, {
   type ProviderCelebrationPayload,
 } from '../components/ProviderCelebrationOverlay'
+import LegalDocumentModal from '../components/LegalDocumentModal'
+import DeleteAccountModal from '../components/DeleteAccountModal'
 import GroupedHistory from '../components/GroupedHistory'
 import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
 import type { HistoryItem } from '../components/GroupedHistory'
@@ -16,6 +18,8 @@ import { useProviderInsights } from '../hooks/useProviderInsights'
 import { useWalkerFlow } from '../hooks/useWalkerFlow'
 import { useProfilePhoto } from '../hooks/useProfilePhoto'
 import { supabase } from '../services/supabaseClient'
+import { requestAccountDeletion } from '../lib/accountDeletion'
+import type { LegalDocumentType } from '../lib/legalAcceptances'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDogCountLabel, isDogServiceType } from '../utils/dogCount'
 import { getServiceLabels } from '../utils/serviceLifecycle'
@@ -66,7 +70,17 @@ type AvailabilityFormRow = {
 }
 
 type AvailabilityFormState = Record<ProfileServiceType, AvailabilityFormRow[]>
-type SettingsSectionKey = 'language' | 'serviceType' | 'availability' | 'pricing' | 'about' | 'capabilities' | 'preferredCustomers' | 'dashboard'
+type SettingsSectionKey =
+  | 'language'
+  | 'serviceType'
+  | 'availability'
+  | 'pricing'
+  | 'about'
+  | 'capabilities'
+  | 'preferredCustomers'
+  | 'dashboard'
+  | 'legal'
+  | 'account'
 type ProviderPricingSummaryPreferenceRow = {
   service_type: ProfileServiceType
   booking_type: 'asap' | 'scheduled'
@@ -827,7 +841,14 @@ export default function WalkerDashboard({
     about: false,
     capabilities: false,
     preferredCustomers: false,
+    legal: false,
+    account: false,
   })
+  const [openLegalDocument, setOpenLegalDocument] = useState<LegalDocumentType | null>(null)
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false)
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null)
+  const [deleteAccountSuccess, setDeleteAccountSuccess] = useState(false)
   const [capSaving, setCapSaving] = useState(false)
   const [capSavedAt, setCapSavedAt] = useState(0)
   const [capError, setCapError] = useState<string | null>(null)
@@ -2701,6 +2722,32 @@ export default function WalkerDashboard({
     await flow.toggleOnline()
   }, [flow, hasSelectedProfileService, serviceSelectionRequiredLabel])
 
+  const handleSignOut = useCallback(async () => {
+    try {
+      await onSignOut()
+    } catch {
+      window.location.reload()
+    }
+  }, [onSignOut])
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (deleteAccountLoading) return
+    setDeleteAccountError(null)
+    setDeleteAccountLoading(true)
+
+    const result = await requestAccountDeletion()
+    if (!result.ok) {
+      setDeleteAccountLoading(false)
+      setDeleteAccountError(result.error)
+      return
+    }
+
+    setDeleteAccountSuccess(true)
+    window.setTimeout(() => {
+      void handleSignOut()
+    }, 900)
+  }, [deleteAccountLoading, handleSignOut])
+
   const openSettingsSection = useCallback((section: SettingsSectionKey) => {
     setBurgerOpen(true)
     setMenuPage('settings')
@@ -3779,6 +3826,27 @@ export default function WalkerDashboard({
       <ProviderCelebrationOverlay
         celebrations={celebrations}
         onDismiss={dismissCelebration}
+      />
+      <LegalDocumentModal
+        documentType={openLegalDocument}
+        isHebrew={isHebrew}
+        onClose={() => setOpenLegalDocument(null)}
+      />
+      <DeleteAccountModal
+        open={deleteAccountOpen}
+        isHebrew={isHebrew}
+        loading={deleteAccountLoading}
+        error={deleteAccountError}
+        success={deleteAccountSuccess}
+        onCancel={() => {
+          if (deleteAccountLoading) return
+          setDeleteAccountOpen(false)
+          setDeleteAccountError(null)
+          setDeleteAccountSuccess(false)
+        }}
+        onConfirm={() => {
+          void handleDeleteAccount()
+        }}
       />
       <style>{`
         .walker-dashboard-screen {
@@ -4982,6 +5050,47 @@ export default function WalkerDashboard({
                       </div>
                     </SettingsCollapsibleSection>
 
+                    <SettingsCollapsibleSection
+                      title={isHebrew ? 'משפטי' : 'Legal'}
+                      subtitle={isHebrew ? 'תנאי שימוש ופרטיות' : 'Terms and privacy'}
+                      open={settingsSectionsOpen.legal}
+                      onToggle={() => toggleSettingsSection('legal')}
+                    >
+                      <div style={settingsActionListStyle}>
+                        <MenuNavRow
+                          icon="📄"
+                          label={isHebrew ? 'תנאי השימוש' : 'Terms of Service'}
+                          onClick={() => setOpenLegalDocument('terms_of_service')}
+                        />
+                        <MenuNavRow
+                          icon="🔒"
+                          label={isHebrew ? 'מדיניות הפרטיות' : 'Privacy Policy'}
+                          onClick={() => setOpenLegalDocument('privacy_policy')}
+                        />
+                      </div>
+                    </SettingsCollapsibleSection>
+
+                    <SettingsCollapsibleSection
+                      title={isHebrew ? 'חשבון' : 'Account'}
+                      subtitle={isHebrew ? 'פעולות קבועות ורגישות' : 'Permanent account actions'}
+                      open={settingsSectionsOpen.account}
+                      onToggle={() => toggleSettingsSection('account')}
+                    >
+                      <div style={settingsActionListStyle}>
+                        <MenuNavRow
+                          icon="🗑"
+                          label={isHebrew ? 'מחיקת חשבון' : 'Delete Account'}
+                          destructive
+                          onClick={() => {
+                            setDeleteAccountError(null)
+                            setDeleteAccountSuccess(false)
+                            setDeleteAccountLoading(false)
+                            setDeleteAccountOpen(true)
+                          }}
+                        />
+                      </div>
+                    </SettingsCollapsibleSection>
+
                     <div style={menuFooterActionWrapStyle}>
                       <MenuNavRow
                         icon="↪"
@@ -4989,7 +5098,7 @@ export default function WalkerDashboard({
                         destructive
                         onClick={() => {
                           closeAll()
-                          void onSignOut()
+                          void handleSignOut()
                         }}
                       />
                     </div>
@@ -6693,6 +6802,11 @@ const serviceTypeStatusMutedStyle: React.CSSProperties = {
 }
 
 const providerBioSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
+}
+
+const settingsActionListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
 }

@@ -39,6 +39,8 @@ import {
   type ProviderCapabilityRow,
 } from '../lib/providerCapabilities'
 import ServiceSelectorPanel from '../components/ServiceSelectorPanel'
+import LegalDocumentModal from '../components/LegalDocumentModal'
+import DeleteAccountModal from '../components/DeleteAccountModal'
 import { hasProviderIssue, isCompletionReviewRequired } from '../utils/completionReview'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDogCountLabel, isDogServiceType, normalizeDogCount } from '../utils/dogCount'
@@ -58,6 +60,8 @@ import {
   normalizeProfileServiceTypes,
 } from '../lib/profileServiceTypes'
 import { supabase } from '../services/supabaseClient'
+import { requestAccountDeletion } from '../lib/accountDeletion'
+import type { LegalDocumentType } from '../lib/legalAcceptances'
 import { normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 
 function pad(n: number): string {
@@ -265,6 +269,8 @@ type MenuPage = 'main' | 'settings' | 'history' | 'futureOrders'
 type ClientSettingsSectionKey =
   | 'language'
   | 'preferredProviders'
+  | 'legal'
+  | 'account'
 type WheelOption = {
   value: string
   label: string
@@ -731,7 +737,14 @@ export default function ClientDashboard({
   const [settingsSectionsOpen, setSettingsSectionsOpen] = useState<Record<ClientSettingsSectionKey, boolean>>({
     language: false,
     preferredProviders: false,
+    legal: false,
+    account: false,
   })
+  const [openLegalDocument, setOpenLegalDocument] = useState<LegalDocumentType | null>(null)
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false)
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null)
+  const [deleteAccountSuccess, setDeleteAccountSuccess] = useState(false)
   const [appViewportHeight, setAppViewportHeight] = useState(getAppViewportHeight)
   const appViewportHeightRef = useRef(appViewportHeight)
   const providerPricingPreferencesCacheRef = useRef<Map<string, ProviderPricingPreferenceInput[]>>(new Map())
@@ -1437,6 +1450,24 @@ export default function ClientDashboard({
       window.location.reload()
     }
   }, [onSignOut])
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (deleteAccountLoading) return
+    setDeleteAccountError(null)
+    setDeleteAccountLoading(true)
+
+    const result = await requestAccountDeletion()
+    if (!result.ok) {
+      setDeleteAccountLoading(false)
+      setDeleteAccountError(result.error)
+      return
+    }
+
+    setDeleteAccountSuccess(true)
+    window.setTimeout(() => {
+      void handleSignOut()
+    }, 900)
+  }, [deleteAccountLoading, handleSignOut])
 
   const babysitterDurationValue = clampNumber(
     parseNumberOrFallback(babysitterDurationHours, BABYSITTER_DEFAULT_DURATION_HOURS),
@@ -4871,6 +4902,45 @@ export default function ClientDashboard({
                       onOpenProfile={openProviderProfile}
                     />
                   </SettingsCollapsibleSection>
+                  <SettingsCollapsibleSection
+                    title={isRtl ? 'משפטי' : 'Legal'}
+                    subtitle={isRtl ? 'תנאי שימוש ופרטיות' : 'Terms and privacy'}
+                    open={settingsSectionsOpen.legal}
+                    onToggle={() => toggleSettingsSection('legal')}
+                  >
+                    <div style={settingsSectionBodyStyle}>
+                      <MenuNavRow
+                        icon="📄"
+                        label={isRtl ? 'תנאי השימוש' : 'Terms of Service'}
+                        onClick={() => setOpenLegalDocument('terms_of_service')}
+                      />
+                      <MenuNavRow
+                        icon="🔒"
+                        label={isRtl ? 'מדיניות הפרטיות' : 'Privacy Policy'}
+                        onClick={() => setOpenLegalDocument('privacy_policy')}
+                      />
+                    </div>
+                  </SettingsCollapsibleSection>
+                  <SettingsCollapsibleSection
+                    title={isRtl ? 'חשבון' : 'Account'}
+                    subtitle={isRtl ? 'פעולות קבועות ורגישות' : 'Permanent account actions'}
+                    open={settingsSectionsOpen.account}
+                    onToggle={() => toggleSettingsSection('account')}
+                  >
+                    <div style={settingsSectionBodyStyle}>
+                      <MenuNavRow
+                        icon="🗑"
+                        label={isRtl ? 'מחיקת חשבון' : 'Delete Account'}
+                        destructive
+                        onClick={() => {
+                          setDeleteAccountError(null)
+                          setDeleteAccountSuccess(false)
+                          setDeleteAccountLoading(false)
+                          setDeleteAccountOpen(true)
+                        }}
+                      />
+                    </div>
+                  </SettingsCollapsibleSection>
                   <div style={menuFooterActionWrapStyle}>
                     <MenuNavRow
                       icon="↪"
@@ -5305,6 +5375,29 @@ export default function ClientDashboard({
           </div>
         </>
       )}
+
+      <LegalDocumentModal
+        documentType={openLegalDocument}
+        isHebrew={isRtl}
+        onClose={() => setOpenLegalDocument(null)}
+      />
+
+      <DeleteAccountModal
+        open={deleteAccountOpen}
+        isHebrew={isRtl}
+        loading={deleteAccountLoading}
+        error={deleteAccountError}
+        success={deleteAccountSuccess}
+        onCancel={() => {
+          if (deleteAccountLoading) return
+          setDeleteAccountOpen(false)
+          setDeleteAccountError(null)
+          setDeleteAccountSuccess(false)
+        }}
+        onConfirm={() => {
+          void handleDeleteAccount()
+        }}
+      />
 
       <div
         ref={sheetRef}
