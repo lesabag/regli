@@ -5459,10 +5459,6 @@ export default function ClientDashboard({
                       onMorePress={() => undefined}
                       services={availableBookingServices}
                     />
-                    <div style={launchServicesHintStyle} aria-hidden="true">
-                      <span style={launchServicesHintIconStyle}>✦</span>
-                      <span>{t('services.moreComingSoon')}</span>
-                    </div>
                   </div>
                 )}
 
@@ -7608,7 +7604,7 @@ const idleSheetContentStyle: React.CSSProperties = {
 
 const bookingCardStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 5,
   borderRadius: 28,
   padding: '4px 4px 2px',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.44) 0%, rgba(248,250,252,0.24) 100%)',
@@ -7616,34 +7612,13 @@ const bookingCardStyle: React.CSSProperties = {
 
 const launchServicesSelectorWrapStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 5,
-}
-
-const launchServicesHintStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  paddingInline: 8,
-  minHeight: 18,
-  color: '#2563EB',
-  fontSize: 11.5,
-  fontWeight: 700,
-  lineHeight: 1.2,
-  opacity: 0.96,
-  userSelect: 'none',
-  pointerEvents: 'none',
-}
-
-const launchServicesHintIconStyle: React.CSSProperties = {
-  fontSize: 10,
-  lineHeight: 1,
-  opacity: 0.9,
+  gap: 0,
 }
 
 
 const compactFormGridStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 5,
+  gap: 6,
 }
 
 const scheduleSharedInnerCardStyle: React.CSSProperties = {
@@ -8133,7 +8108,7 @@ const preferredWalkerIndicatorTextStyle: React.CSSProperties = {
 
 const compactFieldStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 2,
+  gap: 4,
 }
 
 const fixedVisitSectionStyle: React.CSSProperties = {
@@ -8171,22 +8146,27 @@ const dogWalkerAddressFieldWrapStyle: React.CSSProperties = {
 }
 
 const babysitterPlannerFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 0,
+  marginBottom: 1,
 }
 
 const dogWalkerPlannerFieldWrapStyle: React.CSSProperties = {
-  marginBottom: 0,
+  marginBottom: 1,
 }
 
 const guidedFieldButtonStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  padding: 2,
   borderRadius: 16,
   transformOrigin: 'center top',
   willChange: 'transform, box-shadow, opacity',
+  boxSizing: 'border-box',
 }
 
 const guidedFieldShellStyle: React.CSSProperties = {
   border: '1px solid rgba(96, 165, 250, 0.55)',
-  boxShadow: '0 0 0 4px rgba(96, 165, 250, 0.12)',
+  borderRadius: 16,
+  boxShadow: '0 0 0 2px rgba(96, 165, 250, 0.12)',
   background: 'rgba(248, 251, 255, 0.98)',
 }
 
@@ -8201,7 +8181,7 @@ const guidedFieldHelperStyle: React.CSSProperties = {
 const guidedFieldHintAboveStyle: React.CSSProperties = {
   ...guidedFieldHelperStyle,
   marginTop: 0,
-  marginBottom: 2,
+  marginBottom: 4,
 }
 
 const compactFieldLabelMutedStyle: React.CSSProperties = {
@@ -8580,8 +8560,9 @@ const dogNamePrimaryBtnStyle: React.CSSProperties = {
 
 const durationGuidedFieldShellStyle: React.CSSProperties = {
   border: '2px solid #3B82F6',
+  borderRadius: 15,
   background: 'rgba(59,130,246,0.06)',
-  boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
+  boxShadow: '0 0 0 2px rgba(59,130,246,0.12)',
 }
 
 const guidedFieldAnimationStyle: React.CSSProperties = {
@@ -8592,8 +8573,8 @@ const compactPaymentWrapStyle: React.CSSProperties = {
   marginTop: 0,
   marginBottom: 0,
   border: 'none',
-  borderRadius: 0,
-  padding: 0,
+  borderRadius: 22,
+  padding: 2,
   boxSizing: 'border-box',
   transition: 'border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease',
   transformOrigin: 'center top',
@@ -8825,9 +8806,9 @@ const unifiedBudgetSliderStyle: React.CSSProperties = {
   accentColor: '#2563EB',
   minWidth: 0,
   maxWidth: '100%',
-  height: 42,
-  minHeight: 42,
-  padding: '11px 0',
+  height: 46,
+  minHeight: 46,
+  padding: '13px 0',
   cursor: 'pointer',
   touchAction: 'pan-x',
   WebkitTapHighlightColor: 'transparent',
@@ -8841,7 +8822,7 @@ const unifiedBudgetScaleRowStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  marginTop: 0,
+  marginTop: 2,
   paddingInline: 12,
   pointerEvents: 'none',
   userSelect: 'none',
@@ -8899,7 +8880,7 @@ const budgetGuidanceChipHighStyle: React.CSSProperties = {
 
 const dogWalkerPricingStackStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 2,
+  gap: 6,
 }
 
 const pricingMetaRowStyle: React.CSSProperties = {
@@ -8913,24 +8894,24 @@ const pricingMetaRowStyle: React.CSSProperties = {
 const dogWalkerDurationSliderRowStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(88px, auto) minmax(0, 1fr)',
-  gap: 10,
-  alignItems: 'center',
+  gap: 12,
+  alignItems: 'start',
 }
 
 const dogWalkerDurationInlineStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 6,
   minWidth: 0,
   alignContent: 'start',
 }
 
 const dogWalkerSliderInlineStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 0,
+  gap: 4,
   minWidth: 0,
   position: 'relative',
   zIndex: 1,
-  paddingBlock: 2,
+  paddingBlock: 4,
 }
 
 const dogWalkerSliderOnlyRowStyle: React.CSSProperties = {
@@ -8941,36 +8922,38 @@ const dogWalkerSliderOnlyRowStyle: React.CSSProperties = {
 
 const fixedVisitSliderWrapStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 3,
+  gap: 5,
   minWidth: 0,
   width: '100%',
   maxWidth: '100%',
   paddingInline: 2,
-  paddingBlock: 2,
+  paddingBlock: 4,
   boxSizing: 'border-box',
 }
 
 const budgetGuidanceInlineRowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   justifyContent: 'space-between',
-  gap: 8,
+  gap: 10,
   minWidth: 0,
-  paddingTop: 0,
+  paddingTop: 2,
   pointerEvents: 'none',
 }
 
 const budgetGuidanceInlineTextStyle: React.CSSProperties = {
   minWidth: 0,
   flex: 1,
-  textAlign: 'right',
+  textAlign: 'start',
   fontSize: 10,
-  lineHeight: 1.2,
+  lineHeight: 1.3,
   fontWeight: 600,
   color: '#64748B',
   overflow: 'hidden',
-  whiteSpace: 'nowrap',
-  textOverflow: 'ellipsis',
+  whiteSpace: 'normal',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
 }
 
 const fixedVisitGuidanceStackStyle: React.CSSProperties = {
@@ -9001,8 +8984,8 @@ const fixedVisitGuidanceTextStyle: React.CSSProperties = {
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(191, 219, 254, 0.52)',
-  paddingTop: 5,
-  marginTop: 0,
+  paddingTop: 8,
+  marginTop: 2,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
@@ -9015,8 +8998,10 @@ const stickyCtaWrapDogWalkerStyle: React.CSSProperties = {
 
 const paymentGuidedFieldShellStyle: React.CSSProperties = {
   border: '1px solid rgba(59,130,246,0.55)',
+  borderRadius: 20,
+  padding: '6px 8px',
   background: 'rgba(239,246,255,0.9)',
-  boxShadow: '0 0 0 3px rgba(59,130,246,0.10)',
+  boxShadow: '0 0 0 2px rgba(59,130,246,0.10)',
 }
 
 const stickyCtaWrapStyle: React.CSSProperties = {
@@ -9030,7 +9015,7 @@ const stickyCtaWrapStyle: React.CSSProperties = {
 
 const stickyActionZoneStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 10,
   marginInlineStart: 'calc(-16px - env(safe-area-inset-left, 0px))',
   marginInlineEnd: 'calc(-16px - env(safe-area-inset-right, 0px))',
   padding: '10px calc(26px + env(safe-area-inset-right, 0px)) 8px calc(26px + env(safe-area-inset-left, 0px))',
