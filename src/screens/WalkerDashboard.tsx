@@ -6023,28 +6023,28 @@ const headerStyle: React.CSSProperties = {
   flexDirection: 'column',
   alignItems: 'stretch',
   gap: 8,
-  margin: 'calc(6px + env(safe-area-inset-top)) 18px 10px',
+  margin: 'calc(2px + env(safe-area-inset-top)) 18px 10px',
   padding: '0',
   position: 'sticky',
   top: 0,
   zIndex: 20,
-  background: 'linear-gradient(180deg, rgba(250,251,253,0.96) 0%, rgba(250,251,253,0.88) 72%, rgba(250,251,253,0) 100%)',
-  backdropFilter: 'blur(10px)',
-  WebkitBackdropFilter: 'blur(10px)',
+  background: 'transparent',
+  backdropFilter: 'none',
+  WebkitBackdropFilter: 'none',
 }
 
 const homeHeaderStyle: React.CSSProperties = {
   position: 'relative',
   flexShrink: 0,
-  marginBottom: 28,
+  marginBottom: 32,
 }
 
 const headerMenuBtnStyle: React.CSSProperties = {
   width: 42,
   height: 42,
   borderRadius: 16,
-  border: '1px solid rgba(226,232,240,0.9)',
-  background: 'rgba(255,255,255,0.96)',
+  border: '1px solid rgba(128, 151, 220, 0.62)',
+  background: 'rgba(218, 229, 255, 0.98)',
   boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
   display: 'grid',
   placeItems: 'center',
@@ -6053,9 +6053,10 @@ const headerMenuBtnStyle: React.CSSProperties = {
 
 const greetingStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 24,
+  fontSize: 27,
   fontWeight: 900,
-  lineHeight: 1.1,
+  lineHeight: 1.04,
+  color: '#233B74',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -6077,6 +6078,13 @@ const headerTopRowStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 12,
+  padding: '0',
+  borderRadius: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  backdropFilter: 'none',
+  WebkitBackdropFilter: 'none',
 }
 
 const headerIdentityRowStyle: React.CSSProperties = {
@@ -6104,8 +6112,8 @@ const bellWrapStyle: React.CSSProperties = {
   width: 42,
   height: 42,
   borderRadius: 16,
-  background: 'rgba(255,255,255,0.96)',
-  border: '1px solid rgba(226,232,240,0.9)',
+  background: 'rgba(218, 229, 255, 0.98)',
+  border: '1px solid rgba(128, 151, 220, 0.62)',
   boxShadow: '0 8px 20px rgba(15, 23, 42, 0.05)',
   display: 'grid',
   placeItems: 'center',
