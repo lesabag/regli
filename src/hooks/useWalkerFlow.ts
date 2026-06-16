@@ -254,7 +254,6 @@ function startsInMinutes(value: string | null | undefined): number | null {
 
 const AUTO_DISPATCH_LEAD_MINUTES = 15
 const AUTO_DISPATCH_POLL_MS = 20_000
-const COMPLETION_PROMPT_RECENT_MS = 30 * 60 * 1000
 const IDLE_WALKER_POLL_MS = 20_000
 const ACTIVE_WALKER_POLL_MS = 4_000
 const IDLE_LOCATION_BROADCAST_MS = 15_000
@@ -370,12 +369,6 @@ function getWalkerJobPhase(job: WalkRequestRow): Exclude<ServicePhase, 'idle' | 
   return phase
 }
 
-function isRecentCompletion(job: Pick<WalkRequestRow, 'paid_at' | 'created_at'>): boolean {
-  const ts = getJobEventTime(job)
-  if (!ts) return false
-  return Date.now() - ts <= COMPLETION_PROMPT_RECENT_MS
-}
-
 function isCompletionReviewJob(job: Pick<WalkRequestRow, 'status' | 'notes'> | null | undefined): boolean {
   return !!job && job.status === 'accepted' && isCompletionReviewRequired(job.notes)
 }
@@ -392,7 +385,7 @@ function getCompletionPromptJob(
         (job) =>
           job.status === 'completed' &&
           !!job.client_id &&
-          (isRecentCompletion(job) || flowCompletedJobIds.has(job.id)) &&
+          flowCompletedJobIds.has(job.id) &&
           !ratedJobIds.has(job.id) &&
           !dismissedJobIds.has(job.id),
       )
@@ -1093,6 +1086,36 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       dismissedCompletionIdsRef.current,
       flowCompletedJobIdsRef.current,
     )
+    const skippedHistoricalCompletion =
+      completedJobs
+        .filter(
+          (job) =>
+            job.status === 'completed' &&
+            !!job.client_id &&
+            !flowCompletedJobIdsRef.current.has(job.id) &&
+            !ratedJobIds.has(job.id) &&
+            !dismissedCompletionIdsRef.current.has(job.id),
+        )
+        .sort((a, b) => getJobEventTime(b) - getJobEventTime(a))[0] ?? null
+
+    if (skippedHistoricalCompletion) {
+      console.log('[useWalkerFlow] skipping stale provider completion prompt on hydration', {
+        profileId,
+        role: 'walker',
+        jobId: skippedHistoricalCompletion.id,
+        paidAt: skippedHistoricalCompletion.paid_at ?? null,
+        createdAt: skippedHistoricalCompletion.created_at ?? null,
+        reason: 'not_completed_in_current_session',
+      })
+    }
+
+    console.log('[useWalkerFlow] provider completion prompt decision', {
+      profileId,
+      role: 'walker',
+      pendingCompletionJobId: pendingCompletion?.id ?? null,
+      completionSuccessJobId: completionSuccess?.jobId ?? null,
+      flowCompletedJobIds: Array.from(flowCompletedJobIdsRef.current),
+    })
 
     if (!pendingCompletion) {
       setCompletionSuccess((prev) => {
@@ -1140,7 +1163,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
 
       return next
     })
-  }, [completedJobs, ratedJobIds])
+  }, [completedJobs, completionSuccess?.jobId, profileId, ratedJobIds])
 
   useEffect(() => {
     if (!pendingClientConfirmation) return
