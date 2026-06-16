@@ -276,6 +276,22 @@ type WheelOption = {
   label: string
 }
 
+const SHEET_DRAG_HANDLE_SELECTOR = '[data-sheet-drag-handle="true"]'
+const SHEET_DRAG_SURFACE_SELECTOR = '[data-sheet-drag-surface="true"]'
+const SHEET_DRAG_INTERACTIVE_SELECTOR = [
+  'button',
+  'input',
+  'textarea',
+  'select',
+  'option',
+  'a',
+  'label',
+  '[role="button"]',
+  '[role="link"]',
+  '[data-control]',
+  '[data-no-sheet-drag="true"]',
+].join(', ')
+
 const BABYSITTER_DURATION_MIN = 0
 const BABYSITTER_DURATION_MAX = 24
 const BABYSITTER_DURATION_STEP = 0.5
@@ -3501,15 +3517,37 @@ export default function ClientDashboard({
   }, [appViewportHeight, sheetSnap])
 
 
+  const resetSheetDragState = useCallback(() => {
+    sheetDragRef.current = null
+    const el = sheetRef.current
+    if (el) {
+      el.style.transition = ''
+      el.style.maxHeight = ''
+    }
+    setIsDraggingSheet(false)
+  }, [])
+
+  const canStartSheetDrag = useCallback(
+    (target: EventTarget | null) => {
+      if (!isIdleState || !(target instanceof Element)) return false
+      if (target.closest(SHEET_DRAG_HANDLE_SELECTOR)) return true
+      if (!target.closest(SHEET_DRAG_SURFACE_SELECTOR)) return false
+      if (target.closest(SHEET_DRAG_INTERACTIVE_SELECTOR)) return false
+      return (scrollRef.current?.scrollTop ?? 0) <= 2
+    },
+    [isIdleState],
+  )
+
   const handleSheetDragStart = useCallback(
-    (clientY: number) => {
-      if (!isIdleState) return
+    (clientY: number, target?: EventTarget | null) => {
+      if (!isIdleState || sheetDragRef.current) return
+      if (target !== undefined && !canStartSheetDrag(target)) return
       sheetDragRef.current = { startY: clientY, startSnap: sheetSnap, lastDelta: 0 }
       setIsDraggingSheet(true)
       const el = sheetRef.current
       if (el) el.style.transition = 'none'
     },
-    [isIdleState, sheetSnap],
+    [canStartSheetDrag, isIdleState, sheetSnap],
   )
 
   const handleSheetDragMove = useCallback(
@@ -3532,8 +3570,8 @@ export default function ClientDashboard({
   const handleSheetDragEnd = useCallback(() => {
     const drag = sheetDragRef.current
     if (!drag) return
-    sheetDragRef.current = null
     const delta = drag.lastDelta
+    sheetDragRef.current = null
     const el = sheetRef.current
     if (el) {
       el.style.transition = 'max-height 280ms cubic-bezier(0.22, 1, 0.36, 1)'
@@ -3547,6 +3585,50 @@ export default function ClientDashboard({
     }
     setIsDraggingSheet(false)
   }, [])
+
+  const handleSheetTouchStart = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      handleSheetDragStart(touch.clientY, event.target)
+    },
+    [handleSheetDragStart],
+  )
+
+  const handleSheetTouchMove = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      if (!sheetDragRef.current) return
+      if (event.cancelable) event.preventDefault()
+      const touch = event.touches[0]
+      if (!touch) return
+      handleSheetDragMove(touch.clientY)
+    },
+    [handleSheetDragMove],
+  )
+
+  const handleSheetMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!canStartSheetDrag(event.target)) return
+      event.preventDefault()
+      handleSheetDragStart(event.clientY)
+      const onMove = (moveEvent: MouseEvent) => handleSheetDragMove(moveEvent.clientY)
+      const onUp = () => {
+        handleSheetDragEnd()
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [canStartSheetDrag, handleSheetDragEnd, handleSheetDragMove, handleSheetDragStart],
+  )
+
+  useEffect(() => {
+    if (isIdleState) return
+    resetSheetDragState()
+  }, [isIdleState, resetSheetDragState])
+
+  useEffect(() => resetSheetDragState, [resetSheetDragState])
 
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
@@ -4643,6 +4725,20 @@ export default function ClientDashboard({
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
+      <div aria-hidden="true" style={dashboardBrandBackdropStyle}>
+        <div style={dashboardBrandGlowTopStyle} />
+        <div style={dashboardBrandGlowCenterStyle} />
+        <div style={dashboardBrandGlowBottomStyle} />
+        <div style={dashboardBrandDiagonalPrimaryStyle} />
+        <div style={dashboardBrandDiagonalSecondaryStyle} />
+        <div style={dashboardBrandDiagonalTertiaryStyle} />
+        <div style={dashboardBrandRouteUpperStyle} />
+        <div style={dashboardBrandRouteLowerStyle} />
+        <div style={dashboardBrandDotsUpperLeftStyle} />
+        <div style={dashboardBrandDotsTopStyle} />
+        <div style={dashboardBrandDotsLowerRightStyle} />
+        <div style={dashboardBrandDotsBottomStyle} />
+      </div>
       {debugFlags().interactionDebug && (
         <div
           style={{
@@ -5407,30 +5503,16 @@ export default function ClientDashboard({
           ...(isIdleState ? { maxHeight: `${sheetMaxHeights[sheetSnap]}px`, overflow: 'hidden' } : {}),
           transition: isDraggingSheet ? 'none' : 'max-height 280ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
+        onTouchStart={handleSheetTouchStart}
+        onTouchMove={handleSheetTouchMove}
+        onTouchEnd={handleSheetDragEnd}
+        onTouchCancel={resetSheetDragState}
+        onMouseDown={handleSheetMouseDown}
       >
         {isIdleState ? (
           <div
             style={dragHandleZoneStyle}
-            onTouchStart={(e) => {
-              handleSheetDragStart(e.touches[0].clientY)
-            }}
-            onTouchMove={(e) => {
-              e.preventDefault()
-              handleSheetDragMove(e.touches[0].clientY)
-            }}
-            onTouchEnd={handleSheetDragEnd}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              handleSheetDragStart(e.clientY)
-              const onMove = (ev: MouseEvent) => handleSheetDragMove(ev.clientY)
-              const onUp = () => {
-                handleSheetDragEnd()
-                window.removeEventListener('mousemove', onMove)
-                window.removeEventListener('mouseup', onUp)
-              }
-              window.addEventListener('mousemove', onMove)
-              window.addEventListener('mouseup', onUp)
-            }}
+            data-sheet-drag-handle="true"
             onClick={() => {
               if (isDraggingSheet) return
               if (isSheetCollapsed) setSheetSnap('default')
@@ -5446,11 +5528,12 @@ export default function ClientDashboard({
         <div ref={scrollRef} style={currentSheetScrollStyle}>
           {shouldRenderIdleSheet && (
             <div
+              data-sheet-drag-surface="true"
               style={{
                 ...idleSheetContentStyle,
               }}
             >
-              <div style={bookingCardStyle}>
+              <div data-sheet-drag-surface="true" style={bookingCardStyle}>
                 {shouldShowProfileServicePicker && (
                   <div style={launchServicesSelectorWrapStyle}>
                     <ServiceSelectorPanel
@@ -7346,7 +7429,7 @@ const screenStyle: React.CSSProperties = {
   inset: 0,
   left: 0,
   right: 0,
-  background: '#F8FAFC',
+  background: '#F6F9FD',
   overflow: 'hidden',
   overflowX: 'hidden',
   display: 'flex',
@@ -7358,6 +7441,142 @@ const screenStyle: React.CSSProperties = {
   maxInlineSize: '100dvw',
   boxSizing: 'border-box',
   contain: 'layout paint',
+}
+
+const dashboardBrandBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  overflow: 'hidden',
+  pointerEvents: 'none',
+  zIndex: 0,
+}
+
+const dashboardBrandGlowTopStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -110,
+  right: -74,
+  width: 250,
+  height: 250,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(91,124,250,0.22) 0%, rgba(91,124,250,0.08) 46%, rgba(91,124,250,0) 74%)',
+}
+
+const dashboardBrandGlowCenterStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '40%',
+  right: '8%',
+  width: 190,
+  height: 190,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(182,171,255,0.16) 0%, rgba(182,171,255,0.06) 44%, rgba(182,171,255,0) 74%)',
+}
+
+const dashboardBrandGlowBottomStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: -116,
+  bottom: -96,
+  width: 280,
+  height: 280,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(91,124,250,0.18) 0%, rgba(91,124,250,0.06) 44%, rgba(91,124,250,0) 74%)',
+}
+
+const dashboardBrandDiagonalPrimaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '16%',
+  left: '-10%',
+  width: '122%',
+  height: 2,
+  background: 'rgba(118, 148, 184, 0.28)',
+  transform: 'rotate(11deg)',
+}
+
+const dashboardBrandDiagonalSecondaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '36%',
+  right: '-10%',
+  width: '120%',
+  height: 2,
+  background: 'rgba(118, 148, 184, 0.2)',
+  transform: 'rotate(-14deg)',
+}
+
+const dashboardBrandDiagonalTertiaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '67%',
+  left: '-8%',
+  width: '114%',
+  height: 1,
+  background: 'rgba(118, 148, 184, 0.24)',
+  transform: 'rotate(8deg)',
+}
+
+const dashboardBrandRouteUpperStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '18%',
+  left: '59%',
+  width: 104,
+  height: 174,
+  borderLeft: '3px dotted rgba(91, 124, 250, 0.42)',
+  transform: 'rotate(18deg)',
+}
+
+const dashboardBrandRouteLowerStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '18%',
+  bottom: '12%',
+  width: 118,
+  height: 142,
+  borderRight: '3px dotted rgba(91, 124, 250, 0.34)',
+  transform: 'rotate(16deg)',
+}
+
+const dashboardBrandDotsUpperLeftStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '9%',
+  left: '7%',
+  width: 92,
+  height: 92,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.2) 1.2px, transparent 1.2px)',
+  backgroundSize: '13px 13px',
+  opacity: 0.78,
+}
+
+const dashboardBrandDotsTopStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '8%',
+  right: '8%',
+  width: 118,
+  height: 118,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.22) 1.2px, transparent 1.2px)',
+  backgroundSize: '13px 13px',
+  opacity: 0.82,
+}
+
+const dashboardBrandDotsLowerRightStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: '10%',
+  bottom: '22%',
+  width: 86,
+  height: 86,
+  borderRadius: 24,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.18) 1.15px, transparent 1.15px)',
+  backgroundSize: '12px 12px',
+  opacity: 0.72,
+}
+
+const dashboardBrandDotsBottomStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '8%',
+  bottom: '8%',
+  width: 104,
+  height: 104,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.2) 1.15px, transparent 1.15px)',
+  backgroundSize: '12px 12px',
+  opacity: 0.78,
 }
 
 const topUiLayerStyle: React.CSSProperties = {
@@ -7396,12 +7615,16 @@ const deferredMapPlaceholderStyle: React.CSSProperties = {
   position: 'absolute',
   inset: 0,
   background:
-    'radial-gradient(circle at 50% 38%, rgba(59,130,246,0.12) 0%, rgba(59,130,246,0.05) 18%, rgba(248,250,252,0) 42%), linear-gradient(180deg, #EEF4FF 0%, #F8FAFC 46%, #F1F5F9 100%)',
+    'radial-gradient(circle at 84% 14%, rgba(173,191,255,0.12) 0%, rgba(173,191,255,0) 26%), radial-gradient(circle at 14% 78%, rgba(255,209,102,0.08) 0%, rgba(255,209,102,0) 24%), linear-gradient(180deg, #F3F7FD 0%, #F8FAFD 48%, #FBFCFE 100%)',
+  backgroundImage:
+    'radial-gradient(circle at 84% 14%, rgba(173,191,255,0.12) 0%, rgba(173,191,255,0) 26%), radial-gradient(circle at 14% 78%, rgba(255,209,102,0.08) 0%, rgba(255,209,102,0) 24%), linear-gradient(180deg, #F3F7FD 0%, #F8FAFD 48%, #FBFCFE 100%), linear-gradient(11deg, rgba(120,140,176,0.08) 0%, rgba(120,140,176,0.08) 0.12%, transparent 0.12%, transparent 100%), radial-gradient(circle, rgba(120,140,176,0.08) 1.1px, transparent 1.1px)',
+  backgroundSize: 'auto, auto, auto, auto, 14px 14px',
+  backgroundPosition: 'center, center, center, center, calc(100% - 42px) 56px',
 }
 
 const floatingTopBarStyle: React.CSSProperties = {
   position: 'fixed',
-  top: 'calc(16px + env(safe-area-inset-top))',
+  top: 'calc(12px + env(safe-area-inset-top))',
   left: 'max(14px, env(safe-area-inset-left, 0px))',
   right: 'max(14px, env(safe-area-inset-right, 0px))',
   zIndex: 3001,
