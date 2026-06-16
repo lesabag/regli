@@ -380,7 +380,8 @@ const textareaStyle: React.CSSProperties = {
 }
 
 const buttonsContainerStyle: React.CSSProperties = {
-  marginTop: 14,
+  marginTop: 18,
+  paddingTop: 2,
   display: 'flex',
   flexDirection: 'column',
   gap: 8,
