@@ -5344,7 +5344,7 @@ export default function WalkerDashboard({
                 ? (isHebrew ? 'הגעתי' : 'Confirm arrival')
                 : flow.screenPhase === 'arrival_confirmed'
                   ? walkerStartServiceLabel
-                  : (isHebrew ? 'ממתין ללקוח' : 'Waiting for client')
+                  : (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client confirmation')
 
             const missionSupportTitle = missionHasProviderIssue
               ? (isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review')
@@ -5450,29 +5450,31 @@ export default function WalkerDashboard({
                 )}
 
                 {(!missionHasProviderIssue || (!isMissionActive && flow.screenPhase === 'on_the_way')) && (
-                  <button
-                    onClick={async () => {
-                      await hapticSuccess()
-                      if (isMissionActive) {
-                        void flow.handleComplete(missionJob.id)
-                        return
-                      }
-                      if (flow.screenPhase === 'on_the_way') {
-                        void flow.markArrived(missionJob.id)
-                        return
-                      }
-                      void flow.startService(missionJob.id)
-                    }}
-                    disabled={missionCtaDisabled}
-                    style={{
-                      ...completeBtnStyle,
-                      ...(isMissionActive && flow.pendingClientConfirmation === missionJob.id ? pendingConfirmationBtnStyle : null),
-                      opacity: missionCtaDisabled ? 0.72 : 1,
-                      cursor: missionCtaDisabled ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {missionCtaLabel}
-                  </button>
+                  <div style={activeCardFooterStyle}>
+                    <button
+                      onClick={async () => {
+                        await hapticSuccess()
+                        if (isMissionActive) {
+                          void flow.handleComplete(missionJob.id)
+                          return
+                        }
+                        if (flow.screenPhase === 'on_the_way') {
+                          void flow.markArrived(missionJob.id)
+                          return
+                        }
+                        void flow.startService(missionJob.id)
+                      }}
+                      disabled={missionCtaDisabled}
+                      style={{
+                        ...completeBtnStyle,
+                        ...(isMissionActive && flow.pendingClientConfirmation === missionJob.id ? pendingConfirmationBtnStyle : null),
+                        opacity: missionCtaDisabled ? 0.72 : 1,
+                        cursor: missionCtaDisabled ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {missionCtaLabel}
+                    </button>
+                  </div>
                 )}
               </div>
             )
@@ -5660,9 +5662,9 @@ export default function WalkerDashboard({
       )}
 
       {flow.completionSuccess && (
-        <div style={completionOverlayStyle}>
+        <div style={providerCompletionOverlayStyle}>
           <div style={completionOverlayBackdropStyle} />
-          <div style={completionOverlayCardStyle}>
+          <div style={providerCompletionSheetCardStyle}>
             <CompletionCard
               promptKey={flow.completionSuccess.jobId}
               title={getServiceLabels(null).completedTitle}
@@ -8407,22 +8409,31 @@ const providerInsightsHelperTextStyle: React.CSSProperties = {
 
 const activeCardStyle: React.CSSProperties = {
   position: 'fixed',
-  left: 18,
-  right: 18,
-  bottom: 'calc(12px + env(safe-area-inset-bottom))',
+  left: 6,
+  right: 6,
+  bottom: 'env(safe-area-inset-bottom)',
   width: 'auto',
-  maxWidth: 560,
-  margin: '0 auto',
+  maxWidth: 'none',
+  minHeight: 372,
+  margin: 0,
   zIndex: 34,
-  padding: '18px',
-  borderRadius: 30,
+  padding: '16px 16px calc(16px + env(safe-area-inset-bottom))',
+  borderTopLeftRadius: 28,
+  borderTopRightRadius: 28,
+  borderBottomLeftRadius: 14,
+  borderBottomRightRadius: 14,
   background: 'linear-gradient(180deg, rgba(8,15,33,0.98) 0%, rgba(14,23,43,0.98) 100%)',
   border: '1px solid rgba(96, 165, 250, 0.12)',
   boxShadow: '0 24px 52px rgba(2,6,23,0.34), inset 0 1px 0 rgba(255,255,255,0.04)',
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  gap: 14,
+  gap: 12,
+}
+
+const activeCardFooterStyle: React.CSSProperties = {
+  marginTop: 'auto',
+  paddingTop: 10,
 }
 
 const activeHeaderRowStyle: React.CSSProperties = {
@@ -8478,7 +8489,7 @@ const onTheWayBadgeDotStyle: React.CSSProperties = {
 const missionProgressStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gap: 8,
+  gap: 6,
 }
 
 const missionProgressSegmentStyle: React.CSSProperties = {
@@ -8490,12 +8501,12 @@ const missionProgressSegmentStyle: React.CSSProperties = {
 
 const missionHeroStackStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 2,
 }
 
 const activeDogNameStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 800,
   color: '#F8FAFC',
 }
@@ -8509,19 +8520,19 @@ const missionSublineStyle: React.CSSProperties = {
 
 const activeClientStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 15,
+  fontSize: 14,
   color: 'rgba(203, 213, 225, 0.82)',
   fontWeight: 700,
 }
 
 const activeLocationStyle: React.CSSProperties = {
-  padding: '14px 16px',
+  padding: '12px 14px',
   borderRadius: 18,
   background: 'rgba(15, 23, 42, 0.62)',
   border: '1px solid rgba(148, 163, 184, 0.14)',
   color: '#F8FAFC',
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
 const missionInfoLabelStyle: React.CSSProperties = {
@@ -8533,17 +8544,17 @@ const missionInfoLabelStyle: React.CSSProperties = {
 }
 
 const missionNotesStyle: React.CSSProperties = {
-  padding: '14px 16px',
+  padding: '12px 14px',
   borderRadius: 18,
   background: 'rgba(15, 23, 42, 0.42)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
 const missionNotesBodyStyle: React.CSSProperties = {
   fontSize: 13,
-  lineHeight: 1.55,
+  lineHeight: 1.45,
   color: 'rgba(226, 232, 240, 0.88)',
 }
 
@@ -8559,12 +8570,12 @@ const completionPaymentErrorStyle: React.CSSProperties = {
 }
 
 const waitingStateStyle: React.CSSProperties = {
-  padding: '14px 16px',
+  padding: '12px 14px',
   borderRadius: 18,
   background: 'rgba(15, 23, 42, 0.5)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   display: 'grid',
-  gap: 6,
+  gap: 4,
 }
 
 const waitingStateTitleStyle: React.CSSProperties = {
@@ -8587,7 +8598,7 @@ const ellipsisStyle: React.CSSProperties = {
 
 const completeBtnStyle: React.CSSProperties = {
   width: '100%',
-  minHeight: 56,
+  minHeight: 52,
   alignSelf: 'stretch',
   flexShrink: 0,
   borderRadius: 20,
@@ -8597,7 +8608,7 @@ const completeBtnStyle: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
   cursor: 'pointer',
-  padding: '14px 18px',
+  padding: '13px 18px',
   lineHeight: 1.2,
   boxSizing: 'border-box',
   WebkitTapHighlightColor: 'transparent',
@@ -8615,7 +8626,7 @@ const serviceTimerPanelStyle: React.CSSProperties = {
   background: 'transparent',
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
-  gap: 10,
+  gap: 8,
 }
 
 const serviceTimerLabelStyle: React.CSSProperties = {
@@ -8627,21 +8638,21 @@ const serviceTimerLabelStyle: React.CSSProperties = {
 }
 
 const serviceTimerValueStyle: React.CSSProperties = {
-  fontSize: 17,
+  fontSize: 16,
   fontWeight: 800,
   color: '#F8FAFC',
   fontVariantNumeric: 'tabular-nums',
 }
 
 const missionMetaCardStyle: React.CSSProperties = {
-  minHeight: 66,
+  minHeight: 58,
   borderRadius: 18,
   background: 'rgba(15, 23, 42, 0.54)',
   border: '1px solid rgba(96, 165, 250, 0.12)',
-  padding: '12px 14px',
+  padding: '10px 12px',
   display: 'grid',
   alignContent: 'space-between',
-  gap: 8,
+  gap: 6,
 }
 
 const checkStyle: React.CSSProperties = {
@@ -8948,6 +8959,13 @@ const completionOverlayStyle: React.CSSProperties = {
   pointerEvents: 'auto',
 }
 
+const providerCompletionOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 50,
+  pointerEvents: 'auto',
+}
+
 const completionOverlayBackdropStyle: React.CSSProperties = {
   position: 'absolute',
   inset: 0,
@@ -8958,6 +8976,16 @@ const completionOverlayCardStyle: React.CSSProperties = {
   position: 'relative',
   width: 'min(100%, 520px)',
   maxWidth: '100%',
+  boxSizing: 'border-box',
+}
+
+const providerCompletionSheetCardStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 6,
+  right: 6,
+  bottom: 0,
+  width: 'auto',
+  maxWidth: 'none',
   boxSizing: 'border-box',
 }
 
