@@ -34,6 +34,14 @@ const SAFE_PUSH_COPY_FALLBACKS: Record<string, { title: string; body: string }> 
 }
 
 type ApnsEnvironment = keyof typeof APNS_HOSTS
+type PushInstallSource = 'xcode_debug' | 'testflight' | 'app_store' | 'unknown'
+type PushTokenRow = {
+  token: string
+  user_id: string
+  platform: string
+  environment: string | null
+  install_source: string | null
+}
 
 /**
  * send-push-notification
@@ -286,7 +294,7 @@ serve(async (req: Request) => {
 
     let query = supabaseAdmin
       .from('push_tokens')
-      .select('token, user_id, platform')
+      .select('token, user_id, platform, environment, install_source')
       .eq('enabled', true)
 
     if (targetUserId) {
@@ -389,7 +397,7 @@ serve(async (req: Request) => {
       }, 200)
     }
 
-    const iosTokens = tokens.filter(({ platform }) => platform === 'ios')
+    const iosTokens = (tokens as PushTokenRow[]).filter(({ platform }) => platform === 'ios')
 
     if (iosTokens.length === 0) {
       return jsonResp({
@@ -415,8 +423,8 @@ serve(async (req: Request) => {
     }
 
     const apnsJwt = await createApnsJwt(apnsPrivateKey, apnsKeyId, apnsTeamId)
-    const apnsHost = APNS_HOSTS[apnsEnvironment]
-    const staleTokens: string[] = []
+    const groupedIosTokens = groupTokensByApnsEnvironment(iosTokens, apnsEnvironment)
+    const staleTokensByEnvironment = new Map<ApnsEnvironment, Set<string>>()
     let sentCount = 0
     const badge = Number.isFinite(body.badge) ? Number(body.badge) : undefined
 
@@ -427,58 +435,115 @@ serve(async (req: Request) => {
       data: notifData,
     })
 
-    for (const { token, user_id } of iosTokens) {
-      try {
-        console.log(`[Push] sending APNS to targetUserId=${user_id}`)
-        const payload: Record<string, unknown> = {
-          aps: {
-            alert: { title: effectiveTitle, body: effectiveBody },
-            sound: 'default',
-            ...(badge !== undefined ? { badge } : {}),
-          },
-          data: normalizedData,
+    for (const [tokenEnvironment, tokenRows] of Object.entries(groupedIosTokens) as Array<[ApnsEnvironment, PushTokenRow[]]>) {
+      if (tokenRows.length === 0) continue
+
+      const apnsHost = APNS_HOSTS[tokenEnvironment]
+      console.log('[Push] APNS environment batch selected', {
+        environment: tokenEnvironment,
+        endpoint: apnsHost,
+        tokenCount: tokenRows.length,
+        fallbackEnvironment: apnsEnvironment,
+      })
+
+      for (const { token, user_id, install_source } of tokenRows) {
+        try {
+          const installSource = normalizeInstallSource(install_source)
+          console.log('[Push] sending APNS', {
+            targetUserId: user_id,
+            environment: tokenEnvironment,
+            endpoint: apnsHost,
+            installSource,
+            tokenPrefix: tokenPrefix(token),
+          })
+
+          const payload: Record<string, unknown> = {
+            aps: {
+              alert: { title: effectiveTitle, body: effectiveBody },
+              sound: 'default',
+              ...(badge !== undefined ? { badge } : {}),
+            },
+            data: normalizedData,
+          }
+
+          const res = await fetch(`${apnsHost}/3/device/${token}`, {
+            method: 'POST',
+            headers: {
+              authorization: `bearer ${apnsJwt}`,
+              'apns-topic': apnsBundleId,
+              'apns-push-type': 'alert',
+              'apns-priority': '10',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          })
+
+          if (res.ok) {
+            sentCount++
+            console.log('[Push] APNS delivered', {
+              targetUserId: user_id,
+              environment: tokenEnvironment,
+              endpoint: apnsHost,
+              installSource,
+              tokenPrefix: tokenPrefix(token),
+              status: res.status,
+            })
+            continue
+          }
+
+          const apnsResponse = await readApnsResponse(res)
+          console.error('[Push] APNS failed', {
+            status: res.status,
+            reason: apnsResponse.reason,
+            body: apnsResponse.body,
+            token: tokenPrefix(token),
+            environment: tokenEnvironment,
+            endpoint: apnsHost,
+            installSource,
+            targetUserId: user_id,
+          })
+
+          if (shouldDeleteToken(res.status, apnsResponse.reason ?? apnsResponse.body)) {
+            appendStaleToken(staleTokensByEnvironment, tokenEnvironment, token)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          console.error('[Push] APNS failed', {
+            status: 'network',
+            reason: message,
+            token: tokenPrefix(token),
+            environment: tokenEnvironment,
+            endpoint: apnsHost,
+            installSource: normalizeInstallSource(install_source),
+            targetUserId: user_id,
+          })
         }
-
-        const res = await fetch(`${apnsHost}/3/device/${token}`, {
-          method: 'POST',
-          headers: {
-            authorization: `bearer ${apnsJwt}`,
-            'apns-topic': apnsBundleId,
-            'apns-push-type': 'alert',
-            'apns-priority': '10',
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        })
-
-        if (res.ok) {
-          sentCount++
-          console.log(`[Push] Sent to ${user_id} (${tokenPrefix(token)})`)
-          continue
-        }
-
-        const errBody = await safeResponseText(res)
-        console.error(`[Push] APNS failed status=${res.status} token=${tokenPrefix(token)} body=${errBody}`)
-
-        if (shouldDeleteToken(res.status, errBody)) {
-          staleTokens.push(token)
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[Push] APNS failed status=network token=${tokenPrefix(token)} body=${message}`)
       }
     }
 
-    if (staleTokens.length > 0) {
+    let staleRemoved = 0
+    for (const [environment, tokenSet] of staleTokensByEnvironment.entries()) {
+      const staleTokens = Array.from(tokenSet)
+      if (staleTokens.length === 0) continue
+
       const { error: delErr } = await supabaseAdmin
         .from('push_tokens')
         .delete()
+        .eq('environment', environment)
         .in('token', staleTokens)
 
       if (delErr) {
-        console.error('[Push] Failed to delete stale tokens:', delErr.message)
+        console.error('[Push] Failed to delete stale tokens', {
+          environment,
+          tokenCount: staleTokens.length,
+          error: delErr.message,
+        })
       } else {
-        console.log(`[Push] Cleaned up ${staleTokens.length} stale token(s)`)
+        staleRemoved += staleTokens.length
+        console.log('[Push] Cleaned up stale tokens', {
+          environment,
+          tokenCount: staleTokens.length,
+        })
       }
     }
 
@@ -488,7 +553,7 @@ serve(async (req: Request) => {
       total: tokens.length,
       iosTotal: iosTokens.length,
       notified: walkerIds.length,
-      staleRemoved: staleTokens.length,
+      staleRemoved,
     }, 200)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -578,6 +643,38 @@ function getApnsEnvironment(value: string | undefined): ApnsEnvironment {
   return value?.toLowerCase() === 'production' ? 'production' : 'sandbox'
 }
 
+function normalizeStoredApnsEnvironment(
+  value: string | null | undefined,
+  fallback: ApnsEnvironment,
+): ApnsEnvironment {
+  return value === 'production' || value === 'sandbox' ? value : fallback
+}
+
+function normalizeInstallSource(value: string | null | undefined): PushInstallSource {
+  return value === 'xcode_debug'
+    || value === 'testflight'
+    || value === 'app_store'
+    ? value
+    : 'unknown'
+}
+
+function groupTokensByApnsEnvironment(
+  tokens: PushTokenRow[],
+  fallbackEnvironment: ApnsEnvironment,
+): Record<ApnsEnvironment, PushTokenRow[]> {
+  const grouped: Record<ApnsEnvironment, PushTokenRow[]> = {
+    sandbox: [],
+    production: [],
+  }
+
+  for (const token of tokens) {
+    const environment = normalizeStoredApnsEnvironment(token.environment, fallbackEnvironment)
+    grouped[environment].push(token)
+  }
+
+  return grouped
+}
+
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null
 }
@@ -648,6 +745,36 @@ async function safeResponseText(response: Response): Promise<string> {
   } catch {
     return '<unreadable>'
   }
+}
+
+async function readApnsResponse(response: Response): Promise<{ body: string; reason: string | null }> {
+  const body = await safeResponseText(response)
+  try {
+    const parsed = JSON.parse(body) as { reason?: unknown }
+    return {
+      body,
+      reason: readString(parsed.reason),
+    }
+  } catch {
+    return {
+      body,
+      reason: null,
+    }
+  }
+}
+
+function appendStaleToken(
+  staleTokensByEnvironment: Map<ApnsEnvironment, Set<string>>,
+  environment: ApnsEnvironment,
+  token: string,
+) {
+  const existing = staleTokensByEnvironment.get(environment)
+  if (existing) {
+    existing.add(token)
+    return
+  }
+
+  staleTokensByEnvironment.set(environment, new Set([token]))
 }
 
 function tokenPrefix(token: string): string {

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
 import { supabase } from '../services/supabaseClient'
 import {
@@ -15,13 +15,30 @@ const PUSH_DEVICE_ID_STORAGE_KEY = 'regli:push-device-id'
 const PUSH_REGISTRATION_STORAGE_KEY = 'regli:push-registration'
 
 type PushPlatform = 'ios' | 'android' | 'web'
+type PushTokenEnvironment = 'sandbox' | 'production'
+type PushInstallSource = 'xcode_debug' | 'testflight' | 'app_store' | 'unknown'
+
+type NativePushRegistrationInfo = {
+  apnsEnvironment?: PushTokenEnvironment | null
+  installSource?: PushInstallSource | null
+  buildConfiguration?: 'debug' | 'release' | 'unknown' | null
+  isDebugBuild?: boolean | null
+}
+
+type RegliBuildInfoPlugin = {
+  getPushRegistrationInfo(): Promise<NativePushRegistrationInfo>
+}
 
 type StoredPushRegistration = {
   userId: string
   token: string
   platform: PushPlatform
   deviceId: string | null
+  environment: PushTokenEnvironment
+  installSource: PushInstallSource
 }
+
+const RegliBuildInfo = registerPlugin<RegliBuildInfoPlugin>('RegliBuildInfo')
 
 function isSupportedNativePushPlatform(platform: string): platform is PushPlatform {
   return platform === 'ios' || platform === 'android'
@@ -33,9 +50,21 @@ function getStoredPushRegistration(): StoredPushRegistration | null {
   if (!raw) return null
 
   try {
-    const parsed = JSON.parse(raw) as StoredPushRegistration
+    const parsed = JSON.parse(raw) as Partial<StoredPushRegistration>
     if (!parsed?.userId || !parsed?.token) return null
-    return parsed
+    const parsedPlatform = parsed.platform
+    const platform: PushPlatform =
+      parsedPlatform === 'ios' || parsedPlatform === 'android' || parsedPlatform === 'web'
+        ? parsedPlatform
+        : 'ios'
+    return {
+      userId: parsed.userId,
+      token: parsed.token,
+      platform,
+      deviceId: parsed.deviceId ?? null,
+      environment: normalizePushTokenEnvironment(parsed.environment, platform),
+      installSource: normalizePushInstallSource(parsed.installSource),
+    }
   } catch {
     return null
   }
@@ -62,6 +91,69 @@ function getOrCreatePushDeviceId(): string | null {
 
   window.localStorage.setItem(PUSH_DEVICE_ID_STORAGE_KEY, nextValue)
   return nextValue
+}
+
+function normalizePushTokenEnvironment(
+  value: unknown,
+  platform: PushPlatform,
+): PushTokenEnvironment {
+  if (platform === 'ios') {
+    return value === 'sandbox' ? 'sandbox' : 'production'
+  }
+
+  return 'production'
+}
+
+function normalizePushInstallSource(value: unknown): PushInstallSource {
+  return value === 'xcode_debug'
+    || value === 'testflight'
+    || value === 'app_store'
+    ? value
+    : 'unknown'
+}
+
+async function getNativePushRegistrationInfo(
+  platform: PushPlatform,
+): Promise<{
+  environment: PushTokenEnvironment
+  installSource: PushInstallSource
+  buildConfiguration: 'debug' | 'release' | 'unknown'
+  isDebugBuild: boolean
+}> {
+  if (platform !== 'ios' || !Capacitor.isNativePlatform()) {
+    return {
+      environment: 'production',
+      installSource: 'unknown',
+      buildConfiguration: 'unknown',
+      isDebugBuild: false,
+    }
+  }
+
+  try {
+    const info = await RegliBuildInfo.getPushRegistrationInfo()
+    const buildConfiguration =
+      info.buildConfiguration === 'debug' || info.buildConfiguration === 'release'
+        ? info.buildConfiguration
+        : 'unknown'
+
+    return {
+      environment: normalizePushTokenEnvironment(info.apnsEnvironment, platform),
+      installSource: normalizePushInstallSource(info.installSource),
+      buildConfiguration,
+      isDebugBuild: info.isDebugBuild === true || buildConfiguration === 'debug',
+    }
+  } catch (error) {
+    console.warn('[Push] native push registration info unavailable', {
+      platform,
+      error,
+    })
+    return {
+      environment: 'production',
+      installSource: 'unknown',
+      buildConfiguration: 'unknown',
+      isDebugBuild: false,
+    }
+  }
 }
 
 function emitForegroundPushEvent(notification: {
@@ -98,12 +190,16 @@ async function upsertPushToken({
   token,
   platform,
   deviceId,
+  environment,
+  installSource,
   enabled,
 }: {
   userId: string
   token: string
   platform: PushPlatform
   deviceId: string | null
+  environment: PushTokenEnvironment
+  installSource: PushInstallSource
   enabled: boolean
 }) {
   const now = new Date().toISOString()
@@ -112,19 +208,46 @@ async function upsertPushToken({
     token,
     platform,
     device_id: deviceId,
+    environment,
+    install_source: installSource,
     enabled,
     updated_at: now,
     last_seen_at: now,
   }
 
+  if (deviceId) {
+    const { error: disableEnvError } = await supabase
+      .from('push_tokens')
+      .update({
+        enabled: false,
+        updated_at: now,
+      })
+      .eq('user_id', userId)
+      .eq('platform', platform)
+      .eq('device_id', deviceId)
+      .neq('environment', environment)
+
+    if (disableEnvError) {
+      console.warn('[Push] conflicting token environment cleanup failed', {
+        userId,
+        platform,
+        environment,
+        deviceId,
+        message: disableEnvError.message,
+      })
+    }
+  }
+
   const { error } = await supabase
     .from('push_tokens')
-    .upsert(payload, { onConflict: 'user_id,token' })
+    .upsert(payload, { onConflict: 'user_id,token,platform,environment' })
 
   if (error) {
     console.error('[Push] push token upsert failed', {
       userId,
       platform,
+      environment,
+      installSource,
       enabled,
       message: error.message,
     })
@@ -132,7 +255,7 @@ async function upsertPushToken({
   }
 
   if (enabled) {
-    setStoredPushRegistration({ userId, token, platform, deviceId })
+    setStoredPushRegistration({ userId, token, platform, deviceId, environment, installSource })
   }
 
   return true
@@ -149,6 +272,8 @@ export async function disableCurrentPushTokenForUser(userId: string | null) {
     token: stored.token,
     platform: stored.platform,
     deviceId: stored.deviceId,
+    environment: stored.environment,
+    installSource: stored.installSource,
     enabled: false,
   })
 
@@ -190,6 +315,7 @@ export function usePushNotifications(userId: string | null) {
 
     async function setup() {
       try {
+        const registrationInfo = await getNativePushRegistrationInfo(pushPlatform)
         let permission = await PushNotifications.checkPermissions()
 
         if (permission.receive === 'prompt') {
@@ -202,11 +328,23 @@ export function usePushNotifications(userId: string | null) {
 
         listenerHandles.push(await PushNotifications.addListener('registration', async (token) => {
           if (!token.value || !isActive) return
+          console.log('[Push] native registration received', {
+            userId: uid,
+            platform: pushPlatform,
+            environment: registrationInfo.environment,
+            installSource: registrationInfo.installSource,
+            buildConfiguration: registrationInfo.buildConfiguration,
+            isDebugBuild: registrationInfo.isDebugBuild,
+            deviceId,
+            tokenPrefix: token.value.slice(0, 8),
+          })
           await upsertPushToken({
             userId: uid,
             token: token.value,
             platform: pushPlatform,
             deviceId,
+            environment: registrationInfo.environment,
+            installSource: registrationInfo.installSource,
             enabled: true,
           })
         }))
