@@ -11,14 +11,19 @@ import {
 } from '../lib/profileServiceTypes'
 import { isLaunchEnabledProfileService } from '../lib/launchServices'
 import i18n, { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
-import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
-import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
-import customerCharacterImage from '../assets/onboarding/customer-character.jpg'
-import mapPreviewImage from '../assets/onboarding/map-preview.jpg'
+import welcomeHeroImage from '../assets/onboarding/welcom-hero.png'
+import providerCharacterImage from '../assets/onboarding/provider-character.png'
+import customerCharacterImage from '../assets/onboarding/customer-character.png'
+import mapPreviewImage from '../assets/onboarding/map-preview.png'
+import authIllustrationImage from '../assets/onboarding/auth-illustration.png'
+import serviceDogWalkingImage from '../assets/onboarding/service-dog-walking.png'
 
 const onboardingBrandIconSrc = '/regli-app-icon-1024.png'
 const PRIMARY_CTA_BLUE = '#233B74'
 const MIN_PASSWORD_LENGTH = 8
+const ONBOARDING_ILLUSTRATION_BG = 'linear-gradient(180deg, rgba(238,244,255,0.96) 0%, rgba(252,253,255,0.98) 100%)'
+const ONBOARDING_ILLUSTRATION_BORDER = '1px solid rgba(145, 164, 196, 0.14)'
+const ONBOARDING_ILLUSTRATION_SHADOW = '0 12px 28px rgba(45, 68, 126, 0.08), inset 0 1px 0 rgba(255,255,255,0.42)'
 
 interface AuthScreenProps {
   onSignIn: (args: { email: string; password: string }) => Promise<{ ok: boolean }>
@@ -541,7 +546,7 @@ export default function AuthScreen({
   const shouldShowLegalAcceptance = currentStep === 'auth' && (mode === 'signup' || authenticatedOnboarding)
   const legalAcceptanceValid = !shouldShowLegalAcceptance || (acceptedTerms && acceptedPrivacy)
   const selectedServiceIllustration = selectedPrimaryService === 'dog_walker'
-    ? welcomeHeroImage
+    ? serviceDogWalkingImage
     : selectedPrimaryService === 'baby_sitter'
       ? customerCharacterImage
       : customerCharacterImage
@@ -550,6 +555,12 @@ export default function AuthScreen({
     : selectedPrimaryService === 'dog_walker'
       ? (language === 'he' ? 'איור טיול כלבים' : 'Dog walking service illustration')
       : (language === 'he' ? 'איור שירותים כלליים של Regli' : 'Regli general services illustration')
+  const providerDetailsIllustration = selectedPrimaryService === 'baby_sitter'
+    ? customerCharacterImage
+    : providerCharacterImage
+  const providerDetailsIllustrationAlt = selectedPrimaryService === 'baby_sitter'
+    ? (language === 'he' ? 'איור פרופיל בייביסיטר' : 'Babysitter profile character')
+    : (language === 'he' ? 'איור פרופיל דוג ווקר' : 'Dog walker profile character')
 
   const hasDog = selectedServices.includes('dog_walker')
   const hasSitter = selectedServices.includes('baby_sitter')
@@ -1384,6 +1395,19 @@ export default function AuthScreen({
                 {isProvider ? (
                   <>
                     <div style={providerIdentityCardStyle}>
+                      <div style={providerIdentityVisualStyle}>
+                        <div style={providerIdentityVisualGlowStyle} />
+                        <div style={providerIdentityVisualImageFrameStyle}>
+                          <img
+                            src={providerDetailsIllustration}
+                            alt={providerDetailsIllustrationAlt}
+                            style={providerIdentityVisualImageStyle}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        </div>
+                      </div>
+
                       <div style={providerIdentityHeaderStyle}>
                         <div style={providerIdentityTitleStyle}>{copy.buildTrustTitle}</div>
                         <div style={providerIdentitySubtitleStyle}>
@@ -1668,8 +1692,8 @@ export default function AuthScreen({
           )}
 
           {isCreateAccountStep && (
-            <div style={authStageStyle}>
-              <div style={authTitleStackStyle}>
+            <div style={{ ...authStageStyle, ...(shouldShowEmailFields ? authStageExpandedEmailStyle : null) }}>
+              <div style={{ ...authTitleStackStyle, ...(shouldShowEmailFields ? authTitleStackCompactStyle : null) }}>
                 <div style={{ ...eyebrowStyle, textAlign }}>
                   {authenticatedOnboarding
                     ? (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)
@@ -1687,7 +1711,17 @@ export default function AuthScreen({
                 </p>
               </div>
 
-              <div style={authCardStackStyle}>
+              <div style={{ ...authIllustrationCardStyle, ...(shouldShowEmailFields ? authIllustrationCardCompactStyle : null) }}>
+                <img
+                  src={authIllustrationImage}
+                  alt={isHebrew ? 'איור אבטחת חשבון' : 'Account security illustration'}
+                  loading="lazy"
+                  decoding="async"
+                  style={{ ...authIllustrationImageStyle, ...(shouldShowEmailFields ? authIllustrationImageCompactStyle : null) }}
+                />
+              </div>
+
+              <div style={{ ...authCardStackStyle, ...(shouldShowEmailFields ? authCardStackCompactStyle : null) }}>
                 {shouldShowLegalAcceptance && (
                   <div style={legalCardStyle}>
                     <div style={{ ...legalIntroStyle, textAlign }}>
@@ -1751,7 +1785,7 @@ export default function AuthScreen({
                 {!authenticatedOnboarding && mode === 'signup' && renderSocialAuthButtons()}
 
                 {!authenticatedOnboarding ? (
-                  <div style={authEmailRevealAreaStyle}>
+                  <div style={{ ...authEmailRevealAreaStyle, ...(shouldShowEmailFields ? authEmailRevealAreaCompactStyle : null) }}>
                     {!shouldShowEmailFields ? (
                       <button
                         type="button"
@@ -1761,21 +1795,21 @@ export default function AuthScreen({
                         {copy.useEmailInstead}
                       </button>
                     ) : (
-                      <div style={authEmailFieldsStackStyle}>
+                      <div style={{ ...authEmailFieldsStackStyle, ...(shouldShowEmailFields ? authEmailFieldsStackCompactStyle : null) }}>
                         {mode === 'signup' && (
-                          <div style={fieldBlockStyle}>
+                          <div style={{ ...fieldBlockStyle, ...(shouldShowEmailFields ? fieldBlockCompactStyle : null) }}>
                             <label style={{ ...labelStyle, textAlign }}>{copy.fullName}</label>
                             <input
                               value={fullName}
                               onChange={(event) => setFullName(event.target.value)}
                               placeholder={copy.fullNamePlaceholder}
                               dir={direction}
-                              style={{ ...inputStyle, textAlign }}
+                              style={{ ...inputStyle, ...(shouldShowEmailFields ? inputCompactStyle : null), textAlign }}
                             />
                           </div>
                         )}
 
-                        <div style={fieldBlockStyle}>
+                        <div style={{ ...fieldBlockStyle, ...(shouldShowEmailFields ? fieldBlockCompactStyle : null) }}>
                           <label style={{ ...labelStyle, textAlign }}>{copy.email}</label>
                           <input
                             value={email}
@@ -1784,7 +1818,7 @@ export default function AuthScreen({
                             type="email"
                             autoComplete="email"
                             dir={direction}
-                            style={{ ...inputStyle, textAlign }}
+                            style={{ ...inputStyle, ...(shouldShowEmailFields ? inputCompactStyle : null), textAlign }}
                           />
                         </div>
 
@@ -1809,10 +1843,11 @@ export default function AuthScreen({
           </div>
         </div>
 
-        <div style={footerStyle}>
+        <div style={{ ...footerStyle, ...(shouldShowEmailFields ? footerCompactStyle : null) }}>
           <div
             style={{
               ...buttonRowStyle,
+              ...(shouldShowEmailFields ? buttonRowCompactStyle : null),
               ...(shouldShowWelcomeContent ? welcomeFooterButtonRowStyle : null),
             }}
           >
@@ -2249,8 +2284,8 @@ const welcomeCopyStackStyle: CSSProperties = {
 
 const welcomeHeroWrapStyle: CSSProperties = {
   width: '100%',
-  maxHeight: 190,
-  minHeight: 160,
+  maxHeight: 178,
+  minHeight: 148,
   display: 'grid',
   placeItems: 'center',
   padding: '2px 0 6px',
@@ -2259,15 +2294,16 @@ const welcomeHeroWrapStyle: CSSProperties = {
 
 const welcomeHeroStageStyle: CSSProperties = {
   width: '100%',
-  minHeight: 160,
-  maxHeight: 190,
+  minHeight: 148,
+  maxHeight: 178,
   display: 'grid',
   alignItems: 'end',
-  padding: '8px 8px 2px',
+  padding: '8px 10px 6px',
   boxSizing: 'border-box',
-  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
+  background: ONBOARDING_ILLUSTRATION_BG,
   borderRadius: 24,
-  boxShadow: '0 12px 28px rgba(165, 143, 214, 0.08), inset 0 1px 0 rgba(255,255,255,0.42)',
+  border: ONBOARDING_ILLUSTRATION_BORDER,
+  boxShadow: ONBOARDING_ILLUSTRATION_SHADOW,
   backdropFilter: 'blur(12px)',
   WebkitBackdropFilter: 'blur(12px)',
 }
@@ -2277,7 +2313,7 @@ const welcomeHeroPairStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
-  gap: 6,
+  gap: 8,
 }
 
 const welcomeHeroFigureStyle: CSSProperties = {
@@ -2291,44 +2327,42 @@ const welcomeHeroFigureStyle: CSSProperties = {
 
 const welcomeHeroFigureFrameStyle: CSSProperties = {
   width: '100%',
-  minHeight: 144,
-  maxHeight: 164,
+  minHeight: 124,
+  maxHeight: 138,
   display: 'grid',
   placeItems: 'end center',
-  borderRadius: 0,
-  padding: '0',
+  borderRadius: 18,
+  padding: '6px 6px 0',
   boxSizing: 'border-box',
-  background: 'transparent',
-  boxShadow: 'none',
-  backdropFilter: 'none',
-  WebkitBackdropFilter: 'none',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(244,248,255,0.56) 100%)',
+  border: '1px solid rgba(255,255,255,0.42)',
+  boxShadow: '0 10px 18px rgba(45, 68, 126, 0.06)',
 }
 
 const welcomeHeroBadgeStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  minHeight: 20,
-  padding: '0 8px',
+  minHeight: 22,
+  padding: '0 10px',
   borderRadius: 999,
-  background: 'rgba(255,255,255,0.58)',
-  border: 'none',
+  background: 'rgba(255,255,255,0.72)',
+  border: '1px solid rgba(145, 164, 196, 0.10)',
   color: '#475569',
   fontSize: 10.5,
   fontWeight: 700,
   letterSpacing: '0.01em',
-  boxShadow: 'none',
+  boxShadow: '0 6px 16px rgba(45, 68, 126, 0.05)',
 }
 
 const welcomeHeroImageStyle: CSSProperties = {
-  width: '100%',
+  width: '88%',
   height: '100%',
-  maxHeight: 164,
+  maxHeight: 132,
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
   filter: 'drop-shadow(0 12px 20px rgba(45, 68, 126, 0.07)) saturate(1.01)',
-  mixBlendMode: 'darken',
 }
 
 const featureRowStyle: CSSProperties = {
@@ -2629,25 +2663,25 @@ const roleCardBodyStyle: CSSProperties = {
 }
 
 const roleCardImageWrapStyle: CSSProperties = {
-  width: 84,
-  minWidth: 84,
-  height: 84,
+  width: 72,
+  minWidth: 72,
+  height: 72,
   borderRadius: 18,
-  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
-  border: '1px solid rgba(145, 164, 196, 0.14)',
+  background: ONBOARDING_ILLUSTRATION_BG,
+  border: ONBOARDING_ILLUSTRATION_BORDER,
   display: 'grid',
   placeItems: 'center',
   overflow: 'hidden',
   marginBottom: 1,
+  boxShadow: '0 8px 18px rgba(45, 68, 126, 0.05)',
 }
 
 const roleCardImageStyle: CSSProperties = {
-  width: '100%',
-  height: '100%',
+  width: '86%',
+  height: '86%',
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
-  mixBlendMode: 'multiply',
 }
 
 const roleCardTitleRowStyle: CSSProperties = {
@@ -2693,25 +2727,26 @@ const serviceGridStyle: CSSProperties = {
 
 const serviceIllustrationCardStyle: CSSProperties = {
   width: '100%',
-  minHeight: 96,
-  borderRadius: 20,
-  border: '1px solid rgba(145, 164, 196, 0.18)',
-  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
+  minHeight: 98,
+  borderRadius: 22,
+  border: ONBOARDING_ILLUSTRATION_BORDER,
+  background: ONBOARDING_ILLUSTRATION_BG,
   display: 'grid',
   placeItems: 'center',
   overflow: 'hidden',
-  padding: '8px 12px',
+  padding: '8px 12px 6px',
   marginBottom: 4,
+  boxShadow: ONBOARDING_ILLUSTRATION_SHADOW,
 }
 
 const serviceIllustrationImageStyle: CSSProperties = {
-  width: '100%',
+  width: '84%',
   height: '100%',
-  maxHeight: 110,
+  maxHeight: 92,
   objectFit: 'contain',
   objectPosition: 'center',
   display: 'block',
-  mixBlendMode: 'multiply',
+  filter: 'drop-shadow(0 10px 18px rgba(45, 68, 126, 0.08))',
 }
 
 const serviceCardStyle: CSSProperties = {
@@ -3016,6 +3051,10 @@ const fieldBlockStyle: CSSProperties = {
   gap: 3,
 }
 
+const fieldBlockCompactStyle: CSSProperties = {
+  gap: 2,
+}
+
 const labelStyle: CSSProperties = {
   fontSize: 11.5,
   fontWeight: 800,
@@ -3033,6 +3072,10 @@ const inputStyle: CSSProperties = {
   color: '#0F172A',
   boxSizing: 'border-box',
   outline: 'none',
+}
+
+const inputCompactStyle: CSSProperties = {
+  minHeight: 40,
 }
 
 const authErrorStyle: CSSProperties = {
@@ -3055,11 +3098,52 @@ const authStageStyle: CSSProperties = {
   placeSelf: 'center',
 }
 
+const authStageExpandedEmailStyle: CSSProperties = {
+  gap: 8,
+}
+
 const authTitleStackStyle: CSSProperties = {
   width: '100%',
   display: 'grid',
   gap: 6,
   justifyItems: 'center',
+}
+
+const authTitleStackCompactStyle: CSSProperties = {
+  gap: 3,
+}
+
+const authIllustrationCardStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 124,
+  borderRadius: 24,
+  border: ONBOARDING_ILLUSTRATION_BORDER,
+  background: ONBOARDING_ILLUSTRATION_BG,
+  display: 'grid',
+  placeItems: 'center',
+  overflow: 'hidden',
+  padding: '10px 18px',
+  boxShadow: ONBOARDING_ILLUSTRATION_SHADOW,
+}
+
+const authIllustrationCardCompactStyle: CSSProperties = {
+  minHeight: 64,
+  padding: '2px 12px 0',
+}
+
+const authIllustrationImageStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  maxHeight: 132,
+  objectFit: 'contain',
+  objectPosition: 'center',
+  display: 'block',
+  filter: 'drop-shadow(0 10px 18px rgba(45, 68, 126, 0.08))',
+}
+
+const authIllustrationImageCompactStyle: CSSProperties = {
+  width: '72%',
+  maxHeight: 56,
 }
 
 const authCardStackStyle: CSSProperties = {
@@ -3071,6 +3155,11 @@ const authCardStackStyle: CSSProperties = {
   paddingBottom: 8,
 }
 
+const authCardStackCompactStyle: CSSProperties = {
+  gap: 8,
+  paddingBottom: 0,
+}
+
 const authEmailRevealAreaStyle: CSSProperties = {
   width: '100%',
   maxWidth: 348,
@@ -3079,11 +3168,19 @@ const authEmailRevealAreaStyle: CSSProperties = {
   alignItems: 'start',
 }
 
+const authEmailRevealAreaCompactStyle: CSSProperties = {
+  gap: 6,
+}
+
 const authEmailFieldsStackStyle: CSSProperties = {
   width: '100%',
   display: 'grid',
   gap: 10,
   alignContent: 'start',
+}
+
+const authEmailFieldsStackCompactStyle: CSSProperties = {
+  gap: 6,
 }
 
 const authEmailButtonStyle: CSSProperties = {
@@ -3105,10 +3202,19 @@ const footerStyle: CSSProperties = {
   paddingTop: 6,
 }
 
+const footerCompactStyle: CSSProperties = {
+  gap: 6,
+  paddingTop: 2,
+}
+
 const buttonRowStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1.35fr',
   gap: 8,
+}
+
+const buttonRowCompactStyle: CSSProperties = {
+  gap: 6,
 }
 
 const welcomeFooterButtonRowStyle: CSSProperties = {
@@ -3183,15 +3289,57 @@ const detailsSectionsStyle: CSSProperties = {
 
 const providerIdentityCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 14,
+  gap: 16,
   width: '100%',
   maxWidth: 348,
   margin: '0 auto',
-  padding: '16px 14px',
+  padding: '16px 14px 18px',
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
   boxShadow: '0 12px 26px rgba(45, 68, 126, 0.08)',
+}
+
+const providerIdentityVisualStyle: CSSProperties = {
+  position: 'relative',
+  width: '100%',
+  minHeight: 98,
+  borderRadius: 22,
+  overflow: 'hidden',
+  display: 'grid',
+  placeItems: 'center',
+  background: ONBOARDING_ILLUSTRATION_BG,
+  border: ONBOARDING_ILLUSTRATION_BORDER,
+  boxShadow: ONBOARDING_ILLUSTRATION_SHADOW,
+}
+
+const providerIdentityVisualGlowStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background:
+    'radial-gradient(circle at 22% 20%, rgba(173, 191, 255, 0.26) 0%, rgba(173, 191, 255, 0) 48%), radial-gradient(circle at 78% 18%, rgba(206, 195, 255, 0.22) 0%, rgba(206, 195, 255, 0) 44%), linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0) 100%)',
+}
+
+const providerIdentityVisualImageFrameStyle: CSSProperties = {
+  position: 'relative',
+  width: '100%',
+  height: '100%',
+  minHeight: 98,
+  display: 'grid',
+  placeItems: 'end center',
+  padding: '8px 10px 0',
+  boxSizing: 'border-box',
+}
+
+const providerIdentityVisualImageStyle: CSSProperties = {
+  width: '84%',
+  maxWidth: 152,
+  height: '100%',
+  maxHeight: 96,
+  objectFit: 'contain',
+  objectPosition: 'center bottom',
+  display: 'block',
+  filter: 'drop-shadow(0 10px 18px rgba(45, 68, 126, 0.08)) saturate(1.01)',
 }
 
 const providerIdentityHeaderStyle: CSSProperties = {
@@ -3199,6 +3347,7 @@ const providerIdentityHeaderStyle: CSSProperties = {
   gap: 6,
   justifyItems: 'center',
   textAlign: 'center',
+  paddingInline: 6,
 }
 
 const providerIdentityTitleStyle: CSSProperties = {
@@ -3211,6 +3360,7 @@ const providerIdentitySubtitleStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.35,
   color: '#64748B',
+  maxWidth: 272,
 }
 
 const providerIdentityHelperStyle: CSSProperties = {
@@ -3249,11 +3399,10 @@ const detailsFieldBlockStyle: CSSProperties = {
 
 const detailsSelectorRowStyle: CSSProperties = {
   display: 'flex',
-  gap: 6,
-  flexWrap: 'nowrap',
-  overflowX: 'auto',
-  overscrollBehaviorX: 'contain',
-  paddingBottom: 1,
+  gap: 8,
+  flexWrap: 'wrap',
+  justifyContent: 'center',
+  paddingBottom: 2,
 }
 
 const detailsSelectorPillStyle: CSSProperties = {
@@ -3286,6 +3435,7 @@ const chipFieldCardStyle: CSSProperties = {
   borderRadius: 18,
   background: 'rgba(255,255,255,0.84)',
   border: '1px solid rgba(145, 164, 196, 0.16)',
+  justifyItems: 'center',
 }
 
 const chipFieldHeaderStyle: CSSProperties = {
@@ -3305,9 +3455,13 @@ const chipFieldHelperStyle: CSSProperties = {
 
 const chipRowStyle: CSSProperties = {
   display: 'flex',
-  gap: 5,
+  gap: 8,
+  rowGap: 10,
   flexWrap: 'wrap',
   justifyContent: 'center',
+  width: '100%',
+  maxWidth: 276,
+  margin: '0 auto',
 }
 
 const chipStyle: CSSProperties = {
