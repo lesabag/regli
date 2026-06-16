@@ -7642,7 +7642,7 @@ const controlBtnStyle: React.CSSProperties = {
   height: 44,
   borderRadius: 16,
   border: '1px solid rgba(255,255,255,0.9)',
-  background: 'rgba(255,255,255,0.97)',
+  background: 'rgba(218, 229, 255, 0.98)',
   boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
   pointerEvents: 'auto',
   display: 'flex',
@@ -7661,6 +7661,8 @@ const topRightGroupStyle: React.CSSProperties = {
 const bellWrapStyle: React.CSSProperties = {
   width: 38,
   height: 38,
+  borderRadius: 10,
+  background: 'rgba(218, 229, 255, 0.98)',
   display: 'grid',
   placeItems: 'center',
 }
