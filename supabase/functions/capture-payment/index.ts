@@ -757,6 +757,13 @@ function currencyLabel(value: string | null | undefined): string {
   return (normalizeCurrency(value) ?? DEFAULT_MARKET_CURRENCY).toUpperCase()
 }
 
+function formatCurrencyAmountText(amount: number, currency: string | null | undefined): string {
+  const normalizedCurrency = normalizeCurrency(currency) ?? DEFAULT_MARKET_CURRENCY
+  const amountLabel = formatAmount(amount)
+  if (normalizedCurrency === 'ils') return `₪${amountLabel}`
+  return `${currencyLabel(normalizedCurrency)} ${amountLabel}`
+}
+
 function formatAmount(amount: number): string {
   return Number.isInteger(amount) ? String(amount) : amount.toFixed(2).replace(/\.?0+$/, '')
 }
@@ -781,8 +788,7 @@ async function notifyWalkerPaymentReceived(
 ) {
   if (!job.walker_id || !(amount > 0)) return
 
-  const serviceRecipientName = job.dog_name?.trim() || 'your service recipient'
-  const displayCurrency = currencyLabel(paymentCurrency)
+  const amountText = formatCurrencyAmountText(amount, paymentCurrency)
   const { data: existing, error: existingError } = await supabaseAdmin
     .from('notifications')
     .select('id')
@@ -800,8 +806,8 @@ async function notifyWalkerPaymentReceived(
     .insert({
       user_id: job.walker_id,
       type: 'payment_received',
-      title: 'Payment Received',
-      message: `${formatAmount(amount)} ${displayCurrency} has been added to your wallet for walking ${serviceRecipientName}.`,
+      title: `Payment received ${amountText} 💰`,
+      message: 'Your service payment was sent to your payout account.',
       related_job_id: job.id,
     })
 
@@ -814,15 +820,20 @@ async function sendWalkerPayoutPush(params: {
   job: JobRow
 }) {
   if (!params.job.walker_id) return
-  const title = 'Payment received'
-  const body = 'Your earnings were sent to your payout account.'
+  const payoutAmount =
+    params.job.walker_amount
+    ?? params.job.walker_earnings
+    ?? (params.job.price != null ? Math.round(params.job.price * 0.8 * 100) / 100 : 0)
+  const amountText =
+    payoutAmount > 0
+      ? formatCurrencyAmountText(payoutAmount, params.job.currency)
+      : null
 
   try {
     console.log('[payout-push] sending provider push', {
       providerId: params.job.walker_id,
       notificationType: 'payment_received',
-      title,
-      body,
+      amountText,
       source: 'capture-payment',
     })
 
@@ -835,8 +846,6 @@ async function sendWalkerPayoutPush(params: {
       },
       body: JSON.stringify({
         targetUserId: params.job.walker_id,
-        title,
-        body,
         notificationType: 'payment_received',
         relatedJobId: params.job.id,
         deepLink: 'regli://wallet',
@@ -845,6 +854,7 @@ async function sendWalkerPayoutPush(params: {
           dedupId: `payout-transfer:${params.job.id}`,
           type: 'payment_received',
           source: 'capture_payment_transfer',
+          ...(amountText ? { amountText } : {}),
         },
       }),
     })

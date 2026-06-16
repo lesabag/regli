@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import { planTargetedPushDelivery, resolvePushLanguage } from '../_shared/pushDelivery.ts'
 import { buildPushEnvelope, buildPushDedupKey, getPushDedupWindowMs } from '../_shared/pushNotifications.ts'
-import { getPushCopy, resolvePushCopyLanguage } from '../_shared/pushCopy.ts'
+import { getPushCopy } from '../_shared/pushCopy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -31,6 +31,22 @@ const SAFE_PUSH_COPY_FALLBACKS: Record<string, { title: string; body: string }> 
     title: 'Payment received',
     body: 'Your earnings were sent to your payout account.',
   },
+  tip_received: {
+    title: 'You received a tip',
+    body: 'The client added a tip for your service.',
+  },
+  client_confirmation: {
+    title: 'You can start',
+    body: 'The client confirmed arrival. You can start the service now.',
+  },
+  rating_reminder: {
+    title: 'You received a rating',
+    body: 'Great work! Your new rating was added to your profile.',
+  },
+  five_star_rating: {
+    title: 'You received 5 stars',
+    body: 'Great work! Your new rating was added to your profile.',
+  },
 }
 
 type ApnsEnvironment = keyof typeof APNS_HOSTS
@@ -42,6 +58,15 @@ type PushTokenRow = {
   environment: string | null
   install_source: string | null
 }
+
+const PROVIDER_NOTIFICATION_SOUND_TYPES = new Set([
+  'new_dispatch_offer',
+  'client_confirmation',
+  'payment_received',
+  'tip_received',
+  'five_star_rating',
+  'rating_reminder',
+])
 
 /**
  * send-push-notification
@@ -255,6 +280,7 @@ serve(async (req: Request) => {
         providerName: readString(notifData?.providerName) ?? readString(notifData?.provider_name) ?? null,
         walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
         amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
+        ratingText: readString(notifData?.ratingText) ?? readString(notifData?.rating_text) ?? null,
         serviceType: readString(notifData?.serviceType) ?? readString(notifData?.service_type) ?? null,
         disputeEventType,
       })
@@ -434,6 +460,7 @@ serve(async (req: Request) => {
       dedupWindowMs,
       data: notifData,
     })
+    const apnsSound = selectApnsSound(notificationType, notifData)
 
     for (const [tokenEnvironment, tokenRows] of Object.entries(groupedIosTokens) as Array<[ApnsEnvironment, PushTokenRow[]]>) {
       if (tokenRows.length === 0) continue
@@ -460,7 +487,7 @@ serve(async (req: Request) => {
           const payload: Record<string, unknown> = {
             aps: {
               alert: { title: effectiveTitle, body: effectiveBody },
-              sound: 'default',
+              sound: apnsSound,
               ...(badge !== undefined ? { badge } : {}),
             },
             data: normalizedData,
@@ -775,6 +802,18 @@ function appendStaleToken(
   }
 
   staleTokensByEnvironment.set(environment, new Set([token]))
+}
+
+function selectApnsSound(
+  notificationType: string,
+  data?: Record<string, string | number | boolean | null | undefined>,
+): string {
+  const payloadSound = readString(data?.sound) ?? readString(data?.apnsSound) ?? readString(data?.apns_sound)
+  if (payloadSound) return payloadSound
+  if (PROVIDER_NOTIFICATION_SOUND_TYPES.has(notificationType)) {
+    return Deno.env.get('APNS_PROVIDER_SOUND')?.trim() || 'default'
+  }
+  return 'default'
 }
 
 function tokenPrefix(token: string): string {

@@ -22,6 +22,7 @@ export type PushNotificationType =
   | 'job_completed'
   | 'payment_success'
   | 'payment_received'
+  | 'tip_received'
   | 'job_accepted_self'
   | 'job_completed_self'
   | 'new_rating'
@@ -60,7 +61,7 @@ export function buildPushDeepLink(type: string, relatedJobId?: string | null): s
   ) {
     return `regli://booking/${relatedJobId}`
   }
-  if (type === 'payment_update' || type === 'payout_update' || type === 'payment_success' || type === 'payment_received') {
+  if (type === 'payment_update' || type === 'payout_update' || type === 'payment_success' || type === 'payment_received' || type === 'tip_received') {
     return 'regli://wallet'
   }
   return `regli://booking/${relatedJobId}`

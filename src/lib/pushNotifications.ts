@@ -25,6 +25,7 @@ export type PushNotificationType =
   | 'job_completed'
   | 'payment_success'
   | 'payment_received'
+  | 'tip_received'
   | 'job_accepted_self'
   | 'job_completed_self'
   | 'new_rating'
@@ -79,6 +80,7 @@ const PUSH_DEFINITIONS: Record<string, PushDefinition> = {
   job_completed: { audience: 'client', deepLinkKind: 'booking', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
   payment_success: { audience: 'client', deepLinkKind: 'wallet', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
   payment_received: { audience: 'provider', deepLinkKind: 'wallet', dedupWindowMs: 20_000, suppressForegroundWhenBellActive: true },
+  tip_received: { audience: 'provider', deepLinkKind: 'wallet', dedupWindowMs: 20_000, suppressForegroundWhenBellActive: true },
   job_accepted_self: { audience: 'provider', deepLinkKind: 'booking', dedupWindowMs: 8_000, suppressForegroundWhenBellActive: true },
   job_completed_self: { audience: 'provider', deepLinkKind: 'booking', dedupWindowMs: 15_000, suppressForegroundWhenBellActive: true },
   new_rating: { audience: 'system', deepLinkKind: 'notifications', dedupWindowMs: 20_000, suppressForegroundWhenBellActive: true },
