@@ -11,16 +11,16 @@ const copyCases = [
     type: 'new_dispatch_offer',
     context: { language: 'en', serviceType: 'dog_walker' },
     expected: {
-      title: '🐾 New request nearby',
-      body: 'A new customer is looking for help right now.',
+      title: '🚶 New request nearby',
+      body: 'A client is looking for dog walking. Open Regli to accept.',
     },
   },
   {
     type: 'new_dispatch_offer',
     context: { language: 'he', serviceType: 'baby_sitter' },
     expected: {
-      title: '👶 בקשה חדשה בקרבתך',
-      body: 'לקוח חדש מחפש עזרה עכשיו.',
+      title: '🚶 הזמנה חדשה באזור שלך',
+      body: 'לקוח מחפש בייביסיטר. פתחו את Regli כדי לקבל את ההזמנה.',
     },
   },
   {
@@ -56,51 +56,83 @@ const copyCases = [
     },
   },
   {
-    type: 'rating_reminder',
+    type: 'client_confirmation',
     context: { language: 'en' },
     expected: {
-      title: '⭐ You received a new rating',
-      body: 'The customer rated your service.',
+      title: 'You can start ✅',
+      body: 'The client confirmed arrival. You can start the service now.',
     },
   },
   {
-    type: 'rating_reminder',
+    type: 'client_confirmation',
     context: { language: 'he' },
     expected: {
-      title: '⭐ קיבלת דירוג חדש',
-      body: 'הלקוח דירג את השירות שלך.',
+      title: 'אפשר להתחיל ✅',
+      body: 'הלקוח אישר הגעה. אפשר להתחיל את השירות עכשיו.',
     },
   },
   {
     type: 'five_star_rating',
     context: { language: 'en' },
     expected: {
-      title: '🌟 You received 5 stars!',
-      body: 'Excellent work. Keep it up.',
+      title: '⭐ You received 5 stars',
+      body: 'Great work! Your new rating was added to your profile.',
     },
   },
   {
     type: 'five_star_rating',
     context: { language: 'he' },
     expected: {
-      title: '🌟 קיבלת 5 כוכבים!',
-      body: 'עבודה מצוינת! המשך כך.',
+      title: '⭐ קיבלת דירוג 5',
+      body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
+    },
+  },
+  {
+    type: 'rating_reminder',
+    context: { language: 'en', ratingText: '4' },
+    expected: {
+      title: '⭐ You received 4 stars',
+      body: 'Great work! Your new rating was added to your profile.',
+    },
+  },
+  {
+    type: 'rating_reminder',
+    context: { language: 'he', ratingText: '4' },
+    expected: {
+      title: '⭐ קיבלת דירוג 4',
+      body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
     },
   },
   {
     type: 'tip_received',
     context: { language: 'en', amountText: '₪25' },
     expected: {
-      title: '🎁 You received a tip',
-      body: '₪25 was added to your wallet.',
+      title: 'You received a tip ₪25 🎁',
+      body: 'The client added a tip for your service. Great work!',
     },
   },
   {
     type: 'tip_received',
     context: { language: 'he', amountText: '₪25' },
     expected: {
-      title: '🎁 קיבלת טיפ',
-      body: '₪25 נוספו לארנק שלך.',
+      title: 'קיבלת טיפ ₪25 🎁',
+      body: 'הלקוח הוסיף טיפ על השירות. כל הכבוד!',
+    },
+  },
+  {
+    type: 'payment_received',
+    context: { language: 'en', amountText: '₪64' },
+    expected: {
+      title: 'Payment received ₪64 💰',
+      body: 'Your earnings were sent to your payout account.',
+    },
+  },
+  {
+    type: 'payment_received',
+    context: { language: 'he', amountText: '₪64' },
+    expected: {
+      title: 'קיבלת תשלום ₪64 💰',
+      body: 'הרווחים הועברו לחשבון התשלומים שלך.',
     },
   },
   {
@@ -166,6 +198,11 @@ test('booking-related push types build booking deep links consistently', () => {
   assert.equal(buildServerPushDeepLink('dispute_update', jobId), 'regli://booking/job-123')
 })
 
+test('tip_received uses wallet deep links consistently', () => {
+  assert.equal(buildClientPushDeepLink('tip_received', 'job-123'), 'regli://wallet')
+  assert.equal(buildServerPushDeepLink('tip_received', 'job-123'), 'regli://wallet')
+})
+
 test('new dispatch offers keep dispatch deep links', () => {
   assert.equal(buildClientPushDeepLink('new_dispatch_offer', 'attempt-1'), 'regli://dispatch/attempt-1')
   assert.equal(buildServerPushDeepLink('new_dispatch_offer', 'attempt-1'), 'regli://dispatch/attempt-1')
@@ -192,12 +229,12 @@ test('server envelope preserves tip_received type and booking dispute deep link'
 test('client normalized rating reminder is not a please-rate prompt regression', () => {
   const payload = normalizePushPayload({
     type: 'rating_reminder',
-    title: getClientPushCopy('rating_reminder', { language: 'en' })?.title,
-    body: getClientPushCopy('rating_reminder', { language: 'en' })?.body,
+    title: getClientPushCopy('rating_reminder', { language: 'en', ratingText: '4' })?.title,
+    body: getClientPushCopy('rating_reminder', { language: 'en', ratingText: '4' })?.body,
     relatedJobId: 'job-3',
   })
 
-  assert.equal(payload.title, '⭐ You received a new rating')
-  assert.equal(payload.body, 'The customer rated your service.')
+  assert.equal(payload.title, '⭐ You received 4 stars')
+  assert.equal(payload.body, 'Great work! Your new rating was added to your profile.')
   assert.notEqual(payload.title, 'Please rate')
 })

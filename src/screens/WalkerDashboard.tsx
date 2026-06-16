@@ -5607,7 +5607,7 @@ export default function WalkerDashboard({
                 }}
                 style={declineBtnStyle}
               >
-                Decline
+                {isHebrew ? 'דחה' : 'Decline'}
               </button>
               <button
                 onClick={async () => {
@@ -5617,7 +5617,7 @@ export default function WalkerDashboard({
                 style={acceptBtnStyle}
                 className="request-accept-btn"
               >
-                Accept
+                {isHebrew ? 'קבל' : 'Accept'}
               </button>
             </div>
           </div>

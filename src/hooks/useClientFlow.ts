@@ -766,6 +766,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
               ...(copyContext?.providerName ? { providerName: copyContext.providerName } : {}),
               ...(copyContext?.walkerName ? { walkerName: copyContext.walkerName } : {}),
               ...(copyContext?.amountText ? { amountText: copyContext.amountText } : {}),
+              ...(copyContext?.ratingText ? { ratingText: copyContext.ratingText } : {}),
             },
           },
         })
@@ -3788,6 +3789,7 @@ function mergeClientDogSizeAttributes(
               data: {
                 dedupId: ratingPushDedupId,
                 appLanguage: i18n.resolvedLanguage || 'en',
+                ratingText: String(rating),
               },
             },
           })
@@ -3873,13 +3875,13 @@ function mergeClientDogSizeAttributes(
         try {
           await createNotification({
             userId: tipJob.walkerId,
-            type: 'payment_received',
-            title: 'Tip received',
-            message: `You received a ₪${amount} tip`,
+            type: 'tip_received',
+            title: `You received a tip ₪${amount} 🎁`,
+            message: 'The client added a tip for your service. Great work!',
             relatedJobId: tipJob.jobId,
           })
           void sendPushEvent({
-            type: 'payout_update',
+            type: 'tip_received',
             targetUserId: tipJob.walkerId,
             relatedJobId: tipJob.jobId,
             deepLink: 'regli://wallet',

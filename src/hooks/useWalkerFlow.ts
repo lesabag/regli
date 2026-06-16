@@ -584,6 +584,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
               ...(copyContext?.providerName ? { providerName: copyContext.providerName } : {}),
               ...(copyContext?.walkerName ? { walkerName: copyContext.walkerName } : {}),
               ...(copyContext?.amountText ? { amountText: copyContext.amountText } : {}),
+              ...(copyContext?.ratingText ? { ratingText: copyContext.ratingText } : {}),
             },
           },
         })
@@ -2228,7 +2229,7 @@ export function useWalkerFlow(profileId: string, profileName: string) {
                 ? (payload.new as Record<string, unknown>)
                 : null
             const type = typeof row?.type === 'string' ? row.type : null
-            if (type !== 'payment_received' && type !== 'payout_update' && type !== 'payout_failed') {
+            if (type !== 'payment_received' && type !== 'tip_received' && type !== 'payout_update' && type !== 'payout_failed') {
               return
             }
             void fetchWallet()

@@ -11,6 +11,7 @@ export type SupportedPushCopyType =
   | 'service_completed'
   | 'client_confirmation'
   | 'five_star_rating'
+  | 'payment_received'
   | 'tip_received'
   | 'payout_update'
   | 'rating_reminder'
@@ -23,6 +24,7 @@ export type PushCopyContext = {
   providerName?: string | null
   walkerName?: string | null
   amountText?: string | null
+  ratingText?: string | null
   serviceType?: string | null
   disputeEventType?: 'client_completion_dispute' | 'provider_issue' | null
 }
@@ -65,15 +67,19 @@ function getProviderName(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
-function getServiceEmoji(serviceType: string | null | undefined): string {
+function getServiceLabel(serviceType: string | null | undefined, language: PushCopyLanguage): string {
   switch (serviceType?.trim()) {
     case 'dog_walker':
-      return '🐾'
+      return language === 'he' ? 'טיול לכלב' : 'dog walking'
     case 'baby_sitter':
-      return '👶'
+      return language === 'he' ? 'בייביסיטר' : 'babysitting'
     default:
-      return '🤝'
+      return language === 'he' ? 'שירות' : 'help'
   }
+}
+
+function getTrimmedContextValue(value: string | null | undefined): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export function getPushCopy(
@@ -82,8 +88,9 @@ export function getPushCopy(
 ): PushCopy | null {
   const language = resolvePushCopyLanguage(context.language)
   getProviderName(context.providerName ?? context.walkerName)
-  const amountText = typeof context.amountText === 'string' ? context.amountText.trim() : ''
-  const serviceEmoji = getServiceEmoji(context.serviceType)
+  const amountText = getTrimmedContextValue(context.amountText)
+  const ratingText = getTrimmedContextValue(context.ratingText)
+  const serviceLabel = getServiceLabel(context.serviceType, language)
   const disputeEventType = context.disputeEventType ?? null
 
   if (language === 'he') {
@@ -91,8 +98,8 @@ export function getPushCopy(
       case 'new_dispatch_offer':
         return {
           language,
-          title: `${serviceEmoji} בקשה חדשה בקרבתך`,
-          body: 'לקוח חדש מחפש עזרה עכשיו.',
+          title: '🚶 הזמנה חדשה באזור שלך',
+          body: `לקוח מחפש ${serviceLabel}. פתחו את Regli כדי לקבל את ההזמנה.`,
         }
       case 'dispatch_expiring_soon':
         return {
@@ -153,33 +160,33 @@ export function getPushCopy(
       case 'client_confirmation':
         return {
           language,
-          title: 'הלקוח אישר הגעה',
-          body: 'אפשר להתחיל עכשיו.',
+          title: 'אפשר להתחיל ✅',
+          body: 'הלקוח אישר הגעה. אפשר להתחיל את השירות עכשיו.',
         }
       case 'five_star_rating':
         return {
           language,
-          title: '🌟 קיבלת 5 כוכבים!',
-          body: 'עבודה מצוינת! המשך כך.',
+          title: '⭐ קיבלת דירוג 5',
+          body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
         }
       case 'tip_received':
         return {
           language,
-          title: '🎁 קיבלת טיפ',
-          body: amountText ? `${amountText} נוספו לארנק שלך.` : 'נוסף טיפ לארנק שלך.',
+          title: amountText ? `קיבלת טיפ ${amountText} 🎁` : 'קיבלת טיפ 🎁',
+          body: 'הלקוח הוסיף טיפ על השירות. כל הכבוד!',
         }
       case 'payment_received':
       case 'payout_update':
         return {
           language,
-          title: 'התשלום התקבל',
+          title: amountText ? `קיבלת תשלום ${amountText} 💰` : 'קיבלת תשלום 💰',
           body: 'הרווחים הועברו לחשבון התשלומים שלך.',
         }
       case 'rating_reminder':
         return {
           language,
-          title: '⭐ קיבלת דירוג חדש',
-          body: 'הלקוח דירג את השירות שלך.',
+          title: ratingText ? `⭐ קיבלת דירוג ${ratingText}` : '⭐ קיבלת דירוג חדש',
+          body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
         }
       case 'future_booking_reminder':
         return {
@@ -204,13 +211,13 @@ export function getPushCopy(
     }
   }
 
-  switch (type) {
-    case 'new_dispatch_offer':
-      return {
-        language,
-        title: `${serviceEmoji} New request nearby`,
-        body: 'A new customer is looking for help right now.',
-      }
+    switch (type) {
+      case 'new_dispatch_offer':
+        return {
+          language,
+          title: '🚶 New request nearby',
+          body: `A client is looking for ${serviceLabel}. Open Regli to accept.`,
+        }
     case 'dispatch_expiring_soon':
       return {
         language,
@@ -267,37 +274,37 @@ export function getPushCopy(
         title: '🎉 Service completed',
         body: 'The service was completed successfully and the customer was updated.',
       }
-    case 'client_confirmation':
-      return {
-        language,
-        title: 'Client confirmed arrival',
-        body: 'You can start the service now.',
-      }
-    case 'five_star_rating':
-      return {
-        language,
-        title: '🌟 You received 5 stars!',
-        body: 'Excellent work. Keep it up.',
-      }
-    case 'tip_received':
-      return {
-        language,
-        title: '🎁 You received a tip',
-        body: amountText ? `${amountText} was added to your wallet.` : 'A tip was added to your wallet.',
-      }
-    case 'payment_received':
-    case 'payout_update':
-      return {
-        language,
-        title: 'Payment received',
-        body: 'Your earnings were sent to your payout account.',
-      }
-    case 'rating_reminder':
-      return {
-        language,
-        title: '⭐ You received a new rating',
-        body: 'The customer rated your service.',
-      }
+      case 'client_confirmation':
+        return {
+          language,
+          title: 'You can start ✅',
+          body: 'The client confirmed arrival. You can start the service now.',
+        }
+      case 'five_star_rating':
+        return {
+          language,
+          title: '⭐ You received 5 stars',
+          body: 'Great work! Your new rating was added to your profile.',
+        }
+      case 'tip_received':
+        return {
+          language,
+          title: amountText ? `You received a tip ${amountText} 🎁` : 'You received a tip 🎁',
+          body: 'The client added a tip for your service. Great work!',
+        }
+      case 'payment_received':
+      case 'payout_update':
+        return {
+          language,
+          title: amountText ? `Payment received ${amountText} 💰` : 'Payment received 💰',
+          body: 'Your earnings were sent to your payout account.',
+        }
+      case 'rating_reminder':
+        return {
+          language,
+          title: ratingText ? `⭐ You received ${ratingText} stars` : '⭐ You received a rating',
+          body: 'Great work! Your new rating was added to your profile.',
+        }
     case 'future_booking_reminder':
       return {
         language,

@@ -117,6 +117,10 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
     bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0',
     iconPath: 'M12 1v22 M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6',
   },
+  tip_received: {
+    bg: '#FEF3C7', color: '#B45309', border: '#FDE68A',
+    iconPath: 'M12 21s-6.5-4.35-9-8.39C.72 9.21 2.02 4.5 6.19 3.3c2.07-.6 4.06.11 5.2 1.73 1.14-1.62 3.13-2.33 5.2-1.73 4.17 1.2 5.47 5.91 3.19 9.31C18.5 16.65 12 21 12 21z',
+  },
   new_request: {
     bg: '#FFF7ED', color: '#C2410C', border: '#FED7AA',
     iconPath: 'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 01-3.46 0',

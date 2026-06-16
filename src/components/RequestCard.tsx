@@ -9,6 +9,7 @@ interface RequestCardProps {
   onAccept: () => void
   onDecline: () => void
   loading?: boolean
+  isHebrew?: boolean
 }
 
 function shortenAddress(addr: string, maxLen = 30): string {
@@ -25,6 +26,7 @@ export default function RequestCard({
   onAccept,
   onDecline,
   loading,
+  isHebrew = false,
 }: RequestCardProps) {
   return (
     <div style={cardStyle}>
@@ -66,14 +68,16 @@ export default function RequestCard({
           disabled={loading}
           style={declineButtonStyle}
         >
-          Decline
+          {isHebrew ? 'דחה' : 'Decline'}
         </button>
         <button
           onClick={onAccept}
           disabled={loading}
           style={acceptButtonStyle}
         >
-          {loading ? 'Accepting...' : 'Accept'}
+          {loading
+            ? (isHebrew ? 'מקבל...' : 'Accepting...')
+            : (isHebrew ? 'קבל' : 'Accept')}
         </button>
       </div>
     </div>
