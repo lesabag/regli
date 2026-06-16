@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { AppRole, ServiceAttributes } from '../hooks/useAuth'
 import type { LegalDocumentType, PendingLegalAcceptanceContext } from '../lib/legalAcceptances'
 import LegalDocumentModal from './LegalDocumentModal'
+import PasswordField from './PasswordField'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import {
   getProfileServiceOptions,
@@ -14,6 +15,10 @@ import welcomeHeroImage from '../assets/onboarding/welcom-hero.jpg'
 import providerCharacterImage from '../assets/onboarding/provider-character.jpg'
 import customerCharacterImage from '../assets/onboarding/customer-character.jpg'
 import mapPreviewImage from '../assets/onboarding/map-preview.jpg'
+
+const onboardingBrandIconSrc = '/regli-app-icon-1024.png'
+const PRIMARY_CTA_BLUE = '#233B74'
+const MIN_PASSWORD_LENGTH = 8
 
 interface AuthScreenProps {
   onSignIn: (args: { email: string; password: string }) => Promise<{ ok: boolean }>
@@ -130,25 +135,23 @@ const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
 
 const PROVIDER_EXPERIENCE_OPTIONS: {
   value: ProviderExperienceRange
-  label: string
   normalizedYears: number
 }[] = [
-  { value: '0_1', label: '0–1 years', normalizedYears: 1 },
-  { value: '1_3', label: '1–3 years', normalizedYears: 2 },
-  { value: '3_5', label: '3–5 years', normalizedYears: 4 },
-  { value: '5_10', label: '5–10 years', normalizedYears: 7 },
-  { value: '10_plus', label: '10+ years', normalizedYears: 10 },
+  { value: '0_1', normalizedYears: 1 },
+  { value: '1_3', normalizedYears: 2 },
+  { value: '3_5', normalizedYears: 4 },
+  { value: '5_10', normalizedYears: 7 },
+  { value: '10_plus', normalizedYears: 10 },
 ]
 
 const PROVIDER_LANGUAGE_OPTIONS: {
   value: ProviderLanguage
-  label: string
 }[] = [
-  { value: 'hebrew', label: 'Hebrew' },
-  { value: 'english', label: 'English' },
-  { value: 'russian', label: 'Russian' },
-  { value: 'arabic', label: 'Arabic' },
-  { value: 'french', label: 'French' },
+  { value: 'hebrew' },
+  { value: 'english' },
+  { value: 'russian' },
+  { value: 'arabic' },
+  { value: 'french' },
 ]
 
 const PROVIDER_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
@@ -181,6 +184,38 @@ async function reverseGeocodeLocation(lat: number, lng: number, language: Suppor
 
 function getNormalizedExperienceYears(range: ProviderExperienceRange | ''): number {
   return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.normalizedYears ?? 0
+}
+
+function getProviderExperienceLabel(range: ProviderExperienceRange, language: SupportedLanguage): string {
+  if (language === 'he') {
+    if (range === '0_1') return '0–1 שנים'
+    if (range === '1_3') return '1–3 שנים'
+    if (range === '3_5') return '3–5 שנים'
+    if (range === '5_10') return '5–10 שנים'
+    return '10+ שנים'
+  }
+
+  if (range === '0_1') return '0–1 years'
+  if (range === '1_3') return '1–3 years'
+  if (range === '3_5') return '3–5 years'
+  if (range === '5_10') return '5–10 years'
+  return '10+ years'
+}
+
+function getProviderLanguageLabel(value: ProviderLanguage, language: SupportedLanguage): string {
+  if (language === 'he') {
+    if (value === 'hebrew') return 'עברית'
+    if (value === 'english') return 'אנגלית'
+    if (value === 'russian') return 'רוסית'
+    if (value === 'arabic') return 'ערבית'
+    return 'צרפתית'
+  }
+
+  if (value === 'hebrew') return 'Hebrew'
+  if (value === 'english') return 'English'
+  if (value === 'russian') return 'Russian'
+  if (value === 'arabic') return 'Arabic'
+  return 'French'
 }
 
 function getDogSizeLabel(size: DogSize, language: SupportedLanguage): string {
@@ -315,8 +350,18 @@ export default function AuthScreen({
       .map((option) => ({
         id: option.value,
         icon: option.icon,
-        label: option.label,
-        description: option.description,
+        label:
+          option.value === 'dog_walker'
+            ? (language === 'he' ? 'דוג ווקר' : 'Dog Walker')
+            : option.value === 'baby_sitter'
+              ? (language === 'he' ? 'בייביסיטר' : 'Babysitter')
+              : option.label,
+        description:
+          option.value === 'dog_walker'
+            ? (language === 'he' ? 'טיולים כיפיים וטיפול אישי בכלבים שלכם. 🫶🏼' : 'Walks and personalized care for your dogs.')
+            : option.value === 'baby_sitter'
+              ? (language === 'he' ? 'טיפול אחראי ואוהב בילדים שלכם. 💜' : 'Responsible childcare in a familiar environment.')
+              : option.description,
       })),
     [language],
   )
@@ -328,56 +373,62 @@ export default function AuthScreen({
   const textAlign = isRtl ? 'right' : 'left'
   const copy = useMemo(() => ({
     welcomeEyebrow: isHebrew ? 'ברוכים הבאים' : 'Welcome',
-    welcomeTitle: isHebrew ? 'שירותים אמינים, בדרך שלך' : 'Book trusted local services with ease',
+    welcomeTitle: isHebrew ? 'שירותים אמינים, בדרך שלך' : 'Trusted local services, your way',
     welcomeSubtitle: isHebrew
-      ? 'בחרו שירות, אשרו כמה פרטים, ו-Regli תחבר אתכם לספקים מתאימים בקרבתכם.'
-      : 'Choose the service you need, confirm a few details, and Regli helps you connect with trusted providers nearby.',
-    welcomeFeatureLocation: isHebrew ? '📍 מותאם לאזור שלך' : '📍 Tailored to your area',
-    welcomeFeatureFast: isHebrew ? '⚡ התחלה מהירה' : '⚡ Fast setup',
-    welcomeFeatureTrusted: isHebrew ? '🤝 ספקים ולקוחות אמינים' : '🤝 Trusted providers and clients',
-    roleTitle: isHebrew ? 'שרותכם ב-Regli?' : 'Use Regli as?',
+      ? 'מצאו דוג־ווקרים ובייביסיטרים מאומתים באזור שלכם בתוך דקות.'
+      : 'Find trusted dog walkers and babysitters nearby in just a few minutes.',
+    welcomeFeatureLocation: isHebrew ? '📍 ספקים בקרבתך' : '📍 Nearby providers',
+    welcomeFeatureFast: isHebrew ? '⭐ דירוגים אמיתיים' : '⭐ Real ratings',
+    welcomeFeatureTrusted: isHebrew ? '⚡ הזמנה תוך דקות' : '⚡ Book in minutes',
+    welcomeTrustLine: isHebrew
+      ? '🛡️ משתמשים מאומתים ודירוגים לאחר כל שירות'
+      : '🛡️ Verified users and real ratings after every service',
+    roleTitle: isHebrew ? 'בחרו כיצד תרצו להשתמש ב-Regli' : 'Use Regli as?',
     providerTitle: isHebrew ? 'ספק' : 'Provider',
     providerDescription: isHebrew ? 'הציעו שירותים, קבלו הזמנות, ועבדו בקצב שלכם.' : 'Offer services, get booked, and earn on your schedule.',
     clientTitle: isHebrew ? 'לקוח' : 'Customer',
     clientDescription: isHebrew ? 'מצאו ספקים אמינים והזמינו שירותים בקלות.' : 'Find trusted providers and book services with confidence.',
-    serviceIntro: isHebrew ? 'בחרו את סוג השירות הראשי שלכם. אפשר להרחיב אחר כך.' : 'Choose your primary service for now. You can always expand later.',
-    locationIntro: isHebrew ? 'נשתמש בזה כדי להציג תוצאות קרובות וחוויה מדויקת יותר.' : 'We use this to personalize nearby results and a smoother first experience.',
+    serviceIntro: isHebrew ? 'בחרו את סוג השירות הראשי שלכם.' : 'Choose your primary service for now.',
+    serviceIntroSecondary: isHebrew ? 'אפשר להרחיב אחר כך.' : 'You can always expand later.',
+    locationIntro: isHebrew ? 'על מנת להציג תוצאות קרובות ושירות מותאם יותר. 💜' : 'We use this to personalize nearby results and a smoother first experience.',
     locationCurrent: isHebrew ? 'מיקום נוכחי' : 'Current location',
     locationChecking: isHebrew ? 'בודקים מיקום' : 'Checking location',
     locationUnavailable: isHebrew ? 'המיקום לא זמין' : 'Location unavailable',
     locationPreview: isHebrew ? 'תצוגת מיקום' : 'Location preview',
-    locationUsing: isHebrew ? 'משתמשים במיקום הנוכחי שלך.' : 'Using your current location.',
+    locationUsing: isHebrew ? 'משתמשים במיקום הנוכחי.' : 'Using your current location.',
     locationDetecting: isHebrew ? 'מאתרים את המיקום שלך…' : 'Detecting your location…',
     locationDenied: isHebrew ? 'המיקום הנוכחי לא זמין כרגע.' : 'Current location unavailable right now.',
     locationHint: isHebrew ? 'מפה עדינה עוזרת להתאים תוצאות ושירותים קרובים.' : 'A subtle map preview helps personalize nearby services.',
     useCurrentLocation: isHebrew ? 'השתמש במיקום הנוכחי' : 'Use current location',
     refreshingLocation: isHebrew ? 'מרענן מיקום...' : 'Refreshing location...',
-    detailsProvider: isHebrew ? 'בחרו כמה הגדרות מהירות כדי שנוכל לחבר אתכם ללקוחות מתאימים.' : 'Choose a few quick setup details so we can match you with the right clients.',
+    detailsProvider: isHebrew ? 'פרטים שיעזרו ללקוחות להכיר אתכם ואת ההעדפות שלכם לפני ההזמנה.' : 'A few profile details help clients understand who you are and your preferences before booking.',
     detailsClient: isHebrew ? 'שתפו כמה פרטים כדי שנוכל להתאים את החוויה לצרכים שלכם.' : 'Share a few details so we can personalize your experience.',
     yearsExperience: isHebrew ? 'שנות ניסיון' : 'Years of experience',
-    languagesSpoken: isHebrew ? 'שפות מדוברות' : 'Languages spoken',
-    dogPreferences: isHebrew ? 'העדפות לכלבים' : 'Dog preferences',
+    languagesSpoken: isHebrew ? 'שפות' : 'Languages',
+    dogPreferences: isHebrew ? 'גודל כלב' : 'Dog sizes',
     babysitterPreferences: isHebrew ? 'טווחי גילאים' : 'Age ranges',
-    buildTrustTitle: isHebrew ? 'יוצרים אמון מהרגע הראשון' : 'Build trust quickly',
-    buildTrustSubtitle: isHebrew ? 'כמה פרטים בסיסיים עוזרים ללקוחות להבין מי אתם לפני ההזמנה.' : 'A few profile basics help clients understand who you are before they book.',
+    buildTrustTitle: isHebrew ? 'בניית פרופיל מקצועי' : 'Create your professional profile',
+    buildTrustSubtitle: isHebrew ? 'פרטים שיעזרו ללקוחות להכיר אתכם ואת ההעדפות שלכם לפני ההזמנה.' : 'A few profile details help clients understand who you are and your preferences before booking.',
+    profileEditLater: isHebrew ? '💡 ניתן לשנות מאוחר יותר באפליקציה' : '💡 You can update this later in the app',
     finishSetup: isHebrew ? 'סיימו את ההגדרה כדי להמשיך ל-Regli.' : 'Finish your Regli setup to continue.',
     signInPrompt: isHebrew ? 'התחברו כדי להמשיך מאיפה שהפסקתם.' : 'Log in to continue where you left off.',
     createAccountPrompt: isHebrew ? 'השלימו את יצירת החשבון כדי להתחיל עם Regli.' : 'Finish setting up your account to start with Regli.',
-    legalIntroClient: isHebrew ? 'לפני שממשיכים, צריך לאשר את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
-    legalIntroProvider: isHebrew ? 'לפני שממשיכים, צריך לאשר את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
-    agreeTermsPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
-    agreePrivacyPrefix: isHebrew ? 'אני מסכים/ה ל-' : 'I agree to the ',
+    legalIntroClient: isHebrew ? 'לפני שממשיכים, אשרו את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
+    legalIntroProvider: isHebrew ? 'לפני שממשיכים, אשרו את תנאי השימוש ומדיניות הפרטיות של Regli.' : 'Before continuing, please accept Regli’s Terms of Service and Privacy Policy.',
+    dogSizeHelper: isHebrew ? '💡 לא נבחר גודל? נציג לכם בקשות מכל גדלי הכלבים.' : '💡 No size selected? We’ll show requests for dogs of all sizes.',
+    agreeTermsPrefix: isHebrew ? 'מאשרים את ' : 'I agree to the ',
+    agreePrivacyPrefix: isHebrew ? 'מאשרים את ' : 'I agree to the ',
     termsOfService: isHebrew ? 'תנאי השימוש' : 'Terms of Service',
     privacyPolicy: isHebrew ? 'מדיניות הפרטיות' : 'Privacy Policy',
     accountOwnerNotice: isHebrew
-      ? 'אני מבין/ה שבעל/ת החשבון אחראי/ת לתשלומים ולהתחייבויות המשפטיות'
+      ? 'האחריות לתשלומים ולהתחייבויות המשפטיות חלה על הגורם שבבעלותו החשבון'
       : 'I understand that the account owner is responsible for payouts and legal obligations',
     providerAdultNotice: isHebrew
-      ? 'בעל/ת החשבון חייב/ת להיות מבוגר/ת האחראי/ת לתשלומים ולהסכמים המשפטיים.'
+      ? 'החשבון צריך להיות בבעלות אדם בוגר האחראי לתשלומים ולהסכמים המשפטיים.'
       : 'The account owner must be an adult responsible for payouts and legal agreements.',
     useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Use email instead',
     fullName: isHebrew ? 'שם מלא' : 'Full name',
-    fullNamePlaceholder: isHebrew ? 'השם המלא שלך' : 'Your full name',
+    fullNamePlaceholder: isHebrew ? 'השם שיופיע באפליקציה' : 'Your full name',
     email: isHebrew ? 'אימייל' : 'Email',
     password: isHebrew ? 'סיסמה' : 'Password',
     passwordPlaceholder: isHebrew ? 'סיסמה' : 'Password',
@@ -395,7 +446,7 @@ export default function AuthScreen({
     continueToAccount: isHebrew ? 'המשך לחשבון' : 'Continue to account',
     newToRegli: isHebrew ? 'חדשים ב-Regli?' : 'New to Regli?',
     alreadyHaveAccount: isHebrew ? 'כבר יש לכם חשבון?' : 'Already have an account?',
-    designedHint: isHebrew ? 'Regli נבנתה להזמנת שירותים כלליים במובייל.' : 'Designed for mobile-first booking across many everyday services.',
+    designedHint: '',
     startOver: isHebrew ? 'התחל מחדש / התנתק' : 'Start over / Log out',
     readyToBook: isHebrew ? 'מוכנים להזמין' : 'Ready to book',
     provider: isHebrew ? 'ספק' : 'Provider',
@@ -413,10 +464,10 @@ export default function AuthScreen({
     ageYearsPlaceholder: isHebrew ? 'גיל בשנים' : 'Age in years',
     notesAllergies: isHebrew ? 'הערות מיוחדות / אלרגיות' : 'Special notes / allergies',
     notesPlaceholder: isHebrew ? 'כל דבר שחשוב שנדע (אופציונלי)' : 'Anything we should know (optional)',
-    serviceProvide: isHebrew ? 'איזה שירות אתם מציעים?' : 'What service do you provide?',
+    serviceProvide: isHebrew ? 'איזה שירות עיקרי אתם מציעים?' : 'What service do you provide?',
     serviceNeed: isHebrew ? 'איזה שירות אתם מחפשים?' : 'What service are you looking for?',
     whereLocated: isHebrew ? 'איפה אתם נמצאים?' : 'Where are you located?',
-    tellUsMore: isHebrew ? 'ספרו לנו עוד..' : 'Tell us more..',
+    tellUsMore: isHebrew ? 'ספרו לנו עוד..' : 'Tell us more',
     createYourAccount: isHebrew ? 'יצירת חשבון' : 'Create your account',
     logInTitle: isHebrew ? 'התחברות' : 'Log in',
   }), [isHebrew])
@@ -469,6 +520,20 @@ export default function AuthScreen({
       value: option.value,
       label: getDogSizeLabel(option.value, language),
       guidance: getDogSizeGuidance(option.value, language),
+    })),
+    [language],
+  )
+  const providerExperienceOptions = useMemo(
+    () => PROVIDER_EXPERIENCE_OPTIONS.map((option) => ({
+      ...option,
+      label: getProviderExperienceLabel(option.value, language),
+    })),
+    [language],
+  )
+  const providerLanguageOptions = useMemo(
+    () => PROVIDER_LANGUAGE_OPTIONS.map((option) => ({
+      ...option,
+      label: getProviderLanguageLabel(option.value, language),
     })),
     [language],
   )
@@ -531,16 +596,14 @@ export default function AuthScreen({
 
   const canContinue = useMemo(() => {
     if (authenticatedOnboarding && currentStep === 'auth') return legalAcceptanceValid
-    if (mode === 'signin') return !!email && !!password
+    if (mode === 'signin') return !!email && password.length >= MIN_PASSWORD_LENGTH
     if (currentStep === 'role') return !!role
     if (currentStep === 'service') return selectedServices.length > 0
     if (currentStep === 'location') return true
     if (currentStep === 'details') return dogValid && sitterValid && providerIdentityValid
-    if (currentStep === 'auth') return !!email && !!password && !!fullName.trim() && legalAcceptanceValid
+    if (currentStep === 'auth') return !!email && password.length >= MIN_PASSWORD_LENGTH && !!fullName.trim() && legalAcceptanceValid
     return true
   }, [authenticatedOnboarding, currentStep, dogValid, email, fullName, legalAcceptanceValid, mode, password, providerIdentityValid, role, selectedServices, sitterValid])
-
-  const roleSummary = role === 'walker' ? copy.provider : copy.customer
 
   useEffect(() => {
     if (!isProvider) return
@@ -875,9 +938,11 @@ export default function AuthScreen({
           ...(googleSubmitting ? socialButtonLoadingStyle : null),
         }}
       >
-        <span style={socialIconStyle}>G</span>
-        <span style={socialLabelStyle}>
-          {googleSubmitting ? copy.connectingGoogle : copy.continueWithGoogle}
+        <span style={socialButtonContentStyle}>
+          <span style={socialIconStyle}>G</span>
+          <span style={socialLabelStyle}>
+            {googleSubmitting ? copy.connectingGoogle : copy.continueWithGoogle}
+          </span>
         </span>
       </button>
 
@@ -895,9 +960,11 @@ export default function AuthScreen({
           ...(appleSubmitting ? socialButtonLoadingStyle : null),
         }}
       >
-        <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
-        <span style={socialLabelStyle}>
-          {appleSubmitting ? copy.connectingApple : copy.continueWithApple}
+        <span style={socialButtonContentStyle}>
+          <span style={{ ...socialIconStyle, ...appleIconStyle }}></span>
+          <span style={socialLabelStyle}>
+            {appleSubmitting ? copy.connectingApple : copy.continueWithApple}
+          </span>
         </span>
         {!appleSignInEnabled && <span style={comingSoonPillStyle}>Coming soon</span>}
       </button>
@@ -914,13 +981,52 @@ export default function AuthScreen({
           : currentStep === 'location'
             ? copy.whereLocated
             : currentStep === 'details'
-              ? copy.tellUsMore
+              ? (role === 'walker' ? copy.buildTrustTitle : copy.tellUsMore)
               : currentStep === 'auth'
                 ? copy.createYourAccount
                 : copy.welcomeTitle
   const shouldShowEmailFields = !authenticatedOnboarding && currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
-  const cardIsScrollable = true
+  const cardIsScrollable = currentStep !== 'auth'
   const shouldShowWelcomeContent = !authenticatedOnboarding && currentStep === 'welcome'
+  const shouldShowLanguageSwitcher = shouldShowWelcomeContent
+  const hiddenLanguageSpacerStyle = shouldShowLanguageSwitcher ? heroTopSpacerStyle : compactHeroTopSpacerStyle
+  const footerHintContent = authenticatedOnboarding ? (
+    <>
+      {copy.finishSetup}
+      {onStartOver && (
+        <>
+          {' '}
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.sessionStorage.removeItem('regli:onboarding-wow')
+                window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
+              }
+              void onStartOver()
+            }}
+            style={textLinkStyle}
+          >
+            {copy.startOver}
+          </button>
+        </>
+      )}
+    </>
+  ) : mode === 'signin' ? (
+    <>
+      {copy.newToRegli}{' '}
+      <button type="button" onClick={goToSignup} style={textLinkStyle}>
+        {copy.getStarted}
+      </button>
+    </>
+  ) : mode === 'signup' && currentStep === 'auth' ? (
+    <>
+      {copy.alreadyHaveAccount}{' '}
+      <button type="button" onClick={goToSignIn} style={textLinkStyle}>
+        {copy.login}
+      </button>
+    </>
+  ) : null
 
   return (
     <>
@@ -963,29 +1069,41 @@ export default function AuthScreen({
       <div style={{ ...shellStyle, direction }}>
         <div style={heroStyle}>
           <div style={{ ...heroTopRowStyle, ...(isRtl ? heroTopRowRtlStyle : null) }}>
-            <div style={{ ...brandRowStyle, ...(isRtl ? brandRowRtlStyle : null) }}>
-            <div style={brandBadgeStyle}>R</div>
-            <div style={{ textAlign }}>
-              <div style={brandNameStyle}>Regli</div>
-              <div style={{ ...brandSubtitleStyle, textAlign }}>
-                {isHebrew ? 'שירותים אמינים, מתואמים יפה.' : 'Trusted services, beautifully coordinated.'}
+            {shouldShowLanguageSwitcher ? (
+              <div style={{ ...languageSwitchStyle, ...(isRtl ? languageSwitchRtlStyle : null) }}>
+                {(['en', 'he'] as SupportedLanguage[]).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setLanguage(option)}
+                    style={{
+                      ...languagePillStyle,
+                      ...(language === option ? languagePillActiveStyle : null),
+                    }}
+                  >
+                    {option === 'he' ? '🇮🇱 עברית' : '🇺🇸 English'}
+                  </button>
+                ))}
               </div>
-            </div>
+            ) : (
+              <div style={hiddenLanguageSpacerStyle} aria-hidden="true" />
+            )}
           </div>
-            <div style={{ ...languageSwitchStyle, ...(isRtl ? languageSwitchRtlStyle : null) }}>
-              {(['en', 'he'] as SupportedLanguage[]).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setLanguage(option)}
-                  style={{
-                    ...languagePillStyle,
-                    ...(language === option ? languagePillActiveStyle : null),
-                  }}
-                >
-                  {option === 'he' ? 'עברית' : 'EN'}
-                </button>
-              ))}
+          <div style={brandBlockStyle}>
+            <div style={{ ...brandUnitRowStyle, ...(isRtl ? brandUnitRowRtlStyle : null) }}>
+              <div style={brandBadgeStyle}>
+                <img
+                  src={onboardingBrandIconSrc}
+                  alt="Regli"
+                  style={brandBadgeImageStyle}
+                  loading="eager"
+                  decoding="async"
+                />
+              </div>
+              <div style={brandNameStyle}>Regli</div>
+            </div>
+            <div style={{ ...brandSubtitleStyle, textAlign }}>
+              {isHebrew ? 'שירותים מקומיים אמינים, במהירות ובביטחון.' : 'Trusted local services, arranged with confidence.'}
             </div>
           </div>
 
@@ -1011,7 +1129,23 @@ export default function AuthScreen({
             }}
           >
           {shouldShowWelcomeContent && (
-            <>
+            <div style={welcomeSectionStyle}>
+              <div style={welcomeCopyStackStyle}>
+                <div style={{ ...welcomeEyebrowStyle, textAlign }}>{copy.welcomeEyebrow}</div>
+                <h1
+                  style={{
+                    ...titleStyle,
+                    ...(isHebrew ? compactHeroTitleStyle : null),
+                    marginTop: 28,
+                    textAlign,
+                  }}
+                >
+                  {copy.welcomeTitle}
+                </h1>
+                <p style={{ ...subtitleStyle, textAlign, marginBottom: 24 }}>
+                  {copy.welcomeSubtitle}
+                </p>
+              </div>
               <div style={welcomeHeroWrapStyle}>
                 <div style={welcomeHeroStageStyle}>
                   <div style={welcomeHeroPairStyle}>
@@ -1046,42 +1180,38 @@ export default function AuthScreen({
                   </div>
                 </div>
               </div>
-              <div style={welcomeCopyStackStyle}>
-                <div style={{ ...eyebrowStyle, textAlign }}>{copy.welcomeEyebrow}</div>
-                <h1
-                  style={{
-                    ...titleStyle,
-                    ...(isHebrew ? compactHeroTitleStyle : null),
-                    textAlign,
-                  }}
-                >
-                  {copy.welcomeTitle}
-                </h1>
-                <p style={{ ...subtitleStyle, textAlign }}>
-                  {copy.welcomeSubtitle}
-                </p>
-              </div>
 
               <div style={welcomeFeatureRowStyle}>
                 <div style={featurePillStyle}>{copy.welcomeFeatureLocation}</div>
                 <div style={featurePillStyle}>{copy.welcomeFeatureFast}</div>
                 <div style={featurePillStyle}>{copy.welcomeFeatureTrusted}</div>
               </div>
-            </>
-          )}
-
-          {mode === 'signup' && currentStep === 'role' && (
-            <>
-              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1
+              <div
                 style={{
-                  ...titleStyle,
-                  ...(isHebrew ? compactRoleTitleStyle : null),
+                  ...welcomeTrustLineStyle,
+                  ...(isHebrew ? null : welcomeTrustLineEnglishStyle),
                   textAlign,
                 }}
               >
-                {stepTitle}
-              </h1>
+                {copy.welcomeTrustLine}
+              </div>
+            </div>
+          )}
+
+          {mode === 'signup' && currentStep === 'role' && (
+            <div style={roleSelectionSectionStyle}>
+              <div style={roleSelectionTitleStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign, marginBottom: 24 }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+                <h1
+                  style={{
+                    ...titleStyle,
+                    ...(isHebrew ? compactRoleTitleStyle : null),
+                    textAlign,
+                  }}
+                >
+                  {stepTitle}
+                </h1>
+              </div>
               <div style={optionStackStyle}>
                 <RoleCard
                   title={copy.providerTitle}
@@ -1108,24 +1238,44 @@ export default function AuthScreen({
                   }}
                 />
               </div>
-            </>
+            </div>
           )}
 
           {mode === 'signup' && currentStep === 'service' && (
-            <>
-              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1
-                style={{
-                  ...titleStyle,
-                  ...(isHebrew ? compactServiceTitleStyle : null),
-                  textAlign,
-                }}
-              >
-                {stepTitle}
-              </h1>
-              <p style={{ ...subtitleStyle, textAlign }}>
-                {copy.serviceIntro}
-              </p>
+            <div style={serviceSelectionSectionStyle}>
+              <div style={serviceSelectionTitleStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+                <h1
+                  style={{
+                    ...titleStyle,
+                    ...(isHebrew ? compactServiceTitleStyle : null),
+                    textAlign,
+                  }}
+                >
+                  {stepTitle}
+                </h1>
+                {isHebrew && role === 'walker' ? (
+                  <>
+                    <p style={{ ...subtitleStyle, textAlign }}>
+                      {'בחרו את סוג השירות '}
+                      <span style={serviceIntroAccentStyle}>הראשי</span>
+                      {' שלכם.'}
+                    </p>
+                    <p style={{ ...serviceSecondaryLineStyle, textAlign }}>
+                      {copy.serviceIntroSecondary}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ ...subtitleStyle, textAlign }}>
+                      {copy.serviceIntro}
+                    </p>
+                    <p style={{ ...serviceSecondaryLineStyle, textAlign }}>
+                      {copy.serviceIntroSecondary}
+                    </p>
+                  </>
+                )}
+              </div>
               <div style={serviceIllustrationCardStyle}>
                 <img
                   src={selectedServiceIllustration}
@@ -1150,24 +1300,28 @@ export default function AuthScreen({
                         ...(selected ? serviceCardSelectedStyle : null),
                       }}
                     >
-                      <span style={serviceEmojiStyle}>{service.icon}</span>
-                      <span style={serviceLabelStyle}>{service.label}</span>
-                      <span style={serviceDescriptionStyle}>{service.description}</span>
+                      <div style={serviceCardContentStyle}>
+                        <span style={serviceEmojiStyle}>{service.icon}</span>
+                        <span style={serviceLabelStyle}>{service.label}</span>
+                        <span style={serviceDescriptionStyle}>{service.description}</span>
+                      </div>
                       {selected ? <span style={checkBadgeStyle}>✓</span> : null}
                     </button>
                   )
                 })}
               </div>
-            </>
+            </div>
           )}
 
           {mode === 'signup' && currentStep === 'location' && (
-            <>
-              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
-              <p style={{ ...subtitleStyle, textAlign }}>
-                {copy.locationIntro}
-              </p>
+            <div style={locationSectionStyle}>
+              <div style={locationTitleStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+                <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+                <p style={{ ...subtitleStyle, textAlign }}>
+                  {copy.locationIntro}
+                </p>
+              </div>
 
               <div style={locationCardStyle}>
                 <div style={locationMapStyle}>
@@ -1183,45 +1337,49 @@ export default function AuthScreen({
                   <div style={locationMapRouteStyle} />
                   <div style={locationMapPinStyle}>📍</div>
                 </div>
-                <div style={locationMetaStyle}>
-                  <div style={locationLabelTitleStyle}>
-                    {locationStatus === 'live'
-                      ? copy.locationCurrent
-                      : locationStatus === 'loading'
-                        ? copy.locationChecking
-                        : locationStatus === 'denied'
-                          ? copy.locationUnavailable
-                          : copy.locationPreview}
+                <div style={locationMetaSectionStyle}>
+                  <div style={locationMetaStyle}>
+                    <div style={locationLabelTitleStyle}>
+                      <span aria-hidden="true">📍</span>
+                      {locationStatus === 'live'
+                        ? copy.locationCurrent
+                        : locationStatus === 'loading'
+                          ? copy.locationChecking
+                          : locationStatus === 'denied'
+                            ? copy.locationUnavailable
+                            : copy.locationPreview}
+                    </div>
+                    <div style={locationLabelValueStyle}>{locationLabel}</div>
+                    <div style={locationHintStyle}>
+                      {locationStatus === 'live'
+                        ? copy.locationUsing
+                        : locationStatus === 'loading'
+                          ? copy.locationDetecting
+                          : locationStatus === 'denied'
+                            ? copy.locationDenied
+                            : copy.locationHint}
+                    </div>
                   </div>
-                  <div style={locationLabelValueStyle}>{locationLabel}</div>
-                  <div style={locationHintStyle}>
-                    {locationStatus === 'live'
-                      ? copy.locationUsing
-                      : locationStatus === 'loading'
-                        ? copy.locationDetecting
-                        : locationStatus === 'denied'
-                          ? copy.locationDenied
-                          : copy.locationHint}
-                  </div>
+
+                  <button type="button" onClick={handleUseCurrentLocation} style={locationPrimaryButtonStyle}>
+                    {locationStatus === 'loading' ? copy.refreshingLocation : copy.useCurrentLocation}
+                  </button>
                 </div>
               </div>
-
-              <button type="button" onClick={handleUseCurrentLocation} style={secondaryInlineButtonStyle}>
-                {locationStatus === 'loading' ? copy.refreshingLocation : copy.useCurrentLocation}
-              </button>
-            </>
+            </div>
           )}
 
           {mode === 'signup' && currentStep === 'details' && (
-            <>
-              <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
-              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
-              <p style={{ ...subtitleStyle, textAlign }}>
-                {isProvider
-                  ? copy.detailsProvider
-                  : copy.detailsClient}
-              </p>
-
+            <div style={detailsStageStyle}>
+              <div style={detailsTitleStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign }}>{isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`}</div>
+                <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+                <p style={{ ...subtitleStyle, textAlign }}>
+                  {isProvider
+                    ? copy.detailsProvider
+                    : copy.detailsClient}
+                </p>
+              </div>
               <div style={detailsSectionsStyle}>
                 {isProvider ? (
                   <>
@@ -1261,7 +1419,7 @@ export default function AuthScreen({
                             <label style={labelStyle}>{copy.yearsExperience}</label>
                           </div>
                           <div style={chipRowStyle}>
-                            {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
+                            {providerExperienceOptions.map((option) => (
                               <button
                                 key={option.value}
                                 type="button"
@@ -1285,7 +1443,7 @@ export default function AuthScreen({
                             <label style={labelStyle}>{copy.languagesSpoken}</label>
                           </div>
                           <div style={chipRowStyle}>
-                            {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                            {providerLanguageOptions.map((option) => {
                               const selected = providerIdentity.languages.includes(option.value)
                               return (
                                 <button
@@ -1341,6 +1499,7 @@ export default function AuthScreen({
                               )
                             })}
                           </div>
+                          <div style={chipFieldHelperStyle}>{copy.dogSizeHelper}</div>
                         </div>
                       )}
 
@@ -1375,6 +1534,10 @@ export default function AuthScreen({
                           </div>
                         </div>
                       )}
+
+                      <div style={providerIdentityHelperStyle}>
+                        {copy.profileEditLater}
+                      </div>
                     </div>
                   </>
                 ) : (
@@ -1501,159 +1664,158 @@ export default function AuthScreen({
                   </>
                 )}
               </div>
-            </>
+            </div>
           )}
 
           {isCreateAccountStep && (
-            <>
-              <div style={eyebrowStyle}>
-                {authenticatedOnboarding
-                  ? (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)
-                  : mode === 'signin'
-                    ? (isHebrew ? 'שמחים שחזרתם' : 'Welcome back')
-                    : (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)}
-              </div>
-              <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
-              <p style={{ ...subtitleStyle, textAlign }}>
-                {authenticatedOnboarding
-                  ? copy.finishSetup
-                  : mode === 'signin'
-                  ? copy.signInPrompt
-                  : copy.createAccountPrompt}
-              </p>
-
-              {mode === 'signup' && (
-                <div style={summaryCardStyle}>
-                  <div style={summaryRowStyle}>
-                    <span>{roleSummary}</span>
-                    <span>
-                      {isProvider
-                        ? selectedServices.map((value) => serviceOptions.find((service) => service.id === value)?.label).filter(Boolean).join(', ')
-                        : copy.readyToBook}
-                    </span>
-                  </div>
-                  <div style={summaryLocationStyle}>{locationLabel}</div>
+            <div style={authStageStyle}>
+              <div style={authTitleStackStyle}>
+                <div style={{ ...eyebrowStyle, textAlign }}>
+                  {authenticatedOnboarding
+                    ? (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)
+                    : mode === 'signin'
+                      ? (isHebrew ? 'שמחים שחזרתם' : 'Welcome back')
+                      : (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)}
                 </div>
-              )}
+                <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
+                <p style={{ ...subtitleStyle, textAlign }}>
+                  {authenticatedOnboarding
+                    ? copy.finishSetup
+                    : mode === 'signin'
+                    ? copy.signInPrompt
+                    : copy.createAccountPrompt}
+                </p>
+              </div>
 
-              {shouldShowLegalAcceptance && (
-                <div style={legalCardStyle}>
-                  <div style={{ ...legalIntroStyle, textAlign }}>
-                    {isProvider ? copy.legalIntroProvider : copy.legalIntroClient}
+              <div style={authCardStackStyle}>
+                {shouldShowLegalAcceptance && (
+                  <div style={legalCardStyle}>
+                    <div style={{ ...legalIntroStyle, textAlign }}>
+                      {isProvider ? copy.legalIntroProvider : copy.legalIntroClient}
+                    </div>
+
+                    <div style={legalAgreementListStyle}>
+                      <label style={legalCheckboxRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={acceptedTerms}
+                          onChange={(event) => setAcceptedTerms(event.target.checked)}
+                          style={legalCheckboxInputStyle}
+                        />
+                        <span style={legalCheckboxTextStyle}>
+                          {copy.agreeTermsPrefix}
+                          <button
+                            type="button"
+                            onClick={() => setOpenLegalDocument('terms_of_service')}
+                            style={legalLinkStyle}
+                          >
+                            {copy.termsOfService}
+                          </button>
+                        </span>
+                      </label>
+
+                      <label style={legalCheckboxRowStyle}>
+                        <input
+                          type="checkbox"
+                          checked={acceptedPrivacy}
+                          onChange={(event) => setAcceptedPrivacy(event.target.checked)}
+                          style={legalCheckboxInputStyle}
+                        />
+                        <span style={legalCheckboxTextStyle}>
+                          {copy.agreePrivacyPrefix}
+                          <button
+                            type="button"
+                            onClick={() => setOpenLegalDocument('privacy_policy')}
+                            style={legalLinkStyle}
+                          >
+                            {copy.privacyPolicy}
+                          </button>
+                        </span>
+                      </label>
+
+                      {isProvider && (
+                        <>
+                          <div style={legalStaticRowStyle}>
+                            <span style={legalStaticCheckStyle}>☑</span>
+                            <span style={legalCheckboxTextStyle}>{copy.accountOwnerNotice}</span>
+                          </div>
+                          <div style={{ ...legalHelperTextStyle, textAlign }}>
+                            {copy.providerAdultNotice}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
+                )}
 
-                  <div style={legalAgreementListStyle}>
-                    <label style={legalCheckboxRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={acceptedTerms}
-                        onChange={(event) => setAcceptedTerms(event.target.checked)}
-                        style={legalCheckboxInputStyle}
-                      />
-                      <span style={legalCheckboxTextStyle}>
-                        {copy.agreeTermsPrefix}
-                        <button
-                          type="button"
-                          onClick={() => setOpenLegalDocument('terms_of_service')}
-                          style={legalLinkStyle}
-                        >
-                          {copy.termsOfService}
-                        </button>
-                      </span>
-                    </label>
+                {!authenticatedOnboarding && mode === 'signup' && renderSocialAuthButtons()}
 
-                    <label style={legalCheckboxRowStyle}>
-                      <input
-                        type="checkbox"
-                        checked={acceptedPrivacy}
-                        onChange={(event) => setAcceptedPrivacy(event.target.checked)}
-                        style={legalCheckboxInputStyle}
-                      />
-                      <span style={legalCheckboxTextStyle}>
-                        {copy.agreePrivacyPrefix}
-                        <button
-                          type="button"
-                          onClick={() => setOpenLegalDocument('privacy_policy')}
-                          style={legalLinkStyle}
-                        >
-                          {copy.privacyPolicy}
-                        </button>
-                      </span>
-                    </label>
+                {!authenticatedOnboarding ? (
+                  <div style={authEmailRevealAreaStyle}>
+                    {!shouldShowEmailFields ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowEmailAuth(true)}
+                        style={authEmailButtonStyle}
+                      >
+                        {copy.useEmailInstead}
+                      </button>
+                    ) : (
+                      <div style={authEmailFieldsStackStyle}>
+                        {mode === 'signup' && (
+                          <div style={fieldBlockStyle}>
+                            <label style={{ ...labelStyle, textAlign }}>{copy.fullName}</label>
+                            <input
+                              value={fullName}
+                              onChange={(event) => setFullName(event.target.value)}
+                              placeholder={copy.fullNamePlaceholder}
+                              dir={direction}
+                              style={{ ...inputStyle, textAlign }}
+                            />
+                          </div>
+                        )}
 
-                    {isProvider && (
-                      <>
-                        <div style={legalStaticRowStyle}>
-                          <span style={legalStaticCheckStyle}>☑</span>
-                          <span style={legalCheckboxTextStyle}>{copy.accountOwnerNotice}</span>
+                        <div style={fieldBlockStyle}>
+                          <label style={{ ...labelStyle, textAlign }}>{copy.email}</label>
+                          <input
+                            value={email}
+                            onChange={(event) => setEmail(event.target.value)}
+                            placeholder="name@example.com"
+                            type="email"
+                            autoComplete="email"
+                            dir={direction}
+                            style={{ ...inputStyle, textAlign }}
+                          />
                         </div>
-                        <div style={{ ...legalHelperTextStyle, textAlign }}>
-                          {copy.providerAdultNotice}
-                        </div>
-                      </>
+
+                        <PasswordField
+                          label={copy.password}
+                          value={password}
+                          onChange={setPassword}
+                          placeholder={copy.passwordPlaceholder}
+                          autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                          language={isHebrew ? 'he' : 'en'}
+                          compact
+                        />
+                      </div>
                     )}
                   </div>
-                </div>
-              )}
+                ) : null}
 
-              {!authenticatedOnboarding && mode === 'signup' && renderSocialAuthButtons()}
-
-              {!authenticatedOnboarding && !shouldShowEmailFields ? (
-                <button
-                  type="button"
-                  onClick={() => setShowEmailAuth(true)}
-                  style={secondaryInlineButtonStyle}
-                >
-                  {copy.useEmailInstead}
-                </button>
-              ) : !authenticatedOnboarding ? (
-                <>
-                  {mode === 'signup' && (
-                    <div style={fieldBlockStyle}>
-                      <label style={labelStyle}>{copy.fullName}</label>
-                      <input
-                        value={fullName}
-                        onChange={(event) => setFullName(event.target.value)}
-                        placeholder={copy.fullNamePlaceholder}
-                        style={inputStyle}
-                      />
-                    </div>
-                  )}
-
-                  <div style={fieldBlockStyle}>
-                    <label style={labelStyle}>{copy.email}</label>
-                    <input
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
-                      placeholder="name@example.com"
-                      type="email"
-                      autoComplete="email"
-                      style={inputStyle}
-                    />
-                  </div>
-
-                  <div style={fieldBlockStyle}>
-                    <label style={labelStyle}>{copy.password}</label>
-                    <input
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      placeholder={copy.passwordPlaceholder}
-                      type="password"
-                      autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-                      style={inputStyle}
-                    />
-                  </div>
-                </>
-              ) : null}
-
-              {authError && <div style={authErrorStyle}>{authError}</div>}
-            </>
+                {authError && <div style={authErrorStyle}>{authError}</div>}
+              </div>
+            </div>
           )}
           </div>
         </div>
 
         <div style={footerStyle}>
-          <div style={buttonRowStyle}>
+          <div
+            style={{
+              ...buttonRowStyle,
+              ...(shouldShowWelcomeContent ? welcomeFooterButtonRowStyle : null),
+            }}
+          >
             {(mode !== 'welcome' || authenticatedOnboarding) && (
               <button type="button" onClick={handleBack} style={secondaryButtonStyle}>
                 {copy.back}
@@ -1702,47 +1864,17 @@ export default function AuthScreen({
             )}
           </div>
 
-          <div style={{ ...bottomHintStyle, textAlign }}>
-            {authenticatedOnboarding ? (
-              <>
-                {copy.finishSetup}
-                {onStartOver && (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (typeof window !== 'undefined') {
-                          window.sessionStorage.removeItem('regli:onboarding-wow')
-                          window.sessionStorage.removeItem(SIGNUP_STEP_STORAGE_KEY)
-                        }
-                        void onStartOver()
-                      }}
-                      style={textLinkStyle}
-                    >
-                      {copy.startOver}
-                    </button>
-                  </>
-                )}
-              </>
-            ) : mode === 'signin' ? (
-              <>
-                {copy.newToRegli}{' '}
-                <button type="button" onClick={goToSignup} style={textLinkStyle}>
-                  {copy.getStarted}
-                </button>
-              </>
-            ) : mode === 'signup' && currentStep === 'auth' ? (
-              <>
-                {copy.alreadyHaveAccount}{' '}
-                <button type="button" onClick={goToSignIn} style={textLinkStyle}>
-                  {copy.login}
-                </button>
-              </>
-            ) : (
-              copy.designedHint
-            )}
-          </div>
+          {footerHintContent && (
+            <div
+              style={{
+                ...bottomHintStyle,
+                textAlign,
+                ...(shouldShowWelcomeContent ? welcomeFooterHintStyle : null),
+              }}
+            >
+              {footerHintContent}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1782,24 +1914,26 @@ function RoleCard({
         ...(selected ? roleCardSelectedStyle : null),
       }}
     >
-      <div style={roleCardImageWrapStyle}>
-        <img
-          src={imageSrc}
-          alt={imageAlt}
-          loading="lazy"
-          decoding="async"
-          style={roleCardImageStyle}
-        />
-      </div>
-      <div style={roleCardBodyStyle}>
-        <div style={roleCardTopStyle}>
-          <div style={roleCardTitleRowStyle}>
-            <div style={roleIconStyle}>{icon}</div>
-            <div style={roleTitleStyle}>{title}</div>
-          </div>
-          {selected ? <span style={checkBadgeStyle}>✓</span> : null}
+      {selected ? <span style={roleCardCheckWrapStyle}><span style={checkBadgeStyle}>✓</span></span> : null}
+      <div style={roleCardContentStyle}>
+        <div style={roleCardImageWrapStyle}>
+          <img
+            src={imageSrc}
+            alt={imageAlt}
+            loading="lazy"
+            decoding="async"
+            style={roleCardImageStyle}
+          />
         </div>
-        <div style={roleDescriptionStyle}>{description}</div>
+        <div style={roleCardBodyStyle}>
+          <div style={roleCardTopStyle}>
+            <div style={roleCardTitleRowStyle}>
+              <div style={roleIconStyle}>{icon}</div>
+              <div style={roleTitleStyle}>{title}</div>
+            </div>
+          </div>
+          <div style={roleDescriptionStyle}>{description}</div>
+        </div>
       </div>
     </button>
   )
@@ -1919,8 +2053,8 @@ const shellStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'space-between',
-  padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px calc(env(safe-area-inset-bottom, 0px) + 14px)',
-  gap: 10,
+  padding: 'calc(env(safe-area-inset-top, 0px) + 10px) 16px calc(env(safe-area-inset-bottom, 0px) + 8px)',
+  gap: 6,
   maxWidth: 460,
   margin: '0 auto',
   boxSizing: 'border-box',
@@ -1929,27 +2063,43 @@ const shellStyle: CSSProperties = {
 
 const heroStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 10,
 }
 
 const heroTopRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
-  justifyContent: 'space-between',
+  justifyContent: 'center',
   gap: 10,
 }
 
 const heroTopRowRtlStyle: CSSProperties = {
-  flexDirection: 'row-reverse',
+  flexDirection: 'row',
 }
 
-const brandRowStyle: CSSProperties = {
-  display: 'flex',
+const heroTopSpacerStyle: CSSProperties = {
+  height: 36,
+}
+
+const compactHeroTopSpacerStyle: CSSProperties = {
+  height: 14,
+}
+
+const brandBlockStyle: CSSProperties = {
+  display: 'grid',
+  gap: 5,
+  paddingTop: 8,
+}
+
+const brandUnitRowStyle: CSSProperties = {
+  display: 'inline-flex',
   alignItems: 'center',
-  gap: 14,
+  gap: 10,
+  width: 'fit-content',
+  maxWidth: '100%',
 }
 
-const brandRowRtlStyle: CSSProperties = {
+const brandUnitRowRtlStyle: CSSProperties = {
   flexDirection: 'row-reverse',
 }
 
@@ -1957,13 +2107,22 @@ const brandBadgeStyle: CSSProperties = {
   width: 48,
   height: 48,
   borderRadius: 16,
-  background: 'linear-gradient(180deg, #0F172A 0%, #243B74 100%)',
-  color: '#FFFFFF',
-  display: 'grid',
-  placeItems: 'center',
-  fontSize: 24,
-  fontWeight: 900,
-  boxShadow: '0 18px 36px rgba(15, 23, 42, 0.18)',
+  overflow: 'hidden',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  aspectRatio: '1 / 1',
+}
+
+const brandBadgeImageStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'contain',
+  objectPosition: 'center',
+  transform: 'translateY(-1px)',
+  display: 'block',
 }
 
 const brandNameStyle: CSSProperties = {
@@ -1974,7 +2133,7 @@ const brandNameStyle: CSSProperties = {
 }
 
 const brandSubtitleStyle: CSSProperties = {
-  marginTop: 6,
+  marginTop: 0,
   fontSize: 13,
   lineHeight: 1.45,
   color: '#5B6882',
@@ -1999,7 +2158,7 @@ const stepDotStyle: CSSProperties = {
 
 const stepDotActiveStyle: CSSProperties = {
   width: 24,
-  background: '#5B7CFA',
+  background: PRIMARY_CTA_BLUE,
 }
 
 const cardStyle: CSSProperties = {
@@ -2010,7 +2169,7 @@ const cardStyle: CSSProperties = {
   backdropFilter: 'blur(16px)',
   border: '1px solid rgba(255,255,255,0.70)',
   boxShadow: '0 24px 60px rgba(45, 68, 126, 0.14)',
-  padding: 14,
+  padding: 7,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -2018,7 +2177,7 @@ const cardStyle: CSSProperties = {
 
 const cardContentStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 5,
   alignContent: 'start',
   minHeight: 0,
 }
@@ -2028,22 +2187,32 @@ const cardContentScrollableStyle: CSSProperties = {
   overflowY: 'auto',
   overscrollBehavior: 'contain',
   paddingRight: 2,
-  paddingBottom: 12,
+  paddingBottom: 4,
 }
 
 const eyebrowStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 800,
-  color: '#5B7CFA',
+  color: PRIMARY_CTA_BLUE,
   textTransform: 'uppercase',
+}
+
+const welcomeEyebrowStyle: CSSProperties = {
+  ...eyebrowStyle,
+  fontSize: 15,
+  fontWeight: 900,
+  lineHeight: 1.2,
+  textTransform: 'none',
+  paddingTop: 4,
+  paddingBottom: 4,
 }
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 28,
+  fontSize: 29,
   lineHeight: 1.04,
   fontWeight: 900,
-  color: '#0F172A',
+  color: PRIMARY_CTA_BLUE,
 }
 
 const compactHeroTitleStyle: CSSProperties = {
@@ -2074,7 +2243,8 @@ const subtitleStyle: CSSProperties = {
 const welcomeCopyStackStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
-  paddingTop: 22,
+  paddingTop: 8,
+  paddingBottom: 4,
 }
 
 const welcomeHeroWrapStyle: CSSProperties = {
@@ -2083,7 +2253,7 @@ const welcomeHeroWrapStyle: CSSProperties = {
   minHeight: 160,
   display: 'grid',
   placeItems: 'center',
-  padding: '6px 0 8px',
+  padding: '2px 0 6px',
   boxSizing: 'border-box',
 }
 
@@ -2162,14 +2332,38 @@ const welcomeHeroImageStyle: CSSProperties = {
 }
 
 const featureRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   gap: 6,
 }
 
 const welcomeFeatureRowStyle: CSSProperties = {
   ...featureRowStyle,
-  paddingTop: 18,
+  paddingTop: 12,
+}
+
+const welcomeTrustLineStyle: CSSProperties = {
+  fontSize: 13.5,
+  lineHeight: 1.45,
+  fontWeight: 800,
+  color: PRIMARY_CTA_BLUE,
+  paddingTop: 42,
+}
+
+const welcomeTrustLineEnglishStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+}
+
+const welcomeSectionStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
 }
 
 const languageSwitchStyle: CSSProperties = {
@@ -2182,6 +2376,7 @@ const languageSwitchStyle: CSSProperties = {
   border: '1px solid rgba(145, 164, 196, 0.16)',
   boxShadow: '0 10px 24px rgba(45, 68, 126, 0.08)',
   flexShrink: 0,
+  alignSelf: 'center',
 }
 
 const languageSwitchRtlStyle: CSSProperties = {
@@ -2190,29 +2385,35 @@ const languageSwitchRtlStyle: CSSProperties = {
 
 const languagePillStyle: CSSProperties = {
   appearance: 'none',
-  minHeight: 30,
-  padding: '0 10px',
+  minHeight: 28,
+  padding: '0 8px',
   borderRadius: 999,
   border: '1px solid transparent',
   background: 'transparent',
   color: '#64748B',
-  fontSize: 12,
+  fontSize: 11.5,
   fontWeight: 800,
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 
 const languagePillActiveStyle: CSSProperties = {
-  background: '#EEF4FF',
-  borderColor: 'rgba(91, 124, 250, 0.18)',
-  color: '#233B74',
+  background: PRIMARY_CTA_BLUE,
+  borderColor: PRIMARY_CTA_BLUE,
+  color: '#FFFFFF',
 }
 
 const socialStackStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  gap: 18,
 }
 
 const socialButtonStyle: CSSProperties = {
+  position: 'relative',
   width: '100%',
   minHeight: 52,
   borderRadius: 18,
@@ -2220,11 +2421,19 @@ const socialButtonStyle: CSSProperties = {
   background: 'rgba(255,255,255,0.96)',
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
+  justifyContent: 'center',
   padding: '0 14px',
   boxSizing: 'border-box',
-  textAlign: 'start',
+  textAlign: 'center',
   cursor: 'pointer',
+}
+
+const socialButtonContentStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 10,
+  minWidth: 0,
 }
 
 const googleSocialButtonStyle: CSSProperties = {
@@ -2278,30 +2487,109 @@ const comingSoonPillStyle: CSSProperties = {
 }
 
 const featurePillStyle: CSSProperties = {
-  padding: '8px 11px',
+  minWidth: 0,
+  minHeight: 38,
+  padding: '7px 6px',
   borderRadius: 999,
   background: 'rgba(255,255,255,0.82)',
   color: '#31405D',
-  fontSize: 12,
+  fontSize: 11,
+  lineHeight: 1.2,
   fontWeight: 700,
   border: '1px solid rgba(91, 124, 250, 0.14)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+}
+
+const roleSelectionSectionStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  gap: 14,
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
+}
+
+const roleSelectionTitleStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 14,
+  justifyItems: 'center',
+}
+
+const serviceSelectionSectionStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  gap: 18,
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
+}
+
+const serviceSelectionTitleStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 18,
+  justifyItems: 'center',
+}
+
+const serviceIntroAccentStyle: CSSProperties = {
+  color: PRIMARY_CTA_BLUE,
+  fontWeight: 800,
+}
+
+const serviceSecondaryLineStyle: CSSProperties = {
+  fontSize: 13.5,
+  lineHeight: 1.4,
+  fontWeight: 700,
+  color: '#475569',
+  margin: '-2px 0 0',
+}
+
+const locationSectionStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  gap: 20,
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
+}
+
+const locationTitleStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 10,
+  justifyItems: 'center',
 }
 
 const optionStackStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  gap: 24,
+  width: 'min(100%, 332px)',
+  margin: '0 auto',
+  placeSelf: 'center',
+  justifyItems: 'stretch',
+  alignContent: 'center',
 }
 
 const roleCardStyle: CSSProperties = {
+  position: 'relative',
   width: '100%',
-  textAlign: 'start',
+  minHeight: 132,
+  textAlign: 'center',
   border: '1px solid rgba(145, 164, 196, 0.24)',
-  background: '#FFFFFF',
+  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
   borderRadius: 22,
-  padding: 12,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
+  padding: '10px 12px 11px',
+  display: 'grid',
   cursor: 'pointer',
   transition: 'all 180ms ease',
 }
@@ -2309,21 +2597,35 @@ const roleCardStyle: CSSProperties = {
 const roleCardSelectedStyle: CSSProperties = {
   border: '1px solid rgba(91, 124, 250, 0.52)',
   boxShadow: '0 16px 34px rgba(91, 124, 250, 0.14)',
-  background: '#F8FBFF',
+  background: 'linear-gradient(180deg, rgba(238,244,255,0.92) 0%, rgba(252,253,255,0.96) 100%)',
+}
+
+const roleCardCheckWrapStyle: CSSProperties = {
+  position: 'absolute',
+  top: 10,
+  right: 10,
+}
+
+const roleCardContentStyle: CSSProperties = {
+  display: 'grid',
+  justifyItems: 'center',
+  alignContent: 'center',
+  gap: 7,
+  minHeight: 108,
 }
 
 const roleCardTopStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  gap: 10,
+  display: 'grid',
+  justifyItems: 'center',
+  gap: 0,
 }
 
 const roleCardBodyStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
   display: 'grid',
-  gap: 6,
+  gap: 5,
+  justifyItems: 'center',
+  alignContent: 'center',
+  minWidth: 0,
 }
 
 const roleCardImageWrapStyle: CSSProperties = {
@@ -2336,6 +2638,7 @@ const roleCardImageWrapStyle: CSSProperties = {
   display: 'grid',
   placeItems: 'center',
   overflow: 'hidden',
+  marginBottom: 1,
 }
 
 const roleCardImageStyle: CSSProperties = {
@@ -2348,10 +2651,11 @@ const roleCardImageStyle: CSSProperties = {
 }
 
 const roleCardTitleRowStyle: CSSProperties = {
-  display: 'flex',
+  display: 'inline-flex',
   alignItems: 'center',
   gap: 8,
   minWidth: 0,
+  justifyContent: 'center',
 }
 
 const roleIconStyle: CSSProperties = {
@@ -2369,21 +2673,26 @@ const roleTitleStyle: CSSProperties = {
   fontSize: 16,
   fontWeight: 800,
   color: '#0F172A',
+  lineHeight: 1.15,
 }
 
 const roleDescriptionStyle: CSSProperties = {
   fontSize: 12.5,
   lineHeight: 1.4,
   color: '#5E6B83',
+  textAlign: 'center',
+  maxWidth: 240,
 }
 
 const serviceGridStyle: CSSProperties = {
   display: 'grid',
+  width: '100%',
   gridTemplateColumns: '1fr 1fr',
-  gap: 8,
+  gap: 14,
 }
 
 const serviceIllustrationCardStyle: CSSProperties = {
+  width: '100%',
   minHeight: 96,
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
@@ -2391,7 +2700,8 @@ const serviceIllustrationCardStyle: CSSProperties = {
   display: 'grid',
   placeItems: 'center',
   overflow: 'hidden',
-  padding: '6px 10px',
+  padding: '8px 12px',
+  marginBottom: 4,
 }
 
 const serviceIllustrationImageStyle: CSSProperties = {
@@ -2406,17 +2716,26 @@ const serviceIllustrationImageStyle: CSSProperties = {
 
 const serviceCardStyle: CSSProperties = {
   position: 'relative',
+  width: '100%',
   border: '1px solid rgba(145, 164, 196, 0.22)',
   background: '#FFFFFF',
   borderRadius: 18,
-  padding: '10px 9px',
-  minHeight: 70,
+  padding: '12px 10px',
+  minHeight: 88,
   display: 'grid',
-  gap: 4,
-  alignContent: 'start',
-  justifyItems: 'start',
+  alignContent: 'center',
+  justifyItems: 'center',
   cursor: 'pointer',
-  textAlign: 'start',
+  textAlign: 'center',
+}
+
+const serviceCardContentStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 5,
+  justifyItems: 'center',
+  alignContent: 'center',
+  minHeight: 60,
 }
 
 const serviceCardSelectedStyle: CSSProperties = {
@@ -2438,11 +2757,10 @@ const serviceLabelStyle: CSSProperties = {
 
 const serviceDescriptionStyle: CSSProperties = {
   fontSize: 9.5,
-  lineHeight: 1.15,
+  lineHeight: 1.25,
   color: '#64748B',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
+  textAlign: 'center',
+  maxWidth: 120,
 }
 
 const checkBadgeStyle: CSSProperties = {
@@ -2460,7 +2778,8 @@ const checkBadgeStyle: CSSProperties = {
 
 const locationCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 34,
+  width: '100%',
 }
 
 const locationMapStyle: CSSProperties = {
@@ -2522,14 +2841,29 @@ const locationMapPinStyle: CSSProperties = {
 
 const locationMetaStyle: CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 6,
+  justifyItems: 'center',
+  textAlign: 'center',
+}
+
+const locationMetaSectionStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 18,
+  justifyItems: 'stretch',
+  paddingTop: 2,
 }
 
 const locationLabelTitleStyle: CSSProperties = {
-  fontSize: 12,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  fontSize: 19,
+  lineHeight: 1.15,
   fontWeight: 800,
-  textTransform: 'uppercase',
-  color: '#5B7CFA',
+  color: PRIMARY_CTA_BLUE,
+  textAlign: 'center',
 }
 
 const locationLabelValueStyle: CSSProperties = {
@@ -2558,48 +2892,65 @@ const secondaryInlineButtonStyle: CSSProperties = {
   cursor: 'pointer',
 }
 
-const summaryCardStyle: CSSProperties = {
+const locationPrimaryButtonStyle: CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: 'linear-gradient(180deg, #0F172A 0%, #233B74 100%)',
+  color: '#FFFFFF',
+  minHeight: 54,
   borderRadius: 20,
-  background: '#F8FBFF',
-  border: '1px solid rgba(91, 124, 250, 0.14)',
-  padding: 10,
-  display: 'grid',
-  gap: 4,
-}
-
-const summaryRowStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 12,
-  fontSize: 13,
+  padding: '0 18px',
+  fontSize: 16,
   fontWeight: 800,
-  color: '#3F4D68',
+  cursor: 'pointer',
+  boxShadow: '0 18px 36px rgba(15, 23, 42, 0.18)',
+  width: 'min(100%, 228px)',
+  justifySelf: 'center',
 }
 
-const summaryLocationStyle: CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
-  color: '#64748B',
+const detailsStageStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  gap: 18,
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
+}
+
+const detailsTitleStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 10,
+  justifyItems: 'center',
 }
 
 const legalCardStyle: CSSProperties = {
   borderRadius: 20,
   background: 'rgba(239, 246, 255, 0.78)',
   border: '1px solid rgba(91, 124, 250, 0.14)',
-  padding: '12px 12px 10px',
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  padding: '13px 12px',
   display: 'grid',
   gap: 10,
+  justifyItems: 'center',
 }
 
 const legalIntroStyle: CSSProperties = {
-  fontSize: 12.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.35,
   color: '#475569',
+  maxWidth: 280,
 }
 
 const legalAgreementListStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
+  width: '100%',
+  gap: 10,
+  justifyItems: 'center',
 }
 
 const legalCheckboxRowStyle: CSSProperties = {
@@ -2607,6 +2958,8 @@ const legalCheckboxRowStyle: CSSProperties = {
   alignItems: 'flex-start',
   gap: 10,
   cursor: 'pointer',
+  width: '100%',
+  maxWidth: 292,
 }
 
 const legalCheckboxInputStyle: CSSProperties = {
@@ -2618,8 +2971,8 @@ const legalCheckboxInputStyle: CSSProperties = {
 }
 
 const legalCheckboxTextStyle: CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.45,
+  fontSize: 12.5,
+  lineHeight: 1.35,
   color: '#0F172A',
 }
 
@@ -2640,6 +2993,8 @@ const legalStaticRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 10,
+  width: '100%',
+  maxWidth: 292,
 }
 
 const legalStaticCheckStyle: CSSProperties = {
@@ -2651,30 +3006,30 @@ const legalStaticCheckStyle: CSSProperties = {
 }
 
 const legalHelperTextStyle: CSSProperties = {
-  fontSize: 12.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.35,
   color: '#3152C8',
 }
 
 const fieldBlockStyle: CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 3,
 }
 
 const labelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11.5,
   fontWeight: 800,
   color: '#23314F',
 }
 
 const inputStyle: CSSProperties = {
   width: '100%',
-  minHeight: 46,
+  minHeight: 42,
   borderRadius: 16,
   border: '1px solid rgba(145, 164, 196, 0.24)',
   background: '#FFFFFF',
   padding: '0 14px',
-  fontSize: 14,
+  fontSize: 13.5,
   color: '#0F172A',
   boxSizing: 'border-box',
   outline: 'none',
@@ -2689,6 +3044,60 @@ const authErrorStyle: CSSProperties = {
   padding: '10px 12px',
 }
 
+const authStageStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  display: 'grid',
+  gap: 16,
+  justifyItems: 'center',
+  alignContent: 'center',
+  placeSelf: 'center',
+}
+
+const authTitleStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 6,
+  justifyItems: 'center',
+}
+
+const authCardStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 14,
+  justifyItems: 'center',
+  alignContent: 'start',
+  paddingBottom: 8,
+}
+
+const authEmailRevealAreaStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  display: 'grid',
+  gap: 10,
+  alignItems: 'start',
+}
+
+const authEmailFieldsStackStyle: CSSProperties = {
+  width: '100%',
+  display: 'grid',
+  gap: 10,
+  alignContent: 'start',
+}
+
+const authEmailButtonStyle: CSSProperties = {
+  ...secondaryInlineButtonStyle,
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  minHeight: 52,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+}
+
 const footerStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
@@ -2700,6 +3109,12 @@ const buttonRowStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: '1fr 1.35fr',
   gap: 8,
+}
+
+const welcomeFooterButtonRowStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
 }
 
 const primaryButtonStyle: CSSProperties = {
@@ -2742,6 +3157,12 @@ const bottomHintStyle: CSSProperties = {
   color: '#64748B',
 }
 
+const welcomeFooterHintStyle: CSSProperties = {
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+}
+
 const textLinkStyle: CSSProperties = {
   appearance: 'none',
   border: 'none',
@@ -2755,13 +3176,18 @@ const textLinkStyle: CSSProperties = {
 
 const detailsSectionsStyle: CSSProperties = {
   display: 'grid',
-  gap: 12,
+  width: '100%',
+  gap: 18,
+  justifyItems: 'center',
 }
 
 const providerIdentityCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
-  padding: '12px 12px 10px',
+  gap: 14,
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  padding: '16px 14px',
   borderRadius: 20,
   border: '1px solid rgba(145, 164, 196, 0.18)',
   background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,251,255,0.96) 100%)',
@@ -2770,7 +3196,9 @@ const providerIdentityCardStyle: CSSProperties = {
 
 const providerIdentityHeaderStyle: CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 6,
+  justifyItems: 'center',
+  textAlign: 'center',
 }
 
 const providerIdentityTitleStyle: CSSProperties = {
@@ -2785,9 +3213,25 @@ const providerIdentitySubtitleStyle: CSSProperties = {
   color: '#64748B',
 }
 
+const providerIdentityHelperStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.35,
+  color: '#64748B',
+  textAlign: 'center',
+  justifySelf: 'center',
+}
+
 const detailsSectionStyle: CSSProperties = {
   display: 'grid',
-  gap: 12,
+  gap: 16,
+  width: '100%',
+  maxWidth: 348,
+  margin: '0 auto',
+  padding: '16px 14px',
+  borderRadius: 20,
+  border: '1px solid rgba(145, 164, 196, 0.16)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(248,251,255,0.94) 100%)',
+  boxShadow: '0 12px 26px rgba(45, 68, 126, 0.06)',
 }
 
 const detailsSectionLabelStyle: CSSProperties = {
@@ -2795,11 +3239,12 @@ const detailsSectionLabelStyle: CSSProperties = {
   fontWeight: 800,
   color: '#5B7CFA',
   textTransform: 'uppercase',
+  textAlign: 'center',
 }
 
 const detailsFieldBlockStyle: CSSProperties = {
   display: 'grid',
-  gap: 6,
+  gap: 8,
 }
 
 const detailsSelectorRowStyle: CSSProperties = {
@@ -2835,24 +3280,34 @@ const detailsSelectorPillActiveStyle: CSSProperties = {
 
 const chipFieldCardStyle: CSSProperties = {
   display: 'grid',
-  gap: 8,
-  padding: '10px 10px 11px',
+  gap: 12,
+  width: '100%',
+  padding: '14px 14px 15px',
   borderRadius: 18,
   background: 'rgba(255,255,255,0.84)',
   border: '1px solid rgba(145, 164, 196, 0.16)',
 }
 
 const chipFieldHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
+  display: 'grid',
+  gap: 6,
+  justifyItems: 'center',
+  textAlign: 'center',
+}
+
+const chipFieldHelperStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.35,
+  color: '#64748B',
+  textAlign: 'center',
+  justifySelf: 'center',
 }
 
 const chipRowStyle: CSSProperties = {
   display: 'flex',
   gap: 5,
   flexWrap: 'wrap',
+  justifyContent: 'center',
 }
 
 const chipStyle: CSSProperties = {
