@@ -3915,6 +3915,20 @@ export default function WalkerDashboard({
             ...(isHomeDashboard ? homeDashboardBackgroundStyle : null),
           }}
         >
+          <div aria-hidden="true" style={dashboardBrandBackdropStyle}>
+            <div style={dashboardBrandGlowTopStyle} />
+            <div style={dashboardBrandGlowCenterStyle} />
+            <div style={dashboardBrandGlowBottomStyle} />
+            <div style={dashboardBrandDiagonalPrimaryStyle} />
+            <div style={dashboardBrandDiagonalSecondaryStyle} />
+            <div style={dashboardBrandDiagonalTertiaryStyle} />
+            <div style={dashboardBrandRouteUpperStyle} />
+            <div style={dashboardBrandRouteLowerStyle} />
+            <div style={dashboardBrandDotsUpperLeftStyle} />
+            <div style={dashboardBrandDotsTopStyle} />
+            <div style={dashboardBrandDotsLowerRightStyle} />
+            <div style={dashboardBrandDotsBottomStyle} />
+          </div>
           <div
             style={{
               ...headerStyle,
@@ -5841,7 +5855,7 @@ function EarningsMetric({
 
 const screenStyle: React.CSSProperties = {
   minHeight: '100dvh',
-  background: '#F8FAFC',
+  background: '#F6F9FD',
   color: '#0F172A',
   fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
   overflowY: 'auto',
@@ -5856,7 +5870,9 @@ const homeScreenStyle: React.CSSProperties = {
 
 const dashboardBackgroundStyle: React.CSSProperties = {
   minHeight: '100dvh',
-  background: 'linear-gradient(180deg, #FAFBFD 0%, #F4F7FB 100%)',
+  position: 'relative',
+  overflow: 'hidden',
+  background: '#F6F9FD',
 }
 
 const homeDashboardBackgroundStyle: React.CSSProperties = {
@@ -5866,12 +5882,148 @@ const homeDashboardBackgroundStyle: React.CSSProperties = {
   overflow: 'hidden',
 }
 
+const dashboardBrandBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  overflow: 'hidden',
+  pointerEvents: 'none',
+  zIndex: 0,
+}
+
+const dashboardBrandGlowTopStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -110,
+  right: -74,
+  width: 250,
+  height: 250,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(91,124,250,0.22) 0%, rgba(91,124,250,0.08) 46%, rgba(91,124,250,0) 74%)',
+}
+
+const dashboardBrandGlowCenterStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '38%',
+  right: '8%',
+  width: 190,
+  height: 190,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(182,171,255,0.16) 0%, rgba(182,171,255,0.06) 44%, rgba(182,171,255,0) 74%)',
+}
+
+const dashboardBrandGlowBottomStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: -116,
+  bottom: -96,
+  width: 280,
+  height: 280,
+  borderRadius: '50%',
+  background: 'radial-gradient(circle, rgba(91,124,250,0.18) 0%, rgba(91,124,250,0.06) 44%, rgba(91,124,250,0) 74%)',
+}
+
+const dashboardBrandDiagonalPrimaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '16%',
+  left: '-10%',
+  width: '122%',
+  height: 2,
+  background: 'rgba(118, 148, 184, 0.28)',
+  transform: 'rotate(11deg)',
+}
+
+const dashboardBrandDiagonalSecondaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '36%',
+  right: '-10%',
+  width: '120%',
+  height: 2,
+  background: 'rgba(118, 148, 184, 0.2)',
+  transform: 'rotate(-14deg)',
+}
+
+const dashboardBrandDiagonalTertiaryStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '68%',
+  left: '-8%',
+  width: '114%',
+  height: 1,
+  background: 'rgba(118, 148, 184, 0.24)',
+  transform: 'rotate(8deg)',
+}
+
+const dashboardBrandRouteUpperStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '18%',
+  left: '59%',
+  width: 104,
+  height: 174,
+  borderLeft: '3px dotted rgba(91, 124, 250, 0.42)',
+  transform: 'rotate(18deg)',
+}
+
+const dashboardBrandRouteLowerStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '18%',
+  bottom: '12%',
+  width: 118,
+  height: 142,
+  borderRight: '3px dotted rgba(91, 124, 250, 0.34)',
+  transform: 'rotate(16deg)',
+}
+
+const dashboardBrandDotsUpperLeftStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '9%',
+  left: '7%',
+  width: 92,
+  height: 92,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.2) 1.2px, transparent 1.2px)',
+  backgroundSize: '13px 13px',
+  opacity: 0.78,
+}
+
+const dashboardBrandDotsTopStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '7%',
+  right: '8%',
+  width: 118,
+  height: 118,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.22) 1.2px, transparent 1.2px)',
+  backgroundSize: '13px 13px',
+  opacity: 0.82,
+}
+
+const dashboardBrandDotsLowerRightStyle: React.CSSProperties = {
+  position: 'absolute',
+  right: '10%',
+  bottom: '22%',
+  width: 86,
+  height: 86,
+  borderRadius: 24,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.18) 1.15px, transparent 1.15px)',
+  backgroundSize: '12px 12px',
+  opacity: 0.72,
+}
+
+const dashboardBrandDotsBottomStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '8%',
+  bottom: '8%',
+  width: 104,
+  height: 104,
+  borderRadius: 28,
+  backgroundImage: 'radial-gradient(circle, rgba(120, 140, 176, 0.2) 1.15px, transparent 1.15px)',
+  backgroundSize: '12px 12px',
+  opacity: 0.78,
+}
+
 const headerStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'stretch',
   gap: 8,
-  margin: 'calc(14px + env(safe-area-inset-top)) 18px 10px',
+  margin: 'calc(6px + env(safe-area-inset-top)) 18px 10px',
   padding: '0',
   position: 'sticky',
   top: 0,
@@ -5884,7 +6036,7 @@ const headerStyle: React.CSSProperties = {
 const homeHeaderStyle: React.CSSProperties = {
   position: 'relative',
   flexShrink: 0,
-  marginBottom: 0,
+  marginBottom: 28,
 }
 
 const headerMenuBtnStyle: React.CSSProperties = {
