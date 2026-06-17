@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import NotificationsBell from '../components/NotificationsBell'
 import MapView from '../components/MapView'
-import ActionButton from '../components/ActionButton'
 import SearchingSheet from '../components/SearchingSheet'
 import CompletionCard from '../components/CompletionCard'
 import ProfileAvatar from '../components/ProfileAvatar'
@@ -665,6 +664,10 @@ export default function ClientDashboard({
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
   const [showSchedulePage, setShowSchedulePage] = useState(false)
   const [scheduleDraft, setScheduleDraft] = useState(getNowPlus15LocalInput())
+  // Gates the "Schedule future order" CTA. Stays false on sheet open / tab
+  // change / after a scheduled booking is created so a default preselect
+  // never enables the CTA on its own — only an actual wheel change does.
+  const [hasUserModifiedSchedule, setHasUserModifiedSchedule] = useState(false)
   const [showDogNameSheet, setShowDogNameSheet] = useState(false)
   const [recentDogNames, setRecentDogNames] = useState<string[]>([])
   const [recentBabysitterNames, setRecentBabysitterNames] = useState<string[]>([])
@@ -1366,6 +1369,9 @@ export default function ClientDashboard({
     const sourceScheduledFor = flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null
     const nextDraft = clampScheduledDraft(sourceScheduledFor, getNowPlus15LocalInput())
     setScheduleDraft((current) => (current === nextDraft ? current : nextDraft))
+    // Sheet (re)open: this useEffect seeds the draft via setScheduleDraft (not
+    // via the wheel handler), so it must not count as a user modification.
+    setHasUserModifiedSchedule(false)
     const nextRepeatTime = splitScheduledDraft(nextDraft).time
     setRepeatStartTime((current) => (current === nextRepeatTime ? current : nextRepeatTime))
     console.log('[schedule-sheet] open', {
@@ -3370,6 +3376,7 @@ export default function ClientDashboard({
     setScheduleDraft(nextDraft)
     setRepeatStartTime(splitScheduledDraft(nextDraft).time)
     setScheduleMode('later')
+    setHasUserModifiedSchedule(false)
     clearScheduleConflictWarning('sheet_open')
     setShowSchedulePage(true)
     markFirstInteractionVisual('client-dashboard:open-schedule')
@@ -3391,6 +3398,8 @@ export default function ClientDashboard({
     clearScheduleConflictWarning(`tab_changed:${nextMode}`)
     setScheduleMode(nextMode)
     setRepeatType(nextMode === 'repeat' ? 'weekly' : 'one_time')
+    // Switching tabs counts as starting a fresh selection in either mode.
+    setHasUserModifiedSchedule(false)
   }, [clearScheduleConflictWarning, flow.bookingTiming, scheduleDraft])
 
   const openAddressPicker = useCallback(() => {
@@ -3481,6 +3490,10 @@ export default function ClientDashboard({
       setScheduleDraft(
         clampScheduledDraft(mergeScheduledDraft(nextDate, `${nextHour}:${nextMinute}`), scheduleMinValue),
       )
+      // This callback is only wired to user-driven wheel onChange events
+      // (seed paths use setScheduleDraft directly), so reaching here means
+      // the user actively changed day, hour, or minute.
+      setHasUserModifiedSchedule(true)
     },
     [scheduleMinValue],
   )
@@ -4220,6 +4233,9 @@ export default function ClientDashboard({
     const nextDraft = clampScheduledDraft(getNowPlus15LocalInput(), getNowPlus15LocalInput())
     setScheduleDraft(nextDraft)
     setRepeatStartTime(splitScheduledDraft(nextDraft).time)
+    // After a scheduled booking is created (or any composer reset), require a
+    // fresh wheel change before the "Schedule future order" CTA re-enables.
+    setHasUserModifiedSchedule(false)
     setMatchingUiState(null)
     console.log('[ClientDashboard] booking composer reset applied', {
       bookingComposerResetKey: flow.bookingComposerResetKey,
@@ -5345,46 +5361,72 @@ export default function ClientDashboard({
               <div style={scheduleInlineCaptionStyle}>
                 {isRtl ? 'החיפוש מתחיל 15 דקות לפני' : 'Search starts 15 min before'}
               </div>
-              <ActionButton
-                label={
+              {(() => {
+                const scheduleCtaLabel =
                   scheduleMode === 'repeat'
                     ? t('recurring.createWeeklyBooking')
                     : (isRtl ? 'יצירת הזמנה עתידית' : 'Schedule future order')
-                }
-                disabled={
+                // 'later' mode also requires an actual wheel change before the
+                // CTA is enabled — opening the sheet or accepting the default
+                // preselect alone must not submit.
+                const scheduleCtaDisabled =
                   scheduleMode === 'repeat'
                     ? !canSubmitRecurringBooking
-                    : !canSubmitBooking
-                }
-                onClick={() => {
-                  const canSubmitCurrentMode = scheduleMode === 'repeat' ? canSubmitRecurringBooking : canSubmitBooking
-                  if (!canSubmitCurrentMode) {
-                    console.log('[ClientDashboard] schedule CTA blocked by validation', {
-                      scheduleMode,
-                      canSubmitCurrentMode,
-                      canSubmitRecurringBooking,
-                      canSubmitBooking,
-                      bookingBlockedReasons,
-                      requestServiceType: effectiveRequestServiceType,
-                      scheduleDraft,
-                    })
-                    return
-                  }
-                  if (scheduleMode === 'repeat') {
-                    setRepeatType('weekly')
-                    void handleCreateRecurringBooking()
-                    return
-                  }
-                  const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
-                  flow.setScheduledFor(nextValue)
-                  setScheduleDraft(nextValue)
-                  setRepeatType('one_time')
-                  clearScheduleConflictWarning('scheduled_submit_success')
-                  flow.setBookingTiming('scheduled')
-                  setShowSchedulePage(false)
-                  void hapticSuccess()
-                }}
-              />
+                    : !canSubmitBooking || !hasUserModifiedSchedule
+                const scheduleCtaLoading = scheduleMode === 'repeat' && recurringLoading
+                return (
+                  <button
+                    type="button"
+                    data-control="schedule-cta"
+                    onClick={() => {
+                      if (scheduleCtaDisabled || scheduleCtaLoading) return
+                      const canSubmitCurrentMode = scheduleMode === 'repeat' ? canSubmitRecurringBooking : canSubmitBooking
+                      if (!canSubmitCurrentMode) {
+                        console.log('[ClientDashboard] schedule CTA blocked by validation', {
+                          scheduleMode,
+                          canSubmitCurrentMode,
+                          canSubmitRecurringBooking,
+                          canSubmitBooking,
+                          hasUserModifiedSchedule,
+                          bookingBlockedReasons,
+                          requestServiceType: effectiveRequestServiceType,
+                          scheduleDraft,
+                        })
+                        return
+                      }
+                      if (scheduleMode === 'repeat') {
+                        setRepeatType('weekly')
+                        void handleCreateRecurringBooking()
+                        return
+                      }
+                      const nextValue = clampScheduledDraft(scheduleDraft, scheduleMinValue)
+                      flow.setScheduledFor(nextValue)
+                      setScheduleDraft(nextValue)
+                      setRepeatType('one_time')
+                      clearScheduleConflictWarning('scheduled_submit_success')
+                      flow.setBookingTiming('scheduled')
+                      setHasUserModifiedSchedule(false)
+                      setShowSchedulePage(false)
+                      void hapticSuccess()
+                    }}
+                    disabled={scheduleCtaDisabled || scheduleCtaLoading}
+                    style={{
+                      ...bookingPrimaryButtonStyle,
+                      ...(scheduleCtaDisabled ? bookingPrimaryButtonDisabledStyle : null),
+                      ...(scheduleCtaLoading ? bookingPrimaryButtonLoadingStyle : null),
+                    }}
+                  >
+                    {scheduleCtaLoading ? (
+                      <>
+                        <span style={bookingPrimarySpinnerStyle} />
+                        {t('booking.scheduling')}
+                      </>
+                    ) : (
+                      scheduleCtaLabel
+                    )}
+                  </button>
+                )
+              })()}
               {scheduleMode === 'repeat' && recurringError && <div style={recurringInlineErrorStyle}>{recurringError}</div>}
               {scheduleMode === 'repeat' && recurringSuccess && <div style={recurringInlineSuccessStyle}>{recurringSuccess}</div>}
             </div>
