@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { stripePromise } from '../lib/stripe'
+import { useTranslation } from 'react-i18next'
 
 interface SavedCard {
   id: string
@@ -38,6 +39,8 @@ export default function CardSetupForm({
   onCancelSetup,
   onRetry,
 }: CardSetupFormProps) {
+  const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
   // ── Loading state ──────────────────────────────────────────
   if (loadingCard) {
     return (
@@ -47,8 +50,8 @@ export default function CardSetupForm({
             <CreditCardIcon />
           </div>
           <div style={{ flex: 1 }}>
-            <div style={labelStyle}>Payment method</div>
-            <div style={sublabelStyle}>Loading...</div>
+            <div style={labelStyle}>{isHebrew ? 'אמצעי תשלום' : 'Payment method'}</div>
+            <div style={sublabelStyle}>{isHebrew ? 'טוען...' : 'Loading...'}</div>
           </div>
         </div>
       </div>
@@ -64,12 +67,12 @@ export default function CardSetupForm({
             <CreditCardIcon color="#F59E0B" />
           </div>
           <div style={{ flex: 1 }}>
-            <div style={labelStyle}>Payment method</div>
-            <div style={sublabelStyle}>Could not load — tap to retry</div>
+            <div style={labelStyle}>{isHebrew ? 'אמצעי תשלום' : 'Payment method'}</div>
+            <div style={sublabelStyle}>{isHebrew ? 'לא הצלחנו לטעון — הקישו כדי לנסות שוב' : 'Could not load — tap to retry'}</div>
           </div>
           {onRetry && (
             <button type="button" onClick={onRetry} style={retryBtnStyle}>
-              Retry
+              {isHebrew ? 'נסה שוב' : 'Retry'}
             </button>
           )}
         </div>
@@ -82,7 +85,9 @@ export default function CardSetupForm({
     return (
       <div style={setupWrapperStyle}>
         <div style={{ ...labelStyle, marginBottom: 10 }}>
-          {savedCard ? 'Change payment method' : 'Add payment method'}
+          {savedCard
+            ? (isHebrew ? 'החלף אמצעי תשלום' : 'Change payment method')
+            : (isHebrew ? 'הוסף אמצעי תשלום' : 'Add payment method')}
         </div>
         <Elements stripe={stripePromise} options={{ clientSecret: setupClientSecret }}>
           <SetupForm
@@ -93,7 +98,7 @@ export default function CardSetupForm({
         </Elements>
         <div style={{ ...reassuranceStyle, marginTop: 12 }}>
           <LockIcon />
-          <span>Your card is saved securely. You won't be charged now.</span>
+          <span>{isHebrew ? 'הכרטיס נשמר בצורה מאובטחת. לא נחייב אותך עכשיו.' : "Your card is saved securely. You won't be charged now."}</span>
         </div>
       </div>
     )
@@ -113,17 +118,17 @@ export default function CardSetupForm({
             </div>
             {savedCard.expMonth && savedCard.expYear && (
               <div style={sublabelStyle}>
-                Expires {String(savedCard.expMonth).padStart(2, '0')}/{String(savedCard.expYear).slice(-2)}
+                {isHebrew ? 'תוקף' : 'Expires'} {String(savedCard.expMonth).padStart(2, '0')}/{String(savedCard.expYear).slice(-2)}
               </div>
             )}
           </div>
           <button type="button" onClick={onChangeCard} style={changeBtnStyle}>
-            Change
+            {isHebrew ? 'שנה' : 'Change'}
           </button>
         </div>
         <div style={reassuranceStyle}>
           <LockIcon />
-          <span>Charged only after the walk</span>
+          <span>{isHebrew ? 'החיוב יתבצע רק אחרי השלמת השירות' : 'Charged only after the walk'}</span>
         </div>
       </div>
     )
@@ -137,11 +142,11 @@ export default function CardSetupForm({
           <CreditCardIcon color="#EF4444" />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={labelStyle}>No payment method</div>
-          <div style={sublabelStyle}>Add a card to book walks</div>
+          <div style={labelStyle}>{isHebrew ? 'אין אמצעי תשלום' : 'No payment method'}</div>
+          <div style={sublabelStyle}>{isHebrew ? 'הוסף כרטיס כדי להזמין שירותים' : 'Add a card to book walks'}</div>
         </div>
         <button type="button" onClick={onRequestSetup} style={addBtnStyle}>
-          Add card
+          {isHebrew ? 'הוסף כרטיס' : 'Add card'}
         </button>
       </div>
     </div>
@@ -157,6 +162,8 @@ function SetupForm({
   onCancel: () => void
   hasExistingCard: boolean
 }) {
+  const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
   const stripe = useStripe()
   const elements = useElements()
   const [processing, setProcessing] = useState(false)
@@ -182,7 +189,7 @@ function SetupForm({
     })
 
     if (submitError) {
-      setError(submitError.message || 'Failed to save card')
+      setError(submitError.message || (isHebrew ? 'שמירת הכרטיס נכשלה' : 'Failed to save card'))
       setProcessing(false)
       return
     }
@@ -219,8 +226,8 @@ function SetupForm({
             opacity: processing ? 0.7 : 1,
             cursor: processing ? 'not-allowed' : 'pointer',
           }}
-        >
-          {processing ? 'Saving...' : 'Save card'}
+          >
+          {processing ? (isHebrew ? 'שומר...' : 'Saving...') : (isHebrew ? 'שמור כרטיס' : 'Save card')}
         </button>
         {hasExistingCard && (
           <button
@@ -229,7 +236,7 @@ function SetupForm({
             disabled={processing}
             style={cancelBtnStyle}
           >
-            Cancel
+            {isHebrew ? 'ביטול' : 'Cancel'}
           </button>
         )}
       </div>

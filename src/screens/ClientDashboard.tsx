@@ -885,7 +885,9 @@ export default function ClientDashboard({
     : selectedDogPets.length > 1
       ? `${formatDogDisplayLabel(selectedDogPets[0]?.normalizedName ?? '', selectedDogPets[0]?.dog_size, { isHebrew: isRtl })} +${selectedDogPets.length - 1}`
       : bookingSubjectDisplayValue
-  const selectedDogNamesNote = selectedDogNames.length > 0 ? `Dogs: ${selectedDogNames.join(', ')}` : null
+  const selectedDogNamesNote = selectedDogNames.length > 0
+    ? `${isRtl ? 'כלבים' : 'Dogs'}: ${selectedDogNames.join(', ')}`
+    : null
   useEffect(() => {
     selectedBookingServiceRef.current = resolvedBookingService
     requestServiceTypeRef.current = requestServiceType
@@ -3269,7 +3271,7 @@ export default function ClientDashboard({
     })
     if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
       rows.push({
-        label: isRtl ? 'Dogs' : 'Dogs',
+        label: isRtl ? 'כלבים' : 'Dogs',
         value: formatDogCountLabel(completionJobDetails.dog_count ?? 1, { isHebrew: isRtl }),
       })
     }

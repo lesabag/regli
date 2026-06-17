@@ -158,6 +158,49 @@ function durationFromMinutes(minutes: number | null | undefined): string {
   return formatDurationFromMinutes(minutes) ?? '—'
 }
 
+function formatDurationFromMinutesLocalized(
+  minutes: number | null | undefined,
+  isHebrew: boolean,
+): string {
+  if (!isHebrew) return durationFromMinutes(minutes)
+  if (minutes == null || Number.isNaN(minutes)) return '—'
+  const safe = Math.max(0, Math.round(minutes))
+  if (safe <= 0) return '—'
+  if (safe < 60) return safe === 1 ? 'דקה 1' : `${safe} דקות`
+  if (safe % 60 === 0) return safe / 60 === 1 ? 'שעה 1' : `${safe / 60} שעות`
+  if (safe % 30 === 0) return `${safe / 60} שעות`
+  return `${safe} דקות`
+}
+
+function formatElapsedDurationLocalized(
+  seconds: number | null | undefined,
+  isHebrew: boolean,
+): string | null {
+  if (seconds == null || Number.isNaN(seconds)) return null
+
+  const safe = Math.max(0, Math.floor(seconds))
+
+  if (!isHebrew) {
+    if (safe < 60) return `${safe} sec`
+    const totalMinutes = Math.floor(safe / 60)
+    if (totalMinutes < 60) return `${totalMinutes} min`
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    if (minutes <= 0) return `${hours} h`
+    return `${hours} h ${minutes} min`
+  }
+
+  if (safe < 60) return safe === 1 ? 'שניה 1' : `${safe} שניות`
+  const totalMinutes = Math.floor(safe / 60)
+  if (totalMinutes < 60) return totalMinutes === 1 ? 'דקה 1' : `${totalMinutes} דקות`
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (minutes <= 0) return hours === 1 ? 'שעה 1' : `${hours} שעות`
+  const hourLabel = hours === 1 ? 'שעה 1' : `${hours} שעות`
+  const minuteLabel = minutes === 1 ? 'דקה 1' : `${minutes} דקות`
+  return `${hourLabel} ${minuteLabel}`
+}
+
 function parseBabysitterNotes(notes: string | null | undefined): {
   details: string | null
   startTime: string | null
@@ -199,6 +242,12 @@ function getDisplayServiceNote(serviceType: string | null | undefined, notes: st
 
   const trimmed = notes.trim()
   return trimmed || null
+}
+
+function formatMissionServiceNote(note: string | null, isHebrew: boolean): string | null {
+  if (!note) return null
+  if (!isHebrew) return note
+  return note.replace(/^Dogs:\s*/i, 'כלבים: ')
 }
 
 function formatMoney(value: number | null | undefined): string {
@@ -1875,6 +1924,7 @@ export default function WalkerDashboard({
   const onTheWayJobHasProviderIssue = hasProviderIssue(onTheWayJob?.notes)
   const activeJobHasProviderIssue = hasProviderIssue(activeJob?.notes)
   const activeLabels = getServiceLabels(activeJob?.service_type)
+  const localizedCompletionTitle = isHebrew ? 'השירות הושלם' : getServiceLabels(null).completedTitle
   const walkerStartServiceLabel = isHebrew ? 'התחל שירות' : 'Start service'
   const walkerCompleteServiceLabel = isHebrew ? 'סיים שירות' : 'Complete service'
   const activeJobCanComplete =
@@ -1999,6 +2049,14 @@ export default function WalkerDashboard({
       completionJobDetails?.service_completed_at,
     ],
   )
+  const completionPlannedDurationLabel = useMemo(
+    () => formatDurationFromMinutesLocalized(completionJobDetails?.duration_minutes ?? null, isHebrew),
+    [completionJobDetails?.duration_minutes, isHebrew],
+  )
+  const completionActualDurationLabel = useMemo(
+    () => formatElapsedDurationLocalized(completionDurationSummary.elapsedSeconds, isHebrew) ?? '—',
+    [completionDurationSummary.elapsedSeconds, isHebrew],
+  )
 
   useEffect(() => {
     if (!flow.completionSuccess) return
@@ -2012,10 +2070,10 @@ export default function WalkerDashboard({
       service_started_at: completionJobDetails?.service_started_at ?? null,
       service_completed_at: completionJobDetails?.service_completed_at ?? null,
       computedDiffSeconds: diffSeconds,
-      computedActualDurationLabel: completionDurationSummary.actualLabel ?? '—',
+      computedActualDurationLabel: completionActualDurationLabel,
     })
   }, [
-    completionDurationSummary.actualLabel,
+    completionActualDurationLabel,
     completionJobDetails?.service_completed_at,
     completionJobDetails?.service_started_at,
     flow.completionSuccess,
@@ -2025,21 +2083,21 @@ export default function WalkerDashboard({
     const rows: Array<{ label: string; value: string }> = []
     if (isDogServiceType(completionJobDetails?.service_type) && completionJobDetails) {
       rows.push({
-        label: isHebrew ? 'Dogs' : 'Dogs',
+        label: isHebrew ? 'כלבים' : 'Dogs',
         value: formatDogCountLabel(completionJobDetails.dog_count ?? 1, { isHebrew }),
       })
     }
-    if (completionDurationSummary.plannedLabel) {
-      rows.push({ label: 'Planned', value: completionDurationSummary.plannedLabel })
+    if (completionPlannedDurationLabel && completionPlannedDurationLabel !== '—') {
+      rows.push({ label: isHebrew ? 'מתוכנן' : 'Planned', value: completionPlannedDurationLabel })
     }
     rows.push({
       label: isHebrew ? 'משך בפועל' : 'Actual duration',
-      value: completionDurationSummary.actualLabel || '—',
+      value: completionActualDurationLabel,
     })
     return rows
   }, [
-    completionDurationSummary.actualLabel,
-    completionDurationSummary.plannedLabel,
+    completionActualDurationLabel,
+    completionPlannedDurationLabel,
     completionJobDetails,
     isHebrew,
   ])
@@ -5370,16 +5428,23 @@ export default function WalkerDashboard({
               ? formatDogCountLabel(missionJob.dog_count ?? 1, { isHebrew })
               : null
             const missionAddress = missionJob.location ? formatShortAddress(missionJob.address || missionJob.location) : null
-            const missionNote = getDisplayServiceNote(missionJob.service_type, missionJob.notes)
+            const missionNote = formatMissionServiceNote(
+              getDisplayServiceNote(missionJob.service_type, missionJob.notes),
+              isHebrew,
+            )
             const isFixedVisitMission = getBookingPricingModelForService(missionJob.service_type) === 'fixed_visit'
             const missionFixedVisitPriceLabel = formatMoney(
               missionJob.walker_earnings ?? getEstimatedProviderEarnings(missionJob) ?? missionJob.price,
             )
+            const missionElapsedLabel = formatElapsedDurationLocalized(activeDurationSummary.elapsedSeconds, isHebrew)
+            const missionPlannedLabel = isMissionActive
+              ? formatDurationFromMinutesLocalized(missionJob.duration_minutes ?? null, isHebrew)
+              : formatDurationFromMinutesLocalized(missionJob.duration_minutes, isHebrew)
 
             const missionStatusLabel = isMissionActive
-              ? activeLabels.activeTitle
+              ? (isHebrew ? 'השירות פעיל כעת' : activeLabels.activeTitle)
               : flow.screenPhase === 'arrived_pending_confirmation'
-                ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for confirmation')
+                ? (isHebrew ? 'המתן לאישור הלקוח' : 'Wait for confirmation')
                 : flow.screenPhase === 'arrival_confirmed'
                   ? (isHebrew ? 'הגעת ללקוח' : 'Arrived')
                   : (isHebrew ? 'בדרך ללקוח' : 'On the way')
@@ -5393,7 +5458,7 @@ export default function WalkerDashboard({
               : flow.screenPhase === 'arrival_confirmed'
                 ? (isHebrew ? 'אפשר להתחיל את השירות' : 'Ready to start the service')
                 : flow.screenPhase === 'arrived_pending_confirmation'
-                  ? (isHebrew ? 'ממתין לאישור הלקוח כדי להתחיל' : 'Waiting for client confirmation to start')
+                  ? (isHebrew ? 'המתן לאישור הלקוח כדי להתחיל' : 'Wait for client confirmation to start')
                   : (isHebrew ? 'נווט אל הלקוח והכן את השירות' : 'Head to the client and prepare the service')
 
             const missionProgressStep = isMissionActive
@@ -5407,19 +5472,16 @@ export default function WalkerDashboard({
                   isFixedVisitMission
                     ? [
                         { label: t('tracking.visitFee'), value: missionFixedVisitPriceLabel },
-                        activeDurationSummary.elapsedLabel
-                          ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
+                        missionElapsedLabel
+                          ? { label: isHebrew ? 'בפועל' : 'Actual', value: missionElapsedLabel }
                           : null,
                       ].filter(Boolean)
                     : [
-                        activeDurationSummary.elapsedLabel
-                          ? { label: isHebrew ? 'עבר' : 'Elapsed', value: activeDurationSummary.elapsedLabel }
+                        missionPlannedLabel && missionPlannedLabel !== '—'
+                          ? { label: isHebrew ? 'מתוכנן' : 'Planned', value: missionPlannedLabel }
                           : null,
-                        activeDurationSummary.plannedLabel
-                          ? { label: isHebrew ? 'מתוכנן' : 'Planned', value: activeDurationSummary.plannedLabel }
-                          : null,
-                        activeDurationSummary.actualLabel
-                          ? { label: isHebrew ? 'בפועל' : 'Actual', value: activeDurationSummary.actualLabel }
+                        missionElapsedLabel
+                          ? { label: isHebrew ? 'בפועל' : 'Actual', value: missionElapsedLabel }
                           : null,
                       ].filter(Boolean)
                 ) as Array<{ label: string; value: string }>
@@ -5427,7 +5489,7 @@ export default function WalkerDashboard({
                   isFixedVisitMission
                     ? { label: t('tracking.visitFee'), value: missionFixedVisitPriceLabel }
                     : missionJob.duration_minutes
-                      ? { label: isHebrew ? 'משך' : 'Duration', value: durationFromMinutes(missionJob.duration_minutes) }
+                      ? { label: isHebrew ? 'משך' : 'Duration', value: formatDurationFromMinutesLocalized(missionJob.duration_minutes, isHebrew) }
                       : null,
                   !isFixedVisitMission && missionDogCountLabel
                     ? { label: isHebrew ? 'פרטים' : 'Details', value: missionDogCountLabel }
@@ -5452,12 +5514,12 @@ export default function WalkerDashboard({
                 ? (isHebrew ? 'הגעתי' : 'Confirm arrival')
                 : flow.screenPhase === 'arrival_confirmed'
                   ? walkerStartServiceLabel
-                  : (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client confirmation')
+                  : (isHebrew ? 'המתן לאישור הלקוח' : 'Wait for client confirmation')
 
             const missionSupportTitle = missionHasProviderIssue
-              ? (isHebrew ? 'ממתין לבדיקת התמיכה' : 'Waiting for support review')
+              ? (isHebrew ? 'המתן לבדיקת התמיכה' : 'Waiting for support review')
               : flow.screenPhase === 'arrived_pending_confirmation'
-                ? (isHebrew ? 'ממתין לאישור הלקוח' : 'Waiting for client confirmation')
+                ? (isHebrew ? 'המתן לאישור הלקוח' : 'Wait for client confirmation')
                 : (isHebrew ? 'מוכן לשלב הבא' : 'Ready for the next step')
 
             const missionSupportBody = missionHasProviderIssue
@@ -5510,7 +5572,7 @@ export default function WalkerDashboard({
 
                 {missionNote && (
                   <div style={missionNotesStyle}>
-                    <div style={missionInfoLabelStyle}>{isHebrew ? 'הערות שירות' : 'Service notes'}</div>
+                    <div style={missionInfoLabelStyle}>{isHebrew ? 'הערות:' : 'Notes:'}</div>
                     <div style={missionNotesBodyStyle}>{missionNote}</div>
                   </div>
                 )}
@@ -5525,14 +5587,15 @@ export default function WalkerDashboard({
                   <div style={serviceTimerPanelStyle}>
                     {missionMetaItems.map((item) => (
                       <div key={item.label} style={missionMetaCardStyle}>
-                        <span style={serviceTimerLabelStyle}>{item.label}</span>
-                        <span style={serviceTimerValueStyle}>{item.value}</span>
+                        <span style={serviceTimerInlineTextStyle}>
+                          <span style={serviceTimerLabelInlineStyle}>{item.label}:</span> {item.value}
+                        </span>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {(missionHasProviderIssue || flow.screenPhase === 'arrived_pending_confirmation' || flow.screenPhase === 'arrival_confirmed') && (
+                {(missionHasProviderIssue || flow.screenPhase === 'arrived_pending_confirmation') && (
                   <div style={waitingStateStyle}>
                     <div style={waitingStateTitleStyle}>{missionSupportTitle}</div>
                     <div style={waitingStateBodyStyle}>{missionSupportBody}</div>
@@ -5557,7 +5620,8 @@ export default function WalkerDashboard({
                   </div>
                 )}
 
-                {(!missionHasProviderIssue || (!isMissionActive && flow.screenPhase === 'on_the_way')) && (
+                {(!missionHasProviderIssue || (!isMissionActive && flow.screenPhase === 'on_the_way')) &&
+                flow.screenPhase !== 'arrived_pending_confirmation' && (
                   <div style={activeCardFooterStyle}>
                     <button
                       onClick={async () => {
@@ -5775,7 +5839,7 @@ export default function WalkerDashboard({
           <div style={providerCompletionSheetCardStyle}>
             <CompletionCard
               promptKey={flow.completionSuccess.jobId}
-              title={getServiceLabels(null).completedTitle}
+              title={localizedCompletionTitle}
               subtitle={isHebrew ? `דרג את ${completionClientName}` : `Rate ${completionClientName}`}
               metaRows={completionMetaRows}
               earnings={
@@ -5783,6 +5847,7 @@ export default function WalkerDashboard({
                   ? `₪${flow.completionSuccess.earnings.toFixed(0)}`
                   : undefined
               }
+              isHebrew={isHebrew}
               onRate={flow.submitCompletionRating}
               ratingSubmitting={flow.completionRatingSubmitting}
               alreadyRated={flow.ratedJobIds.has(flow.completionSuccess.jobId)}
@@ -8737,29 +8802,31 @@ const serviceTimerPanelStyle: React.CSSProperties = {
   gap: 8,
 }
 
-const serviceTimerLabelStyle: React.CSSProperties = {
-  fontSize: 11,
+const serviceTimerInlineTextStyle: React.CSSProperties = {
+  fontSize: 14,
   fontWeight: 700,
-  color: 'rgba(148, 163, 184, 0.9)',
-  textTransform: 'uppercase',
-  letterSpacing: 0.35,
+  color: '#F8FAFC',
+  lineHeight: 1.25,
+  whiteSpace: 'normal',
+  overflow: 'visible',
+  textOverflow: 'clip',
 }
 
-const serviceTimerValueStyle: React.CSSProperties = {
-  fontSize: 16,
+const serviceTimerLabelInlineStyle: React.CSSProperties = {
+  color: 'rgba(148, 163, 184, 0.9)',
+  fontSize: 12,
   fontWeight: 800,
-  color: '#F8FAFC',
-  fontVariantNumeric: 'tabular-nums',
 }
 
 const missionMetaCardStyle: React.CSSProperties = {
-  minHeight: 58,
+  minHeight: 44,
   borderRadius: 18,
   background: 'rgba(15, 23, 42, 0.54)',
   border: '1px solid rgba(96, 165, 250, 0.12)',
   padding: '10px 12px',
-  display: 'grid',
-  alignContent: 'space-between',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
   gap: 6,
 }
 

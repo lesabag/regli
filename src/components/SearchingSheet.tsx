@@ -136,10 +136,10 @@ export default function SearchingSheet({
   const activeStepIndex = Math.min(statusSteps.length - 1, Math.floor(safeElapsedSeconds / 6))
   const activeStep = statusSteps[activeStepIndex] ?? statusSteps[0]
   const title = isRtl ? 'מאתרים ספקים קרובים…' : 'Finding nearby providers…'
-  const etaLabel = 'ETA'
-  const durationText = isFixedVisit ? i18n.t('tracking.visitFee') : (isRtl ? 'Duration' : 'Duration')
+  const etaLabel = isRtl ? 'זמן הגעה' : 'ETA'
+  const durationText = isFixedVisit ? i18n.t('tracking.visitFee') : (isRtl ? 'משך' : 'Duration')
   const durationValue = isFixedVisit ? (priceLabel || '—') : (durationLabel || '—')
-  const priceText = isRtl ? 'Price' : 'Price'
+  const priceText = isRtl ? 'מחיר' : 'Price'
   const tryAgainLabel = isRtl ? 'נסה שוב' : 'Try again'
   const emptyResolvedPrimaryLabel = emptyPrimaryLabel || tryAgainLabel
   const emptyResolvedSecondaryLabel = emptySecondaryLabel || null

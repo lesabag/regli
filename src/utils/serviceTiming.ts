@@ -1,3 +1,5 @@
+import i18n from '../i18n.ts'
+
 type DurationSummaryInput = {
   plannedMinutes?: number | null
   startedAt?: string | null
@@ -29,27 +31,29 @@ function formatClock(seconds: number): string {
 export function formatDurationFromMinutes(minutes: number | null | undefined): string | null {
   if (minutes == null || Number.isNaN(minutes)) return null
   const safe = Math.max(0, Math.round(minutes))
+  const isHebrew = i18n.resolvedLanguage === 'he'
   if (safe <= 0) return null
-  if (safe < 60) return `${safe} min`
-  if (safe % 60 === 0) return `${safe / 60} h`
-  if (safe % 30 === 0) return `${safe / 60} h`
-  return `${safe} min`
+  if (safe < 60) return isHebrew ? `${safe} דק׳` : `${safe} min`
+  if (safe % 60 === 0) return isHebrew ? `${safe / 60} שעה` : `${safe / 60} h`
+  if (safe % 30 === 0) return isHebrew ? `${safe / 60} שעה` : `${safe / 60} h`
+  return isHebrew ? `${safe} דק׳` : `${safe} min`
 }
 
 export function formatElapsedDurationFromSeconds(seconds: number | null | undefined): string | null {
   if (seconds == null || Number.isNaN(seconds)) return null
 
   const safe = Math.max(0, Math.floor(seconds))
+  const isHebrew = i18n.resolvedLanguage === 'he'
 
-  if (safe < 60) return `${safe} sec`
+  if (safe < 60) return isHebrew ? `${safe} שניות` : `${safe} sec`
 
   const totalMinutes = Math.floor(safe / 60)
-  if (totalMinutes < 60) return `${totalMinutes} min`
+  if (totalMinutes < 60) return isHebrew ? `${totalMinutes} דק׳` : `${totalMinutes} min`
 
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
-  if (minutes <= 0) return `${hours} h`
-  return `${hours} h ${minutes} min`
+  if (minutes <= 0) return isHebrew ? `${hours} שעה` : `${hours} h`
+  return isHebrew ? `${hours} שעה ${minutes} דק׳` : `${hours} h ${minutes} min`
 }
 
 export function getElapsedSeconds(

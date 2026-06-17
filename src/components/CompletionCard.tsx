@@ -6,6 +6,7 @@ interface CompletionCardProps {
   title: string
   subtitle: string
   earnings?: string
+  isHebrew?: boolean
   metaRows?: Array<{ label: string; value: string }>
   onRate?: (rating: number, review: string) => void
   ratingSubmitting?: boolean
@@ -23,6 +24,7 @@ export default function CompletionCard({
   title,
   subtitle,
   earnings,
+  isHebrew = false,
   metaRows,
   onRate,
   ratingSubmitting,
@@ -55,6 +57,17 @@ export default function CompletionCard({
   }
 
   const showRatingInput = !!onRate && !ratingDone
+  const favoriteDefaultActiveLabel = isHebrew ? 'ספק מועדף' : 'Preferred walker'
+  const favoriteDefaultInactiveLabel = isHebrew ? `שמור את ${favoriteLabel}` : `Save ${favoriteLabel}`
+  const earnedLabel = isHebrew ? 'התקבל' : 'Earned'
+  const ratingPromptLabel = isHebrew ? 'איך הייתה החוויה שלך?' : 'How was your experience?'
+  const reviewPlaceholder = isHebrew ? 'כתבו משוב קצר (לא חובה)' : 'Share your feedback (optional)'
+  const thanksLabel = isHebrew ? 'תודה על המשוב שלך!' : 'Thanks for your feedback!'
+  const submitRatingLabel = isHebrew ? 'שלח דירוג' : 'Submit rating'
+  const sendingLabel = isHebrew ? 'שולח...' : 'Sending...'
+  const dismissLabel = ratingDone || alreadyRated
+    ? (isHebrew ? 'סיום' : 'Done')
+    : (isHebrew ? 'דלג' : 'Skip')
 
   return (
     <div style={cardStyle}>
@@ -92,15 +105,15 @@ export default function CompletionCard({
           <span style={favoriteIconStyle}>{favoriteActive ? '♥' : '♡'}</span>
           <span>
             {favoriteActive
-              ? favoriteActiveLabel ?? 'Preferred walker'
-              : favoriteInactiveLabel ?? `Save ${favoriteLabel}`}
+              ? favoriteActiveLabel ?? favoriteDefaultActiveLabel
+              : favoriteInactiveLabel ?? favoriteDefaultInactiveLabel}
           </span>
         </button>
       )}
 
       {earnings && (
         <div style={earningsStyle}>
-          <span style={{ fontSize: 13, color: '#15803D', fontWeight: 600 }}>Earned</span>
+          <span style={{ fontSize: 13, color: '#15803D', fontWeight: 600 }}>{earnedLabel}</span>
           <span style={{ fontSize: 20, fontWeight: 800, color: '#15803D' }}>{earnings}</span>
         </div>
       )}
@@ -118,7 +131,7 @@ export default function CompletionCard({
 
       {showRatingInput && (
         <div style={ratingContainerStyle}>
-          <p style={ratingLabelStyle}>How was your experience?</p>
+          <p style={ratingLabelStyle}>{ratingPromptLabel}</p>
 
           <div style={starsRowStyle}>
             {[1, 2, 3, 4, 5].map((star) => {
@@ -179,7 +192,7 @@ export default function CompletionCard({
             <textarea
               value={review}
               onChange={(e) => setReview(e.target.value)}
-              placeholder="Share your feedback (optional)"
+              placeholder={reviewPlaceholder}
               rows={2}
               style={textareaStyle}
             />
@@ -203,7 +216,7 @@ export default function CompletionCard({
               <polyline points="20 6 9 17 4 12" />
             </svg>
           </div>
-          <span style={thanksTextStyle}>Thanks for your feedback!</span>
+          <span style={thanksTextStyle}>{thanksLabel}</span>
         </div>
       )}
 
@@ -218,11 +231,11 @@ export default function CompletionCard({
               opacity: ratingSubmitting ? 0.7 : 1,
             }}
           >
-            {ratingSubmitting ? 'Sending...' : 'Submit rating'}
+            {ratingSubmitting ? sendingLabel : submitRatingLabel}
           </button>
         )}
         <button onClick={onDismiss} style={secondaryButtonStyle}>
-          {ratingDone || alreadyRated ? 'Done' : 'Skip'}
+          {dismissLabel}
         </button>
       </div>
     </div>
