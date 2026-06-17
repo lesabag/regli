@@ -1261,10 +1261,10 @@ export default function WalkerDashboard({
   )
   const capabilitySections = useMemo<Array<{ id: CapabilitySectionId; label: string }>>(() => {
     const sections: Array<{ id: CapabilitySectionId; label: string }> = [
-      { id: 'profile', label: isHebrew ? 'פרופיל' : 'Profile' },
+      { id: 'profile', label: isHebrew ? 'פרופיל אישי' : 'Profile' },
     ]
     if (profileServiceTypes.includes('dog_walker')) {
-      sections.push({ id: 'dog_walker', label: isHebrew ? 'הליכת כלבים' : 'Dog walking' })
+      sections.push({ id: 'dog_walker', label: isHebrew ? 'שירות כלבים' : 'Dog walking' })
     }
     if (profileServiceTypes.includes('baby_sitter')) {
       sections.push({ id: 'baby_sitter', label: isHebrew ? 'שמרטפות' : 'Babysitting' })
@@ -4787,7 +4787,7 @@ export default function WalkerDashboard({
 
                     <SettingsCollapsibleSection
                       title={isHebrew ? 'יכולות שירות' : 'Service capabilities'}
-                      subtitle={isHebrew ? 'הגדר את ההעדפות והניסיון שלך.' : 'Define your preferences and experience.'}
+                      subtitle={isHebrew ? 'הלקוחות ימצאו אותך לפי ההעדפות והניסיון שלך.' : 'Define your preferences and experience.'}
                       open={settingsSectionsOpen.capabilities}
                       onToggle={() => toggleSettingsSection('capabilities')}
                     >
@@ -4814,7 +4814,7 @@ export default function WalkerDashboard({
                           <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
                               <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'פרופיל ספק' : 'Provider profile'}
+                                {isHebrew ? 'פרופיל' : 'Profile'}
                               </div>
 
                               <div style={capFieldStyle}>
@@ -4864,11 +4864,11 @@ export default function WalkerDashboard({
                           <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
                               <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'הליכת כלבים' : 'Dog walking'}
+                                {isHebrew ? 'שירות כלבים' : 'Dog walking'}
                               </div>
 
                               <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'גדלי כלבים' : 'Dog sizes'}</div>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'גדלי כלבים (ללא בחירה מסמל זמינות לכלל הגדלים)' : 'Dog sizes'}</div>
                                 <div style={capChipRowStyle}>
                                   {(['S', 'M', 'L', 'XL'] as const).map((size) => {
                                     const sel = provDogSizes.includes(size)

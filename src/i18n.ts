@@ -657,10 +657,10 @@ const resources = {
       },
       providerProfile: {
         aboutMe: 'עליי בקצרה',
-        aboutMeSubtitle: 'היכרות, לקוחות יראו אחרי קבלת ההזמנה.',
+        aboutMeSubtitle: 'לקוחות יראו אחרי קבלת ההזמנה.',
         aboutMePlaceholder:
           'ספר ללקוחות בקצרה על עצמך, הניסיון שלך או מה מיוחד בשירות שלך.',
-        whatsappNumber: 'מספר וואטסאפ',
+        whatsappNumber: 'מספר וואטסאפ (המספר אינו חשוף ללקוח)',
         whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'הטקסט נשמר.',
         bioSaveError: 'לא הצלחנו לשמור את הטקסט.',
