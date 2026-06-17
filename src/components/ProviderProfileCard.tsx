@@ -8,11 +8,11 @@ export interface ProviderProfileCardProps {
   rating: number | null
   serviceLabel?: string | null
   priceLabel?: string | null
-  experienceRange?: string | null
-  experienceYears?: number | null
+  ageRange?: string | null
   languages?: string[] | null
   specialties?: string[] | null
   servicePreferences?: string[] | null
+  supportedAgeRanges?: string[] | null
   shortBio?: string | null
   completedCount?: number | null
   preferredCustomerCount?: number | null
@@ -21,24 +21,16 @@ export interface ProviderProfileCardProps {
   onClose?: () => void
 }
 
-function formatExperienceLabel(
-  experienceRange: string | null | undefined,
-  experienceYears: number | null | undefined,
+function formatProviderAgeLabel(
+  ageRange: string | null | undefined,
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string | null {
-  const normalizedRange = (experienceRange ?? '').trim().toLowerCase()
-  if (normalizedRange === '0_1') return t('providerPublicProfile.experienceRanges.0_1')
-  if (normalizedRange === '1_3') return t('providerPublicProfile.experienceRanges.1_3')
-  if (normalizedRange === '3_5') return t('providerPublicProfile.experienceRanges.3_5')
-  if (normalizedRange === '5_10') return t('providerPublicProfile.experienceRanges.5_10')
-  if (normalizedRange === '10_plus') return t('providerPublicProfile.experienceRanges.10_plus')
-
-  if (typeof experienceYears === 'number' && Number.isFinite(experienceYears) && experienceYears > 0) {
-    return experienceYears >= 10
-      ? t('providerPublicProfile.experienceRanges.10_plus')
-      : t('providerPublicProfile.experienceYears', { count: Math.round(experienceYears) })
-  }
-
+  const normalizedRange = (ageRange ?? '').trim().toLowerCase()
+  if (normalizedRange === '14_17') return t('providerProfile.ageRanges.14_17')
+  if (normalizedRange === '18_24') return t('providerProfile.ageRanges.18_24')
+  if (normalizedRange === '25_34') return t('providerProfile.ageRanges.25_34')
+  if (normalizedRange === '35_49') return t('providerProfile.ageRanges.35_49')
+  if (normalizedRange === '50_plus') return t('providerProfile.ageRanges.50_plus')
   return null
 }
 
@@ -88,11 +80,11 @@ export default function ProviderProfileCard({
   rating,
   serviceLabel,
   priceLabel,
-  experienceRange,
-  experienceYears,
+  ageRange,
   languages,
   specialties,
   servicePreferences,
+  supportedAgeRanges,
   shortBio,
   completedCount,
   preferredCustomerCount,
@@ -101,7 +93,7 @@ export default function ProviderProfileCard({
   onClose,
 }: ProviderProfileCardProps) {
   const { t } = useTranslation()
-  const experienceLabel = formatExperienceLabel(experienceRange, experienceYears, t)
+  const providerAgeLabel = formatProviderAgeLabel(ageRange, t)
   const languageLabels = (languages ?? [])
     .map((value) => getLanguageLabel(value, t))
     .filter((value): value is string => !!value)
@@ -109,8 +101,12 @@ export default function ProviderProfileCard({
     .map((value) => getSpecialtyLabel(value, t))
     .filter((value): value is string => !!value)
   const servicePreferenceLabels = (servicePreferences ?? [])
+    .filter((value) => !value.startsWith('age_ranges:'))
     .map((value) => getServicePreferenceLabel(value, t))
     .filter((value): value is string => !!value)
+  const supportedChildrenAgeLabels = (supportedAgeRanges ?? [])
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value): value is string => value.length > 0)
   const trimmedBio = shortBio?.trim() || null
   const trustBadges = [
     rating != null ? `★ ${rating.toFixed(1)}` : null,
@@ -163,14 +159,26 @@ export default function ProviderProfileCard({
         {serviceLabel ? (
           <InfoRow label={t('providerPublicProfile.service')} value={serviceLabel} />
         ) : null}
-        {experienceLabel ? (
-          <InfoRow label={t('providerPublicProfile.experience')} value={experienceLabel} />
+        {providerAgeLabel ? (
+          <InfoRow label={t('providerPublicProfile.age')} value={providerAgeLabel} />
         ) : null}
         {languageLabels.length > 0 ? (
           <div style={sectionStyle}>
             <div style={sectionLabelStyle}>{t('providerPublicProfile.languages')}</div>
             <div style={languageRowStyle}>
               {languageLabels.map((label) => (
+                <span key={label} style={languageChipStyle}>
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {supportedChildrenAgeLabels.length > 0 ? (
+          <div style={sectionStyle}>
+            <div style={sectionLabelStyle}>{t('providerPublicProfile.childrenAgesSupported')}</div>
+            <div style={languageRowStyle}>
+              {supportedChildrenAgeLabels.map((label) => (
                 <span key={label} style={languageChipStyle}>
                   {label}
                 </span>

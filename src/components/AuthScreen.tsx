@@ -89,9 +89,9 @@ type ServiceOption = {
 type DogSize = 'S' | 'M' | 'L'
 type EnergyLevel = 'low' | 'medium' | 'high'
 type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
-type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+type ProviderAgeRange = '14_17' | '18_24' | '25_34' | '35_49' | '50_plus'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
-type ProviderDetailsSection = 'experience' | 'languages' | 'dog' | 'babysitter'
+type ProviderDetailsSection = 'dog' | 'babysitter'
 
 interface DogWalkerAttrs {
   petName: string
@@ -114,7 +114,7 @@ interface ProviderBabySitterAttrs {
 }
 
 interface ProviderIdentityAttrs {
-  experienceRange: ProviderExperienceRange | ''
+  ageRange: ProviderAgeRange | ''
   shortBio: string
   languages: ProviderLanguage[]
 }
@@ -136,27 +136,6 @@ const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
   { value: '2-4', label: '2–4' },
   { value: '5-7', label: '5–7' },
   { value: '7+', label: '7+' },
-]
-
-const PROVIDER_EXPERIENCE_OPTIONS: {
-  value: ProviderExperienceRange
-  normalizedYears: number
-}[] = [
-  { value: '0_1', normalizedYears: 1 },
-  { value: '1_3', normalizedYears: 2 },
-  { value: '3_5', normalizedYears: 4 },
-  { value: '5_10', normalizedYears: 7 },
-  { value: '10_plus', normalizedYears: 10 },
-]
-
-const PROVIDER_LANGUAGE_OPTIONS: {
-  value: ProviderLanguage
-}[] = [
-  { value: 'hebrew' },
-  { value: 'english' },
-  { value: 'russian' },
-  { value: 'arabic' },
-  { value: 'french' },
 ]
 
 const PROVIDER_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']
@@ -185,42 +164,6 @@ async function reverseGeocodeLocation(lat: number, lng: number, language: Suppor
     language,
     fallbackLabel: language === 'he' ? 'המיקום הנוכחי זוהה' : 'Current location detected',
   })
-}
-
-function getNormalizedExperienceYears(range: ProviderExperienceRange | ''): number {
-  return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.normalizedYears ?? 0
-}
-
-function getProviderExperienceLabel(range: ProviderExperienceRange, language: SupportedLanguage): string {
-  if (language === 'he') {
-    if (range === '0_1') return '0–1 שנים'
-    if (range === '1_3') return '1–3 שנים'
-    if (range === '3_5') return '3–5 שנים'
-    if (range === '5_10') return '5–10 שנים'
-    return '10+ שנים'
-  }
-
-  if (range === '0_1') return '0–1 years'
-  if (range === '1_3') return '1–3 years'
-  if (range === '3_5') return '3–5 years'
-  if (range === '5_10') return '5–10 years'
-  return '10+ years'
-}
-
-function getProviderLanguageLabel(value: ProviderLanguage, language: SupportedLanguage): string {
-  if (language === 'he') {
-    if (value === 'hebrew') return 'עברית'
-    if (value === 'english') return 'אנגלית'
-    if (value === 'russian') return 'רוסית'
-    if (value === 'arabic') return 'ערבית'
-    return 'צרפתית'
-  }
-
-  if (value === 'hebrew') return 'Hebrew'
-  if (value === 'english') return 'English'
-  if (value === 'russian') return 'Russian'
-  if (value === 'arabic') return 'Arabic'
-  return 'French'
 }
 
 function getDogSizeLabel(size: DogSize, language: SupportedLanguage): string {
@@ -323,14 +266,14 @@ export default function AuthScreen({
   const [sitterAttrs, setSitterAttrs] = useState<BabySitterAttrs>({ numberOfKids: 0, childrenAges: [''], specialNotes: '' })
   const [provDogAttrs, setProvDogAttrs] = useState<ProviderDogWalkerAttrs>({ supportedDogSizes: [] })
   const [provSitterAttrs, setProvSitterAttrs] = useState<ProviderBabySitterAttrs>({ supportedAgeRanges: [] })
-  const [activeProviderDetailsSection, setActiveProviderDetailsSection] = useState<ProviderDetailsSection>('experience')
-  const [providerIdentity, setProviderIdentity] = useState<ProviderIdentityAttrs>({
-    experienceRange:
+  const [activeProviderDetailsSection, setActiveProviderDetailsSection] = useState<ProviderDetailsSection>('dog')
+  const [providerIdentity] = useState<ProviderIdentityAttrs>({
+    ageRange:
       typeof initialServiceAttributes?.provider_profile === 'object' &&
       initialServiceAttributes.provider_profile &&
-      'experienceRange' in initialServiceAttributes.provider_profile &&
-      typeof initialServiceAttributes.provider_profile.experienceRange === 'string'
-        ? initialServiceAttributes.provider_profile.experienceRange as ProviderExperienceRange
+      'ageRange' in initialServiceAttributes.provider_profile &&
+      typeof initialServiceAttributes.provider_profile.ageRange === 'string'
+        ? initialServiceAttributes.provider_profile.ageRange as ProviderAgeRange
         : '',
     shortBio: initialShortBio ?? '',
     languages:
@@ -403,7 +346,6 @@ export default function AuthScreen({
     refreshingLocation: isHebrew ? 'מרענן מיקום...' : 'Refreshing location...',
     detailsProvider: isHebrew ? 'פרטים שיעזרו ללקוחות להכיר אתכם ואת ההעדפות שלכם לפני ההזמנה.' : 'A few profile details help clients understand who you are and your preferences before booking.',
     detailsClient: isHebrew ? 'שתפו כמה פרטים כדי שנוכל להתאים את החוויה לצרכים שלכם.' : 'Share a few details so we can personalize your experience.',
-    yearsExperience: isHebrew ? 'שנות ניסיון' : 'Years of experience',
     languagesSpoken: isHebrew ? 'שפות' : 'Languages',
     dogPreferences: isHebrew ? 'גודל כלב' : 'Dog sizes',
     babysitterPreferences: isHebrew ? 'טווחי גילאים' : 'Age ranges',
@@ -523,20 +465,6 @@ export default function AuthScreen({
     })),
     [language],
   )
-  const providerExperienceOptions = useMemo(
-    () => PROVIDER_EXPERIENCE_OPTIONS.map((option) => ({
-      ...option,
-      label: getProviderExperienceLabel(option.value, language),
-    })),
-    [language],
-  )
-  const providerLanguageOptions = useMemo(
-    () => PROVIDER_LANGUAGE_OPTIONS.map((option) => ({
-      ...option,
-      label: getProviderLanguageLabel(option.value, language),
-    })),
-    [language],
-  )
   const selectedPrimaryService = selectedServices[0] ?? null
   const shouldShowLegalAcceptance = currentStep === 'auth' && (mode === 'signup' || authenticatedOnboarding)
   const legalAcceptanceValid = !shouldShowLegalAcceptance || (acceptedTerms && acceptedPrivacy)
@@ -565,12 +493,10 @@ export default function AuthScreen({
   const onboardingServiceTypes = isProvider ? selectedServices : []
   const providerDetailSections = useMemo(
     () => [
-      { id: 'experience' as const, label: isHebrew ? copy.yearsExperience : 'Experience' },
-      { id: 'languages' as const, label: isHebrew ? copy.languagesSpoken : 'Languages' },
       ...(isProviderDogWalker ? [{ id: 'dog' as const, label: isHebrew ? copy.dogPreferences : 'Dog prefs' }] : []),
       ...(isProviderBabySitter ? [{ id: 'babysitter' as const, label: copy.babysitterPreferences }] : []),
     ],
-    [copy.babysitterPreferences, copy.dogPreferences, copy.languagesSpoken, copy.yearsExperience, isHebrew, isProviderBabySitter, isProviderDogWalker],
+    [copy.babysitterPreferences, copy.dogPreferences, isHebrew, isProviderBabySitter, isProviderDogWalker],
   )
 
   const dogValid = isProvider
@@ -584,7 +510,7 @@ export default function AuthScreen({
         sitterAttrs.childrenAges.every((a) => a.trim().length > 0)
       )
 
-  const providerIdentityValid = !isProvider || providerIdentity.experienceRange !== ''
+  const providerIdentityValid = true
 
   const buildLegalAcceptanceContext = (
     source: PendingLegalAcceptanceContext['source'],
@@ -614,7 +540,7 @@ export default function AuthScreen({
   useEffect(() => {
     if (!isProvider) return
     if (providerDetailSections.some((section) => section.id === activeProviderDetailsSection)) return
-    setActiveProviderDetailsSection(providerDetailSections[0]?.id ?? 'experience')
+    setActiveProviderDetailsSection(providerDetailSections[0]?.id ?? 'dog')
   }, [activeProviderDetailsSection, isProvider, providerDetailSections])
 
   useEffect(() => {
@@ -794,20 +720,17 @@ export default function AuthScreen({
       const attrs: ServiceAttributes = {}
       if (isProvider) {
         attrs.provider_profile = {
-          experienceRange: providerIdentity.experienceRange,
-          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+          ageRange: providerIdentity.ageRange || null,
           languagesSpoken: providerIdentity.languages,
         }
         if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
           attrs.dog_walker = {
             supportedDogSizes: provDogAttrs.supportedDogSizes,
-            experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
           }
         }
         if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
           attrs.baby_sitter = {
             supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
-            experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
           }
         }
       }
@@ -836,20 +759,17 @@ export default function AuthScreen({
     const attrs: ServiceAttributes = {}
     if (isProvider) {
       attrs.provider_profile = {
-        experienceRange: providerIdentity.experienceRange,
-        experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
+        ageRange: providerIdentity.ageRange || null,
         languagesSpoken: providerIdentity.languages,
       }
       if (hasDog && provDogAttrs.supportedDogSizes.length > 0) {
         attrs.dog_walker = {
           supportedDogSizes: provDogAttrs.supportedDogSizes,
-          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
         }
       }
       if (hasSitter && provSitterAttrs.supportedAgeRanges.length > 0) {
         attrs.baby_sitter = {
           supportedAgeRanges: provSitterAttrs.supportedAgeRanges,
-          experienceYears: getNormalizedExperienceYears(providerIdentity.experienceRange),
         }
       }
     } else {
@@ -1431,62 +1351,6 @@ export default function AuthScreen({
                           </button>
                         ))}
                       </div>
-
-                      {activeProviderDetailsSection === 'experience' && (
-                        <div style={chipFieldCardStyle}>
-                          <div style={chipFieldHeaderStyle}>
-                            <label style={labelStyle}>{copy.yearsExperience}</label>
-                          </div>
-                          <div style={chipRowStyle}>
-                            {providerExperienceOptions.map((option) => (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => setProviderIdentity((prev) => ({ ...prev, experienceRange: option.value }))}
-                                style={{
-                                  ...chipStyle,
-                                  ...compactChipStyle,
-                                  ...(providerIdentity.experienceRange === option.value ? chipSelectedStyle : null),
-                                }}
-                              >
-                                <span style={compactChipLabelStyle}>{option.label}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {activeProviderDetailsSection === 'languages' && (
-                        <div style={chipFieldCardStyle}>
-                          <div style={chipFieldHeaderStyle}>
-                            <label style={labelStyle}>{copy.languagesSpoken}</label>
-                          </div>
-                          <div style={chipRowStyle}>
-                            {providerLanguageOptions.map((option) => {
-                              const selected = providerIdentity.languages.includes(option.value)
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  onClick={() => setProviderIdentity((prev) => ({
-                                    ...prev,
-                                    languages: selected
-                                      ? prev.languages.filter((value) => value !== option.value)
-                                      : [...prev.languages, option.value],
-                                  }))}
-                                  style={{
-                                    ...chipStyle,
-                                    ...compactChipStyle,
-                                    ...(selected ? chipSelectedStyle : null),
-                                  }}
-                                >
-                                  <span style={compactChipLabelStyle}>{option.label}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
 
                       {activeProviderDetailsSection === 'dog' && isProviderDogWalker && (
                         <div style={chipFieldCardStyle}>

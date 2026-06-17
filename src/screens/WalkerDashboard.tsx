@@ -39,6 +39,7 @@ import {
   PROFILE_SERVICE_TYPES,
   getProfileServiceOptions,
   getProfileServiceTypeLabel,
+  normalizeProfileServiceType,
   normalizeProfileServiceTypes,
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
@@ -64,9 +65,10 @@ type EarningsPeriod = 'today' | 'week' | 'month'
 type AppRole = 'client' | 'walker' | 'admin'
 
 type ServiceAttributes = Record<string, Record<string, unknown>>
-type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+type ProviderAgeRange = '14_17' | '18_24' | '25_34' | '35_49' | '50_plus'
 type CapabilitySectionId = 'profile' | 'dog_walker' | 'baby_sitter'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
+type AboutMeSectionId = 'whatsapp' | 'age' | 'languages'
 type AvailabilityFormRow = {
   dayOfWeek: number
   isActive: boolean
@@ -103,12 +105,12 @@ const PROVIDER_BIO_MENU_PREVIEW_MAX_CHARS = 60
 const AVAILABILITY_DAY_ORDER = [0, 1, 2, 3, 4, 5, 6] as const
 const DEFAULT_AVAILABILITY_START = '09:00'
 const DEFAULT_AVAILABILITY_END = '17:00'
-const PROVIDER_EXPERIENCE_OPTIONS: Array<{ value: ProviderExperienceRange; labelEn: string; labelHe: string; years: number }> = [
-  { value: '0_1', labelEn: '0–1 years', labelHe: '0–1 שנים', years: 1 },
-  { value: '1_3', labelEn: '1–3 years', labelHe: '1–3 שנים', years: 2 },
-  { value: '3_5', labelEn: '3–5 years', labelHe: '3–5 שנים', years: 4 },
-  { value: '5_10', labelEn: '5–10 years', labelHe: '5–10 שנים', years: 7 },
-  { value: '10_plus', labelEn: '10+ years', labelHe: '10+ שנים', years: 10 },
+const ABOUT_ME_AGE_OPTIONS: Array<{ value: ProviderAgeRange; labelEn: string; labelHe: string }> = [
+  { value: '14_17', labelEn: '14–17', labelHe: '14–17' },
+  { value: '18_24', labelEn: '18–24', labelHe: '18–24' },
+  { value: '25_34', labelEn: '25–34', labelHe: '25–34' },
+  { value: '35_49', labelEn: '35–49', labelHe: '35–49' },
+  { value: '50_plus', labelEn: '50+', labelHe: '50+' },
 ]
 const PROVIDER_LANGUAGE_OPTIONS: Array<{ value: ProviderLanguage; labelEn: string; labelHe: string }> = [
   { value: 'hebrew', labelEn: 'Hebrew', labelHe: 'עברית' },
@@ -179,6 +181,48 @@ function getServiceRecipientName(
   if (fallbackName) return fallbackName
 
   return isHebrew ? 'הלקוח' : 'the client'
+}
+
+function serviceTypeUsesRecipientName(serviceType: string | null | undefined): boolean {
+  const normalizedServiceType = normalizeProfileServiceType(serviceType)
+  return normalizedServiceType === 'dog_walker' || normalizedServiceType === 'baby_sitter'
+}
+
+function getProviderOrderDetailsIcon(serviceType: string | null | undefined): string {
+  const normalizedServiceType = normalizeProfileServiceType(serviceType)
+  if (normalizedServiceType === 'baby_sitter') return '👶'
+  if (normalizedServiceType === 'dog_walker') return '🐶'
+  if (normalizedServiceType === 'electrician') return '⚡'
+  if (normalizedServiceType === 'locksmith') return '🔐'
+  if (normalizedServiceType === 'handyman') return '🛠️'
+  if (normalizedServiceType === 'air_conditioner_technician') return '❄️'
+  if (normalizedServiceType === 'plumber') return '🔩'
+  return '•'
+}
+
+function getProviderOrderDetailsText(input: {
+  serviceType: string | null | undefined
+  recipientName?: string | null
+  isHebrew: boolean
+}): string {
+  const recipientName = input.recipientName?.trim() || null
+  const serviceNameRaw = getProfileServiceTypeLabel(input.serviceType, input.isHebrew)
+  const serviceName = input.isHebrew ? serviceNameRaw : serviceNameRaw.toLowerCase()
+  const serviceIcon = getProviderOrderDetailsIcon(input.serviceType)
+  const includeRecipient = serviceTypeUsesRecipientName(input.serviceType) && !!recipientName
+
+  if (includeRecipient) {
+    return i18n.t('providerOrderDetails.compactWithRecipient', {
+      serviceIcon,
+      serviceName,
+      recipientName,
+    })
+  }
+
+  return i18n.t('providerOrderDetails.compactWithoutRecipient', {
+    serviceIcon,
+    serviceName,
+  })
 }
 
 function formatDurationFromMinutesLocalized(
@@ -637,17 +681,11 @@ function getStrictClientDisplayName(
   return isHebrew ? 'לקוח' : 'Client'
 }
 
-function getProviderExperienceYears(range: ProviderExperienceRange | ''): number {
-  return PROVIDER_EXPERIENCE_OPTIONS.find((option) => option.value === range)?.years ?? 0
-}
-
-function getProviderExperienceRangeFromYears(years: number | null | undefined): ProviderExperienceRange | '' {
-  if (typeof years !== 'number' || !Number.isFinite(years) || years <= 0) return ''
-  if (years >= 10) return '10_plus'
-  if (years >= 7) return '5_10'
-  if (years >= 4) return '3_5'
-  if (years >= 2) return '1_3'
-  return '0_1'
+function getProviderAgeRange(value: unknown): ProviderAgeRange | '' {
+  if (value === '14_17' || value === '18_24' || value === '25_34' || value === '35_49' || value === '50_plus') {
+    return value
+  }
+  return ''
 }
 
 function countCodePoints(value: string): number {
@@ -876,6 +914,7 @@ export default function WalkerDashboard({
   )
   const [providerBio, setProviderBio] = useState(getCapabilityShortBio(initialProviderCapabilities, profile.short_bio ?? null))
   const [providerWhatsAppNumber, setProviderWhatsAppNumber] = useState(profile.whatsapp_number ?? '')
+  const [savedProviderWhatsAppNumber, setSavedProviderWhatsAppNumber] = useState(profile.whatsapp_number ?? '')
   const [providerBioSaving, setProviderBioSaving] = useState(false)
   const [providerBioSavedAt, setProviderBioSavedAt] = useState(0)
   const [providerBioError, setProviderBioError] = useState<string | null>(null)
@@ -917,16 +956,9 @@ export default function WalkerDashboard({
   const [capSavedAt, setCapSavedAt] = useState(0)
   const [capError, setCapError] = useState<string | null>(null)
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
-  const [provExperienceRange, setProvExperienceRange] = useState<ProviderExperienceRange | ''>(() => {
-    const experienceRange = typeof providerProfileCapabilities.experienceRange === 'string'
-      ? providerProfileCapabilities.experienceRange as ProviderExperienceRange
-      : ''
-    if (experienceRange) return experienceRange
-    const experienceYears = typeof providerProfileCapabilities.experienceYears === 'number'
-      ? providerProfileCapabilities.experienceYears
-      : null
-    return getProviderExperienceRangeFromYears(experienceYears)
-  })
+  const [provAgeRange, setProvAgeRange] = useState<ProviderAgeRange | ''>(() => (
+    getProviderAgeRange(providerProfileCapabilities.ageRange)
+  ))
   const [provLanguages, setProvLanguages] = useState<ProviderLanguage[]>(() => {
     const rawLanguages = providerProfileCapabilities.languagesSpoken ?? providerProfileCapabilities.languages
     return Array.isArray(rawLanguages)
@@ -961,29 +993,52 @@ export default function WalkerDashboard({
     const sa = getCapabilityScope<Record<string, unknown>>(initialProviderCapabilities, 'baby_sitter')
     return typeof sa?.notes === 'string' ? (sa.notes as string) : ''
   })
+  const [activeAboutMeSection, setActiveAboutMeSection] = useState<AboutMeSectionId>('whatsapp')
   const [activeCapabilitySection, setActiveCapabilitySection] = useState<CapabilitySectionId>('profile')
   const providerBioCharCount = useMemo(() => countCodePoints(providerBio), [providerBio])
   const providerBioMenuPreview = useMemo(
     () => truncateCodePoints(providerBio, PROVIDER_BIO_MENU_PREVIEW_MAX_CHARS),
     [providerBio],
   )
-  const capDirty = useMemo(() => {
+  const aboutProfileDirty = useMemo(() => {
     const providerProfileSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {}
+    const savedBio = getCapabilityShortBio(providerCapabilities, profile.short_bio ?? null).trim()
+    const savedAgeRange = getProviderAgeRange(providerProfileSa.ageRange)
+    const savedLanguagesRaw = providerProfileSa.languagesSpoken ?? providerProfileSa.languages
+    const savedLanguages = Array.isArray(savedLanguagesRaw)
+      ? savedLanguagesRaw.filter((value): value is ProviderLanguage => typeof value === 'string')
+      : []
+    const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
+
+    return (
+      providerWhatsAppNumber.trim() !== savedProviderWhatsAppNumber.trim() ||
+      providerBio.trim() !== savedBio ||
+      provAgeRange !== savedAgeRange ||
+      !arrEq(provLanguages, savedLanguages)
+    )
+  }, [
+    profile.short_bio,
+    providerBio,
+    providerCapabilities,
+    providerWhatsAppNumber,
+    provAgeRange,
+    provLanguages,
+    savedProviderWhatsAppNumber,
+  ])
+  const aboutMeSections = useMemo<Array<{ id: AboutMeSectionId; label: string }>>(
+    () => [
+      { id: 'whatsapp', label: isHebrew ? 'וואטסאפ' : 'WhatsApp' },
+      { id: 'age', label: t('providerProfile.age') },
+      { id: 'languages', label: t('providerPublicProfile.languages') },
+    ],
+    [isHebrew, t],
+  )
+  const capDirty = useMemo(() => {
     const dogSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'dog_walker') ?? {}
     const sitterSa = getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'baby_sitter') ?? {}
     const origDogSizes = Array.isArray(dogSa.supportedDogSizes) ? (dogSa.supportedDogSizes as string[]) : []
     const origDogExp = typeof dogSa.experienceYears === 'number' ? (dogSa.experienceYears as number) : 0
     const origDogNotes = typeof dogSa.notes === 'string' ? (dogSa.notes as string) : ''
-    const origExperienceRange =
-      typeof providerProfileSa.experienceRange === 'string'
-        ? providerProfileSa.experienceRange as ProviderExperienceRange
-        : getProviderExperienceRangeFromYears(
-            typeof providerProfileSa.experienceYears === 'number' ? providerProfileSa.experienceYears : null,
-          )
-    const origLanguagesRaw = providerProfileSa.languagesSpoken ?? providerProfileSa.languages
-    const origLanguages = Array.isArray(origLanguagesRaw)
-      ? origLanguagesRaw.filter((value): value is ProviderLanguage => typeof value === 'string')
-      : []
     const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges)
       ? (sitterSa.supportedAgeRanges as unknown[])
           .map((range) => normalizeAgeRangeValue(range))
@@ -993,8 +1048,6 @@ export default function WalkerDashboard({
     const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
     const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
     return (
-      provExperienceRange !== origExperienceRange ||
-      !arrEq(provLanguages, origLanguages) ||
       !arrEq(provDogSizes, origDogSizes) ||
       provDogExp !== origDogExp ||
       provDogNotes !== origDogNotes ||
@@ -1004,8 +1057,6 @@ export default function WalkerDashboard({
     )
   }, [
     providerCapabilities,
-    provExperienceRange,
-    provLanguages,
     provDogSizes, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
@@ -1260,9 +1311,7 @@ export default function WalkerDashboard({
     [profileServiceTypes],
   )
   const capabilitySections = useMemo<Array<{ id: CapabilitySectionId; label: string }>>(() => {
-    const sections: Array<{ id: CapabilitySectionId; label: string }> = [
-      { id: 'profile', label: isHebrew ? 'פרופיל אישי' : 'Profile' },
-    ]
+    const sections: Array<{ id: CapabilitySectionId; label: string }> = []
     if (profileServiceTypes.includes('dog_walker')) {
       sections.push({ id: 'dog_walker', label: isHebrew ? 'שירות כלבים' : 'Dog walking' })
     }
@@ -1278,7 +1327,7 @@ export default function WalkerDashboard({
 
   useEffect(() => {
     if (capabilitySections.some((section) => section.id === activeCapabilitySection)) return
-    setActiveCapabilitySection(capabilitySections[0]?.id ?? 'profile')
+    setActiveCapabilitySection(capabilitySections[0]?.id ?? 'dog_walker')
   }, [activeCapabilitySection, capabilitySections])
 
   useEffect(() => {
@@ -1289,14 +1338,9 @@ export default function WalkerDashboard({
     setProviderCapabilities(mergedCapabilities)
     setProviderBio(getCapabilityShortBio(mergedCapabilities, profile.short_bio ?? null))
     const providerProfileAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'provider_profile') ?? {}
-    const nextExperienceRange =
-      typeof providerProfileAttrs.experienceRange === 'string'
-        ? providerProfileAttrs.experienceRange as ProviderExperienceRange
-        : getProviderExperienceRangeFromYears(
-            typeof providerProfileAttrs.experienceYears === 'number' ? providerProfileAttrs.experienceYears : null,
-          )
+    const nextAgeRange = getProviderAgeRange(providerProfileAttrs.ageRange)
     const rawLanguages = providerProfileAttrs.languagesSpoken ?? providerProfileAttrs.languages
-    setProvExperienceRange(nextExperienceRange)
+    setProvAgeRange(nextAgeRange)
     setProvLanguages(
       Array.isArray(rawLanguages)
         ? rawLanguages.filter((value): value is ProviderLanguage => typeof value === 'string')
@@ -1320,6 +1364,7 @@ export default function WalkerDashboard({
 
   useEffect(() => {
     setProviderWhatsAppNumber(profile.whatsapp_number ?? '')
+    setSavedProviderWhatsAppNumber(profile.whatsapp_number ?? '')
   }, [profile.whatsapp_number])
 
   useEffect(() => {
@@ -1349,14 +1394,9 @@ export default function WalkerDashboard({
       setProviderCapabilities(mergedCapabilities)
       setProviderBio(getCapabilityShortBio(mergedCapabilities, profile.short_bio ?? null))
       const providerProfileAttrs = getCapabilityScope<Record<string, unknown>>(mergedCapabilities, 'provider_profile') ?? {}
-      const nextExperienceRange =
-        typeof providerProfileAttrs.experienceRange === 'string'
-          ? providerProfileAttrs.experienceRange as ProviderExperienceRange
-          : getProviderExperienceRangeFromYears(
-              typeof providerProfileAttrs.experienceYears === 'number' ? providerProfileAttrs.experienceYears : null,
-            )
+      const nextAgeRange = getProviderAgeRange(providerProfileAttrs.ageRange)
       const rawLanguages = providerProfileAttrs.languagesSpoken ?? providerProfileAttrs.languages
-      setProvExperienceRange(nextExperienceRange)
+      setProvAgeRange(nextAgeRange)
       setProvLanguages(
         Array.isArray(rawLanguages)
           ? rawLanguages.filter((value): value is ProviderLanguage => typeof value === 'string')
@@ -1681,8 +1721,7 @@ export default function WalkerDashboard({
 
     next.provider_profile = {
       ...(getCapabilityScope<Record<string, unknown>>(existing, 'provider_profile') ?? {}),
-      experienceRange: provExperienceRange || null,
-      experienceYears: getProviderExperienceYears(provExperienceRange),
+      ageRange: provAgeRange || null,
       languagesSpoken: provLanguages,
       shortBio: providerBio.trim() || null,
     }
@@ -1736,7 +1775,7 @@ export default function WalkerDashboard({
     setCapSavedAt(Date.now())
   }, [
     capSaving, profile.id, profileServiceTypes, isHebrew, providerCapabilities, providerBio,
-    provExperienceRange, provLanguages,
+    provAgeRange, provLanguages,
     provDogSizes, provDogExp, provDogNotes,
     provSitterAges, provSitterExp, provSitterNotes,
   ])
@@ -1864,6 +1903,8 @@ export default function WalkerDashboard({
       provider_profile: {
         ...(getCapabilityScope<Record<string, unknown>>(providerCapabilities, 'provider_profile') ?? {}),
         shortBio: nextBio || null,
+        ageRange: provAgeRange || null,
+        languagesSpoken: provLanguages,
       },
     }
     const providerCapabilityRows = buildProviderCapabilityRows(profile.id, nextCapabilities).map((row) => ({
@@ -1923,10 +1964,20 @@ export default function WalkerDashboard({
 
     setProviderBio((data.short_bio as string | null) ?? '')
     setProviderWhatsAppNumber((data.whatsapp_number as string | null) ?? '')
+    setSavedProviderWhatsAppNumber((data.whatsapp_number as string | null) ?? '')
     setProviderCapabilities(nextCapabilities)
     setProviderBioSaving(false)
     setProviderBioSavedAt(Date.now())
-  }, [profile.id, providerBio, providerBioSaving, providerCapabilities, providerWhatsAppNumber, t])
+  }, [
+    profile.id,
+    providerBio,
+    providerBioSaving,
+    providerCapabilities,
+    providerWhatsAppNumber,
+    provAgeRange,
+    provLanguages,
+    t,
+  ])
 
   const [serviceClockNow, setServiceClockNow] = useState(() => Date.now())
 
@@ -1963,6 +2014,11 @@ export default function WalkerDashboard({
     },
     isHebrew,
   )
+  const requestOrderDetailsText = getProviderOrderDetailsText({
+    serviceType: topRequest?.service_type ?? null,
+    recipientName: requestRecipientName,
+    isHebrew,
+  })
   const babysitterRequestNotes = useMemo(
     () => parseBabysitterNotes(topRequest?.notes),
     [topRequest?.notes],
@@ -4683,33 +4739,115 @@ export default function WalkerDashboard({
                       onToggle={() => toggleSettingsSection('about')}
                     >
                       <div style={providerBioSectionStyle}>
-                        <div style={providerBioFieldStyle}>
-                          <div style={providerBioFieldLabelStyle}>{t('providerProfile.whatsappNumber')}</div>
-                          <input
-                            type="tel"
-                            inputMode="tel"
-                            autoComplete="tel"
-                            value={providerWhatsAppNumber}
-                            onChange={(event) => {
-                              setProviderWhatsAppNumber(event.target.value)
-                              setProviderBioSavedAt(0)
-                              setProviderBioError(null)
-                            }}
-                            placeholder={t('providerProfile.whatsappNumberPlaceholder')}
-                            style={providerBioInputStyle}
-                          />
+                        <div style={capSelectorRowStyle}>
+                          {aboutMeSections.map((section) => (
+                            <button
+                              key={section.id}
+                              type="button"
+                              onClick={() => setActiveAboutMeSection(section.id)}
+                              style={{
+                                ...capSelectorPillStyle,
+                                ...(activeAboutMeSection === section.id ? capSelectorPillActiveStyle : null),
+                              }}
+                            >
+                              {section.label}
+                            </button>
+                          ))}
                         </div>
-                        <textarea
-                          value={providerBio}
-                          onChange={(event) => {
-                            setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
-                            setProviderBioSavedAt(0)
-                            setProviderBioError(null)
-                          }}
-                          placeholder={t('providerProfile.aboutMePlaceholder')}
-                          style={providerBioTextareaStyle}
-                          rows={3}
-                        />
+
+                        <div style={capSectionCardStyle}>
+                          <div style={capSectionStyle}>
+                            {activeAboutMeSection === 'whatsapp' && (
+                              <>
+                                <div style={capFieldStyle}>
+                                  <div style={capFieldLabelStyle}>{isHebrew ? 'וואטסאפ' : 'WhatsApp'}</div>
+                                  <input
+                                    type="tel"
+                                    inputMode="tel"
+                                    autoComplete="tel"
+                                    value={providerWhatsAppNumber}
+                                    onChange={(event) => {
+                                      setProviderWhatsAppNumber(event.target.value)
+                                      setProviderBioSavedAt(0)
+                                      setProviderBioError(null)
+                                    }}
+                                    placeholder={t('providerProfile.whatsappNumberPlaceholder')}
+                                    style={providerBioInputStyle}
+                                  />
+                                </div>
+                                <div style={capFieldStyle}>
+                                  <div style={capFieldLabelStyle}>{isHebrew ? 'עליי' : 'About me'}</div>
+                                  <textarea
+                                    value={providerBio}
+                                    onChange={(event) => {
+                                      setProviderBio(trimToCodePoints(event.target.value, PROVIDER_BIO_MAX_CHARS))
+                                      setProviderBioSavedAt(0)
+                                      setProviderBioError(null)
+                                    }}
+                                    placeholder={t('providerProfile.aboutMePlaceholder')}
+                                    style={providerBioTextareaStyle}
+                                    rows={3}
+                                  />
+                                </div>
+                              </>
+                            )}
+
+                            {activeAboutMeSection === 'age' && (
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{t('providerProfile.age')}</div>
+                                <div style={capChipRowStyle}>
+                                  {ABOUT_ME_AGE_OPTIONS.map((option) => {
+                                    const selected = provAgeRange === option.value
+                                    return (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => {
+                                          setProvAgeRange((current) => (current === option.value ? '' : option.value))
+                                          setProviderBioSavedAt(0)
+                                          setProviderBioError(null)
+                                        }}
+                                        style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
+                                      >
+                                        {isHebrew ? option.labelHe : option.labelEn}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {activeAboutMeSection === 'languages' && (
+                              <div style={capFieldStyle}>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'שפות' : 'Languages'}</div>
+                                <div style={capChipRowStyle}>
+                                  {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
+                                    const selected = provLanguages.includes(option.value)
+                                    return (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => {
+                                          setProvLanguages((prev) =>
+                                            selected
+                                              ? prev.filter((value) => value !== option.value)
+                                              : [...prev, option.value]
+                                          )
+                                          setProviderBioSavedAt(0)
+                                          setProviderBioError(null)
+                                        }}
+                                        style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
+                                      >
+                                        {isHebrew ? option.labelHe : option.labelEn}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
                         <div style={providerBioFooterStyle}>
                           <div style={providerBioCounterStyle}>
                             {t('providerProfile.bioHint', { count: providerBioCharCount })}
@@ -4717,18 +4855,22 @@ export default function WalkerDashboard({
                           <button
                             type="button"
                             onClick={() => void handleSaveProviderBio()}
-                            disabled={providerBioSaving}
+                            disabled={providerBioSaving || !aboutProfileDirty}
                             style={{
                               ...providerBioSaveButtonStyle,
-                              ...(providerBioSaving ? providerBioSaveButtonDisabledStyle : null),
+                              ...(providerBioSaving || !aboutProfileDirty ? providerBioSaveButtonDisabledStyle : null),
                             }}
                           >
-                            {providerBioSaving ? t('providerPricing.saving') : t('common.save')}
+                            {providerBioSaving
+                              ? t('providerPricing.saving')
+                              : !aboutProfileDirty && providerBioSavedAt > 0
+                                ? (isHebrew ? '✓ נשמר' : '✓ Saved')
+                                : t('common.save')}
                           </button>
                         </div>
                         {providerBioError ? (
                           <div style={serviceTypeStatusErrorStyle}>{providerBioError}</div>
-                        ) : providerBioSavedAt > 0 ? (
+                        ) : providerBioSavedAt > 0 && !aboutProfileDirty ? (
                           <div style={serviceTypeStatusSuccessStyle}>{t('providerProfile.bioSaved')}</div>
                         ) : null}
                       </div>
@@ -4787,7 +4929,7 @@ export default function WalkerDashboard({
 
                     <SettingsCollapsibleSection
                       title={isHebrew ? 'יכולות שירות' : 'Service capabilities'}
-                      subtitle={isHebrew ? 'הלקוחות ימצאו אותך לפי ההעדפות והניסיון שלך.' : 'Define your preferences and experience.'}
+                      subtitle={isHebrew ? 'הגדירו את העדפות השירות החשובות ללקוחות.' : 'Define the service preferences clients care about.'}
                       open={settingsSectionsOpen.capabilities}
                       onToggle={() => toggleSettingsSection('capabilities')}
                     >
@@ -4807,56 +4949,6 @@ export default function WalkerDashboard({
                                 {section.label}
                               </button>
                             ))}
-                          </div>
-                        )}
-
-                        {activeCapabilitySection === 'profile' && (
-                          <div style={capSectionCardStyle}>
-                            <div style={capSectionStyle}>
-                              <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'פרופיל' : 'Profile'}
-                              </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
-                                <div style={capChipRowStyle}>
-                                  {PROVIDER_EXPERIENCE_OPTIONS.map((option) => (
-                                    <button
-                                      key={option.value}
-                                      type="button"
-                                      onClick={() => setProvExperienceRange(option.value)}
-                                      style={{ ...capChipStyle, ...(provExperienceRange === option.value ? capChipSelectedStyle : null) }}
-                                    >
-                                      {isHebrew ? option.labelHe : option.labelEn}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'שפות' : 'Languages'}</div>
-                                <div style={capChipRowStyle}>
-                                  {PROVIDER_LANGUAGE_OPTIONS.map((option) => {
-                                    const selected = provLanguages.includes(option.value)
-                                    return (
-                                      <button
-                                        key={option.value}
-                                        type="button"
-                                        onClick={() => setProvLanguages((prev) =>
-                                          selected
-                                            ? prev.filter((value) => value !== option.value)
-                                            : [...prev, option.value]
-                                        )}
-                                        style={{ ...capChipStyle, ...(selected ? capChipSelectedStyle : null) }}
-                                      >
-                                        {isHebrew ? option.labelHe : option.labelEn}
-                                      </button>
-                                    )
-                                  })}
-                                </div>
-                              </div>
-
-                            </div>
                           </div>
                         )}
 
@@ -4887,23 +4979,6 @@ export default function WalkerDashboard({
                                   })}
                                 </div>
                               </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
-                                <div style={capChipRowStyle}>
-                                  {[0, 1, 2, 3, 5, 10].map((yr) => (
-                                    <button
-                                      key={yr}
-                                      type="button"
-                                      onClick={() => setProvDogExp(yr)}
-                                      style={{ ...capChipStyle, ...(provDogExp === yr ? capChipSelectedStyle : null) }}
-                                    >
-                                      {yr === 0 ? (isHebrew ? 'חדש' : 'New') : `${yr}+`}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
                             </div>
                           </div>
                         )}
@@ -4912,7 +4987,7 @@ export default function WalkerDashboard({
                           <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
                               <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'שמרטפות' : 'Babysitting'}
+                                {isHebrew ? 'העדפת גילאים שלך' : 'Babysitting'}
                               </div>
 
                               <div style={capFieldStyle}>
@@ -4936,23 +5011,6 @@ export default function WalkerDashboard({
                                   })}
                                 </div>
                               </div>
-
-                              <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'שנות ניסיון' : 'Experience'}</div>
-                                <div style={capChipRowStyle}>
-                                  {[0, 1, 2, 3, 5, 10].map((yr) => (
-                                    <button
-                                      key={yr}
-                                      type="button"
-                                      onClick={() => setProvSitterExp(yr)}
-                                      style={{ ...capChipStyle, ...(provSitterExp === yr ? capChipSelectedStyle : null) }}
-                                    >
-                                      {yr === 0 ? (isHebrew ? 'חדש' : 'New') : `${yr}+`}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
                             </div>
                           </div>
                         )}
@@ -5472,6 +5530,11 @@ export default function WalkerDashboard({
             const missionHeadline = isMissionActive
               ? (missionJob.dog_name || (isHebrew ? 'השירות פעיל' : 'Service is live'))
               : missionJob.dog_name || (isHebrew ? 'משימה פעילה' : 'Live mission')
+            const missionOrderDetailsText = getProviderOrderDetailsText({
+              serviceType: missionJob.service_type ?? null,
+              recipientName: missionRecipientName,
+              isHebrew,
+            })
 
             const missionSubline = isMissionActive
               ? (isHebrew ? 'השירות פעיל כעת' : 'Your service is now active')
@@ -5577,9 +5640,9 @@ export default function WalkerDashboard({
                   <h3 style={activeDogNameStyle}>{missionHeadline}</h3>
                   <p style={missionSublineStyle}>{missionSubline}</p>
                   <p style={activeClientStyle}>
-                    {isHebrew ? 'עבור ' : 'For '}
-                    {missionRecipientName}
-                    {missionDogCountLabel ? ` · ${missionDogCountLabel}` : ''}
+                    <span style={serviceTimerLabelInlineStyle}>{t('providerOrderDetails.label')}:</span>
+                    <span style={orderDetailsAccentStyle}>{missionOrderDetailsText}</span>
+                    {missionDogCountLabel && !serviceTypeUsesRecipientName(missionJob.service_type) ? ` · ${missionDogCountLabel}` : ''}
                   </p>
                 </div>
 
@@ -5634,7 +5697,7 @@ export default function WalkerDashboard({
                         disabled={reportIssueSubmitting}
                         style={reportIssueBtnStyle}
                       >
-                        {isHebrew ? 'דיווח על בעיה' : 'Report an issue'}
+                        {isHebrew ? 'דיווח על בעיה😔' : 'Report an issue'}
                       </button>
                     )}
                   </div>
@@ -5736,10 +5799,10 @@ export default function WalkerDashboard({
 
                 <div style={incomingInfoCardStyle}>
                   <div style={incomingInfoLabelStyle}>
-                    {isHebrew ? 'עבור' : 'For'}
+                    {t('providerOrderDetails.label')}
                   </div>
                   <div style={dogNameStyle}>
-                    {requestRecipientName}
+                    {requestOrderDetailsText}
                   </div>
                 </div>
 
@@ -7156,17 +7219,6 @@ const providerBioSectionStyle: React.CSSProperties = {
 const settingsActionListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
-}
-
-const providerBioFieldStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 6,
-}
-
-const providerBioFieldLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#64748B',
 }
 
 const providerBioInputStyle: React.CSSProperties = {
@@ -8708,6 +8760,16 @@ const activeClientStyle: React.CSSProperties = {
   fontSize: 14,
   color: 'rgba(203, 213, 225, 0.82)',
   fontWeight: 700,
+  lineHeight: 1.45,
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'baseline',
+  gap: 6,
+}
+
+const orderDetailsAccentStyle: React.CSSProperties = {
+  color: '#F59E0B',
+  fontWeight: 700,
 }
 
 const activeLocationStyle: React.CSSProperties = {
@@ -8976,9 +9038,10 @@ const progressFillStyle: React.CSSProperties = {
 }
 
 const dogNameStyle: React.CSSProperties = {
-  fontSize: 22,
-  fontWeight: 900,
-  color: '#F8FAFC',
+  fontSize: 15,
+  fontWeight: 700,
+  lineHeight: 1.35,
+  color: '#F59E0B',
 }
 
 const incomingMainCardStyle: React.CSSProperties = {

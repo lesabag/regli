@@ -383,11 +383,11 @@ type ProviderHeroMeta = {
   rating: number | null
   completedCount: number
   serviceLabel: string | null
-  experienceRange: string | null
-  experienceYears: number | null
+  ageRange: string | null
   languages: string[]
   specialties: string[]
   servicePreferences: string[]
+  supportedAgeRanges: string[]
   shortBio: string | null
   preferredCustomerCount: number
   repeatClientIndicator: boolean
@@ -719,11 +719,11 @@ export default function ClientDashboard({
     rating: null,
     completedCount: 0,
     serviceLabel: null,
-    experienceRange: null,
-    experienceYears: null,
+    ageRange: null,
     languages: [],
     specialties: [],
     servicePreferences: [],
+    supportedAgeRanges: [],
     shortBio: null,
     preferredCustomerCount: 0,
     repeatClientIndicator: false,
@@ -2810,7 +2810,10 @@ export default function ClientDashboard({
       providerId: activeProviderId,
     })
     if (!activeProviderWhatsAppPhone || typeof window === 'undefined') return
-    const message = `Hi ${activeProviderName}, regarding the current Regli booking 😊`
+    const message =
+    i18n.resolvedLanguage === 'he'
+      ? `היי ${activeProviderName}, בקשר להזמנה הנוכחית ב-Regli 😊`
+      : `Hi ${activeProviderName}, regarding the current Regli booking 😊`
     window.location.href = `https://wa.me/${activeProviderWhatsAppPhone}?text=${encodeURIComponent(message)}`
   }, [activeProviderId, activeProviderName, activeProviderWhatsAppPhone])
 
@@ -2826,11 +2829,11 @@ export default function ClientDashboard({
               rating: null,
               completedCount: 0,
               serviceLabel: null,
-              experienceRange: null,
-              experienceYears: null,
+              ageRange: null,
               languages: [],
               specialties: [],
               servicePreferences: [],
+              supportedAgeRanges: [],
               shortBio: null,
               preferredCustomerCount: 0,
               repeatClientIndicator: false,
@@ -2940,11 +2943,11 @@ export default function ClientDashboard({
           rating: averageRating,
           completedCount: completedResult.count ?? 0,
           serviceLabel: providerServiceLabel,
-          experienceRange: capabilitySummary.experienceRange,
-          experienceYears: capabilitySummary.experienceYears,
+          ageRange: capabilitySummary.ageRange,
           languages: capabilitySummary.languages,
           specialties: capabilitySummary.specialties,
           servicePreferences: capabilitySummary.servicePreferences,
+          supportedAgeRanges: capabilitySummary.supportedAgeRanges,
           shortBio: capabilitySummary.shortBio,
           preferredCustomerCount: preferredCustomersResult.count ?? 0,
           repeatClientIndicator: (preferredCustomersResult.count ?? 0) > 0,
@@ -2963,11 +2966,11 @@ export default function ClientDashboard({
             rating: null,
             completedCount: 0,
             serviceLabel: null,
-            experienceRange: null,
-            experienceYears: null,
+            ageRange: null,
             languages: [],
             specialties: [],
             servicePreferences: [],
+            supportedAgeRanges: [],
             shortBio: null,
             preferredCustomerCount: 0,
             repeatClientIndicator: false,
@@ -3098,11 +3101,11 @@ export default function ClientDashboard({
                 : null,
             isHebrew: isRtl,
           }),
-          experienceRange: capabilitySummary.experienceRange,
-          experienceYears: capabilitySummary.experienceYears,
+          ageRange: capabilitySummary.ageRange,
           languages: capabilitySummary.languages,
           specialties: capabilitySummary.specialties,
           servicePreferences: capabilitySummary.servicePreferences,
+          supportedAgeRanges: capabilitySummary.supportedAgeRanges,
           shortBio: capabilitySummary.shortBio,
           preferredCustomerCount: preferredCustomersResult.count ?? 0,
           repeatClientIndicator: (preferredCustomersResult.count ?? 0) > 0,
@@ -5699,6 +5702,8 @@ export default function ClientDashboard({
                     walkerRating={providerHeroMeta.rating}
                     completedCount={providerHeroMeta.completedCount}
                     walkerBio={truncateCodePoints(providerHeroMeta.shortBio, 56)}
+                    providerAgeRange={providerHeroMeta.ageRange}
+                    providerSupportedAgeRanges={providerHeroMeta.supportedAgeRanges}
                     whatsappAvailable={!!activeProviderWhatsAppPhone}
                     onOpenProfile={
                       flow.activeJob?.walker_id
@@ -6543,11 +6548,11 @@ export default function ClientDashboard({
                         : null
                     : null
                 }
-                experienceRange={providerProfileData.experienceRange}
-                experienceYears={providerProfileData.experienceYears}
+                ageRange={providerProfileData.ageRange}
                 languages={providerProfileData.languages}
                 specialties={providerProfileData.specialties}
                 servicePreferences={providerProfileData.servicePreferences}
+                supportedAgeRanges={providerProfileData.supportedAgeRanges}
                 shortBio={providerProfileData.shortBio}
                 completedCount={providerProfileData.completedCount}
                 preferredCustomerCount={providerProfileData.preferredCustomerCount}
@@ -7112,6 +7117,8 @@ function TrackingCard({
   walkerRating,
   completedCount,
   walkerBio,
+  providerAgeRange,
+  providerSupportedAgeRanges,
   whatsappAvailable,
   onOpenProfile,
   phase,
@@ -7135,6 +7142,8 @@ function TrackingCard({
   walkerRating: number | null
   completedCount: number
   walkerBio: string | null
+  providerAgeRange: string | null
+  providerSupportedAgeRanges: string[]
   whatsappAvailable: boolean
   onOpenProfile?: () => void
   phase: 'on_the_way' | 'arrived_pending_confirmation' | 'arrival_confirmed' | 'in_progress'
@@ -7201,6 +7210,17 @@ function TrackingCard({
   const ratingValue = walkerRating != null ? walkerRating.toFixed(1) : '—'
   const etaHeroValue = formatEta(etaMinutes, displayEtaSeconds, isArrived || isArrivalPending || isArrivalConfirmed)
   const shouldShowWalkerBio = isOnTheWay && !!walkerBio?.trim()
+  const providerAgeLabel =
+    providerAgeRange === '14_17' ? t('providerProfile.ageRanges.14_17')
+    : providerAgeRange === '18_24' ? t('providerProfile.ageRanges.18_24')
+    : providerAgeRange === '25_34' ? t('providerProfile.ageRanges.25_34')
+    : providerAgeRange === '35_49' ? t('providerProfile.ageRanges.35_49')
+    : providerAgeRange === '50_plus' ? t('providerProfile.ageRanges.50_plus')
+    : null
+  const visibleSupportedAgeRanges = providerSupportedAgeRanges
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  const shouldShowProviderInfo = (!!providerAgeLabel || visibleSupportedAgeRanges.length > 0)
   return (
     <div style={resolvedTrackingCardStyle}>
       <div style={trackingTopUtilityRowStyle}>
@@ -7267,6 +7287,22 @@ function TrackingCard({
       {shouldShowWalkerBio ? (
         <div style={trackingBioCardStyle}>
           <div style={trackingBioTextStyle}>{walkerBio?.trim()}</div>
+        </div>
+      ) : null}
+      {shouldShowProviderInfo ? (
+        <div style={trackingBioCardStyle}>
+          {providerAgeLabel ? (
+            <div style={trackingMetaInfoLineStyle}>
+              <span style={trackingBioLabelStyle}>{t('providerPublicProfile.age')}</span>
+              <span style={trackingBioTextStyle}>{providerAgeLabel}</span>
+            </div>
+          ) : null}
+          {visibleSupportedAgeRanges.length > 0 ? (
+            <div style={trackingMetaInfoLineStyle}>
+              <span style={trackingBioLabelStyle}>{t('providerPublicProfile.childrenAgesSupported')}</span>
+              <span style={trackingBioTextStyle}>{visibleSupportedAgeRanges.join(' • ')}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div style={trackingTitleStyle}>{title}</div>
@@ -9530,8 +9566,8 @@ const pendingConfirmCardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   borderRadius: '30px 30px 0 0',
-  minHeight: 424,
-  padding: '22px 16px calc(20px + env(safe-area-inset-bottom, 0px))',
+  minHeight: 456,
+  padding: '26px 16px calc(24px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -9912,6 +9948,8 @@ const trackingServiceStartedPillStyle: React.CSSProperties = {
 }
 
 const trackingBioCardStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 10,
   borderRadius: 18,
   border: '1px solid rgba(148, 163, 184, 0.10)',
   background: 'rgba(255,255,255,0.04)',
@@ -9923,6 +9961,18 @@ const trackingBioTextStyle: React.CSSProperties = {
   fontSize: 13,
   lineHeight: 1.5,
   color: 'rgba(226, 232, 240, 0.90)',
+}
+
+const trackingBioLabelStyle: React.CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  fontWeight: 800,
+  color: 'rgba(191, 219, 254, 0.86)',
+}
+
+const trackingMetaInfoLineStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
 }
 
 const trackingTopActionChipStyle: React.CSSProperties = {

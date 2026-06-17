@@ -3,6 +3,7 @@ import type { ProfileServiceType } from './profileServiceTypes'
 export type ProviderCapabilitiesMap = Record<string, Record<string, unknown>>
 export type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
 export type ProviderExperienceRange = '0_1' | '1_3' | '3_5' | '5_10' | '10_plus'
+export type ProviderAgeRange = '14_17' | '18_24' | '25_34' | '35_49' | '50_plus'
 
 export type ProviderCapabilityRow = {
   provider_id: string
@@ -144,6 +145,13 @@ function parseProviderLanguages(value: unknown): ProviderLanguage[] {
   )
 }
 
+function parseProviderAgeRange(value: unknown): ProviderAgeRange | null {
+  if (value === '14_17' || value === '18_24' || value === '25_34' || value === '35_49' || value === '50_plus') {
+    return value
+  }
+  return null
+}
+
 function toTitleCaseLabel(value: string): string {
   return value
     .split(/[_\s-]+/)
@@ -162,12 +170,14 @@ function getProviderExperienceRangeFromYears(years: number | null | undefined): 
 }
 
 export type ProviderCapabilitySummary = {
+  ageRange: ProviderAgeRange | null
   experienceRange: ProviderExperienceRange | null
   experienceYears: number | null
   languages: ProviderLanguage[]
   shortBio: string | null
   specialties: string[]
   servicePreferences: string[]
+  supportedAgeRanges: string[]
 }
 
 export function getProviderCapabilitySummary(params: {
@@ -193,11 +203,13 @@ export function getProviderCapabilitySummary(params: {
     typeof providerProfile.experienceRange === 'string'
       ? providerProfile.experienceRange as ProviderExperienceRange
       : getProviderExperienceRangeFromYears(experienceYears)
+  const ageRange = parseProviderAgeRange(providerProfile.ageRange)
   const languages = parseProviderLanguages(providerProfile.languagesSpoken ?? providerProfile.languages)
   const shortBio = getCapabilityShortBio(params.capabilities, params.fallbackShortBio ?? null).trim() || null
 
   const specialties = new Set<string>()
   const servicePreferences = new Set<string>()
+  let supportedAgeRanges: string[] = []
 
   if (scopeKey === 'dog_walker') {
     const dogSizes = parseStringArray(serviceScope.supportedDogSizes).map((size) => size.toUpperCase())
@@ -215,6 +227,7 @@ export function getProviderCapabilitySummary(params: {
   if (scopeKey === 'baby_sitter') {
     const ageRanges = parseStringArray(serviceScope.supportedAgeRanges)
     if (ageRanges.length > 0) {
+      supportedAgeRanges = ageRanges
       specialties.add('ageRangeCare')
       servicePreferences.add(`age_ranges:${ageRanges.join(', ')}`)
     }
@@ -225,12 +238,14 @@ export function getProviderCapabilitySummary(params: {
   }
 
   return {
+    ageRange,
     experienceRange,
     experienceYears,
     languages,
     shortBio,
     specialties: Array.from(specialties),
     servicePreferences: Array.from(servicePreferences),
+    supportedAgeRanges,
   }
 }
 
@@ -251,8 +266,8 @@ export function getProviderMatchingSignals(params: {
   })
 
   return {
-    experienceYears: summary.experienceYears ?? 0,
-    languageCodes: summary.languages,
+    experienceYears: 0,
+    languageCodes: [],
     serviceSpecialties: summary.specialties,
     servicePreferences: summary.servicePreferences,
   }

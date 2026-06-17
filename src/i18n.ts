@@ -225,18 +225,31 @@ const resources = {
       },
       providerProfile: {
         aboutMe: 'About me',
-        aboutMeSubtitle: 'clients can see after you accept.',
+        aboutMeSubtitle: 'Details clients will see after a booking is accepted.',
         aboutMePlaceholder:
-          'Tell clients a little about yourself, your experience, or what makes your service great.',
+          'Tell clients a little about yourself and what makes your service great.',
         whatsappNumber: 'WhatsApp number',
         whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'About me saved.',
         bioSaveError: 'Could not save your bio.',
         bioHint: '{{count}} / 160',
+        age: 'Age',
+        ageRanges: {
+          '14_17': '14–17',
+          '18_24': '18–24',
+          '25_34': '25–34',
+          '35_49': '35–49',
+          '50_plus': '50+',
+        },
+      },
+      providerOrderDetails: {
+        label: 'Order details',
+        compactWithRecipient: '{{serviceIcon}} {{serviceName}} for {{recipientName}}',
+        compactWithoutRecipient: '{{serviceIcon}} {{serviceName}}',
       },
       providerPublicProfile: {
         viewProfile: 'View profile',
-        experience: 'Experience',
+        age: 'Provider age',
         languages: 'Languages',
         about: 'About',
         service: 'Service',
@@ -251,6 +264,7 @@ const resources = {
         unavailable: 'Could not load this provider profile right now.',
         specialtiesLabel: 'Specialties',
         servicePreferencesLabel: 'Service preferences',
+        childrenAgesSupported: 'Child ages served',
         experienceYears_one: '{{count}} year',
         experienceYears_other: '{{count}} years',
         experienceRanges: {
@@ -275,7 +289,7 @@ const resources = {
         servicePreferences: {
           dogSizes: 'Dog sizes: {{value}}',
           energyLevels: 'Energy levels: {{value}}',
-          ageRanges: 'Age ranges: {{value}}',
+          ageRanges: 'Child ages served: {{value}}',
         },
       },
       tracking: {
@@ -657,18 +671,31 @@ const resources = {
       },
       providerProfile: {
         aboutMe: 'עליי בקצרה',
-        aboutMeSubtitle: 'לקוחות יראו אחרי קבלת ההזמנה.',
+        aboutMeSubtitle: 'פרטים שלקוחות יראו לאחר קבלת ההזמנה.',
         aboutMePlaceholder:
-          'ספר ללקוחות בקצרה על עצמך, הניסיון שלך או מה מיוחד בשירות שלך.',
+          'ספרו ללקוחות בקצרה על עצמכם ומה מיוחד בשירות שלכם.',
         whatsappNumber: 'מספר וואטסאפ (המספר אינו חשוף ללקוח)',
         whatsappNumberPlaceholder: '+972501234567',
         bioSaved: 'הטקסט נשמר.',
         bioSaveError: 'לא הצלחנו לשמור את הטקסט.',
         bioHint: '{{count}} / 160',
+        age: 'גיל',
+        ageRanges: {
+          '14_17': '14–17',
+          '18_24': '18–24',
+          '25_34': '25–34',
+          '35_49': '35–49',
+          '50_plus': '50+',
+        },
+      },
+      providerOrderDetails: {
+        label: 'פרטי ההזמנה',
+        compactWithRecipient: '{{serviceIcon}} {{serviceName}} עבור {{recipientName}}',
+        compactWithoutRecipient: '{{serviceIcon}} {{serviceName}}',
       },
       providerPublicProfile: {
         viewProfile: 'צפייה בפרופיל',
-        experience: 'ניסיון',
+        age: 'גיל ספק',
         languages: 'שפות',
         about: 'על הספק',
         service: 'שירות',
@@ -683,6 +710,7 @@ const resources = {
         unavailable: 'לא הצלחנו לטעון את פרופיל הספק כרגע.',
         specialtiesLabel: 'התמחויות',
         servicePreferencesLabel: 'העדפות שירות',
+        childrenAgesSupported: 'גילאי ילדים שהספק מעדיף לבייביסיטינג',
         experienceYears_one: '{{count}} שנה',
         experienceYears_other: '{{count}} שנים',
         experienceRanges: {
@@ -707,7 +735,7 @@ const resources = {
         servicePreferences: {
           dogSizes: 'גדלי כלבים: {{value}}',
           energyLevels: 'רמות אנרגיה: {{value}}',
-          ageRanges: 'טווחי גילאים: {{value}}',
+          ageRanges: 'גילאי ילדים שהספק מעדיף לשרת',
         },
       },
       tracking: {
@@ -745,7 +773,7 @@ const resources = {
         rateProvider: 'דרגו את {{name}}',
         pendingTitle: 'אישור סיום השירות',
         pendingSubtitle: '{{name}} סימן/ה שהשירות הסתיים.',
-        confirmCompletion: 'אשר שהשירות הסתיים בהצלחה 💙',
+        confirmCompletion: 'נא לאשר שהשירות הסתיים בהצלחה 💙',
         rejectCompletion: 'דיווח על בעיה 😏',
         confirming: 'מאשרים...',
         walkerWaiting: 'ממתינים לאישור הלקוח',
