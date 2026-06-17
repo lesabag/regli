@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
+import { BackgroundTask } from '@capawesome/capacitor-background-task'
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
 import { distanceKm, evaluateDogSizeCompatibility, rankWalkerCandidates } from '../lib/dispatchRanking'
@@ -537,6 +538,43 @@ function addressSourceStorageKey(profileId: string): string {
   return `regli_client_address_source_${profileId}`
 }
 
+function searchStartTimerStorageKey(profileId: string): string {
+  return `regli_client_search_start_${profileId}`
+}
+
+function readPersistedSearchStart(profileId: string, requestId: string): number | null {
+  try {
+    const raw = window.localStorage.getItem(searchStartTimerStorageKey(profileId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { requestId?: unknown; startedAt?: unknown }
+    if (parsed?.requestId !== requestId) return null
+    if (typeof parsed?.startedAt !== 'number' || !Number.isFinite(parsed.startedAt)) return null
+    return parsed.startedAt
+  } catch {
+    return null
+  }
+}
+
+function writePersistedSearchStart(profileId: string, requestId: string | null | undefined, startedAt: number) {
+  if (!requestId) return
+  try {
+    window.localStorage.setItem(
+      searchStartTimerStorageKey(profileId),
+      JSON.stringify({ requestId, startedAt }),
+    )
+  } catch {
+    // noop
+  }
+}
+
+function clearPersistedSearchStart(profileId: string) {
+  try {
+    window.localStorage.removeItem(searchStartTimerStorageKey(profileId))
+  } catch {
+    // noop
+  }
+}
+
 function isFutureScheduledJob(job: WalkRequestRow): boolean {
   if (job.booking_timing !== 'scheduled') return false
   if (job.status === 'completed' || job.status === 'cancelled') return false
@@ -914,6 +952,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       searchTimerRequestIdRef.current = nextRequestId
       searchTimerAttemptIdRef.current = nextAttemptId
       searchTimerAttemptExpiresAtRef.current = nextExpiresAt
+      writePersistedSearchStart(profileId, nextRequestId, currentStartedAt)
       console.log('[SearchingTimer] preserving existing searchStartTime', {
         reason,
         requestId: nextRequestId,
@@ -949,8 +988,9 @@ export function useClientFlow(profileId: string, _profileName: string) {
     searchStartTimeRef.current = startedAt
     setSearchClockNow(startedAt)
     setSearchStartTime(startedAt)
+    writePersistedSearchStart(profileId, nextRequestId, startedAt)
     return startedAt
-  }, [])
+  }, [profileId])
 
   const setAddressSourceValue = useCallback(
     (nextSource: AddressSource) => {
@@ -1009,11 +1049,16 @@ export function useClientFlow(profileId: string, _profileName: string) {
         message: error.message,
       })
       if (searchStartTimeRef.current == null) {
-        setSearchAttemptStartedAt(Date.now(), `${reason}:fallback_lookup_failed`, {
-          requestId,
-          attemptId: null,
-          expiresAt: null,
-        })
+        const persistedStartedAt = readPersistedSearchStart(profileId, requestId)
+        setSearchAttemptStartedAt(
+          persistedStartedAt ?? Date.now(),
+          `${reason}:fallback_lookup_failed${persistedStartedAt != null ? ':from_storage' : ''}`,
+          {
+            requestId,
+            attemptId: null,
+            expiresAt: null,
+          },
+        )
       } else {
         setSearchAttemptStartedAt(searchStartTimeRef.current, `${reason}:fallback_lookup_failed`, {
           requestId,
@@ -1038,7 +1083,12 @@ export function useClientFlow(profileId: string, _profileName: string) {
             : searchStartTimeRef.current ?? Date.now()
 
     if (!attempt) {
-      setSearchAttemptStartedAt(searchStartTimeRef.current ?? derivedStartedAt, `${reason}:no_pending_dispatch_attempt`, {
+      const persistedStartedAt = readPersistedSearchStart(profileId, requestId)
+      const fallbackStartedAt =
+        searchStartTimeRef.current ?? persistedStartedAt ?? derivedStartedAt
+      const persistedSuffix =
+        searchStartTimeRef.current == null && persistedStartedAt != null ? ':from_storage' : ''
+      setSearchAttemptStartedAt(fallbackStartedAt, `${reason}:no_pending_dispatch_attempt${persistedSuffix}`, {
         requestId,
         attemptId: null,
         expiresAt: null,
@@ -1051,7 +1101,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
       attemptId: attempt.id,
       expiresAt: attempt.expires_at,
     })
-  }, [setSearchAttemptStartedAt])
+  }, [profileId, setSearchAttemptStartedAt])
 
   const clearSearchAttempt = useCallback(() => {
     searchTimerRequestIdRef.current = null
@@ -1060,7 +1110,8 @@ export function useClientFlow(profileId: string, _profileName: string) {
     searchStartTimeRef.current = null
     setSearchStartTime(null)
     setSearchClockNow(Date.now())
-  }, [])
+    clearPersistedSearchStart(profileId)
+  }, [profileId])
 
   const startOptimisticSearching = useCallback((jobId: string, reason: string, details?: Record<string, unknown>) => {
     optimisticSearchingJobIdRef.current = jobId
@@ -4053,6 +4104,18 @@ function mergeClientDogSizeAttributes(
       }
     }
 
+    let backgroundTaskId: string | null = null
+    if (Capacitor.isNativePlatform()) {
+      try {
+        backgroundTaskId = await BackgroundTask.beforeExit(() => {
+          // iOS expiration handler — the plugin's internal handler calls
+          // endBackgroundTask itself, so this callback can stay a no-op.
+        })
+      } catch (backgroundTaskError) {
+        console.warn('[useClientFlow] BackgroundTask.beforeExit unavailable', backgroundTaskError)
+      }
+    }
+
     try {
       console.log('[useClientFlow] booking payment path decision', {
         activePaymentMethod: activePaymentMethod?.type ?? null,
@@ -4825,6 +4888,14 @@ function mergeClientDogSizeAttributes(
       setCurrentJob(null)
       setCurrentJobId(null)
     } finally {
+      if (backgroundTaskId) {
+        try {
+          BackgroundTask.finish({ taskId: backgroundTaskId })
+        } catch (backgroundTaskError) {
+          console.warn('[useClientFlow] BackgroundTask.finish failed', backgroundTaskError)
+        }
+        backgroundTaskId = null
+      }
       setLoading(false)
     }
   }, [
