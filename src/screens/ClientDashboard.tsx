@@ -4553,6 +4553,15 @@ export default function ClientDashboard({
     accentColor: budgetSliderSemanticColor,
     background: `linear-gradient(to right, ${budgetSliderSemanticColor} 0%, ${budgetSliderSemanticColor} ${activeBudgetFillPercent}%, #E2E8F0 ${activeBudgetFillPercent}%, #E2E8F0 100%)`,
   }
+  const compactPaymentRowHelperText = isRtl ? 'חיוב בסיום השירות' : 'Charge at the end of the service'
+  const disabledBookingReason =
+    bookingBlockedReasons.includes('missing_saved_card')
+      ? (isRtl ? 'הוסיפו אמצעי תשלום כדי להמשיך' : 'Add a payment method to continue')
+      : bookingBlockedReasons.includes('missing_service_name')
+        ? (isRtl ? 'הזינו שם למקבל השירות' : 'Enter a service recipient name')
+        : bookingBlockedReasons.includes('missing_price')
+          ? (isRtl ? 'בחרו מחיר גדול מ־₪0' : 'Choose a price greater than ₪0')
+          : null
 
   const compactSavedCardSummary =
     flow.activePaymentMethod && !flow.setupClientSecret ? (
@@ -4567,9 +4576,12 @@ export default function ClientDashboard({
         style={compactSavedCardRowStyle}
       >
         <div style={compactSavedCardMainStyle}>
-          <span style={compactSavedCardBrandStyle}>
-            {getPaymentMethodLabel(flow.activePaymentMethod).replace(/\s+(\d{4})$/, ' •••• $1')}
-          </span>
+          <div style={compactSavedCardTextClusterStyle}>
+            <span style={compactSavedCardBrandStyle}>
+              {getPaymentMethodLabel(flow.activePaymentMethod).replace(/\s+(\d{4})$/, ' •••• $1')}
+            </span>
+            <span style={compactSavedCardHelperStyle}>{compactPaymentRowHelperText}</span>
+          </div>
           <span style={compactPaymentMethodIconWrapStyle} aria-hidden="true">
             {flow.activePaymentMethod.type === 'apple_pay' ? (
               <span style={compactPaymentMethodApplePayStyle}></span>
@@ -5768,10 +5780,9 @@ export default function ClientDashboard({
                       t('booking.orderNow')
                     )}
                   </button>
-                  <div style={stickyPaymentNoticeStyle}>
-                    <span style={paymentInfoIconStyle} aria-hidden="true">i</span>
-                    <span>{compactPaymentAuthorizationNotice}</span>
-                  </div>
+                  {!canSubmitBooking && disabledBookingReason && !flow.loading && !(flow.cardLoading && !flow.savedCard) ? (
+                    <div style={stickyDisabledReasonStyle}>{disabledBookingReason}</div>
+                  ) : null}
                   {!flow.location.trim() && !flow.locationLoading ? (
                     <div
                       onClick={openAddressPicker}
@@ -8850,6 +8861,15 @@ const compactSavedCardMainStyle: React.CSSProperties = {
   padding: '2px 0',
 }
 
+const compactSavedCardTextClusterStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 8,
+  minWidth: 0,
+  flex: 1,
+  flexWrap: 'wrap',
+}
+
 const compactAddPaymentMethodCtaRowStyle: React.CSSProperties = {
   borderRadius: 18,
   padding: '10px 12px',
@@ -8897,6 +8917,15 @@ const compactSavedCardBrandStyle: React.CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   minWidth: 0,
+}
+
+const compactSavedCardHelperStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 600,
+  color: '#64748B',
+  lineHeight: 1.2,
+  minWidth: 0,
+  whiteSpace: 'nowrap',
 }
 
 const compactPaymentMethodIconWrapStyle: React.CSSProperties = {
@@ -9282,7 +9311,7 @@ const stickyMainActionStyle: React.CSSProperties = {
   minWidth: 0,
 }
 
-const stickyPaymentNoticeStyle: React.CSSProperties = {
+const stickyDisabledReasonStyle: React.CSSProperties = {
   marginTop: 7,
   width: '100%',
   boxSizing: 'border-box',
@@ -9294,32 +9323,13 @@ const stickyPaymentNoticeStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 4,
   fontSize: 10.5,
   fontWeight: 600,
   lineHeight: 1.2,
-  color: '#1D4ED8',
+  color: '#64748B',
   textAlign: 'center',
   minWidth: 0,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-}
-
-const paymentInfoIconStyle: React.CSSProperties = {
-  width: 14,
-  height: 14,
-  minWidth: 14,
-  borderRadius: 999,
-  background: 'rgba(59, 130, 246, 0.14)',
-  color: '#2563EB',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: 9,
-  fontWeight: 900,
-  lineHeight: 1,
-  marginTop: 0,
-  flexShrink: 0,
+  whiteSpace: 'normal',
 }
 
 const stickyActionRowStyle: React.CSSProperties = {
@@ -9520,7 +9530,7 @@ const pendingConfirmCardStyle: React.CSSProperties = {
   background: 'linear-gradient(180deg, rgba(14,17,22,0.94) 0%, rgba(20,24,31,0.96) 100%)',
   border: '1px solid rgba(148, 163, 184, 0.12)',
   borderRadius: '30px 30px 0 0',
-  minHeight: 392,
+  minHeight: 424,
   padding: '22px 16px calc(20px + env(safe-area-inset-bottom, 0px))',
   display: 'flex',
   flexDirection: 'column',
@@ -9580,16 +9590,18 @@ const pendingConfirmBtnStyle: React.CSSProperties = {
 
 const pendingRejectBtnStyle: React.CSSProperties = {
   appearance: 'none',
-  border: '1.5px solid rgba(96, 165, 250, 0.16)',
+  border: '1px solid rgba(248, 113, 113, 0.22)',
   width: '100%',
   minHeight: 46,
-  borderRadius: 16,
-  background: 'rgba(17, 24, 39, 0.78)',
-  color: '#60A5FA',
-  fontSize: 15,
-  fontWeight: 800,
+  borderRadius: 12,
+  background: 'rgba(127, 29, 29, 0.2)',
+  color: '#FCA5A5',
+  fontSize: 12,
+  fontWeight: 700,
   cursor: 'pointer',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+  fontFamily: 'inherit',
+  boxShadow: 'none',
+  opacity: 1,
 }
 
 const tipCardStyle: React.CSSProperties = {

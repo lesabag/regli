@@ -1,4 +1,5 @@
 import { formatShortAddress } from '../utils/addressFormat'
+import { localizeDurationLabel } from '../utils/serviceTiming'
 
 interface RequestCardProps {
   clientName: string
@@ -28,6 +29,8 @@ export default function RequestCard({
   loading,
   isHebrew = false,
 }: RequestCardProps) {
+  const localizedDuration = localizeDurationLabel(duration, isHebrew ? 'he' : 'en') || duration
+
   return (
     <div style={cardStyle}>
       {/* Header: avatar + name */}
@@ -38,7 +41,7 @@ export default function RequestCard({
             {clientName}
           </h3>
           <p style={{ margin: '2px 0 0', fontSize: 14, color: '#64748B' }}>
-            {dogName} · {duration} · <span style={{ color: '#15803D', fontWeight: 700 }}>{price}</span>
+            {dogName} · {localizedDuration} · <span style={{ color: '#15803D', fontWeight: 700 }}>{price}</span>
           </p>
         </div>
       </div>

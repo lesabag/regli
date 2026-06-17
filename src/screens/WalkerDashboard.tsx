@@ -23,7 +23,12 @@ import type { LegalDocumentType } from '../lib/legalAcceptances'
 import { formatShortAddress } from '../utils/addressFormat'
 import { formatDogCountLabel, isDogServiceType } from '../utils/dogCount'
 import { getServiceLabels } from '../utils/serviceLifecycle'
-import { formatDurationFromMinutes, getDurationSummary } from '../utils/serviceTiming'
+import {
+  formatDurationFromMinutes,
+  formatElapsedDurationFromSeconds,
+  getDurationSummary,
+  localizeDurationLabel,
+} from '../utils/serviceTiming'
 import {
   BUSINESS_TIMEZONE,
   type ProviderAvailabilityRow,
@@ -158,47 +163,36 @@ function durationFromMinutes(minutes: number | null | undefined): string {
   return formatDurationFromMinutes(minutes) ?? '—'
 }
 
+function getServiceRecipientName(
+  input: {
+    dogName?: string | null
+    petName?: string | null
+    orderName?: string | null
+    clientName?: string | null
+  },
+  isHebrew: boolean,
+): string {
+  const recipientName = input.dogName?.trim() || input.petName?.trim() || input.orderName?.trim()
+  if (recipientName) return recipientName
+
+  const fallbackName = input.clientName?.trim()
+  if (fallbackName) return fallbackName
+
+  return isHebrew ? 'הלקוח' : 'the client'
+}
+
 function formatDurationFromMinutesLocalized(
   minutes: number | null | undefined,
   isHebrew: boolean,
 ): string {
-  if (!isHebrew) return durationFromMinutes(minutes)
-  if (minutes == null || Number.isNaN(minutes)) return '—'
-  const safe = Math.max(0, Math.round(minutes))
-  if (safe <= 0) return '—'
-  if (safe < 60) return safe === 1 ? 'דקה 1' : `${safe} דקות`
-  if (safe % 60 === 0) return safe / 60 === 1 ? 'שעה 1' : `${safe / 60} שעות`
-  if (safe % 30 === 0) return `${safe / 60} שעות`
-  return `${safe} דקות`
+  return formatDurationFromMinutes(minutes, isHebrew ? 'he' : 'en') ?? '—'
 }
 
 function formatElapsedDurationLocalized(
   seconds: number | null | undefined,
   isHebrew: boolean,
 ): string | null {
-  if (seconds == null || Number.isNaN(seconds)) return null
-
-  const safe = Math.max(0, Math.floor(seconds))
-
-  if (!isHebrew) {
-    if (safe < 60) return `${safe} sec`
-    const totalMinutes = Math.floor(safe / 60)
-    if (totalMinutes < 60) return `${totalMinutes} min`
-    const hours = Math.floor(totalMinutes / 60)
-    const minutes = totalMinutes % 60
-    if (minutes <= 0) return `${hours} h`
-    return `${hours} h ${minutes} min`
-  }
-
-  if (safe < 60) return safe === 1 ? 'שניה 1' : `${safe} שניות`
-  const totalMinutes = Math.floor(safe / 60)
-  if (totalMinutes < 60) return totalMinutes === 1 ? 'דקה 1' : `${totalMinutes} דקות`
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  if (minutes <= 0) return hours === 1 ? 'שעה 1' : `${hours} שעות`
-  const hourLabel = hours === 1 ? 'שעה 1' : `${hours} שעות`
-  const minuteLabel = minutes === 1 ? 'דקה 1' : `${minutes} דקות`
-  return `${hourLabel} ${minuteLabel}`
+  return formatElapsedDurationFromSeconds(seconds, isHebrew ? 'he' : 'en')
 }
 
 function parseBabysitterNotes(notes: string | null | undefined): {
@@ -248,6 +242,24 @@ function formatMissionServiceNote(note: string | null, isHebrew: boolean): strin
   if (!note) return null
   if (!isHebrew) return note
   return note.replace(/^Dogs:\s*/i, 'כלבים: ')
+}
+
+function normalizeComparableText(value: string | null | undefined): string {
+  return (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^(dogs|כלבים|service details|notes|הערות)\s*:\s*/i, '')
+    .replace(/[•.,!?\-–—]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function shouldShowMissionNote(note: string | null | undefined, recipientName: string): boolean {
+  const normalizedNote = normalizeComparableText(note)
+  if (!normalizedNote) return false
+  const normalizedRecipient = normalizeComparableText(recipientName)
+  if (!normalizedRecipient) return true
+  return normalizedNote !== normalizedRecipient
 }
 
 function formatMoney(value: number | null | undefined): string {
@@ -1940,14 +1952,23 @@ export default function WalkerDashboard({
         : '—'
     : '—'
 
-  const requestDuration = durationFromMinutes(topRequest?.duration_minutes)
+  const requestDuration = formatDurationFromMinutesLocalized(topRequest?.duration_minutes, isHebrew)
   const requestDogCountLabel = formatDogCountLabel(topRequest?.dog_count ?? 1, { isHebrew })
   const isBabysitterRequest = topRequest?.service_type === 'baby_sitter'
   const isFixedVisitRequest = getBookingPricingModelForService(topRequest?.service_type) === 'fixed_visit'
+  const requestRecipientName = getServiceRecipientName(
+    {
+      dogName: topRequest?.dog_name || null,
+      clientName: topRequest?.client?.full_name || topRequest?.client?.email || null,
+    },
+    isHebrew,
+  )
   const babysitterRequestNotes = useMemo(
     () => parseBabysitterNotes(topRequest?.notes),
     [topRequest?.notes],
   )
+  const requestOfferDuration =
+    localizeDurationLabel(babysitterRequestNotes.duration, isHebrew ? 'he' : 'en') || requestDuration
   const topOffer = flow.activeOffers.find((offer) => offer.request_id === topRequest?.id) ?? null
 
   useEffect(() => {
@@ -5416,11 +5437,10 @@ export default function WalkerDashboard({
 
             const isMissionActive = flow.screenState === 'active'
             const missionHasProviderIssue = isMissionActive ? activeJobHasProviderIssue : onTheWayJobHasProviderIssue
-            const missionCustomerName = getCustomerDisplayName(
+            const missionRecipientName = getServiceRecipientName(
               {
-                client: missionJob.client ?? null,
-                clientName: missionJob.client?.full_name || missionJob.client?.email || null,
                 dogName: missionJob.dog_name || null,
+                clientName: missionJob.client?.full_name || missionJob.client?.email || null,
               },
               isHebrew,
             )
@@ -5428,10 +5448,10 @@ export default function WalkerDashboard({
               ? formatDogCountLabel(missionJob.dog_count ?? 1, { isHebrew })
               : null
             const missionAddress = missionJob.location ? formatShortAddress(missionJob.address || missionJob.location) : null
-            const missionNote = formatMissionServiceNote(
-              getDisplayServiceNote(missionJob.service_type, missionJob.notes),
-              isHebrew,
-            )
+            const missionRawNote = getDisplayServiceNote(missionJob.service_type, missionJob.notes)
+            const missionNote = shouldShowMissionNote(missionRawNote, missionRecipientName)
+              ? formatMissionServiceNote(missionRawNote, isHebrew)
+              : null
             const isFixedVisitMission = getBookingPricingModelForService(missionJob.service_type) === 'fixed_visit'
             const missionFixedVisitPriceLabel = formatMoney(
               missionJob.walker_earnings ?? getEstimatedProviderEarnings(missionJob) ?? missionJob.price,
@@ -5557,8 +5577,8 @@ export default function WalkerDashboard({
                   <h3 style={activeDogNameStyle}>{missionHeadline}</h3>
                   <p style={missionSublineStyle}>{missionSubline}</p>
                   <p style={activeClientStyle}>
-                    {isHebrew ? 'עבור ' : 'for '}
-                    {missionCustomerName}
+                    {isHebrew ? 'עבור ' : 'For '}
+                    {missionRecipientName}
                     {missionDogCountLabel ? ` · ${missionDogCountLabel}` : ''}
                   </p>
                 </div>
@@ -5716,20 +5736,12 @@ export default function WalkerDashboard({
 
                 <div style={incomingInfoCardStyle}>
                   <div style={incomingInfoLabelStyle}>
-                    {isFixedVisitRequest
-                    ? (isHebrew ? 'שירות' : 'Service')
-                    : isBabysitterRequest
-                      ? (isHebrew ? 'פרטי שירות' : 'Service details')
-                      : (isHebrew ? 'שם' : 'Name')}
+                    {isHebrew ? 'עבור' : 'For'}
+                  </div>
+                  <div style={dogNameStyle}>
+                    {requestRecipientName}
+                  </div>
                 </div>
-                <div style={dogNameStyle}>
-                  {isFixedVisitRequest
-                    ? topRequest.notes || t('tracking.fixedVisit')
-                    : isBabysitterRequest
-                    ? babysitterRequestNotes.details || topRequest.dog_name || (isHebrew ? 'שירות בייביסיטר' : 'Babysitter service')
-                    : topRequest.dog_name || t('booking.walkFallback')}
-                </div>
-              </div>
 
               {(isBabysitterRequest ? babysitterRequestNotes.startTime : topRequest.location) && (
                 <div style={reqLocationStyle}>
@@ -5746,28 +5758,28 @@ export default function WalkerDashboard({
                   <div style={incomingMetaCardStyle}>
                     <span style={incomingMetaLabelStyle}>
                       {isFixedVisitRequest
-                      ? t('tracking.visitFee')
-                      : isBabysitterRequest
-                        ? (isHebrew ? 'משך מבוקש' : 'Requested duration')
-                        : t('booking.durationQuestion')}
+                        ? t('tracking.visitFee')
+                        : isBabysitterRequest
+                          ? (isHebrew ? 'משך מבוקש' : 'Requested duration')
+                          : t('booking.durationQuestion')}
                     </span>
                     <span style={incomingMetaValueStyle}>
                       {isFixedVisitRequest
-                      ? requestPrice
-                      : isBabysitterRequest
-                      ? babysitterRequestNotes.duration || requestDuration
-                      : `${requestDuration}${isDogServiceType(topRequest.service_type) ? ` · ${requestDogCountLabel}` : ''}`}
-                  </span>
+                        ? requestPrice
+                        : isBabysitterRequest
+                          ? requestOfferDuration
+                          : `${requestDuration}${isDogServiceType(topRequest.service_type) ? ` · ${requestDogCountLabel}` : ''}`}
+                    </span>
+                  </div>
+                  <div style={incomingMetaCardStyle}>
+                    <span style={incomingMetaLabelStyle}>
+                      {isBabysitterRequest ? (isHebrew ? 'תקציב לקוח' : 'Client budget') : t('booking.priceLabel')}
+                    </span>
+                    <span style={incomingPriceValueStyle}>
+                      {requestPrice !== '—' ? requestPrice : isBabysitterRequest ? babysitterRequestNotes.budget || '—' : '—'}
+                    </span>
+                  </div>
                 </div>
-                <div style={incomingMetaCardStyle}>
-                  <span style={incomingMetaLabelStyle}>
-                    {isBabysitterRequest ? (isHebrew ? 'תקציב לקוח' : 'Client budget') : t('booking.priceLabel')}
-                  </span>
-                  <span style={incomingPriceValueStyle}>
-                    {requestPrice !== '—' ? requestPrice : isBabysitterRequest ? babysitterRequestNotes.budget || '—' : '—'}
-                  </span>
-                </div>
-              </div>
             </div>
 
             {flow.openJobs.length > 1 && <div style={queueHintStyle}>+{flow.openJobs.length - 1} more in queue</div>}

@@ -28,32 +28,108 @@ function formatClock(seconds: number): string {
   return [hours, minutes, secs].map((value) => String(value).padStart(2, '0')).join(':')
 }
 
-export function formatDurationFromMinutes(minutes: number | null | undefined): string | null {
-  if (minutes == null || Number.isNaN(minutes)) return null
-  const safe = Math.max(0, Math.round(minutes))
-  const isHebrew = i18n.resolvedLanguage === 'he'
-  if (safe <= 0) return null
-  if (safe < 60) return isHebrew ? `${safe} דק׳` : `${safe} min`
-  if (safe % 60 === 0) return isHebrew ? `${safe / 60} שעה` : `${safe / 60} h`
-  if (safe % 30 === 0) return isHebrew ? `${safe / 60} שעה` : `${safe / 60} h`
-  return isHebrew ? `${safe} דק׳` : `${safe} min`
+function getUnitLabel(
+  value: number,
+  unit: 'hour' | 'minute' | 'second',
+  isHebrew: boolean,
+): string {
+  if (!isHebrew) {
+    if (unit === 'hour') return value === 1 ? 'hour' : 'hours'
+    if (unit === 'minute') return value === 1 ? 'min' : 'min'
+    return value === 1 ? 'sec' : 'sec'
+  }
+
+  if (unit === 'hour') return value === 1 ? 'שעה' : 'שעות'
+  if (unit === 'minute') return value === 1 ? 'דקה' : 'דקות'
+  return value === 1 ? 'שניה' : 'שניות'
 }
 
-export function formatElapsedDurationFromSeconds(seconds: number | null | undefined): string | null {
+function formatCountWithUnit(
+  value: number,
+  unit: 'hour' | 'minute' | 'second',
+  isHebrew: boolean,
+): string {
+  return `${value} ${getUnitLabel(value, unit, isHebrew)}`
+}
+
+function resolveIsHebrew(locale?: string): boolean {
+  return (locale ?? i18n.resolvedLanguage) === 'he'
+}
+
+function pluralizeEnglishUnit(unit: 'hour' | 'minute' | 'second', value: number): string {
+  if (unit === 'hour') return value === 1 ? 'hour' : 'hours'
+  if (unit === 'minute') return value === 1 ? 'minute' : 'minutes'
+  return value === 1 ? 'second' : 'seconds'
+}
+
+function formatFullDurationUnit(
+  value: number,
+  unit: 'hour' | 'minute' | 'second',
+  isHebrew: boolean,
+): string {
+  if (isHebrew) return formatCountWithUnit(value, unit, true)
+  return `${value} ${pluralizeEnglishUnit(unit, value)}`
+}
+
+export function localizeDurationLabel(raw: string | null | undefined, locale?: string): string | null {
+  const trimmed = raw?.trim()
+  if (!trimmed) return null
+
+  const isHebrew = resolveIsHebrew(locale)
+  const normalized = trimmed.toLowerCase()
+  const patterns: Array<{ unit: 'hour' | 'minute' | 'second'; match: RegExpMatchArray | null }> = [
+    { unit: 'hour', match: normalized.match(/^(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs|h)$/i) },
+    { unit: 'hour', match: normalized.match(/^(hour|hours|hr|hrs|h)\s*(\d+(?:\.\d+)?)$/i) },
+    { unit: 'minute', match: normalized.match(/^(\d+(?:\.\d+)?)\s*(minute|minutes|min|mins|m)$/i) },
+    { unit: 'minute', match: normalized.match(/^(minute|minutes|min|mins|m)\s*(\d+(?:\.\d+)?)$/i) },
+    { unit: 'second', match: normalized.match(/^(\d+(?:\.\d+)?)\s*(second|seconds|sec|secs|s)$/i) },
+    { unit: 'second', match: normalized.match(/^(second|seconds|sec|secs|s)\s*(\d+(?:\.\d+)?)$/i) },
+  ]
+
+  for (const pattern of patterns) {
+    if (!pattern.match) continue
+    const amountRaw = pattern.match.slice(1).find((part) => /\d/.test(part)) ?? null
+    if (!amountRaw) return trimmed
+    const amount = Number(amountRaw)
+    if (!Number.isFinite(amount)) return trimmed
+    return formatFullDurationUnit(amount, pattern.unit, isHebrew)
+  }
+
+  return trimmed
+}
+
+export function formatDurationFromMinutes(
+  minutes: number | null | undefined,
+  locale?: string,
+): string | null {
+  if (minutes == null || Number.isNaN(minutes)) return null
+  const safe = Math.max(0, Math.round(minutes))
+  const isHebrew = resolveIsHebrew(locale)
+  if (safe <= 0) return null
+  if (safe < 60) return formatCountWithUnit(safe, 'minute', isHebrew)
+  if (safe % 60 === 0) return formatCountWithUnit(safe / 60, 'hour', isHebrew)
+  if (safe % 30 === 0) return formatCountWithUnit(safe / 60, 'hour', isHebrew)
+  return formatCountWithUnit(safe, 'minute', isHebrew)
+}
+
+export function formatElapsedDurationFromSeconds(
+  seconds: number | null | undefined,
+  locale?: string,
+): string | null {
   if (seconds == null || Number.isNaN(seconds)) return null
 
   const safe = Math.max(0, Math.floor(seconds))
-  const isHebrew = i18n.resolvedLanguage === 'he'
+  const isHebrew = resolveIsHebrew(locale)
 
-  if (safe < 60) return isHebrew ? `${safe} שניות` : `${safe} sec`
+  if (safe < 60) return formatCountWithUnit(safe, 'second', isHebrew)
 
   const totalMinutes = Math.floor(safe / 60)
-  if (totalMinutes < 60) return isHebrew ? `${totalMinutes} דק׳` : `${totalMinutes} min`
+  if (totalMinutes < 60) return formatCountWithUnit(totalMinutes, 'minute', isHebrew)
 
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
-  if (minutes <= 0) return isHebrew ? `${hours} שעה` : `${hours} h`
-  return isHebrew ? `${hours} שעה ${minutes} דק׳` : `${hours} h ${minutes} min`
+  if (minutes <= 0) return formatCountWithUnit(hours, 'hour', isHebrew)
+  return `${formatCountWithUnit(hours, 'hour', isHebrew)} ${formatCountWithUnit(minutes, 'minute', isHebrew)}`
 }
 
 export function getElapsedSeconds(
