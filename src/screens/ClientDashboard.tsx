@@ -4537,6 +4537,22 @@ export default function ClientDashboard({
       : budgetGuidance.likelihood === 'medium'
         ? budgetGuidanceChipMediumStyle
         : budgetGuidanceChipLowStyle
+  const budgetSliderSemanticColor =
+    budgetGuidance.likelihood === 'high'
+      ? '#10B981'
+      : budgetGuidance.likelihood === 'medium'
+        ? '#2563EB'
+        : '#F59E0B'
+  const activeBudgetRange = Math.max(activeBudgetMax - activeBudgetMin, 1)
+  const activeBudgetFillPercent = Math.min(
+    100,
+    Math.max(0, ((activeBudgetValue - activeBudgetMin) / activeBudgetRange) * 100),
+  )
+  const activeBudgetSliderStyle: React.CSSProperties = {
+    ...unifiedBudgetSliderStyle,
+    accentColor: budgetSliderSemanticColor,
+    background: `linear-gradient(to right, ${budgetSliderSemanticColor} 0%, ${budgetSliderSemanticColor} ${activeBudgetFillPercent}%, #E2E8F0 ${activeBudgetFillPercent}%, #E2E8F0 100%)`,
+  }
 
   const compactSavedCardSummary =
     flow.activePaymentMethod && !flow.setupClientSecret ? (
@@ -4620,7 +4636,7 @@ export default function ClientDashboard({
             step={activeBudgetStep}
             value={activeBudgetValue}
             onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
-            style={unifiedBudgetSliderStyle}
+            style={activeBudgetSliderStyle}
             aria-label={isRtl ? 'תקציב' : 'Budget'}
           />
           <div style={unifiedBudgetScaleRowStyle}>
@@ -4657,7 +4673,7 @@ export default function ClientDashboard({
             step={activeBudgetStep}
             value={activeBudgetValue}
             onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
-            style={unifiedBudgetSliderStyle}
+            style={activeBudgetSliderStyle}
             aria-label={isRtl ? 'תקציב ביקור' : 'Visit fee'}
           />
         </div>
