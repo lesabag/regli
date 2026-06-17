@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { XCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 const MAX_RETRIES = 3;
 const COOLDOWN_MS = 10000;
@@ -11,6 +12,8 @@ interface NoMatchOverlayProps {
 }
 
 export default function NoMatchOverlay({ attempts, onRetry, onCancel }: NoMatchOverlayProps) {
+  const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
   const maxedOut = attempts >= MAX_RETRIES;
   const [cooldown, setCooldown] = useState(maxedOut);
 
@@ -53,13 +56,13 @@ export default function NoMatchOverlay({ attempts, onRetry, onCancel }: NoMatchO
 
       <p className="text-white text-lg font-semibold tracking-tight text-center px-8 animate-[fadeIn_400ms_ease-out]">
         {maxedOut
-          ? 'Still no walkers available'
-          : 'No walkers available right now'}
+          ? (isHebrew ? 'עדיין אין ספקים זמינים' : 'Still no walkers available')
+          : (isHebrew ? 'אין ספקים זמינים כרגע' : 'No walkers available right now')}
       </p>
       <p className="text-white/40 text-sm mt-2 text-center px-8">
         {maxedOut
-          ? 'Please try again in a few minutes'
-          : 'All walkers are currently busy'}
+          ? (isHebrew ? 'נסו שוב בעוד כמה דקות' : 'Please try again in a few minutes')
+          : (isHebrew ? 'כל הספקים עסוקים כרגע' : 'All walkers are currently busy')}
       </p>
 
       <div className="flex flex-col items-center gap-3 mt-8">
@@ -72,13 +75,15 @@ export default function NoMatchOverlay({ attempts, onRetry, onCancel }: NoMatchO
               : 'bg-white text-[#001A33] active:scale-[0.98]'
           }`}
         >
-          {cooldown ? `Try again in ${secondsLeft}s` : 'Try again'}
+          {cooldown
+            ? (isHebrew ? `נסו שוב בעוד ${secondsLeft} שנ׳` : `Try again in ${secondsLeft}s`)
+            : (isHebrew ? 'נסה שוב' : 'Try again')}
         </button>
         <button
           onClick={onCancel}
           className="px-6 py-2.5 text-[13px] font-semibold text-white/50 active:text-white/70 transition-colors"
         >
-          Cancel
+          {isHebrew ? 'ביטול' : 'Cancel'}
         </button>
       </div>
     </div>

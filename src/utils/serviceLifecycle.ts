@@ -1,3 +1,5 @@
+import i18n from '../i18n.ts'
+
 export type ServicePhase =
   | 'idle'
   | 'searching'
@@ -35,8 +37,11 @@ function normalizeServiceKind(serviceType: string | null | undefined): 'default'
   if (
     normalized === 'dog' ||
     normalized === 'walk' ||
+    normalized === 'dog_walker' ||
+    normalized === 'dogwalker' ||
     normalized === 'dog_walk' ||
     normalized === 'dog-walk' ||
+    normalized === 'dog_walking' ||
     normalized === 'quick' ||
     normalized === 'standard' ||
     normalized === 'energy'
@@ -46,6 +51,7 @@ function normalizeServiceKind(serviceType: string | null | undefined): 'default'
 
   if (
     normalized === 'babysitter' ||
+    normalized === 'baby_sitter' ||
     normalized === 'babysitting' ||
     normalized === 'sitter' ||
     normalized === 'childcare'
@@ -55,6 +61,8 @@ function normalizeServiceKind(serviceType: string | null | undefined): 'default'
 
   if (
     normalized === 'handyman' ||
+    normalized === 'locksmith' ||
+    normalized === 'cleaning' ||
     normalized === 'handy' ||
     normalized === 'job' ||
     normalized === 'maintenance' ||
@@ -68,51 +76,52 @@ function normalizeServiceKind(serviceType: string | null | undefined): 'default'
 
 export function getServiceLabels(serviceType: string | null | undefined): ServiceLabels {
   const kind = normalizeServiceKind(serviceType)
+  const isHebrew = i18n.resolvedLanguage === 'he'
 
   if (kind === 'dog') {
     return {
-      startAction: 'Start Walk',
-      completeAction: 'Complete Walk',
-      startedPast: 'Walk started',
-      completedPast: 'Walk completed',
-      activeTitle: 'Active walk',
-      completedTitle: 'Walk completed',
-      itemLabel: 'walk',
+      startAction: isHebrew ? 'התחל טיול' : 'Start Walk',
+      completeAction: isHebrew ? 'סיים טיול' : 'Complete Walk',
+      startedPast: isHebrew ? 'הטיול התחיל' : 'Walk started',
+      completedPast: isHebrew ? 'הטיול הושלם' : 'Walk completed',
+      activeTitle: isHebrew ? 'הטיול פעיל כעת' : 'Active walk',
+      completedTitle: isHebrew ? 'הטיול הושלם' : 'Walk completed',
+      itemLabel: isHebrew ? 'טיול' : 'walk',
     }
   }
 
   if (kind === 'babysitter') {
     return {
-      startAction: 'Start Session',
-      completeAction: 'Complete Session',
-      startedPast: 'Session started',
-      completedPast: 'Session completed',
-      activeTitle: 'Active session',
-      completedTitle: 'Session completed',
-      itemLabel: 'session',
+      startAction: isHebrew ? 'התחל סשן' : 'Start Session',
+      completeAction: isHebrew ? 'סיים סשן' : 'Complete Session',
+      startedPast: isHebrew ? 'הסשן התחיל' : 'Session started',
+      completedPast: isHebrew ? 'הסשן הושלם' : 'Session completed',
+      activeTitle: isHebrew ? 'הסשן פעיל כעת' : 'Active session',
+      completedTitle: isHebrew ? 'הסשן הושלם' : 'Session completed',
+      itemLabel: isHebrew ? 'סשן' : 'session',
     }
   }
 
   if (kind === 'handyman') {
     return {
-      startAction: 'Start Job',
-      completeAction: 'Complete Job',
-      startedPast: 'Job started',
-      completedPast: 'Job completed',
-      activeTitle: 'Active job',
-      completedTitle: 'Job completed',
-      itemLabel: 'job',
+      startAction: isHebrew ? 'התחל עבודה' : 'Start Job',
+      completeAction: isHebrew ? 'סיים עבודה' : 'Complete Job',
+      startedPast: isHebrew ? 'העבודה התחילה' : 'Job started',
+      completedPast: isHebrew ? 'העבודה הושלמה' : 'Job completed',
+      activeTitle: isHebrew ? 'העבודה פעילה כעת' : 'Active job',
+      completedTitle: isHebrew ? 'העבודה הושלמה' : 'Job completed',
+      itemLabel: isHebrew ? 'עבודה' : 'job',
     }
   }
 
   return {
-    startAction: 'Start Service',
-    completeAction: 'Complete Service',
-    startedPast: 'Service started',
-    completedPast: 'Service completed',
-    activeTitle: 'Service in progress',
-    completedTitle: 'Service completed',
-    itemLabel: 'service',
+    startAction: isHebrew ? 'התחל שירות' : 'Start Service',
+    completeAction: isHebrew ? 'סיים שירות' : 'Complete Service',
+    startedPast: isHebrew ? 'השירות התחיל' : 'Service started',
+    completedPast: isHebrew ? 'השירות הושלם' : 'Service completed',
+    activeTitle: isHebrew ? 'השירות פעיל כעת' : 'Service in progress',
+    completedTitle: isHebrew ? 'השירות הושלם' : 'Service completed',
+    itemLabel: isHebrew ? 'שירות' : 'service',
   }
 }
 

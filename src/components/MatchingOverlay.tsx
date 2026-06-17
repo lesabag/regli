@@ -1,11 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Search, CheckCircle } from 'lucide-react';
-
-const steps = [
-  'Searching nearby walkers...',
-  'Contacting available walkers...',
-  'Almost there...',
-];
+import { useTranslation } from 'react-i18next';
 
 interface MatchingOverlayProps {
   matched: boolean;
@@ -18,6 +13,13 @@ export default function MatchingOverlay({
   onCancel,
   elapsedSeconds = 0,
 }: MatchingOverlayProps) {
+  const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
+  const steps = [
+    isHebrew ? 'מאתרים ספקים קרובים...' : 'Searching nearby walkers...',
+    isHebrew ? 'יוצרים קשר עם ספקים זמינים...' : 'Contacting available walkers...',
+    isHebrew ? 'כמעט שם...' : 'Almost there...',
+  ]
   const [stepIndex, setStepIndex] = useState(0);
 
   useEffect(() => {
@@ -54,13 +56,13 @@ export default function MatchingOverlay({
         key={matched ? 'matched' : stepIndex}
         className="text-white text-lg font-semibold tracking-tight animate-[fadeIn_400ms_ease-out]"
       >
-        {matched ? 'Walker found!' : steps[stepIndex]}
+        {matched ? (isHebrew ? 'נמצא ספק!' : 'Walker found!') : steps[stepIndex]}
       </p>
 
       {/* ⏱️ זמן חיפוש (חדש) */}
       {!matched && (
         <p className="text-white/60 text-sm mt-2">
-          Searching for walkers… {elapsedSeconds}s
+          {isHebrew ? 'מחפשים ספקים…' : 'Searching for walkers…'} {elapsedSeconds}{isHebrew ? ' שנ׳' : 's'}
         </p>
       )}
 
@@ -79,7 +81,7 @@ export default function MatchingOverlay({
       )}
 
       <p className="text-white/40 text-sm mt-4">
-        {matched ? 'Starting session...' : 'This usually takes a few seconds'}
+        {matched ? (isHebrew ? 'מתחילים את השירות...' : 'Starting session...') : (isHebrew ? 'זה בדרך כלל לוקח כמה שניות' : 'This usually takes a few seconds')}
       </p>
 
       {/* Cancel button */}
@@ -88,7 +90,7 @@ export default function MatchingOverlay({
           onClick={onCancel}
           className="mt-8 px-6 py-2.5 rounded-xl text-[13px] font-semibold text-white/60 border border-white/15 active:bg-white/10 transition-colors"
         >
-          Cancel
+          {isHebrew ? 'ביטול' : 'Cancel'}
         </button>
       )}
     </div>

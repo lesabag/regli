@@ -270,12 +270,7 @@ function detectInitialAuthLanguage(): SupportedLanguage {
 
   const resolved = normalizeSupportedLanguage(i18n.resolvedLanguage)
   if (resolved) return resolved
-
-  if (typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('he')) {
-    return 'he'
-  }
-
-  return 'en'
+  return 'he'
 }
 
 export default function AuthScreen({
