@@ -122,8 +122,8 @@ serve(async (req) => {
       .select(`
         id,
         client_id,
-        client_lat,
-        client_lng,
+        user_lat,
+        user_lng,
         status,
         service_type,
         scheduled_for,
@@ -407,8 +407,8 @@ serve(async (req) => {
             job.scheduled_for!,
           ),
         )
-        const requestClientLat = toFiniteNumber((job as { client_lat?: unknown }).client_lat)
-        const requestClientLng = toFiniteNumber((job as { client_lng?: unknown }).client_lng)
+        const requestClientLat = toFiniteNumber((job as { user_lat?: unknown }).user_lat)
+        const requestClientLng = toFiniteNumber((job as { user_lng?: unknown }).user_lng)
         const hasRequestCoordinates = requestClientLat != null && requestClientLng != null
 
         let radiusCompatibleWalkers = onlineWalkers
