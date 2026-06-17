@@ -258,6 +258,8 @@ function formatCelebrationTipAmount(value: number, isHebrew: boolean): string {
   }
 }
 
+const TIP_CELEBRATION_DEDUP_WINDOW_MS = 20_000
+
 function buildPaymentCelebration({
   jobId,
   isHebrew,
@@ -826,6 +828,7 @@ export default function WalkerDashboard({
   const seenPaidAtByJobRef = useRef<Map<string, number>>(new Map())
   const emittedCelebrationIdsRef = useRef<Set<string>>(new Set())
   const handledRealtimeTipIdsRef = useRef<Set<string>>(new Set())
+  const shownTipCelebrationKeysRef = useRef<Map<string, number>>(new Map())
   const availabilityRowsRef = useRef(availabilityRows)
   const [availabilityStateVersion, setAvailabilityStateVersion] = useState(0)
   const availabilityStateVersionRef = useRef(0)
@@ -962,6 +965,41 @@ export default function WalkerDashboard({
     setCelebrations((current) => [...current, payload])
   }, [])
 
+  const markTipCelebrationShown = useCallback((params: {
+    jobId: string
+    tipAmount: number
+    source: 'notification_event' | 'tip_state'
+  }) => {
+    const now = Date.now()
+
+    for (const [key, timestamp] of shownTipCelebrationKeysRef.current.entries()) {
+      if (now - timestamp > TIP_CELEBRATION_DEDUP_WINDOW_MS) {
+        shownTipCelebrationKeysRef.current.delete(key)
+      }
+    }
+
+    const key = `tip_received:${params.jobId}:${params.tipAmount}`
+    const previousShownAt = shownTipCelebrationKeysRef.current.get(key) ?? null
+    if (previousShownAt != null && now - previousShownAt < TIP_CELEBRATION_DEDUP_WINDOW_MS) {
+      console.log('[tip-celebration] duplicate skipped key', {
+        key,
+        bookingRequestId: params.jobId,
+        currentTipAmount: params.tipAmount,
+        source: params.source,
+      })
+      return false
+    }
+
+    shownTipCelebrationKeysRef.current.set(key, now)
+    console.log('[tip-celebration] shown key', {
+      key,
+      bookingRequestId: params.jobId,
+      currentTipAmount: params.tipAmount,
+      source: params.source,
+    })
+    return true
+  }, [])
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
 
@@ -972,14 +1010,31 @@ export default function WalkerDashboard({
       const dedupeKey = typeof detail?.dedupeKey === 'string' ? detail.dedupeKey : null
 
       if (!jobId || !(tipAmount > 0) || !dedupeKey) return
-      if (handledRealtimeTipIdsRef.current.has(dedupeKey)) return
+      if (handledRealtimeTipIdsRef.current.has(dedupeKey)) {
+        console.log('[tip-celebration] blocked realtime toast event', {
+          bookingRequestId: jobId,
+          currentTipAmount: tipAmount,
+          shouldShow: false,
+          blockedReason: 'dedupe_key_already_handled',
+          eventType: 'tip_received',
+        })
+        return
+      }
 
       handledRealtimeTipIdsRef.current.add(dedupeKey)
-      console.log('[tip] celebration shown', {
-        jobId,
-        tipAmount,
+      console.log('[tip-celebration] notification/event received', {
+        bookingRequestId: jobId,
+        currentTipAmount: tipAmount,
+        shouldShow: true,
+        eventType: 'tip_received',
         timestamp: Date.now(),
       })
+      const shouldShowTipCelebration = markTipCelebrationShown({
+        jobId,
+        tipAmount,
+        source: 'notification_event',
+      })
+      if (!shouldShowTipCelebration) return
       queueCelebration(buildTipCelebration({
         jobId,
         tipId: dedupeKey,
@@ -992,7 +1047,7 @@ export default function WalkerDashboard({
     return () => {
       window.removeEventListener(PROVIDER_TIP_TOAST_EVENT, handleTipToastEvent as EventListener)
     }
-  }, [isHebrew, queueCelebration])
+  }, [isHebrew, markTipCelebrationShown, queueCelebration])
 
   useEffect(() => {
     if (flow.loading) return
@@ -1049,6 +1104,59 @@ export default function WalkerDashboard({
       const amount = typeof tip.amount === 'number' && Number.isFinite(tip.amount) ? tip.amount : 0
       const createdAtMs = parseCelebrationTimestamp(tip.created_at)
       if (!(amount > 0) || !tip.walk_request_id) continue
+      const previousTip = seenTipsByIdRef.current.get(tip.id) ?? null
+      const hadPreviousTip = seenTipsByIdRef.current.has(tip.id)
+      const previousTipAmount = previousTip?.amount ?? 0
+      const shouldShowTipCelebration =
+        (!hadPreviousTip && createdAtMs > 0 && createdAtMs >= celebrationBaselineAtRef.current) ||
+        (hadPreviousTip && amount > previousTipAmount)
+      const blockedReason =
+        shouldShowTipCelebration
+          ? null
+          : !hadPreviousTip
+            ? createdAtMs <= 0
+              ? 'invalid_tip_timestamp'
+              : createdAtMs < celebrationBaselineAtRef.current
+                ? 'tip_before_celebration_baseline'
+                : 'new_tip_did_not_meet_baseline'
+            : amount <= previousTipAmount
+              ? 'tip_amount_not_increased'
+              : 'no_tip_change'
+
+      console.log('[tip-celebration] evaluate tip state', {
+        tipId: tip.id,
+        bookingRequestId: tip.walk_request_id,
+        previousTipAmount,
+        currentTipAmount: amount,
+        shouldShowTipCelebration,
+        shouldShow: shouldShowTipCelebration,
+        blockedReason,
+        eventType: 'tip_received',
+      })
+
+      if (shouldShowTipCelebration) {
+        const shouldRenderTipCelebration = markTipCelebrationShown({
+          jobId: tip.walk_request_id,
+          tipAmount: amount,
+          source: 'tip_state',
+        })
+        if (!shouldRenderTipCelebration) {
+          const nextTip = {
+            amount,
+            jobId: tip.walk_request_id,
+            createdAtMs,
+          }
+          nextTipMap.set(tip.id, nextTip)
+          continue
+        }
+        queueCelebration(buildTipCelebration({
+          jobId: tip.walk_request_id,
+          tipId: tip.id,
+          isHebrew,
+          tipAmount: amount,
+        }))
+      }
+
       const nextTip = {
         amount,
         jobId: tip.walk_request_id,
@@ -1072,7 +1180,7 @@ export default function WalkerDashboard({
     seenRatingsByIdRef.current = nextRatingsById
     seenTipsByIdRef.current = nextTipMap
     seenPaidAtByJobRef.current = nextPaidAtMap
-  }, [flow.completedJobs, flow.loading, flow.ratingsReceived, flow.walkerTips, isHebrew, queueCelebration])
+  }, [flow.completedJobs, flow.loading, flow.ratingsReceived, flow.walkerTips, isHebrew, markTipCelebrationShown, queueCelebration])
 
   const closeAll = useCallback(() => {
     setBurgerOpen(false)

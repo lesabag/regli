@@ -296,19 +296,27 @@ export default function NotificationsBell({
           fetchNotifications(authUserId)
           const row = payload.new as Notification | undefined
           if (row && isBellVisibleNotification(row)) {
-            const tipAmount = parseTipAmountFromMessage(row.message)
+            const tipAmount = parseTipAmountFromNotification(row)
             const receivedAt = Date.now()
             const isTipNotification =
-              row.type === 'payment_received' &&
-              row.title === 'Tip received' &&
               !!row.related_job_id &&
               tipAmount != null &&
-              tipAmount > 0
+              tipAmount > 0 &&
+              (
+                row.type === 'tip_received' ||
+                (
+                  row.type === 'payment_received' &&
+                  row.title === 'Tip received'
+                )
+              )
 
             if (isTipNotification) {
-              console.log('[tip] realtime event received', {
-                jobId: row.related_job_id,
+              console.log('[tip-celebration] notification/event received', {
+                bookingRequestId: row.related_job_id,
+                eventType: row.type,
                 tipAmount,
+                title: row.title,
+                message: row.message,
                 timestamp: receivedAt,
               })
             }
@@ -322,9 +330,11 @@ export default function NotificationsBell({
             }))
 
             if (isTipNotification) {
-              console.log('[tip] banner shown', {
-                jobId: row.related_job_id,
-                tipAmount,
+              console.log('[tip-celebration] dispatch provider toast event', {
+                bookingRequestId: row.related_job_id,
+                eventType: row.type,
+                currentTipAmount: tipAmount,
+                shouldShow: true,
                 timestamp: Date.now(),
               })
               window.dispatchEvent(new CustomEvent(PROVIDER_TIP_TOAST_EVENT, {
@@ -335,6 +345,20 @@ export default function NotificationsBell({
                   timestamp: receivedAt,
                 },
               }))
+            } else if (row.type === 'tip_received') {
+              console.log('[tip-celebration] blocked notification event', {
+                bookingRequestId: row.related_job_id,
+                eventType: row.type,
+                currentTipAmount: tipAmount,
+                shouldShow: false,
+                blockedReason: !row.related_job_id
+                  ? 'missing_related_job_id'
+                  : !(tipAmount != null && tipAmount > 0)
+                    ? 'missing_tip_amount'
+                    : 'type_not_supported',
+                title: row.title,
+                message: row.message,
+              })
             }
           }
         }
@@ -626,12 +650,16 @@ export default function NotificationsBell({
   )
 }
 
-function parseTipAmountFromMessage(message: string | null | undefined): number | null {
-  if (typeof message !== 'string') return null
-  const match = message.match(/₪\s?(\d+(?:\.\d+)?)/)
+function parseTipAmountFromText(value: string | null | undefined): number | null {
+  if (typeof value !== 'string') return null
+  const match = value.match(/₪\s?(\d+(?:\.\d+)?)/)
   if (!match?.[1]) return null
   const amount = Number(match[1])
   return Number.isFinite(amount) && amount > 0 ? amount : null
+}
+
+function parseTipAmountFromNotification(notification: Pick<Notification, 'title' | 'message'>): number | null {
+  return parseTipAmountFromText(notification.title) ?? parseTipAmountFromText(notification.message)
 }
 
 // ─── Exported helper ────────────────────────────────────────────
