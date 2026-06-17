@@ -280,7 +280,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, dog_name, duration_minutes, price, client_lat, client_lng')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, dog_name, duration_minutes, price, user_lat, user_lng')
       .eq('id', requestId)
       .single()
 
@@ -320,8 +320,8 @@ serve(async (req) => {
             service_type: requestRow.service_type ?? null,
             booking_timing: requestRow.booking_timing ?? null,
             scheduled_for: requestRow.scheduled_for ?? null,
-            client_lat: (requestRow as { client_lat?: number | null }).client_lat ?? null,
-            client_lng: (requestRow as { client_lng?: number | null }).client_lng ?? null,
+            client_lat: (requestRow as { user_lat?: number | null }).user_lat ?? null,
+            client_lng: (requestRow as { user_lng?: number | null }).user_lng ?? null,
             dog_name: (requestRow as { dog_name?: string | null }).dog_name ?? null,
           },
           source: 'start-dispatch',
