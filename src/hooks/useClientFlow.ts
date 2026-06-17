@@ -3,8 +3,6 @@ import { App as CapacitorApp } from '@capacitor/app'
 import { BackgroundTask } from '@capawesome/capacitor-background-task'
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 import { supabase, invokeEdgeFunction } from '../services/supabaseClient'
-import { distanceKm, evaluateDogSizeCompatibility, rankWalkerCandidates } from '../lib/dispatchRanking'
-import { startDispatch } from '../lib/startDispatch'
 import {
   DURATION_OPTIONS,
   type DurationType,
@@ -15,11 +13,6 @@ import { useJobTracking } from './useJobTracking'
 import { createNotification } from '../components/NotificationsBell'
 import { formatShortAddress } from '../utils/addressFormat'
 import { normalizeDogCount } from '../utils/dogCount'
-import {
-  fetchProviderAvailabilityRows,
-  groupProviderAvailabilityRows,
-  isProviderAvailableAt,
-} from '../utils/providerAvailability'
 import { buildPushDeepLink, getPushDedupWindowMs } from '../lib/pushNotifications'
 import { reverseGeocodeAddress } from '../utils/reverseGeocode'
 import { getServiceLabels, getServicePhase, type ServicePhase } from '../utils/serviceLifecycle'
@@ -244,25 +237,6 @@ type RequestWalkOptions = {
   clientServiceAttributesOverride?: Record<string, unknown> | null
 }
 
-type DispatchWalkerProfile = {
-  id: string
-  last_lat: number | null
-  last_lng: number | null
-  service_type?: string | null
-  service_types?: string[] | string | null
-  service_attributes?: Record<string, unknown> | null
-}
-
-type DispatchRatingRow = {
-  to_user_id: string
-  rating: number
-}
-
-type ProviderRadiusPreferenceRow = {
-  provider_id: string | null
-  service_radius_km: number | null
-}
-
 type QueryResult<T> = {
   data: T | null
   error: { message: string } | null
@@ -283,11 +257,6 @@ const SEARCH_ATTEMPT_AUTO_ADVANCE_DEDUPE_MS = 5_000
 const REVERSE_GEOCODE_SKIP_LOG_THROTTLE_MS = 60_000
 const COLD_LAUNCH_GPS_DRAFT_MAX_AGE_MS = 45 * 60 * 1000
 const TRANSIENT_BANNER_DURATION_MS = 3000
-
-function normalizeServiceRadiusKm(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
-}
-
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -1846,66 +1815,6 @@ export function useClientFlow(profileId: string, _profileName: string) {
     }
     return normalized
   }
-
-function walkerSupportsRequestedService(
-    walker: {
-      service_type?: string | null
-      service_types?: string[] | string | null
-    },
-    requestServiceType: string | null,
-  ): boolean {
-    if (!requestServiceType) return true
-
-    const rawServiceTypes = walker.service_types
-    const serviceTypes =
-      Array.isArray(rawServiceTypes)
-        ? rawServiceTypes
-        : typeof rawServiceTypes === 'string'
-          ? rawServiceTypes
-              .replace(/^\{|\}$/g, '')
-              .split(',')
-              .map((value) => value.trim().replace(/^"|"$/g, ''))
-              .filter(Boolean)
-          : null
-
-    if (serviceTypes) {
-      const normalizedServiceTypes = serviceTypes
-        .map((value) => normalizeProviderServiceType(value))
-        .filter((value): value is string => value !== null)
-
-      if (normalizedServiceTypes.length > 0) {
-        return normalizedServiceTypes.includes(requestServiceType)
-      }
-    }
-
-  return normalizeProviderServiceType(walker.service_type) === requestServiceType
-}
-
-function mergeClientDogSizeAttributes(
-  baseAttributes: Record<string, unknown> | null,
-  overrideAttributes: Record<string, unknown> | null | undefined,
-): Record<string, unknown> | null {
-  if (!baseAttributes && !overrideAttributes) return null
-  const baseDogWalker =
-    baseAttributes && typeof baseAttributes.dog_walker === 'object' && baseAttributes.dog_walker
-      ? { ...(baseAttributes.dog_walker as Record<string, unknown>) }
-      : {}
-  const overrideDogWalker =
-    overrideAttributes && typeof overrideAttributes.dog_walker === 'object' && overrideAttributes.dog_walker
-      ? (overrideAttributes.dog_walker as Record<string, unknown>)
-      : null
-
-  return {
-    ...(baseAttributes ?? {}),
-    ...(overrideAttributes ?? {}),
-    dog_walker: overrideDogWalker
-      ? {
-          ...baseDogWalker,
-          ...overrideDogWalker,
-        }
-      : baseDogWalker,
-  }
-}
 
   const startsInMinutes = useCallback((date: string | null | undefined) => {
     const dt = parseWallClockDate(date)
@@ -4412,47 +4321,6 @@ function mergeClientDogSizeAttributes(
       }
       const shouldSearchNow = effectiveBookingTiming === 'asap'
 
-      const platformFeeILS = effectivePriceILS > 0 ? Math.round(effectivePriceILS * 0.20 * 100) / 100 : 0
-      const walkerEarningsILS = effectivePriceILS > 0 ? Math.round(effectivePriceILS * 0.80 * 100) / 100 : 0
-      console.log('[PayoutTruth] status patch financials', {
-        jobId,
-        priceILS: effectivePriceILS,
-        platformFeeILS,
-        walkerEarningsILS,
-        durationMinutes: effectiveDurationMinutes,
-        dogCount: effectiveDogCount,
-      })
-      const statusPatch: Record<string, unknown> = {
-        status: 'open',
-        dispatch_state: 'queued',
-        smart_dispatch_state: 'idle',
-        smart_dispatch_last_error: null,
-        duration_minutes: effectiveDurationMinutes,
-        dog_count: effectiveDogCount,
-        price: effectivePriceILS,
-        platform_fee: platformFeeILS,
-        walker_earnings: walkerEarningsILS,
-        walker_amount: walkerEarningsILS,
-        notes: effectiveNotes,
-        issue_type: effectiveIssueType,
-        issue_description: effectiveIssueDescription,
-      }
-      if (effectiveBookingTiming !== 'scheduled') {
-        statusPatch.booking_timing = 'asap'
-      } else {
-        statusPatch.booking_timing = 'scheduled'
-      }
-
-      const { error: normalizeError } = await supabase
-        .from('walk_requests')
-        .update(statusPatch)
-        .eq('id', jobId)
-        .eq('client_id', profileId)
-
-      if (normalizeError) {
-        throw new Error(normalizeError.message)
-      }
-
       const { data: job, error: jobError } = await supabase
         .from('walk_requests')
         .select(JOB_SELECT)
@@ -4471,335 +4339,11 @@ function mergeClientDogSizeAttributes(
         setCurrentJobId(createdJob.id)
         setCurrentJob(createdJob)
         lastActiveJobIdRef.current = createdJob.id
-        startOptimisticSearching(createdJob.id, 'request_created_before_dispatch', {
+        startOptimisticSearching(createdJob.id, 'request_created_server_dispatch', {
           status: createdJob.status,
           dispatch_state: createdJob.dispatch_state,
           smart_dispatch_state: createdJob.smart_dispatch_state,
         })
-
-        const [{ data: walkers, error: walkersError }, { data: clientProfileRow }] = await Promise.all([
-          supabase
-            .from('profiles')
-            .select('id, last_lat, last_lng, service_type, service_types, service_attributes')
-            .eq('role', 'walker')
-            .eq('is_online', true),
-          supabase
-            .from('profiles')
-            .select('service_attributes')
-            .eq('id', profileId)
-            .maybeSingle(),
-        ])
-
-        if (walkersError) {
-          throw new Error(walkersError.message)
-        }
-
-        const clientServiceAttributes = mergeClientDogSizeAttributes(
-          (clientProfileRow?.service_attributes as Record<string, unknown> | null) ?? null,
-          requestOptions.clientServiceAttributesOverride ?? null,
-        )
-        const requestedProviderServiceType = normalizeProviderServiceType(
-          createdJob.service_type ?? normalizedRequestServiceType,
-        )
-        const allOnlineWalkers = (walkers as DispatchWalkerProfile[] | null) ?? []
-        const matchingWalkers = allOnlineWalkers.filter((walker) => {
-          return walkerSupportsRequestedService(walker, requestedProviderServiceType)
-        })
-        const availabilityReferenceAt =
-          createdJob.booking_timing === 'scheduled'
-            ? createdJob.scheduled_for
-            : new Date().toISOString()
-
-        const availabilityRows = await fetchProviderAvailabilityRows(
-          matchingWalkers.map((walker) => walker.id),
-          requestedProviderServiceType,
-        )
-        const availabilityByProvider = groupProviderAvailabilityRows(availabilityRows)
-        const availableWalkers = matchingWalkers.filter((walker) =>
-          availabilityReferenceAt
-            ? isProviderAvailableAt(
-                availabilityByProvider.get(walker.id) ?? [],
-                requestedProviderServiceType,
-                availabilityReferenceAt,
-              )
-            : false,
-        )
-        let radiusCompatibleWalkers = availableWalkers
-        if (availableWalkers.length > 0) {
-          const { data: providerPreferencesRows, error: providerPreferencesError } = await supabase
-            .from('provider_service_preferences')
-            .select('provider_id, service_radius_km')
-            .in('provider_id', availableWalkers.map((walker) => walker.id))
-            .eq('service_type', requestedProviderServiceType ?? '')
-            .eq('booking_type', createdJob.booking_timing === 'scheduled' ? 'scheduled' : 'asap')
-
-          if (providerPreferencesError) {
-            throw new Error(providerPreferencesError.message)
-          }
-
-          const radiusByProviderId = new Map(
-            (((providerPreferencesRows as ProviderRadiusPreferenceRow[] | null) ?? [])).map<[string, number | null]>((row) => [
-              row.provider_id ?? '',
-              normalizeServiceRadiusKm(row.service_radius_km),
-            ]).filter((entry): entry is [string, number | null] => entry[0].length > 0),
-          )
-
-          radiusCompatibleWalkers = availableWalkers.filter((walker) => {
-            const serviceRadiusKm = radiusByProviderId.get(walker.id) ?? null
-            if (serviceRadiusKm == null) return true
-            if (!userLocation) return true
-            if (typeof walker.last_lat !== 'number' || !Number.isFinite(walker.last_lat)) return true
-            if (typeof walker.last_lng !== 'number' || !Number.isFinite(walker.last_lng)) return true
-
-            const candidateDistanceKm = distanceKm(
-              userLocation[0],
-              userLocation[1],
-              walker.last_lat,
-              walker.last_lng,
-            )
-            const withinRadius = candidateDistanceKm <= serviceRadiusKm
-
-            if (!withinRadius) {
-              console.log('[useClientFlow] provider excluded by service radius', {
-                profileId,
-                requestId: createdJob.id,
-                walkerId: walker.id,
-                requestServiceType: requestedProviderServiceType,
-                bookingType: createdJob.booking_timing === 'scheduled' ? 'scheduled' : 'asap',
-                distanceKm: Number(candidateDistanceKm.toFixed(2)),
-                serviceRadiusKm,
-              })
-            }
-
-            return withinRadius
-          })
-        }
-
-        const walkerIds = radiusCompatibleWalkers.map((walker) => walker.id)
-
-        let ratingsByWalker = new Map<string, { total: number; count: number }>()
-        if (walkerIds.length > 0) {
-          const { data: ratingsRows, error: ratingsError } = await supabase
-            .from('ratings')
-            .select('to_user_id, rating')
-            .in('to_user_id', walkerIds)
-
-          if (ratingsError) {
-            throw new Error(ratingsError.message)
-          }
-
-          ratingsByWalker = ((ratingsRows as DispatchRatingRow[] | null) ?? []).reduce((map, row) => {
-            const current = map.get(row.to_user_id) ?? { total: 0, count: 0 }
-            current.total += row.rating
-            current.count += 1
-            map.set(row.to_user_id, current)
-            return map
-          }, new Map<string, { total: number; count: number }>())
-        }
-
-        let providerSavedCustomerIds = new Set<string>()
-        let customerSavedProviderIds = new Set<string>()
-        if (walkerIds.length > 0) {
-          const [{ data: favoriteCustomersRows, error: favoriteCustomersError }, { data: favoriteWalkersRows, error: favoriteWalkersError }] =
-            await Promise.all([
-              supabase
-                .from('favorite_customers')
-                .select('walker_id')
-                .eq('client_id', profileId)
-                .in('walker_id', walkerIds),
-              supabase
-                .from('favorite_walkers')
-                .select('walker_id')
-                .eq('client_id', profileId)
-                .in('walker_id', walkerIds),
-            ])
-
-          if (favoriteCustomersError) {
-            console.warn('[useClientFlow] favorite customers unavailable for affinity:', favoriteCustomersError.message)
-          } else {
-            providerSavedCustomerIds = new Set(
-              ((favoriteCustomersRows as Array<{ walker_id: string | null }> | null) ?? [])
-                .map((row) => row.walker_id)
-                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
-            )
-          }
-
-          if (favoriteWalkersError) {
-            console.warn('[useClientFlow] favorite walkers unavailable for affinity:', favoriteWalkersError.message)
-          } else {
-            customerSavedProviderIds = new Set(
-              ((favoriteWalkersRows as Array<{ walker_id: string | null }> | null) ?? [])
-                .map((row) => row.walker_id)
-                .filter((walkerId): walkerId is string => typeof walkerId === 'string' && walkerId.length > 0),
-            )
-          }
-        }
-
-        const walkerServiceAttrsById = new Map(
-          radiusCompatibleWalkers
-            .filter((w) => w.service_attributes)
-            .map((w) => [w.id, w.service_attributes as Record<string, unknown>]),
-        )
-
-        const dogSizeCompatibleWalkers = radiusCompatibleWalkers.filter((walker) => {
-          const compatibility = evaluateDogSizeCompatibility(
-            requestedProviderServiceType,
-            clientServiceAttributes,
-            walkerServiceAttrsById.get(walker.id) ?? null,
-          )
-
-          if (!compatibility.compatible) {
-            console.log('[useClientFlow] provider excluded by dog size compatibility', {
-              profileId,
-              requestId: createdJob.id,
-              walkerId: walker.id,
-              requestServiceType: requestedProviderServiceType,
-              reason: compatibility.reason,
-              knownClientDogSizes: compatibility.knownClientDogSizes,
-              providerAcceptedDogSizes: compatibility.providerAcceptedDogSizes,
-              missingClientDogSizes: compatibility.missingClientDogSizes,
-            })
-          }
-
-          return compatibility.compatible
-        })
-
-        const ranked = rankWalkerCandidates(
-          dogSizeCompatibleWalkers.map((walker) => {
-            const ratingStats = ratingsByWalker.get(walker.id)
-            const hasWalkerLocation =
-              userLocation &&
-              typeof walker.last_lat === 'number' &&
-              Number.isFinite(walker.last_lat) &&
-              typeof walker.last_lng === 'number' &&
-              Number.isFinite(walker.last_lng)
-
-            return {
-              walkerId: walker.id,
-              distanceKm: hasWalkerLocation
-                ? distanceKm(userLocation![0], userLocation![1], walker.last_lat!, walker.last_lng!)
-                : null,
-              avgRating:
-                ratingStats && ratingStats.count > 0
-                  ? ratingStats.total / ratingStats.count
-                  : null,
-              reviewCount: ratingStats?.count ?? 0,
-              affinityProviderSaved: providerSavedCustomerIds.has(walker.id),
-              affinityClientSaved: customerSavedProviderIds.has(walker.id),
-              serviceType: requestedProviderServiceType,
-              clientServiceAttributes: clientServiceAttributes,
-              providerServiceAttributes: walkerServiceAttrsById.get(walker.id) ?? null,
-            }
-          }),
-        ).map((candidate) => ({
-          walkerId: candidate.walkerId,
-          score: candidate.score,
-          meta: {
-            source: 'useClientFlow',
-            base_score: candidate.baseScore,
-            affinity_score: candidate.affinityScore,
-            affinity_provider_saved: candidate.affinityProviderSaved,
-            affinity_client_saved: candidate.affinityClientSaved,
-            distance_score: candidate.distanceScore,
-            rating_score: candidate.ratingScore,
-            review_count_score: candidate.reviewCountScore,
-            distance_km: candidate.distanceKm,
-            avg_rating: candidate.avgRating,
-            review_count: candidate.reviewCount,
-            attribute_score: candidate.attributeScore,
-            attribute_reason: candidate.attributeReason,
-            attribute_matches: candidate.attributeMatches,
-          },
-        }))
-
-        console.log('[useClientFlow] start-dispatch invoke', {
-          requestId: createdJob.id,
-          booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-          payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
-          dispatch_state: createdJob.dispatch_state ?? null,
-          smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
-          startDispatchInvokeCalled: true,
-          requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
-          onlineWalkerCount: allOnlineWalkers.length,
-          matchingWalkerCount: matchingWalkers.length,
-          availableWalkerCount: availableWalkers.length,
-          radiusCompatibleWalkerCount: radiusCompatibleWalkers.length,
-          dogSizeCompatibleWalkerCount: dogSizeCompatibleWalkers.length,
-          rankedCandidateCount: ranked.length,
-        })
-
-        if (ranked.length === 0) {
-          console.warn('[useClientFlow] start-dispatch zero-ranked fast exhaust path', {
-            profileId,
-            requestId: createdJob.id,
-            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
-            dispatch_state: createdJob.dispatch_state ?? null,
-            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
-            startDispatchInvokeCalled: true,
-            requestServiceType: createdJob.service_type ?? normalizedRequestServiceType,
-            onlineWalkerCount: allOnlineWalkers.length,
-            matchingWalkerCount: matchingWalkers.length,
-            availableWalkerCount: availableWalkers.length,
-            radiusCompatibleWalkerCount: radiusCompatibleWalkers.length,
-          })
-        }
-
-        let dispatchResult: Awaited<ReturnType<typeof startDispatch>>
-        try {
-          console.log('[useClientFlow] dispatch start', {
-            requestId: createdJob.id,
-            bookingTiming: createdJob.booking_timing ?? effectiveBookingTiming,
-          })
-          dispatchResult = await startDispatch({
-            requestId: createdJob.id,
-            rankedCandidates: ranked,
-            resetExisting: true,
-          })
-
-          console.log('[useClientFlow] start-dispatch response', {
-            requestId: createdJob.id,
-            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
-            dispatch_state: createdJob.dispatch_state ?? null,
-            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
-            startDispatchInvokeCalled: true,
-            dispatchResult,
-          })
-        } catch (dispatchError) {
-          console.error('[useClientFlow] dispatch error', {
-            requestId: createdJob.id,
-            booking_timing: createdJob.booking_timing ?? effectiveBookingTiming,
-            payment_status: createdJob.payment_status ?? paymentResponse.paymentStatus ?? null,
-            dispatch_state: createdJob.dispatch_state ?? null,
-            smart_dispatch_state: createdJob.smart_dispatch_state ?? null,
-            startDispatchInvokeCalled: true,
-            error: dispatchError instanceof Error ? dispatchError.message : dispatchError,
-          })
-          throw dispatchError
-        }
-
-        if (!dispatchResult.ok) {
-          throw new Error(dispatchResult.error || dispatchResult.details || 'Dispatch did not start')
-        }
-        console.log('[useClientFlow] dispatch success', {
-          requestId: createdJob.id,
-          dispatchResult,
-        })
-        if (dispatchResult.attemptId && dispatchResult.timeoutSeconds) {
-          const optimisticAttemptExpiresAt = new Date(
-            Date.now() + Math.max(3, dispatchResult.timeoutSeconds) * 1000,
-          ).toISOString()
-          setSearchAttemptStartedAt(
-            searchStartTimeRef.current ?? Date.now(),
-            'start_dispatch_response',
-            {
-              requestId: createdJob.id,
-              attemptId: dispatchResult.attemptId,
-              expiresAt: optimisticAttemptExpiresAt,
-            },
-          )
-        }
 
         setSuccessMessage('Searching for a walker...')
       } else {

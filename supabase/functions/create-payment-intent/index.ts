@@ -38,6 +38,47 @@ function getServiceDurationMinutes(serviceType: string): number | null {
   return null
 }
 
+async function triggerStartDispatchForAsap(jobId: string, bookingTiming: string | null | undefined): Promise<void> {
+  if (bookingTiming !== 'asap') return
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.warn('[create-payment-intent] start-dispatch skipped: missing env', { jobId })
+    return
+  }
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/start-dispatch`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        requestId: jobId,
+        rankedCandidates: [],
+        shouldRankServerSide: true,
+        resetExisting: true,
+      }),
+    })
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '')
+      console.warn('[create-payment-intent] start-dispatch returned error', {
+        jobId,
+        status: response.status,
+        body: errorText.slice(0, 500),
+      })
+      return
+    }
+    console.log('[create-payment-intent] start-dispatch triggered', { jobId })
+  } catch (err) {
+    console.warn('[create-payment-intent] start-dispatch invocation failed', {
+      jobId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 function normalizeRequestServiceType(value: string | null | undefined): string | null {
   const normalized = (value ?? '').trim().toLowerCase()
   if (!normalized) return null
@@ -791,6 +832,10 @@ serve(async (req: Request) => {
           ? new Date().toISOString()
           : null
       const paidAt = initialPaymentStatus === 'paid' ? new Date().toISOString() : null
+      const initialJobStatus =
+        initialPaymentStatus === 'authorized' || initialPaymentStatus === 'paid'
+          ? 'open'
+          : 'awaiting_payment'
 
       const { data: job, error: jobError } = await supabaseAdmin
         .from('walk_requests')
@@ -804,7 +849,7 @@ serve(async (req: Request) => {
           notes: notes?.trim() || null,
           issue_type: normalizedIssueType,
           issue_description: normalizedIssueDescription,
-          status: 'awaiting_payment',
+          status: initialJobStatus,
           dispatch_state: 'queued',
           smart_dispatch_state: 'idle',
           smart_dispatch_last_error: null,
@@ -868,6 +913,10 @@ serve(async (req: Request) => {
         jobId: job.id,
         paymentStatus: paymentIntent.status,
       })
+
+      if (initialJobStatus === 'open') {
+        await triggerStartDispatchForAsap(job.id, bookingTiming)
+      }
 
       return new Response(
         JSON.stringify({
@@ -1134,6 +1183,10 @@ serve(async (req: Request) => {
         ? new Date().toISOString()
         : null
     const paidAt = initialPaymentStatus === 'paid' ? new Date().toISOString() : null
+    const initialJobStatus =
+      initialPaymentStatus === 'authorized' || initialPaymentStatus === 'paid'
+        ? 'open'
+        : 'awaiting_payment'
 
     const { data: job, error: jobError } = await supabaseAdmin
       .from('walk_requests')
@@ -1147,7 +1200,7 @@ serve(async (req: Request) => {
         notes: notes?.trim() || null,
         issue_type: normalizedIssueType,
         issue_description: normalizedIssueDescription,
-        status: 'awaiting_payment',
+        status: initialJobStatus,
         dispatch_state: 'queued',
         smart_dispatch_state: 'idle',
         smart_dispatch_last_error: null,
@@ -1261,6 +1314,10 @@ serve(async (req: Request) => {
       await stripe.paymentIntents.update(paymentIntent.id, updatePayload)
     } catch (updateErr) {
       console.error('Failed to update PI with job ID (non-blocking):', updateErr)
+    }
+
+    if (initialJobStatus === 'open') {
+      await triggerStartDispatchForAsap(job.id, bookingTiming)
     }
 
     return new Response(

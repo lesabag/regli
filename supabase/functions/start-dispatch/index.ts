@@ -8,6 +8,7 @@ import {
   type RankedCandidate,
 } from '../_shared/dispatch.ts'
 import { rankDispatchCandidatesByFinalScore, computeAttributeScore, evaluateDogSizeCompatibility } from '../_shared/dispatchRanking.ts'
+import { buildRankedDispatchCandidates } from '../_shared/dispatchRankingFlow.ts'
 import { evaluatePricingEligibility, type ProviderPricingPreferenceRow } from '../_shared/pricingEligibility.ts'
 import { loadSelectedDogSizesForRequest, mergeSelectedDogSizesIntoClientAttributes } from '../_shared/requestDogSizes.ts'
 import {
@@ -21,6 +22,7 @@ type StartDispatchBody = {
   timeoutSeconds?: number
   rankedCandidates?: RankedCandidate[]
   resetExisting?: boolean
+  shouldRankServerSide?: boolean
 }
 
 type DispatchAttemptPushParams = {
@@ -251,8 +253,9 @@ serve(async (req) => {
     const body = (await req.json()) as StartDispatchBody
     const requestId = String(body.requestId ?? '').trim()
     const timeoutSeconds = normalizeTimeoutSeconds(body.timeoutSeconds, 20)
-    const rankedCandidates = sanitizeCandidates(body.rankedCandidates)
+    let rankedCandidates = sanitizeCandidates(body.rankedCandidates)
     const resetExisting = body.resetExisting === true
+    const shouldRankServerSide = body.shouldRankServerSide === true
 
     console.log('[start-dispatch] enter', {
       version: START_DISPATCH_VERSION,
@@ -277,7 +280,7 @@ serve(async (req) => {
 
     const { data: requestRow, error: requestError } = await supabase
       .from('walk_requests')
-      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, duration_minutes, price, client_lat, client_lng')
+      .select('id, client_id, status, walker_id, booking_timing, scheduled_for, dispatch_state, smart_dispatch_state, smart_dispatch_last_error, payment_status, stripe_payment_intent_id, service_type, dog_count, dog_name, duration_minutes, price, client_lat, client_lng')
       .eq('id', requestId)
       .single()
 
@@ -299,6 +302,43 @@ serve(async (req) => {
         status: requestRow.status,
       })
       return jsonResponse(409, { ok: false, error: 'request is not open' }, corsHeaders)
+    }
+
+    if (rankedCandidates.length === 0 && shouldRankServerSide) {
+      console.log('[start-dispatch] server-side ranking requested', {
+        version: START_DISPATCH_VERSION,
+        requestId,
+        booking_timing: requestRow.booking_timing ?? null,
+        service_type: requestRow.service_type ?? null,
+      })
+      try {
+        rankedCandidates = await buildRankedDispatchCandidates({
+          supabase,
+          request: {
+            id: requestRow.id,
+            client_id: requestRow.client_id ?? null,
+            service_type: requestRow.service_type ?? null,
+            booking_timing: requestRow.booking_timing ?? null,
+            scheduled_for: requestRow.scheduled_for ?? null,
+            client_lat: (requestRow as { client_lat?: number | null }).client_lat ?? null,
+            client_lng: (requestRow as { client_lng?: number | null }).client_lng ?? null,
+            dog_name: (requestRow as { dog_name?: string | null }).dog_name ?? null,
+          },
+          source: 'start-dispatch',
+        })
+        console.log('[start-dispatch] server-side ranking complete', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          candidate_count: rankedCandidates.length,
+        })
+      } catch (rankError) {
+        console.error('[start-dispatch] server-side ranking failed', {
+          version: START_DISPATCH_VERSION,
+          requestId,
+          error: rankError instanceof Error ? rankError.message : String(rankError),
+        })
+        // Fall through to the empty-candidates exhausted path below.
+      }
     }
 
     if (rankedCandidates.length === 0) {
