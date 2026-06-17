@@ -1,5 +1,7 @@
 export type PushCopyLanguage = 'en' | 'he'
 
+export type PushRecipientRole = 'client' | 'provider'
+
 export type SupportedPushCopyType =
   | 'new_dispatch_offer'
   | 'dispatch_expiring_soon'
@@ -21,6 +23,7 @@ export type SupportedPushCopyType =
 
 export type PushCopyContext = {
   language?: string | null
+  recipientRole?: PushRecipientRole | string | null
   providerName?: string | null
   walkerName?: string | null
   amountText?: string | null
@@ -61,6 +64,22 @@ export function resolvePushCopyLanguage(...values: Array<string | null | undefin
   return 'en'
 }
 
+/**
+ * Maps a profiles.role value to the copy-resolver's recipientRole domain.
+ * - 'walker' / 'provider' → 'provider'
+ * - 'client' → 'client'
+ * - anything else (admin, null, unknown) → null
+ */
+export function normalizePushRecipientRole(
+  value: string | null | undefined,
+): PushRecipientRole | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'client') return 'client'
+  if (normalized === 'provider' || normalized === 'walker') return 'provider'
+  return null
+}
+
 function getProviderName(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -82,6 +101,18 @@ function getTrimmedContextValue(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/**
+ * Resolves localized push copy for a given notificationType.
+ *
+ * For lifecycle types that fire to both client and provider audiences
+ * (provider_accepted, provider_on_the_way, provider_arrived,
+ * service_started, service_completed), the returned copy is split by
+ * context.recipientRole. When recipientRole is missing, the copy defaults
+ * to the PROVIDER variant for backward compatibility with legacy callers
+ * that only emitted provider-targeted pushes. The server-side resolver
+ * in send-push-notification always passes recipientRole explicitly after
+ * looking up the target user's profiles.role.
+ */
 export function getPushCopy(
   type: SupportedPushCopyType | string,
   context: PushCopyContext = {},
@@ -93,13 +124,15 @@ export function getPushCopy(
     const ratingText = getTrimmedContextValue(context.ratingText)
     const serviceLabel = getServiceLabel(context.serviceType, language)
     const disputeEventType = context.disputeEventType ?? null
+    const recipientRole = normalizePushRecipientRole(context.recipientRole)
+    const isClient = recipientRole === 'client'
 
     if (language === 'he') {
       switch (type) {
         case 'new_dispatch_offer':
           return {
             language,
-            title: '🚶 הזמנה חדשה באזור שלך',
+            title: 'הזמנה חדשה באזור שלך 🚶',
             body: `לקוח מחפש ${serviceLabel}. פתחו את Regli כדי לקבל את ההזמנה.`,
           }
         case 'dispatch_expiring_soon':
@@ -129,34 +162,69 @@ export function getPushCopy(
             body: 'נדרש טיפול מצד הצוות.',
           }
         case 'provider_accepted':
+          if (isClient) {
+            return {
+              language,
+              title: 'הספק אישר את ההזמנה 👋',
+              body: 'מצאנו לך ספק. נעדכן אותך בהמשך.',
+            }
+          }
           return {
             language,
-            title: '🎉 קיבלת את הבקשה',
-            body: 'הלקוח בחר בך לביצוע השירות.',
+            title: 'בדרך ללקוח 🚗',
+            body: 'הלקוח עודכן שאתה בדרך.',
           }
         case 'provider_on_the_way':
+          if (isClient) {
+            return {
+              language,
+              title: 'הספק בדרך אליך 🚗',
+              body: 'הספק בדרך למיקום השירות.',
+            }
+          }
           return {
             language,
-            title: '🚗 בדרך ללקוח',
+            title: 'בדרך ללקוח 🚗',
             body: 'הלקוח עודכן שאתה בדרך.',
           }
         case 'provider_arrived':
+          if (isClient) {
+            return {
+              language,
+              title: 'הספק הגיע 📍',
+              body: 'הספק הגיע למיקום השירות.',
+            }
+          }
           return {
             language,
-            title: '👋 הלקוח אישר שהגעת',
+            title: 'הלקוח אישר שהגעת 👋',
             body: 'אפשר להתחיל את השירות.',
           }
         case 'service_started':
+          if (isClient) {
+            return {
+              language,
+              title: 'השירות התחיל ▶️',
+              body: 'השירות שלך התחיל. נעדכן אותך כשהוא יסתיים.',
+            }
+          }
           return {
             language,
-            title: '▶️ השירות התחיל',
-            body: 'בהצלחה! אנחנו נעדכן את הלקוח בסיום השירות.',
+            title: 'השירות התחיל ▶️',
+            body: 'בהצלחה! נעדכן את הלקוח בסיום השירות.',
           }
         case 'service_completed':
+          if (isClient) {
+            return {
+              language,
+              title: 'השירות הושלם 🎉',
+              body: 'השירות הסתיים בהצלחה. אפשר להשאיר דירוג וטיפ.',
+            }
+          }
           return {
             language,
-            title: '🎉 שירות הושלם',
-            body: 'העבודה הסתיימה בהצלחה, הלקוח עודכן.',
+            title: 'השירות הושלם 🎉',
+            body: 'השירות הסתיים בהצלחה.',
           }
         case 'client_confirmation':
           return {
@@ -167,7 +235,7 @@ export function getPushCopy(
         case 'five_star_rating':
           return {
             language,
-            title: '⭐ קיבלת דירוג 5',
+            title: 'קיבלת דירוג 5 ⭐',
             body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
           }
         case 'tip_received':
@@ -186,19 +254,19 @@ export function getPushCopy(
         case 'rating_reminder':
           return {
             language,
-            title: ratingText ? `⭐ קיבלת דירוג ${ratingText}` : '⭐ קיבלת דירוג חדש',
+            title: ratingText ? `קיבלת דירוג ${ratingText} ⭐` : 'קיבלת דירוג חדש ⭐',
             body: 'עבודה מעולה! הדירוג החדש נוסף לפרופיל שלך.',
           }
         case 'future_booking_reminder':
           return {
             language,
-            title: '📅 הזמנה עתידית מתקרבת',
+            title: 'הזמנה עתידית מתקרבת 📅',
             body: 'אל תשכח, יש לך שירות מתוכנן בקרוב.',
           }
         case 'weekly_recurring_booking_reminder':
           return {
             language,
-            title: '🔁 תזכורת לשירות קבוע',
+            title: 'תזכורת לשירות קבוע 🔁',
             body: 'השירות השבועי שלך יתחיל בקרוב.',
           }
         case 'scheduled_booking_reminder':
@@ -216,7 +284,7 @@ export function getPushCopy(
       case 'new_dispatch_offer':
         return {
           language,
-          title: '🚶 New request nearby',
+          title: 'New request nearby 🚶',
           body: `A client is looking for ${serviceLabel}. Open Regli to accept.`,
         }
       case 'dispatch_expiring_soon':
@@ -246,34 +314,69 @@ export function getPushCopy(
           body: 'A booking issue needs review.',
         }
       case 'provider_accepted':
+        if (isClient) {
+          return {
+            language,
+            title: 'Your provider accepted 👋',
+            body: "We found you a provider. We'll keep you posted.",
+          }
+        }
         return {
           language,
-          title: '🎉 You got the request',
-          body: 'The customer chose you for this service.',
+          title: 'On your way 🚗',
+          body: "The customer has been notified that you're on the way.",
         }
       case 'provider_on_the_way':
+        if (isClient) {
+          return {
+            language,
+            title: 'Your provider is on the way 🚗',
+            body: 'The provider is heading to the service location.',
+          }
+        }
         return {
           language,
-          title: '🚗 On your way',
+          title: 'On your way 🚗',
           body: "The customer has been notified that you're on the way.",
         }
       case 'provider_arrived':
+        if (isClient) {
+          return {
+            language,
+            title: 'Your provider arrived 📍',
+            body: 'The provider has arrived at the service location.',
+          }
+        }
         return {
           language,
-          title: '👋 Arrival confirmed',
+          title: 'Arrival confirmed 👋',
           body: 'You can start the service now.',
         }
       case 'service_started':
+        if (isClient) {
+          return {
+            language,
+            title: 'Service started ▶️',
+            body: "Your service has started. We'll notify you when it's complete.",
+          }
+        }
         return {
           language,
-          title: '▶️ Service started',
-          body: "Good luck! We'll notify the customer when it's completed.",
+          title: 'Service started ▶️',
+          body: "Good luck! We'll notify the customer when it's complete.",
         }
       case 'service_completed':
+        if (isClient) {
+          return {
+            language,
+            title: 'Service completed 🎉',
+            body: 'The service ended successfully. You can leave a rating and tip.',
+          }
+        }
         return {
           language,
-          title: '🎉 Service completed',
-          body: 'The service was completed successfully and the customer was updated.',
+          title: 'Service completed 🎉',
+          body: 'The service was completed successfully.',
         }
       case 'client_confirmation':
         return {
@@ -284,7 +387,7 @@ export function getPushCopy(
       case 'five_star_rating':
         return {
           language,
-          title: '⭐ You received 5 stars',
+          title: 'You received 5 stars ⭐',
           body: 'Great work! Your new rating was added to your profile.',
         }
       case 'tip_received':
@@ -303,19 +406,19 @@ export function getPushCopy(
       case 'rating_reminder':
         return {
           language,
-          title: ratingText ? `⭐ You received ${ratingText} stars` : '⭐ You received a rating',
+          title: ratingText ? `You received ${ratingText} stars ⭐` : 'You received a rating ⭐',
           body: 'Great work! Your new rating was added to your profile.',
         }
       case 'future_booking_reminder':
         return {
           language,
-          title: '📅 Upcoming booking reminder',
+          title: 'Upcoming booking reminder 📅',
           body: "Don't forget, you have a scheduled service coming up soon.",
         }
       case 'weekly_recurring_booking_reminder':
         return {
           language,
-          title: '🔁 Weekly service reminder',
+          title: 'Weekly service reminder 🔁',
           body: 'Your recurring weekly service starts soon.',
         }
       case 'scheduled_booking_reminder':

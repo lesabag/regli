@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.100.0'
 import { planTargetedPushDelivery, resolvePushLanguage } from '../_shared/pushDelivery.ts'
 import { buildPushEnvelope, buildPushDedupKey, getPushDedupWindowMs } from '../_shared/pushNotifications.ts'
-import { getPushCopy } from '../_shared/pushCopy.ts'
+import { getPushCopy, normalizePushRecipientRole, type PushRecipientRole } from '../_shared/pushCopy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -251,9 +251,14 @@ serve(async (req: Request) => {
 
     const appLanguage = readString(notifData?.appLanguage) ?? readString(notifData?.app_language) ?? null
     const payloadProfileLanguage = readString(notifData?.profileLanguage) ?? readString(notifData?.profile_language) ?? null
+    const targetProfileSnapshot = targetUserId
+      ? await getTargetUserProfileSnapshot(supabaseAdmin, targetUserId)
+      : null
+    const targetRoleRaw = targetProfileSnapshot?.role ?? null
+    const recipientRole: PushRecipientRole | null = normalizePushRecipientRole(targetRoleRaw)
     const languageResolution = targetUserId
       ? resolvePushLanguage({
-          profileLanguage: await getTargetUserProfileLanguage(supabaseAdmin, targetUserId),
+          profileLanguage: targetProfileSnapshot?.language ?? null,
           metadataLanguage: await getTargetUserPreferredLanguage(supabaseAdmin, targetUserId),
           payloadProfileLanguage,
           appLanguage,
@@ -277,6 +282,7 @@ serve(async (req: Request) => {
     try {
       localizedCopy = getPushCopy(notificationType, {
         language: resolvedLanguage,
+        recipientRole,
         providerName: readString(notifData?.providerName) ?? readString(notifData?.provider_name) ?? null,
         walkerName: readString(notifData?.walkerName) ?? readString(notifData?.walker_name) ?? null,
         amountText: readString(notifData?.amountText) ?? readString(notifData?.amount_text) ?? null,
@@ -303,6 +309,18 @@ serve(async (req: Request) => {
       readString(notifBody) ??
       readString(localizedCopy?.body) ??
       safeEnglishCopy.body
+
+    console.log('[Push] copy resolved', {
+      notificationType,
+      targetUserId: targetUserId ?? null,
+      targetRole: targetRoleRaw,
+      recipientRole,
+      resolvedLanguage,
+      languageSource: languageResolution.source,
+      titlePreview: effectiveTitle.length > 80 ? `${effectiveTitle.slice(0, 80)}…` : effectiveTitle,
+      bodyPreview: effectiveBody.length > 120 ? `${effectiveBody.slice(0, 120)}…` : effectiveBody,
+      titleSource: readString(title) ? 'caller' : readString(localizedCopy?.title) ? 'localized' : 'fallback',
+    })
 
     const envelope = buildPushEnvelope({
       type: notificationType,
@@ -730,10 +748,10 @@ async function getTargetUserPreferredLanguage(
   }
 }
 
-async function getTargetUserProfileLanguage(
+async function getTargetUserProfileSnapshot(
   supabaseAdmin: ReturnType<typeof createClient>,
   userId: string,
-): Promise<string | null> {
+): Promise<{ language: string | null; role: string | null } | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from('profiles')
@@ -742,7 +760,11 @@ async function getTargetUserProfileLanguage(
       .maybeSingle()
 
     if (error || !data || typeof data !== 'object') return null
-    return readLanguageFromMetadata(data)
+    const record = data as Record<string, unknown>
+    return {
+      language: readLanguageFromMetadata(record),
+      role: readString(record.role),
+    }
   } catch {
     return null
   }
