@@ -3635,6 +3635,25 @@ export default function ClientDashboard({
 
   useEffect(() => resetSheetDragState, [resetSheetDragState])
 
+  // If the app gets backgrounded mid-drag, iOS may not fire touchend/touchcancel,
+  // leaving sheetDragRef.current set. The next touchMove would then call
+  // preventDefault on unrelated touches (slider/buttons) until a full app restart.
+  // Reset on every return-to-visible so gesture state can't go stale.
+  useEffect(() => {
+    const handleVisible = () => {
+      if (typeof document === 'undefined') return
+      if (document.visibilityState === 'visible') {
+        resetSheetDragState()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisible)
+    window.addEventListener('pageshow', handleVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisible)
+      window.removeEventListener('pageshow', handleVisible)
+    }
+  }, [resetSheetDragState])
+
   const serviceKeys = SERVICE_I18N_KEYS[resolvedBookingService]
   const isSelectedServiceAvailable = checkServiceAvailable(resolvedBookingService)
   const isBabySitterMode = requestServiceType === 'baby_sitter'
@@ -4644,16 +4663,21 @@ export default function ClientDashboard({
           </div>
         </div>
         <div style={dogWalkerSliderInlineStyle}>
-          <input
-            type="range"
-            min={activeBudgetMin}
-            max={activeBudgetMax}
-            step={activeBudgetStep}
-            value={activeBudgetValue}
-            onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
-            style={activeBudgetSliderStyle}
-            aria-label={isRtl ? 'תקציב' : 'Budget'}
-          />
+          {/* Hitbox wrap keeps the visual 46px row but isolates the input to
+              its visible track so the surrounding band passes touches through
+              to the bookingCard drag-surface. */}
+          <div style={unifiedBudgetSliderHitboxWrapStyle}>
+            <input
+              type="range"
+              min={activeBudgetMin}
+              max={activeBudgetMax}
+              step={activeBudgetStep}
+              value={activeBudgetValue}
+              onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
+              style={activeBudgetSliderStyle}
+              aria-label={isRtl ? 'תקציב' : 'Budget'}
+            />
+          </div>
           <div style={unifiedBudgetScaleRowStyle}>
             <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
             <span style={unifiedBudgetScaleValueStyle}>₪{activeBudgetValue}</span>
@@ -4681,16 +4705,19 @@ export default function ClientDashboard({
       </div>
       <div style={fixedVisitSliderWrapStyle}>
         <div style={dogWalkerSliderOnlyRowStyle}>
-          <input
-            type="range"
-            min={activeBudgetMin}
-            max={activeBudgetMax}
-            step={activeBudgetStep}
-            value={activeBudgetValue}
-            onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
-            style={activeBudgetSliderStyle}
-            aria-label={isRtl ? 'תקציב ביקור' : 'Visit fee'}
-          />
+          {/* See unifiedBudgetSliderHitboxWrapStyle: tight input, 46px visual row. */}
+          <div style={unifiedBudgetSliderHitboxWrapStyle}>
+            <input
+              type="range"
+              min={activeBudgetMin}
+              max={activeBudgetMax}
+              step={activeBudgetStep}
+              value={activeBudgetValue}
+              onChange={(e) => handleActiveBudgetChange(Number(e.target.value))}
+              style={activeBudgetSliderStyle}
+              aria-label={isRtl ? 'תקציב ביקור' : 'Visit fee'}
+            />
+          </div>
         </div>
         <div style={unifiedBudgetScaleRowStyle}>
           <span style={unifiedBudgetScaleLabelStyle}>₪0</span>
@@ -9108,21 +9135,39 @@ const unifiedPricingPaymentCardInnerStyle: React.CSSProperties = {
   minHeight: '100%',
 }
 
+// The input itself is intentionally tight (24px). The 46px visual footprint
+// is provided by unifiedBudgetSliderHitboxWrapStyle so the empty space above
+// and below the track does NOT belong to the <input> and does NOT absorb
+// touches. That space is plain content inside the bookingCard drag-surface,
+// so downward swipes there collapse the sheet instead of being captured by
+// the range input.
 const unifiedBudgetSliderStyle: React.CSSProperties = {
   width: '100%',
   margin: 0,
   accentColor: '#2563EB',
   minWidth: 0,
   maxWidth: '100%',
-  height: 46,
-  minHeight: 46,
-  padding: '13px 0',
+  height: 24,
+  minHeight: 24,
+  padding: 0,
   cursor: 'pointer',
   touchAction: 'pan-x',
   WebkitTapHighlightColor: 'transparent',
   boxSizing: 'border-box',
   position: 'relative',
   zIndex: 2,
+  display: 'block',
+}
+
+// Centers the tightened slider inside the same 46px row the original style
+// claimed via height/padding. The wrapper is non-interactive so its empty
+// upper/lower bands fall through to the sheet's drag-surface ancestor.
+const unifiedBudgetSliderHitboxWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  width: '100%',
+  minHeight: 46,
+  boxSizing: 'border-box',
 }
 
 const unifiedBudgetScaleRowStyle: React.CSSProperties = {
