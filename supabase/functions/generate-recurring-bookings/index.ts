@@ -7,7 +7,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const FUNCTION_VERSION = 'v_recurring_engine_2026_05_17'
+const FUNCTION_VERSION = 'v_recurring_engine_2026_06_18'
 const PLATFORM_FEE_PERCENT = 20
 const SCHEDULE_TIMEZONE = 'Asia/Jerusalem'
 const DEFAULT_MARKET_CURRENCY = 'ils'
@@ -223,7 +223,26 @@ serve(async (req: Request) => {
     const now = new Date()
     const windowEnd = new Date(now.getTime() + GENERATION_WINDOW_DAYS * 24 * 60 * 60 * 1000)
 
-    const { data: recurringRows, error: recurringError } = await supabase
+    let targetRecurringBookingId: string | null = null
+    if (req.method === 'POST') {
+      try {
+        const rawBody = await req.text()
+        if (rawBody.trim().length > 0) {
+          const parsed = JSON.parse(rawBody) as { recurring_booking_id?: unknown }
+          if (typeof parsed?.recurring_booking_id === 'string' && parsed.recurring_booking_id.trim().length > 0) {
+            targetRecurringBookingId = parsed.recurring_booking_id.trim()
+          }
+        }
+      } catch (error) {
+        return jsonResponse(400, {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Invalid JSON body',
+          _v: FUNCTION_VERSION,
+        })
+      }
+    }
+
+    let recurringQuery = supabase
       .from('recurring_bookings')
       .select(`
         id,
@@ -245,6 +264,12 @@ serve(async (req: Request) => {
         recurring_status
       `)
       .eq('recurring_status', 'active')
+
+    if (targetRecurringBookingId) {
+      recurringQuery = recurringQuery.eq('id', targetRecurringBookingId)
+    }
+
+    const { data: recurringRows, error: recurringError } = await recurringQuery
 
     if (recurringError) {
       console.error('[generate-recurring-bookings] failed to load recurring bookings', recurringError)

@@ -710,6 +710,22 @@ export default function ClientDashboard({
   const [editingRecurringBooking, setEditingRecurringBooking] = useState<RecurringBookingItem | null>(null)
   const [recurringEditDays, setRecurringEditDays] = useState<number[]>([])
   const [recurringEditTime, setRecurringEditTime] = useState('18:00')
+  const [scheduleSuccessBanner, setScheduleSuccessBanner] = useState<
+    | { kind: 'future'; whenLabel: string }
+    | { kind: 'weekly'; daysLabel: string; timeLabel: string }
+    | null
+  >(null)
+  useEffect(() => {
+    if (!scheduleSuccessBanner) return
+    const timer = window.setTimeout(() => setScheduleSuccessBanner(null), 6000)
+    return () => window.clearTimeout(timer)
+  }, [scheduleSuccessBanner])
+  const [mainCtaSchedulingPulse, setMainCtaSchedulingPulse] = useState(false)
+  useEffect(() => {
+    if (!mainCtaSchedulingPulse) return
+    const timer = window.setTimeout(() => setMainCtaSchedulingPulse(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [mainCtaSchedulingPulse])
   const [scheduleOverlapWarning, setScheduleOverlapWarning] = useState<string | null>(null)
   const scheduleOverlapWarningRef = useRef<string | null>(null)
   const bookingTimingRef = useRef(flow.bookingTiming)
@@ -1577,22 +1593,17 @@ export default function ClientDashboard({
   }
 
   async function handleRecurringStatusUpdate(id: string, status: RecurringStatus) {
-    setRecurringSaving(true)
     setRecurringError(null)
-    const { error } = await supabase
-      .from('recurring_bookings')
-      .update({ recurring_status: status })
-      .eq('id', id)
-      .eq('client_id', profile.id)
 
-    if (error) {
-      setRecurringSaving(false)
-      setRecurringError(error.message)
-      return
+    const previous = recurringBookings
+    setRecurringBookings((rows) =>
+      status === 'cancelled'
+        ? rows.filter((row) => row.id !== id)
+        : rows.map((row) => (row.id === id ? { ...row, recurring_status: status } : row)),
+    )
+    if (editingRecurringBooking?.id === id && status === 'cancelled') {
+      setEditingRecurringBooking(null)
     }
-
-    await loadRecurringBookings()
-    setRecurringSaving(false)
     setRecurringSuccess(
       status === 'paused'
         ? t('recurring.pausedSeries')
@@ -1600,9 +1611,21 @@ export default function ClientDashboard({
           ? t('recurring.resumedSeries')
           : t('recurring.cancelledSeries'),
     )
-    if (editingRecurringBooking?.id === id && status === 'cancelled') {
-      setEditingRecurringBooking(null)
+
+    const { error } = await supabase
+      .from('recurring_bookings')
+      .update({ recurring_status: status })
+      .eq('id', id)
+      .eq('client_id', profile.id)
+
+    if (error) {
+      setRecurringBookings(previous)
+      setRecurringSuccess(null)
+      setRecurringError(error.message)
+      return
     }
+
+    void loadRecurringBookings()
   }
 
   async function handleSaveRecurringEdit() {
@@ -1695,24 +1718,58 @@ export default function ClientDashboard({
       recurring_status: 'active' as const,
     }
 
-    const { error } = await supabase.from('recurring_bookings').insert(payload)
-    if (error) {
-      setRecurringSaving(false)
-      setRecurringError(error.message)
-      return
-    }
-
-    await loadRecurringBookings()
-    setRecurringSaving(false)
+    // Mirror Future flow: close the sheet, surface the banner, then run the
+    // network/Stripe work in the background. Awaiting Stripe inside the click
+    // handler kept the user trapped in the sheet for the whole roundtrip.
+    setScheduleSuccessBanner({
+      kind: 'weekly',
+      daysLabel: formatRepeatDaysLabel(effectiveRepeatDays, i18n.resolvedLanguage || 'en'),
+      timeLabel: formatRecurringDisplayTime(repeatStartTime, i18n.resolvedLanguage || 'en'),
+    })
     setRecurringSuccess(t('recurring.createdSeries'))
+    setMainCtaSchedulingPulse(true)
     setRepeatDays([])
     setRepeatType('one_time')
     closeScheduleSheet()
-    setMenuPage('futureOrders')
-    setBurgerOpen(true)
+
+    void (async () => {
+      try {
+        const { data: inserted, error: insertError } = await supabase
+          .from('recurring_bookings')
+          .insert(payload)
+          .select('id')
+          .single()
+        if (insertError || !inserted?.id) {
+          setScheduleSuccessBanner(null)
+          setRecurringSuccess(null)
+          setRecurringError(insertError?.message ?? 'Failed to create recurring booking')
+          return
+        }
+
+        try {
+          await supabase.functions.invoke('generate-recurring-bookings', {
+            body: { recurring_booking_id: inserted.id },
+          })
+        } catch (invokeError) {
+          console.warn('[ClientDashboard] immediate recurring materialization failed', invokeError)
+        }
+
+        await loadRecurringBookings()
+      } finally {
+        setRecurringSaving(false)
+      }
+    })()
   }
 
-  const handleFindWalker = useCallback(() => {
+  const handleFindWalker = useCallback((
+    overrides?: { bookingTiming?: 'asap' | 'scheduled'; scheduledFor?: string | null },
+  ) => {
+    const overrideBookingTiming = overrides?.bookingTiming
+    const hasScheduledForOverride = overrides ? 'scheduledFor' in overrides : false
+    const effectiveBookingTiming = overrideBookingTiming ?? flow.bookingTiming
+    const effectiveScheduledFor = hasScheduledForOverride
+      ? overrides?.scheduledFor ?? null
+      : flow.scheduledFor
     const effectiveBookingService = availableBookingServices.includes(selectedBookingServiceRef.current)
       ? selectedBookingServiceRef.current
       : resolvedBookingService
@@ -1794,7 +1851,7 @@ export default function ClientDashboard({
         localBookingBlockedReasons.push('missing_price')
       }
       if (!flow.savedCard) localBookingBlockedReasons.push('missing_saved_card')
-      if (flow.bookingTiming === 'scheduled' && !flow.scheduledFor) {
+      if (effectiveBookingTiming === 'scheduled' && !effectiveScheduledFor) {
         localBookingBlockedReasons.push('missing_scheduled_for')
       }
       const pricingPackage = durationTypeFromMinutes(
@@ -1830,7 +1887,7 @@ export default function ClientDashboard({
         `₪${babysitterFixedBudgetValue}`
       const notes = [
         `Service details: ${babysitterServiceDetails.trim()}`,
-        `Start time: ${formatScheduledTime(flow.scheduledFor)}`,
+        `Start time: ${formatScheduledTime(effectiveScheduledFor)}`,
         `Requested duration: ${formatHoursValue(babysitterDurationValue)} hour${babysitterDurationValue === 1 ? '' : 's'}`,
         `Client budget: ${budgetLabel}`,
       ].join('\n')
@@ -1847,8 +1904,8 @@ export default function ClientDashboard({
         durationOverride: pricingDuration,
         durationMinutesOverride: babysitterDurationMinutes,
         priceOverrideILS: babysitterBudgetValue,
-        bookingTimingOverride: flow.bookingTiming,
-        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
+        bookingTimingOverride: effectiveBookingTiming,
+        scheduledForOverride: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
       })
     } else if (effectiveServiceType === 'dog_walker') {
       const pricingDuration = durationTypeFromMinutes(dogWalkerDurationMinutes ?? 0)
@@ -1870,8 +1927,8 @@ export default function ClientDashboard({
               },
             }
           : null,
-        bookingTimingOverride: flow.bookingTiming,
-        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
+        bookingTimingOverride: effectiveBookingTiming,
+        scheduledForOverride: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
       })
     } else if (effectiveBookingPricingModel === 'fixed_visit') {
       flow.requestWalk({
@@ -1887,8 +1944,8 @@ export default function ClientDashboard({
         dogCountOverride: null,
         issueTypeOverride: effectiveServiceType ?? effectiveBookingService,
         issueDescriptionOverride: fixedVisitIssueDescription.trim() || null,
-        bookingTimingOverride: flow.bookingTiming,
-        scheduledForOverride: flow.bookingTiming === 'scheduled' ? flow.scheduledFor : null,
+        bookingTimingOverride: effectiveBookingTiming,
+        scheduledForOverride: effectiveBookingTiming === 'scheduled' ? effectiveScheduledFor : null,
       })
     } else {
       flow.requestWalk({
@@ -4801,6 +4858,30 @@ export default function ClientDashboard({
 
   return (
     <div className="regli-client-screen" style={screenStyle}>
+      {scheduleSuccessBanner && (
+        <div role="status" style={scheduleSuccessBannerStyle} onClick={() => setScheduleSuccessBanner(null)}>
+          <span style={scheduleSuccessBannerIconStyle} aria-hidden>✅</span>
+          <div style={scheduleSuccessBannerBodyStyle}>
+            {scheduleSuccessBanner.kind === 'future' ? (
+              <>
+                <span style={scheduleSuccessBannerTitleStyle}>{t('booking.futureScheduledTitle')}</span>
+                <span style={scheduleSuccessBannerLineStyle}>{scheduleSuccessBanner.whenLabel}</span>
+                <span style={scheduleSuccessBannerNoticeStyle}>{t('booking.searchWillBeginNotice')}</span>
+              </>
+            ) : (
+              <>
+                <span style={scheduleSuccessBannerTitleStyle}>{t('recurring.createdSeries')}</span>
+                <span style={scheduleSuccessBannerLineStyle}>
+                  {t('recurring.daysLabel', { days: scheduleSuccessBanner.daysLabel })}
+                </span>
+                <span style={scheduleSuccessBannerLineStyle}>
+                  {t('recurring.timeLabel', { time: scheduleSuccessBanner.timeLabel })}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div aria-hidden="true" style={dashboardBrandBackdropStyle}>
         <div style={dashboardBrandGlowTopStyle} />
         <div style={dashboardBrandGlowCenterStyle} />
@@ -5365,7 +5446,7 @@ export default function ClientDashboard({
                 const scheduleCtaLabel =
                   scheduleMode === 'repeat'
                     ? t('recurring.createWeeklyBooking')
-                    : (isRtl ? 'יצירת הזמנה עתידית' : 'Schedule future order')
+                    : (isRtl ? 'יצירת הזמנה עתידית' : 'Schedule Future Order')
                 // 'later' mode also requires an actual wheel change before the
                 // CTA is enabled — opening the sheet or accepting the default
                 // preselect alone must not submit.
@@ -5407,6 +5488,11 @@ export default function ClientDashboard({
                       flow.setBookingTiming('scheduled')
                       setHasUserModifiedSchedule(false)
                       setShowSchedulePage(false)
+                      setScheduleSuccessBanner({
+                        kind: 'future',
+                        whenLabel: formatFutureBannerWhen(nextValue, isRtl ? 'he' : 'en'),
+                      })
+                      handleFindWalker({ bookingTiming: 'scheduled', scheduledFor: nextValue })
                       void hapticSuccess()
                     }}
                     disabled={scheduleCtaDisabled || scheduleCtaLoading}
@@ -5833,19 +5919,19 @@ export default function ClientDashboard({
                 <div style={stickyMainActionStyle}>
                   <button
                     type="button"
-                    onClick={handleFindWalker}
-                    disabled={!canSubmitBooking || flow.loading || (flow.cardLoading && !flow.savedCard)}
+                    onClick={() => handleFindWalker()}
+                    disabled={!canSubmitBooking || flow.loading || mainCtaSchedulingPulse || (flow.cardLoading && !flow.savedCard)}
                     style={{
                       ...bookingPrimaryButtonStyle,
                       ...(!canSubmitBooking ? bookingPrimaryButtonDisabledStyle : null),
-                      ...(flow.loading || (flow.cardLoading && !flow.savedCard) ? bookingPrimaryButtonLoadingStyle : null),
+                      ...(flow.loading || mainCtaSchedulingPulse || (flow.cardLoading && !flow.savedCard) ? bookingPrimaryButtonLoadingStyle : null),
                     }}
                   >
-                    {flow.loading || (flow.cardLoading && !flow.savedCard) ? (
+                    {flow.loading || mainCtaSchedulingPulse || (flow.cardLoading && !flow.savedCard) ? (
                       <>
                         <span style={bookingPrimarySpinnerStyle} />
-                        {flow.loading
-                          ? flow.bookingTiming === 'scheduled'
+                        {flow.loading || mainCtaSchedulingPulse
+                          ? mainCtaSchedulingPulse || flow.bookingTiming === 'scheduled'
                             ? t('booking.scheduling')
                             : t('booking.ordering')
                           : t('booking.loadingPayment')}
@@ -7501,6 +7587,15 @@ function formatScheduledTime(value: string | null | undefined): string {
   })
 }
 
+function formatFutureBannerWhen(value: string | null | undefined, language: string): string {
+  const dt = parseDateTimeFlexible(value)
+  if (!dt) return ''
+  const locale = language === 'he' ? 'he-IL' : 'en-US'
+  const weekday = dt.toLocaleDateString(locale, { weekday: 'short' })
+  const time = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  return `${weekday} ${time}`
+}
+
 function getScheduledDispatchWindowLabel(value: string | null | undefined): string | null {
   const dt = parseDateTimeFlexible(value)
   if (!dt) return null
@@ -8097,6 +8192,57 @@ const recurringInlineSuccessStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 600,
   color: '#166534',
+}
+
+const scheduleSuccessBannerStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 'max(env(safe-area-inset-top, 0px), 12px)',
+  left: 12,
+  right: 12,
+  zIndex: 60,
+  padding: '12px 14px',
+  borderRadius: 16,
+  background: 'rgba(220, 252, 231, 0.98)',
+  border: '1px solid rgba(34, 197, 94, 0.45)',
+  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.12)',
+  color: '#166534',
+  display: 'flex',
+  gap: 10,
+  alignItems: 'flex-start',
+}
+
+const scheduleSuccessBannerIconStyle: React.CSSProperties = {
+  fontSize: 18,
+  lineHeight: 1.2,
+}
+
+const scheduleSuccessBannerBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  flex: 1,
+  minWidth: 0,
+}
+
+const scheduleSuccessBannerTitleStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  lineHeight: 1.3,
+}
+
+const scheduleSuccessBannerLineStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 500,
+  lineHeight: 1.35,
+  color: '#15803D',
+}
+
+const scheduleSuccessBannerNoticeStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 500,
+  lineHeight: 1.4,
+  color: '#166534',
+  opacity: 0.85,
 }
 
 const futureOrdersSectionsStyle: React.CSSProperties = {
