@@ -83,6 +83,7 @@ type Group = {
   key: string
   label: string
   items: HistoryItem[]
+  defaultExpanded: boolean
 }
 
 const SWIPE_HIDE_WIDTH = 132
@@ -91,6 +92,7 @@ const SWIPE_HIDE_THRESHOLD = 86
 export default function GroupedHistory(props: GroupedHistoryProps) {
   const { i18n } = useTranslation()
   const compact = props.compact === true
+  const isHebrew = i18n.resolvedLanguage === 'he'
   const rawItems = useMemo(
     () => props.items ?? props.history ?? props.requests ?? props.jobs ?? [],
     [props.items, props.history, props.requests, props.jobs],
@@ -153,9 +155,20 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
     [props.onHide],
   )
 
-  const grouped = useMemo(() => buildGroups(items), [items])
+  const grouped = useMemo(() => buildGroups(items, isHebrew), [isHebrew, items])
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const hideLabel = i18n.resolvedLanguage === 'he' ? 'הסתר' : 'Hide'
   const favoriteLabel = i18n.resolvedLanguage === 'he' ? 'מועדף' : 'Favorite'
+
+  useEffect(() => {
+    setExpandedGroups((current) => {
+      const next: Record<string, boolean> = {}
+      grouped.forEach((group) => {
+        next[group.key] = current[group.key] ?? group.defaultExpanded
+      })
+      return next
+    })
+  }, [grouped])
 
   return (
     <div className={props.className} style={{ ...styles.root, ...(compact ? compactStyles.root : null) }}>
@@ -167,7 +180,29 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
       ) : (
         grouped.map((group) => (
           <section key={group.key} style={{ ...styles.groupSection, ...(compact ? compactStyles.groupSection : null) }}>
-            <div style={styles.groupHeader}>{group.label}</div>
+            <button
+              type="button"
+              onClick={() => {
+                setExpandedGroups((current) => ({
+                  ...current,
+                  [group.key]: !(current[group.key] ?? group.defaultExpanded),
+                }))
+              }}
+              style={styles.groupHeaderButton}
+            >
+              <div style={styles.groupHeaderLabelRow}>
+                <span style={styles.groupChevron}>{(expandedGroups[group.key] ?? group.defaultExpanded) ? '▼' : '▶'}</span>
+                <span style={styles.groupHeader}>{group.label}</span>
+              </div>
+              <span style={styles.groupCountBadge}>{group.items.length}</span>
+            </button>
+            <div
+              style={{
+                ...styles.groupContentWrap,
+                maxHeight: (expandedGroups[group.key] ?? group.defaultExpanded) ? `${Math.max(240, group.items.length * (compact ? 170 : 220))}px` : '0px',
+                opacity: (expandedGroups[group.key] ?? group.defaultExpanded) ? 1 : 0,
+              }}
+            >
             <div style={{ ...styles.groupList, ...(compact ? compactStyles.groupList : null) }}>
               {group.items.map((item) => {
                 const id = getItemId(item)
@@ -196,6 +231,7 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
                   />
                 )
               })}
+            </div>
             </div>
           </section>
         ))
@@ -592,22 +628,24 @@ function MiniLocationPreview({
   )
 }
 
-function buildGroups(items: HistoryItem[]): Group[] {
+function buildGroups(items: HistoryItem[], isHebrew: boolean): Group[] {
   const map = new Map<string, Group>()
 
   for (const item of items) {
     const date = getDateValue(item)
     const key = getGroupKey(date)
-    const label = getGroupLabel(date)
+    const label = getGroupLabel(key, isHebrew)
+    const defaultExpanded = key === 'today' || key === 'yesterday'
 
     if (!map.has(key)) {
-      map.set(key, { key, label, items: [] })
+      map.set(key, { key, label, items: [], defaultExpanded })
     }
 
     map.get(key)!.items.push(item)
   }
 
-  return Array.from(map.values()).sort((a, b) => (a.key < b.key ? 1 : -1))
+  const order = ['today', 'yesterday', 'this_week', 'earlier']
+  return Array.from(map.values()).sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))
 }
 
 function getItemId(item: HistoryItem): string {
@@ -751,28 +789,24 @@ function getDateValue(item: HistoryItem): Date | null {
 }
 
 function getGroupKey(date: Date | null): string {
-  if (!date) return 'unknown'
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function getGroupLabel(date: Date | null): string {
-  if (!date) return 'Earlier'
-
+  if (!date) return 'earlier'
   const today = startOfDay(new Date())
   const itemDay = startOfDay(date)
-  const diffDays = Math.round((today.getTime() - itemDay.getTime()) / (1000 * 60 * 60 * 24))
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const weekStart = startOfWeek(today)
 
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
+  if (itemDay.getTime() === today.getTime()) return 'today'
+  if (itemDay.getTime() === yesterday.getTime()) return 'yesterday'
+  if (itemDay >= weekStart) return 'this_week'
+  return 'earlier'
+}
 
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  }).format(date)
+function getGroupLabel(key: string, isHebrew: boolean): string {
+  if (key === 'today') return isHebrew ? 'היום' : 'Today'
+  if (key === 'yesterday') return isHebrew ? 'אתמול' : 'Yesterday'
+  if (key === 'this_week') return isHebrew ? 'השבוע' : 'This Week'
+  return isHebrew ? 'מוקדם יותר' : 'Earlier'
 }
 
 function getCoordinates(item: HistoryItem): { lat: number; lng: number } | null {
@@ -821,6 +855,13 @@ function formatTime(date: Date): string {
 
 function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function startOfWeek(date: Date): Date {
+  const day = date.getDay()
+  const result = startOfDay(date)
+  result.setDate(result.getDate() - day)
+  return result
 }
 
 function applyResistance(raw: number, leftActionWidth: number, rightActionWidth: number): number {
@@ -908,6 +949,32 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 10,
   },
+  groupHeaderButton: {
+    appearance: 'none',
+    border: 'none',
+    background: 'transparent',
+    padding: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    width: '100%',
+    textAlign: 'left',
+  },
+  groupHeaderLabelRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  groupChevron: {
+    fontSize: 11,
+    lineHeight: 1,
+    color: 'rgba(200, 212, 234, 0.72)',
+    flexShrink: 0,
+  },
   groupHeader: {
     fontSize: 12,
     lineHeight: 1.2,
@@ -916,6 +983,26 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'rgba(200, 212, 234, 0.64)',
     paddingInline: 4,
     fontWeight: 700,
+  },
+  groupCountBadge: {
+    minWidth: 26,
+    height: 22,
+    padding: '0 8px',
+    borderRadius: 999,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    color: 'rgba(226, 232, 240, 0.82)',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  groupContentWrap: {
+    overflow: 'hidden',
+    transition: 'max-height 220ms ease, opacity 180ms ease',
   },
   groupList: {
     display: 'flex',

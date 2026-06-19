@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { supabase } from '../services/supabaseClient'
 import {
   buildPushDedupKey,
@@ -153,21 +154,20 @@ function isBellVisibleNotification(notification: Notification): boolean {
 
 // ─── Time grouping ──────────────────────────────────────────────
 
-type TimeGroup = 'Today' | 'Yesterday' | 'This week' | 'Earlier'
+type TimeGroupKey = 'today' | 'yesterday' | 'this_week' | 'earlier'
 
-function getTimeGroup(dateStr: string): TimeGroup {
+function getTimeGroup(dateStr: string): TimeGroupKey {
   const d = new Date(dateStr)
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const today = startOfDay(new Date())
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
-  const weekAgo = new Date(today)
-  weekAgo.setDate(weekAgo.getDate() - 7)
+  const weekStart = startOfWeek(today)
 
-  if (d >= today) return 'Today'
-  if (d >= yesterday) return 'Yesterday'
-  if (d >= weekAgo) return 'This week'
-  return 'Earlier'
+  const itemDay = startOfDay(d)
+  if (itemDay.getTime() === today.getTime()) return 'today'
+  if (itemDay.getTime() === yesterday.getTime()) return 'yesterday'
+  if (itemDay >= weekStart) return 'this_week'
+  return 'earlier'
 }
 
 // ─── Component ──────────────────────────────────────────────────
@@ -179,11 +179,14 @@ interface NotificationsBellProps {
 export default function NotificationsBell({
   variant = 'dark',
 }: NotificationsBellProps) {
+  const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [open, setOpen] = useState(false)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [mountReady, setMountReady] = useState(false)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const ref = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
@@ -191,8 +194,8 @@ export default function NotificationsBell({
 
   // Group notifications by time
   const grouped = useMemo(() => {
-    const groups: { label: TimeGroup; items: Notification[] }[] = []
-    const groupMap = new Map<TimeGroup, Notification[]>()
+    const groups: Array<{ key: TimeGroupKey; label: string; items: Notification[]; defaultExpanded: boolean }> = []
+    const groupMap = new Map<TimeGroupKey, Notification[]>()
 
     for (const n of notifications) {
       const group = getTimeGroup(n.created_at)
@@ -200,14 +203,31 @@ export default function NotificationsBell({
       groupMap.get(group)!.push(n)
     }
 
-    const order: TimeGroup[] = ['Today', 'Yesterday', 'This week', 'Earlier']
-    for (const label of order) {
-      const items = groupMap.get(label)
-      if (items && items.length > 0) groups.push({ label, items })
+    const order: TimeGroupKey[] = ['today', 'yesterday', 'this_week', 'earlier']
+    for (const key of order) {
+      const items = groupMap.get(key)
+      if (items && items.length > 0) {
+        groups.push({
+          key,
+          label: getTimeGroupLabel(key, isHebrew),
+          items,
+          defaultExpanded: key === 'today' || key === 'yesterday',
+        })
+      }
     }
 
     return groups
-  }, [notifications])
+  }, [isHebrew, notifications])
+
+  useEffect(() => {
+    setExpandedGroups((current) => {
+      const next: Record<string, boolean> = {}
+      grouped.forEach((group) => {
+        next[group.key] = current[group.key] ?? group.defaultExpanded
+      })
+      return next
+    })
+  }, [grouped])
 
   const addToast = useCallback((payload: PushNotificationPayload) => {
     setToasts((prev) => {
@@ -525,9 +545,31 @@ export default function NotificationsBell({
                 </div>
               ) : (
                 grouped.map((group) => (
-                  <div key={group.label}>
-                    <div style={groupHeaderStyle}>{group.label}</div>
+                  <div key={group.key} style={groupSectionStyle}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedGroups((current) => ({
+                          ...current,
+                          [group.key]: !(current[group.key] ?? group.defaultExpanded),
+                        }))
+                      }}
+                      style={groupHeaderButtonStyle}
+                    >
+                      <div style={groupHeaderLabelRowStyle}>
+                        <span style={groupChevronStyle}>{(expandedGroups[group.key] ?? group.defaultExpanded) ? '▼' : '▶'}</span>
+                        <div style={groupHeaderStyle}>{group.label}</div>
+                      </div>
+                      <span style={groupCountBadgeStyle}>{group.items.length}</span>
+                    </button>
 
+                    <div
+                      style={{
+                        ...groupContentWrapStyle,
+                        maxHeight: (expandedGroups[group.key] ?? group.defaultExpanded) ? `${Math.max(180, group.items.length * 112)}px` : '0px',
+                        opacity: (expandedGroups[group.key] ?? group.defaultExpanded) ? 1 : 0,
+                      }}
+                    >
                     {group.items.map((n, i) => {
                       const cfg = getTypeConfig(n.type)
                       return (
@@ -586,6 +628,7 @@ export default function NotificationsBell({
                         </div>
                       )
                     })}
+                    </div>
                   </div>
                 ))
               )}
@@ -704,6 +747,24 @@ function formatRelativeDate(value: string): string {
   if (diffHrs < 24) return `${diffHrs}h ago`
   if (diffDays < 7) return `${diffDays}d ago`
   return new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+}
+
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function startOfWeek(date: Date): Date {
+  const day = date.getDay()
+  const result = startOfDay(date)
+  result.setDate(result.getDate() - day)
+  return result
+}
+
+function getTimeGroupLabel(key: TimeGroupKey, isHebrew: boolean): string {
+  if (key === 'today') return isHebrew ? 'היום' : 'Today'
+  if (key === 'yesterday') return isHebrew ? 'אתמול' : 'Yesterday'
+  if (key === 'this_week') return isHebrew ? 'השבוע' : 'This Week'
+  return isHebrew ? 'מוקדם יותר' : 'Earlier'
 }
 
 // ─── Styles ─────────────────────────────────────────────────────
@@ -860,14 +921,68 @@ const emptySubStyle: React.CSSProperties = {
   lineHeight: 1.4,
 }
 
-const groupHeaderStyle: React.CSSProperties = {
+const groupSectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 0,
+}
+
+const groupHeaderButtonStyle: React.CSSProperties = {
+  appearance: 'none',
+  border: 'none',
+  background: '#FAFBFC',
   padding: '10px 18px 6px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  width: '100%',
+  cursor: 'pointer',
+  textAlign: 'left',
+  fontFamily: 'inherit',
+}
+
+const groupHeaderLabelRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  minWidth: 0,
+}
+
+const groupChevronStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1,
+  color: '#94A3B8',
+  flexShrink: 0,
+}
+
+const groupHeaderStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
   color: '#94A3B8',
   textTransform: 'uppercase',
   letterSpacing: 0.5,
-  background: '#FAFBFC',
+}
+
+const groupCountBadgeStyle: React.CSSProperties = {
+  minWidth: 26,
+  height: 22,
+  padding: '0 8px',
+  borderRadius: 999,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  color: '#64748B',
+  fontSize: 11,
+  fontWeight: 800,
+  lineHeight: 1,
+  flexShrink: 0,
+}
+
+const groupContentWrapStyle: React.CSSProperties = {
+  overflow: 'hidden',
+  transition: 'max-height 220ms ease, opacity 180ms ease',
   borderBottom: '1px solid #F4F5F7',
 }
 
