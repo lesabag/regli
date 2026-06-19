@@ -17,6 +17,7 @@ export interface NearbyWalker {
   avatarUrl: string | null
   fullName: string | null
   rating: number | null
+  ratingCount: number
 }
 
 type ProviderRadiusPreferenceRow = {
@@ -179,7 +180,7 @@ export function useNearbyWalkers(
     const availabilityReferenceAt = availabilityAtRef.current ?? new Date().toISOString()
     const expectedBookingType = bookingTypeRef.current
     const providerIds = data.map((row) => row.id).filter((value): value is string => typeof value === 'string' && value.length > 0)
-    let ratingsByProvider = new Map<string, number | null>()
+    let ratingsByProvider = new Map<string, { average: number | null; count: number }>()
     try {
       const [availabilityRows, ratingsResult, providerPreferencesResult] = await Promise.all([
         fetchProviderAvailabilityRows(providerIds, expectedServiceType),
@@ -223,7 +224,7 @@ export function useNearbyWalkers(
           const average = values.length > 0
             ? Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
             : null
-          return [providerId, average]
+          return [providerId, { average, count: values.length }]
         }),
       )
     } catch (availabilityError) {
@@ -260,6 +261,7 @@ export function useNearbyWalkers(
 
       if (candidateDistanceKm <= MAX_DISTANCE_KM) {
         activeIds.add(w.id)
+        const providerRating = ratingsByProvider.get(w.id) ?? { average: null, count: 0 }
         nearby.push({
           id: w.id,
           lat: w.last_lat,
@@ -267,7 +269,8 @@ export function useNearbyWalkers(
           bearing: resolveBearing(w.id, w.last_lat, w.last_lng),
           avatarUrl: ('avatar_url' in w ? (w.avatar_url as string | null) : null) ?? null,
           fullName: ('full_name' in w ? (w.full_name as string | null) : null) ?? null,
-          rating: ratingsByProvider.get(w.id) ?? null,
+          rating: providerRating.average,
+          ratingCount: providerRating.count,
         })
       }
     }
@@ -339,6 +342,7 @@ export function useNearbyWalkers(
             avatarUrl: row.avatar_url ?? (idx >= 0 ? prev[idx]?.avatarUrl ?? null : null),
             fullName: row.full_name ?? (idx >= 0 ? prev[idx]?.fullName ?? null : null),
             rating: idx >= 0 ? prev[idx]?.rating ?? null : null,
+            ratingCount: idx >= 0 ? prev[idx]?.ratingCount ?? 0 : 0,
           }
 
           if (idx >= 0) {

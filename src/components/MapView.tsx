@@ -22,6 +22,7 @@ interface NearbyWalkerMarker {
   avatarUrl?: string | null
   fullName?: string | null
   rating?: number | null
+  ratingCount?: number
 }
 
 interface MapViewProps {
@@ -1081,7 +1082,10 @@ export default function MapView({
             {(() => {
               const metaItems: string[] = []
               if (typeof w.rating === 'number') {
-                metaItems.push(`⭐ ${w.rating.toFixed(1)}`)
+                const ratingCount = typeof w.ratingCount === 'number' && Number.isFinite(w.ratingCount) && w.ratingCount > 0
+                  ? ` (${Math.round(w.ratingCount)})`
+                  : ''
+                metaItems.push(`⭐ ${w.rating.toFixed(1)}${ratingCount}`)
               }
               const distanceKm = distanceBetweenKm(userLocation, [w.lat, w.lng])
               if (Number.isFinite(distanceKm)) {

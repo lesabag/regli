@@ -826,6 +826,18 @@ export default function WalkerDashboard({
   const todayAvailabilityPricingLabel = t('providerPricing.title')
   const unavailableTodayLabel = isHebrew ? 'לא זמין היום' : 'Unavailable today'
   const headerRatingValue = flow.avgRating != null ? flow.avgRating.toFixed(1) : null
+  const providerReviewCountLabel = useMemo(
+    () => isHebrew
+      ? `${flow.ratingsReceived.length} ביקורות`
+      : `${flow.ratingsReceived.length} reviews`,
+    [flow.ratingsReceived.length, isHebrew],
+  )
+  const providerCompletedServicesLabel = useMemo(
+    () => isHebrew
+      ? `${flow.completedJobs.length} שירותים`
+      : `${flow.completedJobs.length} services`,
+    [flow.completedJobs.length, isHebrew],
+  )
   const insightsTitle = isHebrew ? '📈 תובנות לספק' : '📈 Provider Insights'
   const insightsPeriodLabel = isHebrew ? 'החודש' : 'This month'
   const insightsHeaderCtaLabel = isHebrew ? 'צפה בתובנות →' : 'View insights →'
@@ -5418,7 +5430,7 @@ export default function WalkerDashboard({
                         ) : null}
                         {flow.avgRating !== null && (
                           <div style={profileRatingStyle}>
-                            <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating} · {flow.ratingsReceived.length} reviews
+                            <span style={{ color: '#F59E0B' }}>★</span> {flow.avgRating.toFixed(1)} · {providerReviewCountLabel} · {providerCompletedServicesLabel}
                           </div>
                         )}
                         {photo.uploading ? <div style={uploadStatusStyle}>Uploading photo...</div> : null}
