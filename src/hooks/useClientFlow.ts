@@ -121,6 +121,7 @@ type CapturePaymentResponse = {
 
 type ReverseGeocodeOptions = {
   force?: boolean
+  persistSource?: AddressSource
 }
 
 type AddressSource = 'gps' | 'manual'
@@ -858,6 +859,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
   const hydrationRunIdRef = useRef(0)
   const realtimeHydrationAtRef = useRef<Map<string, number>>(new Map())
   const reverseGeocodeSkipLoggedAtRef = useRef(0)
+  const reverseGeocodeLanguageRef = useRef(i18n.resolvedLanguage || 'he')
   const addressSourceRef = useRef<AddressSource>('gps')
   const searchStartTimeRef = useRef<number | null>(null)
   const searchTimerRequestIdRef = useRef<string | null>(null)
@@ -1273,6 +1275,10 @@ export function useClientFlow(profileId: string, _profileName: string) {
 
     reverseGeocodeRef.current = async (lat: number, lng: number, options?: ReverseGeocodeOptions) => {
       const force = options?.force === true
+      const persistSource =
+        options?.persistSource === 'manual' || options?.persistSource === 'gps'
+          ? options.persistSource
+          : 'gps'
       const nextCoords: [number, number] = [lat, lng]
       const lastCoords = lastGeocodeCoordsRef.current
       if (!force && lastCoords && geoDistanceMeters(lastCoords, nextCoords) < LOCATION_REFRESH_METERS) {
@@ -1319,7 +1325,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
                     current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
                       ? current.duration
                       : '20min',
-                  locationSource: 'gps',
+                  locationSource: persistSource,
                   locationUpdatedAt: Date.now(),
                 } satisfies LastBookingDraft),
               )
@@ -1352,7 +1358,7 @@ export function useClientFlow(profileId: string, _profileName: string) {
                     current.duration === '20min' || current.duration === '40min' || current.duration === '60min'
                       ? current.duration
                       : '20min',
-                  locationSource: 'gps',
+                  locationSource: persistSource,
                   locationUpdatedAt: Date.now(),
                 } satisfies LastBookingDraft),
               )
@@ -1440,6 +1446,50 @@ export function useClientFlow(profileId: string, _profileName: string) {
       window.removeEventListener('focus', onResume)
     }
   }, [])
+
+  useEffect(() => {
+    const nextLanguage = i18n.resolvedLanguage || 'he'
+    const previousLanguage = reverseGeocodeLanguageRef.current
+    if (previousLanguage === nextLanguage) return
+
+    reverseGeocodeLanguageRef.current = nextLanguage
+
+    if (!reverseGeocodeRef.current || !userLocationBase || !location.trim()) {
+      return
+    }
+
+    const trimmedLocation = location.trim()
+    const isAutoResolvedAddress =
+      addressSourceRef.current === 'gps' ||
+      trimmedLocation === lastAutoLocationRef.current.trim() ||
+      trimmedLocation === latestResolvedLocationRef.current.trim()
+
+    if (!isAutoResolvedAddress) {
+      console.log('[ReverseGeocodeProvider]', {
+        provider: 'language_refresh',
+        result: 'skipped_manual_address',
+        fromLanguage: previousLanguage,
+        toLanguage: nextLanguage,
+        locationSource: addressSourceRef.current,
+      })
+      return
+    }
+
+    console.log('[ReverseGeocodeProvider]', {
+      provider: 'language_refresh',
+      result: 'refresh_on_language_change',
+      fromLanguage: previousLanguage,
+      toLanguage: nextLanguage,
+      locationSource: addressSourceRef.current,
+      lat: Number(userLocationBase[0].toFixed(5)),
+      lng: Number(userLocationBase[1].toFixed(5)),
+    })
+
+    void reverseGeocodeRef.current(userLocationBase[0], userLocationBase[1], {
+      force: true,
+      persistSource: addressSourceRef.current,
+    })
+  }, [location, userLocationBase, i18n.resolvedLanguage])
 
   useEffect(() => {
     if (screenState !== 'searching' || !searchStartTime) return

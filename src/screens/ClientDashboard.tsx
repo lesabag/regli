@@ -7853,7 +7853,7 @@ const deferredMapPlaceholderStyle: React.CSSProperties = {
 
 const floatingTopBarStyle: React.CSSProperties = {
   position: 'fixed',
-  top: 'calc(12px + env(safe-area-inset-top))',
+  top: 'calc(8px + env(safe-area-inset-top))',
   left: 'max(14px, env(safe-area-inset-left, 0px))',
   right: 'max(14px, env(safe-area-inset-right, 0px))',
   zIndex: 3001,
