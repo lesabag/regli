@@ -3131,10 +3131,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
       })
 
       void sendPushEvent({
-        type: 'dispute_update',
+        type: rating === 5 ? 'five_star_rating' : 'rating_reminder',
         targetUserId: job.client_id,
         relatedJobId: ratingJobId,
-        deepLink: buildPushDeepLink('dispute_update', ratingJobId),
+        deepLink: buildPushDeepLink(rating === 5 ? 'five_star_rating' : 'rating_reminder', ratingJobId),
+        dedupId: `${ratingJobId}:${rating === 5 ? 'five_star_rating' : 'rating_reminder'}`,
+        copyContext: {
+          ratingText: String(rating),
+        },
+        preferServerLocalization: true,
       })
 
       setRatingSubmitting(false)
@@ -3184,10 +3189,15 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         }).catch(() => {})
 
         void sendPushEvent({
-          type: 'dispute_update',
+          type: rating === 5 ? 'five_star_rating' : 'rating_reminder',
           targetUserId: completionSuccess.clientId,
           relatedJobId: completionSuccess.jobId,
-          deepLink: buildPushDeepLink('dispute_update', completionSuccess.jobId),
+          deepLink: buildPushDeepLink(rating === 5 ? 'five_star_rating' : 'rating_reminder', completionSuccess.jobId),
+          dedupId: `${completionSuccess.jobId}:${rating === 5 ? 'five_star_rating' : 'rating_reminder'}`,
+          copyContext: {
+            ratingText: String(rating),
+          },
+          preferServerLocalization: true,
         })
       }
 

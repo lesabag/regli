@@ -154,6 +154,28 @@ serve(async (req: Request) => {
       readDisputeEventType(notifData?.disputeEventType) ??
       readDisputeEventType(notifData?.dispute_event_type)
     const requestSource = readString(body.source) ?? readString(notifData?.source) ?? null
+    const resolvedRelatedJobId =
+      body.relatedJobId ??
+      readString(notifData?.jobId) ??
+      readString(notifData?.related_job_id) ??
+      null
+
+    if (notificationType === 'dispute_update' && (!disputeEventType || !resolvedRelatedJobId)) {
+      console.warn('[dispute-notify] skipped invalid dispute notification', {
+        notificationType,
+        targetUserId: targetUserId ?? null,
+        relatedJobId: resolvedRelatedJobId,
+        disputeEventType,
+        source: requestSource,
+      })
+      return jsonResp({
+        ok: true,
+        sent: 0,
+        notified: 0,
+        skipped: true,
+        reason: 'missing_dispute_context',
+      }, 200)
+    }
 
     if (!targetUserId && notificationType === 'dispute_update') {
       const { data: adminRows, error: adminError } = await supabaseAdmin
@@ -326,7 +348,7 @@ serve(async (req: Request) => {
       type: notificationType,
       title: effectiveTitle,
       body: effectiveBody,
-      relatedJobId: body.relatedJobId ?? readString(notifData?.jobId) ?? readString(notifData?.related_job_id) ?? null,
+      relatedJobId: resolvedRelatedJobId,
       deepLink: body.deepLink ?? readString(notifData?.deepLink) ?? readString(notifData?.deep_link) ?? null,
       dedupId: readString(notifData?.dedupId) ?? readString(notifData?.dedup_id) ?? null,
     })
