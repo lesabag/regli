@@ -32,6 +32,7 @@ import {
   getInitialSuggestedBudgetILS,
   type ProviderPricingPreferenceInput,
 } from '../lib/pricing'
+import { formatBabysitterAgeRangeLabel } from '../lib/dispatchRanking'
 import {
   getProviderCapabilitySummary,
   mergeProviderCapabilitiesSources,
@@ -2824,6 +2825,32 @@ export default function ClientDashboard({
     () => Array.from(new Set(nearbyWalkers.map((walker) => walker.id).filter((value) => value.length > 0))).sort(),
     [nearbyWalkers],
   )
+  const serviceAvailabilityChip = useMemo(() => {
+    const availableCount = nearbyWalkers.length
+
+    if (!flow.hasUserLocation || flow.screenState !== 'idle' || !checkServiceAvailable(resolvedBookingService)) {
+      return null
+    }
+
+    if (availableCount === 0) {
+      return {
+        icon: SERVICE_ICONS[resolvedBookingService],
+        text: t('booking.serviceAvailabilityChip.noneAvailable'),
+        tone: 'critical' as const,
+      }
+    }
+
+    return {
+      icon: SERVICE_ICONS[resolvedBookingService],
+      text: t(
+        availableCount === 1
+          ? 'booking.serviceAvailabilityChip.availableNow_one'
+          : 'booking.serviceAvailabilityChip.availableNow_other',
+        { count: availableCount },
+      ),
+      tone: 'positive' as const,
+    }
+  }, [flow.hasUserLocation, flow.screenState, nearbyWalkers.length, resolvedBookingService, t])
   const nearbyProviderIdsForGuidanceKey = useMemo(
     () => nearbyProviderIdsForGuidance.join(','),
     [nearbyProviderIdsForGuidance],
@@ -3932,7 +3959,6 @@ export default function ClientDashboard({
   ])
 
   const budgetGuidanceDebugSnapshotRef = useRef<string>('')
-  const budgetLikelihoodLabel = t(`booking.budgetLikelihood.${budgetGuidance.likelihood}` as never)
   const compactPaymentAuthorizationNotice = isRtl
     ? 'נאמת עכשיו · חיוב בסיום השירות!'
     : 'Verified now · Charged after service completion!'
@@ -3948,19 +3974,14 @@ export default function ClientDashboard({
           max: budgetBelowMinimumHint.max,
         })
       : t('booking.budgetRetryHint')
-    : budgetGuidance.likelihood === 'low'
-      ? t('booking.budgetLowAvailabilityHint')
-      : !budgetGuidance.fallback
-        ? (isFixedVisitBookingMode || budgetGuidance.pricingModel === 'fixed_visit')
-          ? t('booking.budgetTypicalVisitFee', {
-              min: budgetGuidance.suggestedLow,
-              max: budgetGuidance.suggestedHigh,
-            })
-          : t('booking.budgetTypicalRange', {
-              min: budgetGuidance.suggestedLow,
-              max: budgetGuidance.suggestedHigh,
-            })
-        : null
+    : !budgetGuidance.fallback
+      ? currentBudgetForGuidanceILS < budgetGuidance.suggestedLow
+        ? t('booking.budgetBelowTypicalRange', {
+            min: budgetGuidance.suggestedLow,
+            max: budgetGuidance.suggestedHigh,
+          })
+        : t('booking.budgetWithinTypicalRange')
+      : null
   const fixedVisitCompactGuidanceText = t('booking.fixedVisit.compactGuidance', {
     min: budgetGuidance.suggestedLow,
     max: budgetGuidance.suggestedHigh,
@@ -4535,7 +4556,7 @@ export default function ClientDashboard({
       <div style={dogWalkerPlannerCardStyle}>
         <div style={dogWalkerDurationOnlyRowStyle}>
           <div style={dogWalkerFieldGroupStyle}>
-            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך השירות (שעה)' : 'Duration (H)'}</label>
             <div
               style={{
                 ...babysitterDurationStepperStyle,
@@ -4576,7 +4597,7 @@ export default function ClientDashboard({
       <div style={babysitterPlannerCardStyle}>
         <div style={dogWalkerDurationOnlyRowStyle}>
           <div style={babysitterFieldGroupStyle}>
-            <label style={babysitterFieldLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+            <label style={babysitterFieldLabelStyle}>{isRtl ? 'משך השירות (שעה)' : 'Duration (H)'}</label>
             <div style={babysitterDurationStepperStyle}>
               <div style={babysitterDurationValueStyle}>{formatHoursValue(babysitterDurationValue)}</div>
               <div style={babysitterDurationStepperButtonsStyle}>
@@ -4626,18 +4647,12 @@ export default function ClientDashboard({
     }
     handleDogWalkerDurationStep(direction)
   }
-  const guidanceChipToneStyle =
-    budgetGuidance.likelihood === 'high'
-      ? budgetGuidanceChipHighStyle
-      : budgetGuidance.likelihood === 'medium'
-        ? budgetGuidanceChipMediumStyle
-        : budgetGuidanceChipLowStyle
   const budgetSliderSemanticColor =
-    budgetGuidance.likelihood === 'high'
-      ? '#10B981'
-      : budgetGuidance.likelihood === 'medium'
-        ? '#2563EB'
-        : '#F59E0B'
+    currentBudgetForGuidanceILS < budgetGuidance.suggestedLow
+      ? '#F59E0B'
+      : currentBudgetForGuidanceILS <= budgetGuidance.suggestedHigh
+        ? '#10B981'
+        : '#10B981'
   const activeBudgetRange = Math.max(activeBudgetMax - activeBudgetMin, 1)
   const activeBudgetFillPercent = Math.min(
     100,
@@ -4703,7 +4718,7 @@ export default function ClientDashboard({
       <div style={dogWalkerDurationSliderRowStyle}>
         <div style={dogWalkerDurationInlineStyle}>
           <div style={pricingMetaRowStyle}>
-            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך (ש׳)' : 'Duration (H)'}</label>
+            <label style={dogWalkerPlannerLabelStyle}>{isRtl ? 'משך השירות (שעה)' : 'Duration (H)'}</label>
           </div>
           <div
             style={{
@@ -4758,14 +4773,6 @@ export default function ClientDashboard({
         </div>
       </div>
       <div style={budgetGuidanceInlineRowStyle}>
-        <span
-          style={{
-            ...budgetGuidanceChipStyle,
-            ...guidanceChipToneStyle,
-          }}
-        >
-          {budgetLikelihoodLabel}
-        </span>
         {budgetGuidanceText && <span style={budgetGuidanceInlineTextStyle}>{budgetGuidanceText}</span>}
       </div>
     </div>
@@ -4798,14 +4805,6 @@ export default function ClientDashboard({
         </div>
       </div>
       <div style={fixedVisitGuidanceStackStyle}>
-        <span
-          style={{
-            ...budgetGuidanceChipStyle,
-            ...guidanceChipToneStyle,
-          }}
-        >
-          {budgetLikelihoodLabel}
-        </span>
         <span style={fixedVisitGuidanceTextStyle}>
           {shouldShowBudgetRetryHint ? budgetGuidanceText : fixedVisitCompactGuidanceText}
         </span>
@@ -4995,7 +4994,7 @@ export default function ClientDashboard({
             userLocation={mapUserLocation}
             showUserMarker={true}
             isSearching={isSearching}
-            nearbyWalkers={showNearbyWalkers ? nearbyWalkers : []}
+            nearbyWalkers={[]}
             bottomViewportPadding={mapBottomViewportPadding}
             onRecenter={flow.refreshLocation}
             {...(isTrackingState && flow.walkerLocation
@@ -5688,7 +5687,7 @@ export default function ClientDashboard({
         className="regli-client-dashboard-sheet"
         style={{
           ...currentSheetStyle,
-          ...(isIdleState ? { maxHeight: `${sheetMaxHeights[sheetSnap]}px`, overflow: 'hidden' } : {}),
+          ...(isIdleState ? { maxHeight: `${sheetMaxHeights[sheetSnap]}px`, overflow: 'visible' } : {}),
           transition: isDraggingSheet ? 'none' : 'max-height 280ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
         onTouchStart={handleSheetTouchStart}
@@ -5697,6 +5696,30 @@ export default function ClientDashboard({
         onTouchCancel={resetSheetDragState}
         onMouseDown={handleSheetMouseDown}
       >
+        {serviceAvailabilityChip ? (
+          <div
+            style={{
+              ...serviceAvailabilityChipWrapStyle,
+              ...(isRtl
+                ? { right: 'max(14px, env(safe-area-inset-right, 0px))' }
+                : { left: 'max(14px, env(safe-area-inset-left, 0px))' }),
+            }}
+          >
+            <div
+              style={{
+                ...serviceAvailabilityChipStyle,
+                ...(serviceAvailabilityChip.tone === 'critical'
+                  ? serviceAvailabilityChipCriticalStyle
+                  : serviceAvailabilityChipPositiveStyle),
+              }}
+            >
+              <span style={serviceAvailabilityChipIconStyle} aria-hidden="true">
+                {serviceAvailabilityChip.icon}
+              </span>
+              <span style={serviceAvailabilityChipTextStyle}>{serviceAvailabilityChip.text}</span>
+            </div>
+          </div>
+        ) : null}
         {isIdleState ? (
           <div
             style={dragHandleZoneStyle}
@@ -7373,8 +7396,8 @@ function TrackingCard({
     : providerAgeRange === '50_plus' ? t('providerProfile.ageRanges.50_plus')
     : null
   const visibleSupportedAgeRanges = providerSupportedAgeRanges
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)
+    .map((value) => formatBabysitterAgeRangeLabel(value))
+    .filter((value): value is string => !!value && value.length > 0)
   const shouldShowProviderInfo = (!!providerAgeLabel || visibleSupportedAgeRanges.length > 0)
   return (
     <div style={resolvedTrackingCardStyle}>
@@ -7894,6 +7917,55 @@ const bellWrapStyle: React.CSSProperties = {
   background: 'rgba(218, 229, 255, 0.98)',
   display: 'grid',
   placeItems: 'center',
+}
+
+const serviceAvailabilityChipWrapStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: -8,
+  transform: 'translateY(-100%)',
+  zIndex: 3,
+  pointerEvents: 'none',
+}
+
+const serviceAvailabilityChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  minHeight: 34,
+  maxWidth: 'min(72vw, 220px)',
+  padding: '8px 12px',
+  borderRadius: 999,
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
+  boxShadow: '0 10px 28px rgba(15, 23, 42, 0.14)',
+  border: '1px solid rgba(255,255,255,0.55)',
+  background: 'rgba(255,255,255,0.92)',
+  color: '#0F172A',
+}
+
+const serviceAvailabilityChipCriticalStyle: React.CSSProperties = {
+  borderColor: 'rgba(248, 113, 113, 0.32)',
+}
+
+const serviceAvailabilityChipPositiveStyle: React.CSSProperties = {
+  borderColor: 'rgba(74, 222, 128, 0.32)',
+}
+
+const serviceAvailabilityChipIconStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 20,
+  minWidth: 20,
+  fontSize: 16,
+  lineHeight: 1,
+}
+
+const serviceAvailabilityChipTextStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
 }
 
 
@@ -9385,38 +9457,6 @@ const unifiedBudgetScaleValueStyle: React.CSSProperties = {
   fontVariantNumeric: 'tabular-nums',
   minWidth: 46,
   textAlign: 'end',
-}
-
-const budgetGuidanceChipStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 20,
-  padding: '0 8px',
-  borderRadius: 999,
-  fontSize: 10.5,
-  fontWeight: 800,
-  lineHeight: 1,
-  border: '1px solid transparent',
-  whiteSpace: 'nowrap',
-}
-
-const budgetGuidanceChipLowStyle: React.CSSProperties = {
-  background: 'rgba(254, 243, 199, 0.82)',
-  borderColor: 'rgba(245, 158, 11, 0.22)',
-  color: '#B45309',
-}
-
-const budgetGuidanceChipMediumStyle: React.CSSProperties = {
-  background: 'rgba(219, 234, 254, 0.78)',
-  borderColor: 'rgba(59, 130, 246, 0.18)',
-  color: '#1D4ED8',
-}
-
-const budgetGuidanceChipHighStyle: React.CSSProperties = {
-  background: 'rgba(220, 252, 231, 0.78)',
-  borderColor: 'rgba(16, 185, 129, 0.18)',
-  color: '#047857',
 }
 
 const dogWalkerPricingStackStyle: React.CSSProperties = {

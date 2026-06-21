@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { CSSProperties } from 'react'
 import ProfileAvatar from './ProfileAvatar'
+import { formatBabysitterAgeRangeLabel } from '../lib/dispatchRanking'
 
 export interface ProviderProfileCardProps {
   avatarUrl: string | null
@@ -105,8 +106,8 @@ export default function ProviderProfileCard({
     .map((value) => getServicePreferenceLabel(value, t))
     .filter((value): value is string => !!value)
   const supportedChildrenAgeLabels = (supportedAgeRanges ?? [])
-    .map((value) => (typeof value === 'string' ? value.trim() : ''))
-    .filter((value): value is string => value.length > 0)
+    .map((value) => formatBabysitterAgeRangeLabel(value))
+    .filter((value): value is string => !!value && value.length > 0)
   const trimmedBio = shortBio?.trim() || null
   const trustBadges = [
     rating != null ? `★ ${rating.toFixed(1)}` : null,

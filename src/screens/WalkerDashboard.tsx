@@ -54,7 +54,7 @@ import {
 } from '../lib/providerCapabilities'
 import { getBookingPricingModelForService } from '../lib/serviceTypes'
 import { isLaunchEnabledProfileService } from '../lib/launchServices'
-import { normalizeAgeRangeValue } from '../lib/dispatchRanking'
+import { formatBabysitterAgeRangeLabel, normalizeAgeRangeValue, type BabysitterAgeRange } from '../lib/dispatchRanking'
 import { getProviderEarnings, logPayoutSummary } from '../lib/payoutTruth'
 import { hasProviderIssue } from '../utils/completionReview'
 
@@ -994,7 +994,7 @@ export default function WalkerDashboard({
     return Array.isArray(sa?.supportedAgeRanges)
       ? (sa.supportedAgeRanges as unknown[])
           .map((range) => normalizeAgeRangeValue(range))
-          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+          .filter((range): range is BabysitterAgeRange => range !== null)
       : []
   })
   const [provSitterExp, setProvSitterExp] = useState<number>(() => {
@@ -1054,7 +1054,7 @@ export default function WalkerDashboard({
     const origSitterAges = Array.isArray(sitterSa.supportedAgeRanges)
       ? (sitterSa.supportedAgeRanges as unknown[])
           .map((range) => normalizeAgeRangeValue(range))
-          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+          .filter((range): range is BabysitterAgeRange => range !== null)
       : []
     const origSitterExp = typeof sitterSa.experienceYears === 'number' ? (sitterSa.experienceYears as number) : 0
     const origSitterNotes = typeof sitterSa.notes === 'string' ? (sitterSa.notes as string) : ''
@@ -1367,7 +1367,7 @@ export default function WalkerDashboard({
       Array.isArray(sitterAttrs.supportedAgeRanges)
         ? (sitterAttrs.supportedAgeRanges as unknown[])
             .map((range) => normalizeAgeRangeValue(range))
-            .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+            .filter((range): range is BabysitterAgeRange => range !== null)
         : [],
     )
     setProvSitterExp(typeof sitterAttrs.experienceYears === 'number' ? (sitterAttrs.experienceYears as number) : 0)
@@ -1423,7 +1423,7 @@ export default function WalkerDashboard({
         Array.isArray(sitterAttrs.supportedAgeRanges)
           ? (sitterAttrs.supportedAgeRanges as unknown[])
               .map((range) => normalizeAgeRangeValue(range))
-              .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+              .filter((range): range is BabysitterAgeRange => range !== null)
           : [],
       )
       setProvSitterExp(typeof sitterAttrs.experienceYears === 'number' ? (sitterAttrs.experienceYears as number) : 0)
@@ -1752,7 +1752,7 @@ export default function WalkerDashboard({
         ...(getCapabilityScope<Record<string, unknown>>(existing, 'baby_sitter') ?? {}),
         supportedAgeRanges: provSitterAges
           .map((range) => normalizeAgeRangeValue(range))
-          .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null),
+          .filter((range): range is BabysitterAgeRange => range !== null),
         experienceYears: provSitterExp,
         notes: provSitterNotes.trim() || null,
       }
@@ -4964,15 +4964,16 @@ export default function WalkerDashboard({
                           </div>
                         )}
 
+                        <div style={capSectionHintStyle}>
+                          {isHebrew ? 'ⓘ ללא בחירה = כל האפשרויות' : 'ⓘ Leave empty to accept all'}
+                        </div>
+
                         {activeCapabilitySection === 'dog_walker' && profileServiceTypes.includes('dog_walker') && (
                           <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
-                              <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'שירות כלבים' : 'Dog walking'}
-                              </div>
 
                               <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'גדלי כלבים (ללא בחירה מסמל זמינות לכלל הגדלים)' : 'Dog sizes'}</div>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'בחר גודל כלב עבור השירות' : 'Select dog size you can care for'}</div>
                                 <div style={capChipRowStyle}>
                                   {(['S', 'M', 'L', 'XL'] as const).map((size) => {
                                     const sel = provDogSizes.includes(size)
@@ -4998,16 +4999,13 @@ export default function WalkerDashboard({
                         {activeCapabilitySection === 'baby_sitter' && profileServiceTypes.includes('baby_sitter') && (
                           <div style={capSectionCardStyle}>
                             <div style={capSectionStyle}>
-                              <div style={capSectionLabelStyle}>
-                                {isHebrew ? 'העדפת גילאים שלך' : 'Babysitting'}
-                              </div>
 
                               <div style={capFieldStyle}>
-                                <div style={capFieldLabelStyle}>{isHebrew ? 'טווחי גילאים' : 'Age ranges'}</div>
+                                <div style={capFieldLabelStyle}>{isHebrew ? 'בחר טווח גילאים עבור השירות' : 'Select ages you can care for'}</div>
                                 <div style={capChipRowStyle}>
-                                  {(['1-2', '2-4', '5-7', '7+'] as const).map((range) => {
+                                  {(['0-2', '3-5', '6-8', '9+'] as const).map((range) => {
                                     const sel = provSitterAges.includes(range)
-                                    const label = range === '1-2' ? '1–2' : range === '2-4' ? '2–4' : range === '5-7' ? '5–7' : '7+'
+                                    const label = formatBabysitterAgeRangeLabel(range) ?? range
                                     return (
                                       <button
                                         key={range}
@@ -9265,6 +9263,13 @@ const capSelectorRowStyle: React.CSSProperties = {
   paddingBottom: 2,
 }
 
+const capSectionHintStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#64748B',
+  lineHeight: 1.4,
+}
+
 const capSelectorPillStyle: React.CSSProperties = {
   appearance: 'none',
   border: '1px solid rgba(145, 164, 196, 0.20)',
@@ -9300,13 +9305,6 @@ const capSectionCardStyle: React.CSSProperties = {
 const capSectionStyle: React.CSSProperties = {
   display: 'grid',
   gap: 12,
-}
-
-const capSectionLabelStyle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 800,
-  color: '#5B7CFA',
-  textTransform: 'uppercase',
 }
 
 const capFieldStyle: React.CSSProperties = {

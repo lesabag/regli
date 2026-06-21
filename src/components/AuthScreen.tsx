@@ -10,6 +10,7 @@ import {
   type ProfileServiceType,
 } from '../lib/profileServiceTypes'
 import { isLaunchEnabledProfileService } from '../lib/launchServices'
+import { type BabysitterAgeRange, formatBabysitterAgeRangeLabel } from '../lib/dispatchRanking'
 import i18n, { LANGUAGE_STORAGE_KEY, normalizeSupportedLanguage, type SupportedLanguage } from '../i18n'
 import welcomeHeroImage from '../assets/onboarding/welcom-hero.png'
 import providerCharacterImage from '../assets/onboarding/provider-character.png'
@@ -88,7 +89,7 @@ type ServiceOption = {
 
 type DogSize = 'S' | 'M' | 'L'
 type EnergyLevel = 'low' | 'medium' | 'high'
-type AgeRange = '1-2' | '2-4' | '5-7' | '7+'
+type AgeRange = BabysitterAgeRange
 type ProviderAgeRange = '14_17' | '18_24' | '25_34' | '35_49' | '50_plus'
 type ProviderLanguage = 'hebrew' | 'english' | 'russian' | 'arabic' | 'french'
 type ProviderDetailsSection = 'dog' | 'babysitter'
@@ -132,10 +133,10 @@ const ENERGY_OPTIONS: { value: EnergyLevel; label: string }[] = [
 ]
 
 const AGE_RANGE_OPTIONS: { value: AgeRange; label: string }[] = [
-  { value: '1-2', label: '1–2' },
-  { value: '2-4', label: '2–4' },
-  { value: '5-7', label: '5–7' },
-  { value: '7+', label: '7+' },
+  { value: '0-2', label: formatBabysitterAgeRangeLabel('0-2') ?? '0–2' },
+  { value: '3-5', label: formatBabysitterAgeRangeLabel('3-5') ?? '3–5' },
+  { value: '6-8', label: formatBabysitterAgeRangeLabel('6-8') ?? '6–8' },
+  { value: '9+', label: formatBabysitterAgeRangeLabel('9+') ?? '9+' },
 ]
 
 const PROVIDER_SIGNUP_STEPS: SignupStep[] = ['welcome', 'role', 'service', 'location', 'details', 'auth']

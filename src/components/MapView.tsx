@@ -40,6 +40,9 @@ interface MapViewProps {
   onRecenter?: () => void
 }
 
+const CLIENT_IDLE_CAMERA_ZOOM = 17
+const VISIBLE_MAP_CENTER_OFFSET_RATIO = 0.62
+
 function RecenterControl({
   userLocation,
   bottomViewportPadding,
@@ -54,12 +57,15 @@ function RecenterControl({
   const handleClick = useCallback(() => {
     if (onRecenter) onRecenter()
 
-    const projectedPoint = map.project(userLocation, 15)
+    const projectedPoint = map.project(userLocation, CLIENT_IDLE_CAMERA_ZOOM)
     const adjustedCenter = map.unproject(
-      L.point(projectedPoint.x, projectedPoint.y + Math.max(0, bottomViewportPadding) / 2),
-      15,
+      L.point(
+        projectedPoint.x,
+        projectedPoint.y + Math.max(0, bottomViewportPadding) * VISIBLE_MAP_CENTER_OFFSET_RATIO,
+      ),
+      CLIENT_IDLE_CAMERA_ZOOM,
     )
-    map.flyTo([adjustedCenter.lat, adjustedCenter.lng], 15, {
+    map.flyTo([adjustedCenter.lat, adjustedCenter.lng], CLIENT_IDLE_CAMERA_ZOOM, {
       animate: true,
       duration: 0.6,
     })
@@ -110,7 +116,10 @@ function FitAndFollow({
   ): [number, number] => {
     const projectedPoint = map.project(target, zoom)
     const adjustedCenter = map.unproject(
-      L.point(projectedPoint.x, projectedPoint.y + Math.max(0, verticalPadding) / 2),
+      L.point(
+        projectedPoint.x,
+        projectedPoint.y + Math.max(0, verticalPadding) * VISIBLE_MAP_CENTER_OFFSET_RATIO,
+      ),
       zoom,
     )
     return [adjustedCenter.lat, adjustedCenter.lng]
@@ -139,10 +148,14 @@ function FitAndFollow({
     if (hasInitializedRef.current) return
     if (userLocation[0] === 32.0853 && userLocation[1] === 34.7818) return
     hasInitializedRef.current = true
-    map.flyTo(getViewportAdjustedCenter(userLocation, bottomViewportPadding, 15), 15, {
+    map.flyTo(
+      getViewportAdjustedCenter(userLocation, bottomViewportPadding, CLIENT_IDLE_CAMERA_ZOOM),
+      CLIENT_IDLE_CAMERA_ZOOM,
+      {
       animate: true,
       duration: 0.8,
-    })
+      },
+    )
   }, [bottomViewportPadding, map, userLocation])
 
   useEffect(() => {
@@ -177,12 +190,12 @@ function FitAndFollow({
 
     const bounds = L.latLngBounds(points)
     hasFittedNearbyRef.current = true
-    map.fitBounds(bounds, {
-      paddingTopLeft: [40, 40],
-      paddingBottomRight: [40, Math.max(40, bottomViewportPadding)],
-      maxZoom: 14,
-      animate: true,
-    })
+      map.fitBounds(bounds, {
+        paddingTopLeft: [40, 40],
+        paddingBottomRight: [40, Math.max(40, bottomViewportPadding)],
+        maxZoom: 15,
+        animate: true,
+      })
   }, [bottomViewportPadding, nearbyWalkers, userLocation, walkerLocation, map])
 
   useEffect(() => {
@@ -1034,7 +1047,7 @@ export default function MapView({
     <div style={mapShellStyle}>
       <MapContainer
         center={userLocation}
-        zoom={15}
+        zoom={CLIENT_IDLE_CAMERA_ZOOM}
         zoomControl={false}
         style={mapContainerStyle}
         className={isSearchingMapMode ? 'searching-map-mode' : undefined}

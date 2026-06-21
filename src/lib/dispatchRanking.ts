@@ -50,11 +50,19 @@ export type RankedWalkerCandidate = {
   attributeMatches: string[]
 }
 
-const LEGACY_TO_NORMALIZED_AGE_RANGE: Record<string, '1-2' | '2-4' | '5-7' | '7+'> = {
-  '0-2': '1-2',
-  '3-5': '2-4',
-  '6-10': '5-7',
-  '11+': '7+',
+export type BabysitterAgeRange = '0-2' | '3-5' | '6-8' | '9+'
+
+const LEGACY_TO_NORMALIZED_AGE_RANGE: Record<string, BabysitterAgeRange> = {
+  '1-2': '0-2',
+  '2-4': '3-5',
+  '5-7': '6-8',
+  '7+': '9+',
+  '0-2': '0-2',
+  '3-5': '3-5',
+  '6-8': '6-8',
+  '9+': '9+',
+  '6-10': '6-8',
+  '11+': '9+',
 }
 
 const DISTANCE_WEIGHT = 0.55
@@ -76,12 +84,14 @@ const ATTR_SITTER_FULL_BONUS = 0.05
 const ATTR_SITTER_MISMATCH_PENALTY = -0.02
 
 const AGE_RANGE_MAP: Record<string, [number, number]> = {
+  '0-2': [0, 2],
+  '3-5': [3, 5],
+  '6-8': [6, 8],
+  '9+': [9, 120],
   '1-2': [1, 2],
   '2-4': [2, 4],
   '5-7': [5, 7],
   '7+': [7, 120],
-  '0-2': [0, 2],
-  '3-5': [3, 5],
   '6-10': [6, 10],
   '11+': [11, 120],
 }
@@ -199,13 +209,22 @@ export function evaluateDogSizeCompatibility(
   }
 }
 
-export function normalizeAgeRangeValue(value: unknown): '1-2' | '2-4' | '5-7' | '7+' | null {
+export function normalizeAgeRangeValue(value: unknown): BabysitterAgeRange | null {
   if (typeof value !== 'string') return null
   const normalized = value.trim()
-  if (normalized === '1-2' || normalized === '2-4' || normalized === '5-7' || normalized === '7+') {
+  if (normalized === '0-2' || normalized === '3-5' || normalized === '6-8' || normalized === '9+') {
     return normalized
   }
   return LEGACY_TO_NORMALIZED_AGE_RANGE[normalized] ?? null
+}
+
+export function formatBabysitterAgeRangeLabel(value: unknown): string | null {
+  const normalized = normalizeAgeRangeValue(value)
+  if (!normalized) return null
+  if (normalized === '0-2') return '0–2'
+  if (normalized === '3-5') return '3–5'
+  if (normalized === '6-8') return '6–8'
+  return '9+'
 }
 
 function ageInRange(age: number, range: string): boolean {
@@ -301,7 +320,7 @@ function computeBabySitterAttributeScore(
   const providerRanges = Array.isArray(providerSitter.supportedAgeRanges)
     ? (providerSitter.supportedAgeRanges as unknown[])
         .map((range) => normalizeAgeRangeValue(range))
-        .filter((range): range is '1-2' | '2-4' | '5-7' | '7+' => range !== null)
+        .filter((range): range is BabysitterAgeRange => range !== null)
     : null
 
   if (!childrenAges || childrenAges.length === 0 || !providerRanges || providerRanges.length === 0) {
@@ -310,7 +329,7 @@ function computeBabySitterAttributeScore(
 
   const numericAges = childrenAges
     .map((a) => typeof a === 'number' ? a : typeof a === 'string' ? parseInt(a, 10) : NaN)
-    .filter((a) => Number.isFinite(a))
+    .filter((a): a is number => Number.isFinite(a))
 
   if (numericAges.length === 0) {
     return { attributeScore: 0, attributeReason: 'neutral_missing_attributes', attributeMatches: [] }

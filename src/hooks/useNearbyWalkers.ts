@@ -90,6 +90,7 @@ export function useNearbyWalkers(
   const bearingRef = useRef<Map<string, BearingEntry>>(new Map())
   const availabilityByProviderRef = useRef<Map<string, ProviderAvailabilityRow[]>>(new Map())
   const radiusByProviderRef = useRef<Map<string, number | null>>(new Map())
+  const realtimeRefetchTimeoutRef = useRef<number | null>(null)
 
   const removeWalker = useCallback((id: string) => {
     prevPosRef.current.delete(id)
@@ -364,6 +365,10 @@ export function useNearbyWalkers(
     if (!enabled) {
       availabilityByProviderRef.current = new Map()
       radiusByProviderRef.current = new Map()
+      if (realtimeRefetchTimeoutRef.current != null) {
+        window.clearTimeout(realtimeRefetchTimeoutRef.current)
+        realtimeRefetchTimeoutRef.current = null
+      }
       setWalkers([])
       return
     }
@@ -396,12 +401,23 @@ export function useNearbyWalkers(
             avatar_url?: string | null
           }
           applyRealtimeUpdate(row)
+          if (realtimeRefetchTimeoutRef.current != null) {
+            window.clearTimeout(realtimeRefetchTimeoutRef.current)
+          }
+          realtimeRefetchTimeoutRef.current = window.setTimeout(() => {
+            realtimeRefetchTimeoutRef.current = null
+            void fetchNearby()
+          }, 250)
         },
       )
       .subscribe()
 
     return () => {
       clearInterval(pollId)
+      if (realtimeRefetchTimeoutRef.current != null) {
+        window.clearTimeout(realtimeRefetchTimeoutRef.current)
+        realtimeRefetchTimeoutRef.current = null
+      }
       supabase.removeChannel(channel)
     }
   }, [enabled, fetchNearby, applyRealtimeUpdate, serviceTypeFilter])
