@@ -16,7 +16,6 @@ import welcomeHeroImage from '../assets/onboarding/welcom-hero.png'
 import providerCharacterImage from '../assets/onboarding/provider-character.png'
 import customerCharacterImage from '../assets/onboarding/customer-character.png'
 import mapPreviewImage from '../assets/onboarding/map-preview.png'
-import authIllustrationImage from '../assets/onboarding/auth-illustration.png'
 import serviceDogWalkingImage from '../assets/onboarding/service-dog-walking.png'
 
 const onboardingBrandIconSrc = '/regli-app-icon-1024.png'
@@ -258,6 +257,9 @@ export default function AuthScreen({
   const [submitting, setSubmitting] = useState(false)
   const [googleSubmitting, setGoogleSubmitting] = useState(false)
   const [appleSubmitting, setAppleSubmitting] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState<number>(() => (
+    typeof window !== 'undefined' ? Math.round(window.visualViewport?.height ?? window.innerHeight) : 844
+  ))
   const [acceptedTerms, setAcceptedTerms] = useState(false)
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false)
   const [openLegalDocument, setOpenLegalDocument] = useState<LegalDocumentType | null>(null)
@@ -369,7 +371,7 @@ export default function AuthScreen({
     providerAdultNotice: isHebrew
       ? 'החשבון צריך להיות בבעלות אדם בוגר האחראי לתשלומים ולהסכמים המשפטיים.'
       : 'The account owner must be an adult responsible for payouts and legal agreements.',
-    useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Use email instead',
+    useEmailInstead: isHebrew ? 'המשך עם אימייל' : 'Continue with Email',
     fullName: isHebrew ? 'שם מלא' : 'Full name',
     fullNamePlaceholder: isHebrew ? 'השם שיופיע באפליקציה' : 'Your full name',
     email: isHebrew ? 'אימייל' : 'Email',
@@ -560,6 +562,26 @@ export default function AuthScreen({
       document.body.style.height = previousBodyHeight
       document.documentElement.style.overflow = previousHtmlOverflow
       document.documentElement.style.height = previousHtmlHeight
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const updateViewportHeight = () => {
+      const nextHeight = window.visualViewport?.height ?? window.innerHeight
+      if (Number.isFinite(nextHeight) && nextHeight > 0) {
+        setViewportHeight(Math.round(nextHeight))
+      }
+    }
+
+    updateViewportHeight()
+    window.addEventListener('resize', updateViewportHeight)
+    window.visualViewport?.addEventListener('resize', updateViewportHeight)
+
+    return () => {
+      window.removeEventListener('resize', updateViewportHeight)
+      window.visualViewport?.removeEventListener('resize', updateViewportHeight)
     }
   }, [])
 
@@ -849,7 +871,7 @@ export default function AuthScreen({
   }
 
   const renderSocialAuthButtons = () => (
-    <div style={socialStackStyle}>
+    <div style={{ ...socialStackStyle, ...(shouldUseCompactAuthLayout ? socialStackCompactStyle : null) }}>
       <button
         type="button"
         onClick={() => {
@@ -913,7 +935,9 @@ export default function AuthScreen({
                 ? copy.createYourAccount
                 : copy.welcomeTitle
   const shouldShowEmailFields = !authenticatedOnboarding && currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
-  const cardIsScrollable = currentStep !== 'auth'
+  const isShortViewport = viewportHeight <= 760
+  const shouldUseCompactAuthLayout = isCreateAccountStep && (shouldShowEmailFields || isShortViewport)
+  const cardIsScrollable = currentStep !== 'welcome' && currentStep !== 'auth'
   const shouldShowWelcomeContent = !authenticatedOnboarding && currentStep === 'welcome'
   const shouldShowLanguageSwitcher = shouldShowWelcomeContent
   const hiddenLanguageSpacerStyle = shouldShowLanguageSwitcher ? heroTopSpacerStyle : compactHeroTopSpacerStyle
@@ -1552,8 +1576,8 @@ export default function AuthScreen({
           )}
 
           {isCreateAccountStep && (
-            <div style={{ ...authStageStyle, ...(shouldShowEmailFields ? authStageExpandedEmailStyle : null) }}>
-              <div style={{ ...authTitleStackStyle, ...(shouldShowEmailFields ? authTitleStackCompactStyle : null) }}>
+            <div style={{ ...authStageStyle, ...(shouldUseCompactAuthLayout ? authStageExpandedEmailStyle : null), ...(isShortViewport ? authStageShortViewportStyle : null) }}>
+              <div style={{ ...authTitleStackStyle, ...(shouldUseCompactAuthLayout ? authTitleStackCompactStyle : null) }}>
                 <div style={{ ...eyebrowStyle, textAlign }}>
                   {authenticatedOnboarding
                     ? (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)
@@ -1571,24 +1595,14 @@ export default function AuthScreen({
                 </p>
               </div>
 
-              <div style={{ ...authIllustrationCardStyle, ...(shouldShowEmailFields ? authIllustrationCardCompactStyle : null) }}>
-                <img
-                  src={authIllustrationImage}
-                  alt={isHebrew ? 'איור אבטחת חשבון' : 'Account security illustration'}
-                  loading="lazy"
-                  decoding="async"
-                  style={{ ...authIllustrationImageStyle, ...(shouldShowEmailFields ? authIllustrationImageCompactStyle : null) }}
-                />
-              </div>
-
-              <div style={{ ...authCardStackStyle, ...(shouldShowEmailFields ? authCardStackCompactStyle : null) }}>
+              <div style={{ ...authCardStackStyle, ...(shouldUseCompactAuthLayout ? authCardStackCompactStyle : null) }}>
                 {shouldShowLegalAcceptance && (
-                  <div style={legalCardStyle}>
-                    <div style={{ ...legalIntroStyle, textAlign }}>
+                  <div style={{ ...legalCardStyle, ...(shouldUseCompactAuthLayout ? legalCardCompactStyle : null) }}>
+                    <div style={{ ...legalIntroStyle, ...(shouldUseCompactAuthLayout ? legalIntroCompactStyle : null), textAlign }}>
                       {isProvider ? copy.legalIntroProvider : copy.legalIntroClient}
                     </div>
 
-                    <div style={legalAgreementListStyle}>
+                    <div style={{ ...legalAgreementListStyle, ...(shouldUseCompactAuthLayout ? legalAgreementListCompactStyle : null) }}>
                       <label style={legalCheckboxRowStyle}>
                         <input
                           type="checkbox"
@@ -1596,7 +1610,7 @@ export default function AuthScreen({
                           onChange={(event) => setAcceptedTerms(event.target.checked)}
                           style={legalCheckboxInputStyle}
                         />
-                        <span style={legalCheckboxTextStyle}>
+                        <span style={{ ...legalCheckboxTextStyle, ...(shouldUseCompactAuthLayout ? legalCheckboxTextCompactStyle : null) }}>
                           {copy.agreeTermsPrefix}
                           <button
                             type="button"
@@ -1615,7 +1629,7 @@ export default function AuthScreen({
                           onChange={(event) => setAcceptedPrivacy(event.target.checked)}
                           style={legalCheckboxInputStyle}
                         />
-                        <span style={legalCheckboxTextStyle}>
+                        <span style={{ ...legalCheckboxTextStyle, ...(shouldUseCompactAuthLayout ? legalCheckboxTextCompactStyle : null) }}>
                           {copy.agreePrivacyPrefix}
                           <button
                             type="button"
@@ -1631,9 +1645,9 @@ export default function AuthScreen({
                         <>
                           <div style={legalStaticRowStyle}>
                             <span style={legalStaticCheckStyle}>☑</span>
-                            <span style={legalCheckboxTextStyle}>{copy.accountOwnerNotice}</span>
+                            <span style={{ ...legalCheckboxTextStyle, ...(shouldUseCompactAuthLayout ? legalCheckboxTextCompactStyle : null) }}>{copy.accountOwnerNotice}</span>
                           </div>
-                          <div style={{ ...legalHelperTextStyle, textAlign }}>
+                          <div style={{ ...legalHelperTextStyle, ...(shouldUseCompactAuthLayout ? legalHelperTextCompactStyle : null), textAlign }}>
                             {copy.providerAdultNotice}
                           </div>
                         </>
@@ -1642,10 +1656,10 @@ export default function AuthScreen({
                   </div>
                 )}
 
-                {!authenticatedOnboarding && mode === 'signup' && renderSocialAuthButtons()}
+                {!authenticatedOnboarding && renderSocialAuthButtons()}
 
                 {!authenticatedOnboarding ? (
-                  <div style={{ ...authEmailRevealAreaStyle, ...(shouldShowEmailFields ? authEmailRevealAreaCompactStyle : null) }}>
+                  <div style={{ ...authEmailRevealAreaStyle, ...(shouldUseCompactAuthLayout ? authEmailRevealAreaCompactStyle : null) }}>
                     {!shouldShowEmailFields ? (
                       <button
                         type="button"
@@ -1655,21 +1669,21 @@ export default function AuthScreen({
                         {copy.useEmailInstead}
                       </button>
                     ) : (
-                      <div style={{ ...authEmailFieldsStackStyle, ...(shouldShowEmailFields ? authEmailFieldsStackCompactStyle : null) }}>
+                      <div style={{ ...authEmailFieldsStackStyle, ...(shouldUseCompactAuthLayout ? authEmailFieldsStackCompactStyle : null) }}>
                         {mode === 'signup' && (
-                          <div style={{ ...fieldBlockStyle, ...(shouldShowEmailFields ? fieldBlockCompactStyle : null) }}>
+                          <div style={{ ...fieldBlockStyle, ...(shouldUseCompactAuthLayout ? fieldBlockCompactStyle : null) }}>
                             <label style={{ ...labelStyle, textAlign }}>{copy.fullName}</label>
                             <input
                               value={fullName}
                               onChange={(event) => setFullName(event.target.value)}
                               placeholder={copy.fullNamePlaceholder}
                               dir={direction}
-                              style={{ ...inputStyle, ...(shouldShowEmailFields ? inputCompactStyle : null), textAlign }}
+                              style={{ ...inputStyle, ...(shouldUseCompactAuthLayout ? inputCompactStyle : null), textAlign }}
                             />
                           </div>
                         )}
 
-                        <div style={{ ...fieldBlockStyle, ...(shouldShowEmailFields ? fieldBlockCompactStyle : null) }}>
+                        <div style={{ ...fieldBlockStyle, ...(shouldUseCompactAuthLayout ? fieldBlockCompactStyle : null) }}>
                           <label style={{ ...labelStyle, textAlign }}>{copy.email}</label>
                           <input
                             value={email}
@@ -1678,7 +1692,7 @@ export default function AuthScreen({
                             type="email"
                             autoComplete="email"
                             dir={direction}
-                            style={{ ...inputStyle, ...(shouldShowEmailFields ? inputCompactStyle : null), textAlign }}
+                            style={{ ...inputStyle, ...(shouldUseCompactAuthLayout ? inputCompactStyle : null), textAlign }}
                           />
                         </div>
 
@@ -1703,11 +1717,11 @@ export default function AuthScreen({
           </div>
         </div>
 
-        <div style={{ ...footerStyle, ...(shouldShowEmailFields ? footerCompactStyle : null) }}>
+        <div style={{ ...footerStyle, ...(shouldUseCompactAuthLayout ? footerCompactStyle : null) }}>
           <div
             style={{
               ...buttonRowStyle,
-              ...(shouldShowEmailFields ? buttonRowCompactStyle : null),
+              ...(shouldUseCompactAuthLayout ? buttonRowCompactStyle : null),
               ...(shouldShowWelcomeContent ? welcomeFooterButtonRowStyle : null),
             }}
           >
@@ -2306,6 +2320,10 @@ const socialStackStyle: CSSProperties = {
   gap: 18,
 }
 
+const socialStackCompactStyle: CSSProperties = {
+  gap: 8,
+}
+
 const socialButtonStyle: CSSProperties = {
   position: 'relative',
   width: '100%',
@@ -2834,6 +2852,11 @@ const legalCardStyle: CSSProperties = {
   justifyItems: 'center',
 }
 
+const legalCardCompactStyle: CSSProperties = {
+  padding: '11px 12px',
+  gap: 8,
+}
+
 const legalIntroStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.35,
@@ -2841,11 +2864,20 @@ const legalIntroStyle: CSSProperties = {
   maxWidth: 280,
 }
 
+const legalIntroCompactStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.3,
+}
+
 const legalAgreementListStyle: CSSProperties = {
   display: 'grid',
   width: '100%',
   gap: 10,
   justifyItems: 'center',
+}
+
+const legalAgreementListCompactStyle: CSSProperties = {
+  gap: 8,
 }
 
 const legalCheckboxRowStyle: CSSProperties = {
@@ -2869,6 +2901,11 @@ const legalCheckboxTextStyle: CSSProperties = {
   fontSize: 12.5,
   lineHeight: 1.35,
   color: '#0F172A',
+}
+
+const legalCheckboxTextCompactStyle: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.3,
 }
 
 const legalLinkStyle: CSSProperties = {
@@ -2904,6 +2941,11 @@ const legalHelperTextStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.35,
   color: '#3152C8',
+}
+
+const legalHelperTextCompactStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.3,
 }
 
 const fieldBlockStyle: CSSProperties = {
@@ -2959,7 +3001,13 @@ const authStageStyle: CSSProperties = {
 }
 
 const authStageExpandedEmailStyle: CSSProperties = {
-  gap: 8,
+  gap: 6,
+}
+
+const authStageShortViewportStyle: CSSProperties = {
+  gap: 6,
+  alignContent: 'start',
+  placeSelf: 'stretch',
 }
 
 const authTitleStackStyle: CSSProperties = {
@@ -2973,39 +3021,6 @@ const authTitleStackCompactStyle: CSSProperties = {
   gap: 3,
 }
 
-const authIllustrationCardStyle: CSSProperties = {
-  width: '100%',
-  minHeight: 124,
-  borderRadius: 24,
-  border: ONBOARDING_ILLUSTRATION_BORDER,
-  background: ONBOARDING_ILLUSTRATION_BG,
-  display: 'grid',
-  placeItems: 'center',
-  overflow: 'hidden',
-  padding: '10px 18px',
-  boxShadow: ONBOARDING_ILLUSTRATION_SHADOW,
-}
-
-const authIllustrationCardCompactStyle: CSSProperties = {
-  minHeight: 64,
-  padding: '2px 12px 0',
-}
-
-const authIllustrationImageStyle: CSSProperties = {
-  width: '100%',
-  height: '100%',
-  maxHeight: 132,
-  objectFit: 'contain',
-  objectPosition: 'center',
-  display: 'block',
-  filter: 'drop-shadow(0 10px 18px rgba(45, 68, 126, 0.08))',
-}
-
-const authIllustrationImageCompactStyle: CSSProperties = {
-  width: '72%',
-  maxHeight: 56,
-}
-
 const authCardStackStyle: CSSProperties = {
   width: '100%',
   display: 'grid',
@@ -3016,7 +3031,7 @@ const authCardStackStyle: CSSProperties = {
 }
 
 const authCardStackCompactStyle: CSSProperties = {
-  gap: 8,
+  gap: 6,
   paddingBottom: 0,
 }
 
