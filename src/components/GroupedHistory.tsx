@@ -199,7 +199,7 @@ export default function GroupedHistory(props: GroupedHistoryProps) {
             <div
               style={{
                 ...styles.groupContentWrap,
-                maxHeight: (expandedGroups[group.key] ?? group.defaultExpanded) ? `${Math.max(240, group.items.length * (compact ? 170 : 220))}px` : '0px',
+                maxHeight: (expandedGroups[group.key] ?? group.defaultExpanded) ? `${Math.max(320, group.items.length * (compact ? 240 : 280))}px` : '0px',
                 opacity: (expandedGroups[group.key] ?? group.defaultExpanded) ? 1 : 0,
               }}
             >
@@ -374,13 +374,14 @@ function SwipeHistoryRow({
     onDetails()
   }, [onDetails])
   const { i18n } = useTranslation()
+  const isHebrew = i18n.resolvedLanguage === 'he'
 
   const status = formatStatus(item.status)
   const title = getTitle(item)
   const itemId = getItemId(item)
-  const dateLabel = getDisplayDate(item)
+  const dateLabel = getDisplayDate(item, isHebrew)
   const durationLabel = getDuration(item)
-  const dogCountLabel = getDogCountMetaLabel(item, i18n.resolvedLanguage === 'he')
+  const dogCountLabel = getDogCountMetaLabel(item, isHebrew)
   const priceLabel = getPrice(item)
   const tipLabel = getTipLabel(item)
   const counterpartLabel = getCounterpart(item, role)
@@ -757,23 +758,23 @@ function getTipLabel(item: HistoryItem): string {
   return `Tipped ₪${raw}`
 }
 
-function getDisplayDate(item: HistoryItem): string {
+function getDisplayDate(item: HistoryItem, isHebrew: boolean): string {
   const date = getDateValue(item)
-  if (!date) return 'Recently'
+  if (!date) return isHebrew ? 'לאחרונה' : 'Recently'
 
   const today = startOfDay(new Date())
   const itemDay = startOfDay(date)
   const diffDays = Math.round((today.getTime() - itemDay.getTime()) / (1000 * 60 * 60 * 24))
 
   if (diffDays === 0) {
-    return `Today · ${formatTime(date)}`
+    return `${isHebrew ? 'היום' : 'Today'} · ${formatTime(date, isHebrew)}`
   }
 
   if (diffDays === 1) {
-    return `Yesterday · ${formatTime(date)}`
+    return `${isHebrew ? 'אתמול' : 'Yesterday'} · ${formatTime(date, isHebrew)}`
   }
 
-  return `${formatShortDate(date)} · ${formatTime(date)}`
+  return `${formatShortDate(date, isHebrew)} · ${formatTime(date, isHebrew)}`
 }
 
 function getDateValue(item: HistoryItem): Date | null {
@@ -839,17 +840,18 @@ function sanitizeString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function formatShortDate(date: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
+function formatShortDate(date: Date, isHebrew: boolean): string {
+  return new Intl.DateTimeFormat(isHebrew ? 'he-IL' : 'en-US', {
     month: 'short',
     day: 'numeric',
   }).format(date)
 }
 
-function formatTime(date: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
+function formatTime(date: Date, isHebrew: boolean): string {
+  return new Intl.DateTimeFormat(isHebrew ? 'he-IL' : 'en-US', {
     hour: 'numeric',
     minute: '2-digit',
+    hour12: !isHebrew,
   }).format(date)
 }
 
@@ -1500,95 +1502,95 @@ const styles: Record<string, React.CSSProperties> = {
 
 const compactStyles: Partial<Record<string, React.CSSProperties>> = {
   root: {
-    gap: 14,
+    gap: 12,
   },
   groupSection: {
-    gap: 8,
+    gap: 7,
   },
   groupList: {
-    gap: 8,
+    gap: 7,
   },
   rowShell: {
-    borderRadius: 18,
+    borderRadius: 16,
   },
   actionsRail: {
-    padding: 6,
+    padding: 5,
   },
   cardButton: {
-    borderRadius: 18,
+    borderRadius: 16,
   },
   card: {
-    gap: 10,
-    padding: 12,
-    borderRadius: 18,
+    gap: 8,
+    padding: '10px 11px',
+    borderRadius: 16,
   },
   cardTopRow: {
-    gap: 8,
+    gap: 7,
   },
   titleText: {
-    fontSize: 15,
+    fontSize: 14,
   },
   metaRow: {
-    fontSize: 11.5,
-    gap: 5,
-  },
-  counterpartRow: {
-    gap: 6,
-  },
-  counterpartValue: {
-    fontSize: 12.5,
-  },
-  miniMapCard: {
-    gridTemplateColumns: '72px 1fr',
-    gap: 9,
-    minHeight: 62,
-    borderRadius: 14,
-  },
-  miniMapBackdrop: {
-    minHeight: 62,
-  },
-  locationPin: {
-    left: 38,
-    top: 24,
-    width: 11,
-    height: 11,
-    boxShadow: '0 0 0 4px rgba(255, 210, 74, 0.10)',
-  },
-  miniMapInfo: {
-    padding: '8px 10px 8px 0',
+    fontSize: 11,
     gap: 4,
   },
-  miniMapTopRow: {
+  counterpartRow: {
     gap: 5,
   },
-  miniMapLocationText: {
+  counterpartValue: {
     fontSize: 12,
-    lineHeight: 1.28,
+  },
+  miniMapCard: {
+    gridTemplateColumns: '64px 1fr',
+    gap: 8,
+    minHeight: 56,
+    borderRadius: 13,
+  },
+  miniMapBackdrop: {
+    minHeight: 56,
+  },
+  locationPin: {
+    left: 34,
+    top: 22,
+    width: 10,
+    height: 10,
+    boxShadow: '0 0 0 3px rgba(255, 210, 74, 0.10)',
+  },
+  miniMapInfo: {
+    padding: '7px 9px 7px 0',
+    gap: 3,
+  },
+  miniMapTopRow: {
+    gap: 4,
+  },
+  miniMapLocationText: {
+    fontSize: 11.5,
+    lineHeight: 1.22,
     WebkitLineClamp: 1,
   },
   miniMapCoords: {
-    fontSize: 10.5,
+    display: 'none',
   },
   reviewBlock: {
-    gap: 5,
-    padding: '8px 10px',
-    borderRadius: 12,
+    gap: 4,
+    padding: '7px 9px',
+    borderRadius: 11,
   },
   reviewHeaderRow: {
-    gap: 6,
+    gap: 5,
   },
   reviewRatingInline: {
-    padding: '4px 7px',
-    fontSize: 11,
+    padding: '4px 6px',
+    fontSize: 10.5,
   },
   reviewText: {
-    fontSize: 12.5,
-    lineHeight: 1.32,
+    fontSize: 12,
+    lineHeight: 1.28,
   },
   issueActionButton: {
-    minHeight: 31,
-    padding: '0 12px',
-    fontSize: 12,
+    minHeight: 29,
+    padding: '0 11px',
+    fontSize: 11.5,
   },
   emptyCard: {
     borderRadius: 18,

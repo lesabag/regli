@@ -795,7 +795,7 @@ const resources = {
         rateProvider: 'דרגו את {{name}}',
         pendingTitle: 'אישור סיום השירות',
         pendingSubtitle: '{{name}} סימן/ה שהשירות הסתיים.',
-        confirmCompletion: 'נא לאשר שהשירות הסתיים בהצלחה 💙',
+        confirmCompletion: 'אשר שהשירות הסתיים בהצלחה 💙',
         rejectCompletion: 'דיווח על בעיה 😏',
         confirming: 'מאשרים...',
         walkerWaiting: 'ממתינים לאישור הלקוח',
