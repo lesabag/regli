@@ -1609,13 +1609,11 @@ export default function AuthScreen({
                       : (isHebrew ? `שלב ${signupStepNumber}` : `Step ${signupStepNumber}`)}
                 </div>
                 <h1 style={{ ...titleStyle, textAlign }}>{stepTitle}</h1>
-                <p style={{ ...subtitleStyle, textAlign }}>
-                  {authenticatedOnboarding
-                    ? copy.finishSetup
-                    : mode === 'signin'
-                    ? copy.signInPrompt
-                    : copy.createAccountPrompt}
-                </p>
+                {(authenticatedOnboarding || mode === 'signin') ? (
+                  <p style={{ ...subtitleStyle, textAlign }}>
+                    {authenticatedOnboarding ? copy.finishSetup : copy.signInPrompt}
+                  </p>
+                ) : null}
               </div>
 
               <div style={{ ...authCardStackStyle, ...(shouldUseCompactAuthLayout ? authCardStackCompactStyle : null) }}>

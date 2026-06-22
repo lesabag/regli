@@ -856,6 +856,25 @@ export default function WalkerDashboard({
   const payoutSetupEmailErrorLabel = isHebrew
     ? 'יש להזין כתובת אימייל תקינה לפני שממשיכים ל-Stripe.'
     : 'Please enter a valid email address before continuing to Stripe.'
+  const providerFirstRunPayoutEyebrow = isHebrew ? 'הגדרת תשלומים' : 'Payout setup'
+  const providerFirstRunFirstStepEyebrow = isHebrew ? 'שלב ראשון' : 'First step'
+  const providerFirstRunAlmostReadyTitle = isHebrew
+    ? 'השלימו הגדרת תשלומים כדי לעבור לאונליין'
+    : 'Complete payout setup to go online'
+  const providerFirstRunAlmostReadyBody = isHebrew
+    ? 'הגדירו תשלומים פעם אחת כדי לקבל הזמנות ולקבל תשלום.'
+    : 'Set up payouts once so you can receive requests and get paid.'
+  const providerFirstRunMaybeLaterLabel = isHebrew ? 'אולי אחר כך' : 'Maybe later'
+  const providerFirstRunCompleteSetupLabel = isHebrew ? 'השלמת הגדרה' : 'Complete setup'
+  const providerFirstRunCheckingTitle = isHebrew ? 'בודק הגדרת תשלומים' : 'Checking payout setup'
+  const providerFirstRunCheckingButtonLabel = isHebrew ? 'בודק...' : 'Checking...'
+  const providerFirstRunReadyTitle = isHebrew
+    ? 'מוכנים לקבל את ההזמנה הראשונה?'
+    : 'Ready to receive your first request?'
+  const providerFirstRunReadyBody = isHebrew
+    ? 'הפעילו זמינות כשתהיו מוכנים להתחיל לקבל הזמנות.'
+    : 'Turn on availability whenever you’re ready to start receiving bookings.'
+  const providerFirstRunGoOnlineLabel = isHebrew ? 'מעבר לאונליין' : 'Go online'
   const todayAvailabilityTitle = isHebrew ? 'הזמינות שלך היום' : 'Today’s availability'
   const todayAvailabilityManageLabel = isHebrew ? 'נהל זמינות שבועית' : 'Manage weekly availability'
   const weeklyAvailabilitySummaryLabel = isHebrew
@@ -4358,10 +4377,10 @@ export default function WalkerDashboard({
             <>
               <div style={stripeGateOverlayStyle} onClick={() => setShowStripeGate(false)} />
               <div style={stripeGateCardStyle}>
-                <div style={stripeGateEyebrowStyle}>Payout setup</div>
-                <div style={stripeGateTitleStyle}>You&apos;re almost ready to go online</div>
+                <div style={stripeGateEyebrowStyle}>{providerFirstRunPayoutEyebrow}</div>
+                <div style={stripeGateTitleStyle}>{providerFirstRunAlmostReadyTitle}</div>
                 <div style={stripeGateBodyStyle}>
-                  Complete your payout setup to start receiving requests.
+                  {providerFirstRunAlmostReadyBody}
                 </div>
                 <div style={stripeGateActionsStyle}>
                   <button
@@ -4373,10 +4392,10 @@ export default function WalkerDashboard({
                       ...(isCheckingPayout ? stripeGatePrimaryDisabledStyle : null),
                     }}
                   >
-                    {isCheckingPayout ? 'Checking...' : 'Complete setup'}
+                    {isCheckingPayout ? providerFirstRunCheckingButtonLabel : providerFirstRunCompleteSetupLabel}
                   </button>
                   <button type="button" onClick={() => setShowStripeGate(false)} style={stripeGateSecondaryStyle}>
-                    Maybe later
+                    {providerFirstRunMaybeLaterLabel}
                   </button>
                 </div>
                 {payoutSetupInlineError ? (
@@ -4390,20 +4409,22 @@ export default function WalkerDashboard({
             <>
               <div style={stripeGateOverlayStyle} onClick={() => setShowOnboardingWow(false)} />
               <div style={stripeGateCardStyle}>
-                <div style={stripeGateEyebrowStyle}>First step</div>
+                <div style={stripeGateEyebrowStyle}>{providerFirstRunFirstStepEyebrow}</div>
                 <div style={stripeGateTitleStyle}>
                   {flow.connectLoading
-                    ? 'Checking payout setup'
+                    ? providerFirstRunCheckingTitle
                     : flow.stripeReadyForOnline
-                      ? 'Ready to receive your first request?'
-                      : 'Complete payout setup to go online'}
+                      ? providerFirstRunReadyTitle
+                      : providerFirstRunAlmostReadyTitle}
                 </div>
                 <div style={stripeGateBodyStyle}>
                   {flow.connectLoading
-                    ? 'We are checking your payout status so we can get you online smoothly.'
+                    ? (isHebrew
+                      ? 'אנחנו בודקים את סטטוס התשלומים כדי להעביר אתכם לאונליין בצורה חלקה.'
+                      : 'We are checking your payout status so we can get you online smoothly.')
                     : flow.stripeReadyForOnline
-                      ? 'Turn on availability whenever you’re ready to start receiving bookings.'
-                      : 'Set up payouts once so you can receive requests and get paid.'}
+                      ? providerFirstRunReadyBody
+                      : providerFirstRunAlmostReadyBody}
                 </div>
                 <div style={stripeGateActionsStyle}>
                   <button
@@ -4416,20 +4437,20 @@ export default function WalkerDashboard({
                     }}
                   >
                     {flow.connectLoading
-                      ? 'Checking...'
+                      ? providerFirstRunCheckingButtonLabel
                       : flow.stripeReadyForOnline
-                        ? 'Go online'
+                        ? providerFirstRunGoOnlineLabel
                         : isCheckingPayout
-                          ? 'Checking...'
-                          : 'Complete setup'}
+                          ? providerFirstRunCheckingButtonLabel
+                          : providerFirstRunCompleteSetupLabel}
                   </button>
                   {!flow.connectLoading && !flow.stripeReadyForOnline ? (
                     <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
-                      Maybe later
+                      {providerFirstRunMaybeLaterLabel}
                     </button>
                   ) : (
                     <button type="button" onClick={() => setShowOnboardingWow(false)} style={stripeGateSecondaryStyle}>
-                      Maybe later
+                      {providerFirstRunMaybeLaterLabel}
                     </button>
                   )}
                 </div>
