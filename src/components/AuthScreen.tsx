@@ -936,8 +936,10 @@ export default function AuthScreen({
                 : copy.welcomeTitle
   const shouldShowEmailFields = !authenticatedOnboarding && currentStep === 'auth' && (mode === 'signin' ? showEmailAuth : showEmailAuth)
   const isShortViewport = viewportHeight <= 760
+  const shouldPinAuthHeaderTop = isCreateAccountStep
   const shouldUseCompactAuthLayout = isCreateAccountStep && (shouldShowEmailFields || isShortViewport)
-  const cardIsScrollable = currentStep !== 'welcome' && currentStep !== 'auth'
+  const shouldUseCompactAuthHeader = isCreateAccountStep && isShortViewport
+  const cardIsScrollable = currentStep !== 'welcome' && (currentStep !== 'auth' || shouldShowEmailFields)
   const shouldShowWelcomeContent = !authenticatedOnboarding && currentStep === 'welcome'
   const shouldShowLanguageSwitcher = shouldShowWelcomeContent
   const hiddenLanguageSpacerStyle = shouldShowLanguageSwitcher ? heroTopSpacerStyle : compactHeroTopSpacerStyle
@@ -1017,8 +1019,15 @@ export default function AuthScreen({
         <div style={routeMarkerEndStyle}>⌂</div>
       </div>
 
-      <div style={{ ...shellStyle, direction }}>
-        <div style={heroStyle}>
+      <div
+        style={{
+          ...shellStyle,
+          ...(shouldPinAuthHeaderTop ? shellAuthTopAlignedStyle : null),
+          ...(shouldUseCompactAuthHeader ? shellCompactTopStyle : null),
+          direction,
+        }}
+      >
+        <div style={{ ...heroStyle, ...(shouldUseCompactAuthHeader ? heroCompactStyle : null) }}>
           <div style={{ ...heroTopRowStyle, ...(isRtl ? heroTopRowRtlStyle : null) }}>
             {shouldShowLanguageSwitcher ? (
               <div style={{ ...languageSwitchStyle, ...(isRtl ? languageSwitchRtlStyle : null) }}>
@@ -1037,12 +1046,19 @@ export default function AuthScreen({
                 ))}
               </div>
             ) : (
-              <div style={hiddenLanguageSpacerStyle} aria-hidden="true" />
+              <div
+                style={{
+                  ...hiddenLanguageSpacerStyle,
+                  ...(shouldPinAuthHeaderTop ? authHiddenLanguageSpacerStyle : null),
+                  ...(shouldUseCompactAuthHeader ? compactHiddenLanguageSpacerStyle : null),
+                }}
+                aria-hidden="true"
+              />
             )}
           </div>
-          <div style={brandBlockStyle}>
+          <div style={{ ...brandBlockStyle, ...(shouldUseCompactAuthHeader ? brandBlockCompactStyle : null) }}>
             <div style={{ ...brandUnitRowStyle, ...(isRtl ? brandUnitRowRtlStyle : null) }}>
-              <div style={brandBadgeStyle}>
+              <div style={{ ...brandBadgeStyle, ...(shouldUseCompactAuthHeader ? brandBadgeCompactStyle : null) }}>
                 <img
                   src={onboardingBrandIconSrc}
                   alt="Regli"
@@ -1051,14 +1067,14 @@ export default function AuthScreen({
                   decoding="async"
                 />
               </div>
-              <div style={brandNameStyle}>Regli</div>
+              <div style={{ ...brandNameStyle, ...(shouldUseCompactAuthHeader ? brandNameCompactStyle : null) }}>Regli</div>
             </div>
-            <div style={{ ...brandSubtitleStyle, textAlign }}>
+            <div style={{ ...brandSubtitleStyle, ...(shouldUseCompactAuthHeader ? brandSubtitleCompactStyle : null), textAlign }}>
               {isHebrew ? 'שירותים מקומיים אמינים, במהירות ובביטחון.' : 'Trusted local services, arranged with confidence.'}
             </div>
           </div>
 
-          <div style={{ ...stepsRowStyle, ...(isRtl ? stepsRowRtlStyle : null) }}>
+          <div style={{ ...stepsRowStyle, ...(shouldUseCompactAuthHeader ? stepsRowCompactStyle : null), ...(isRtl ? stepsRowRtlStyle : null) }}>
             {signupSteps.map((step, index) => (
               <span
                 key={step}
@@ -1576,7 +1592,14 @@ export default function AuthScreen({
           )}
 
           {isCreateAccountStep && (
-            <div style={{ ...authStageStyle, ...(shouldUseCompactAuthLayout ? authStageExpandedEmailStyle : null), ...(isShortViewport ? authStageShortViewportStyle : null) }}>
+            <div
+              style={{
+                ...authStageStyle,
+                ...(shouldPinAuthHeaderTop ? authStageTopAlignedStyle : null),
+                ...(shouldUseCompactAuthLayout ? authStageExpandedEmailStyle : null),
+                ...(isShortViewport ? authStageShortViewportStyle : null),
+              }}
+            >
               <div style={{ ...authTitleStackStyle, ...(shouldUseCompactAuthLayout ? authTitleStackCompactStyle : null) }}>
                 <div style={{ ...eyebrowStyle, textAlign }}>
                   {authenticatedOnboarding
@@ -1970,9 +1993,22 @@ const shellStyle: CSSProperties = {
   overflow: 'hidden',
 }
 
+const shellAuthTopAlignedStyle: CSSProperties = {
+  justifyContent: 'flex-start',
+  gap: 4,
+}
+
+const shellCompactTopStyle: CSSProperties = {
+  paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1px)',
+}
+
 const heroStyle: CSSProperties = {
   display: 'grid',
   gap: 10,
+}
+
+const heroCompactStyle: CSSProperties = {
+  gap: 4,
 }
 
 const heroTopRowStyle: CSSProperties = {
@@ -1994,10 +2030,23 @@ const compactHeroTopSpacerStyle: CSSProperties = {
   height: 14,
 }
 
+const authHiddenLanguageSpacerStyle: CSSProperties = {
+  height: 0,
+}
+
+const compactHiddenLanguageSpacerStyle: CSSProperties = {
+  height: 0,
+}
+
 const brandBlockStyle: CSSProperties = {
   display: 'grid',
   gap: 5,
   paddingTop: 8,
+}
+
+const brandBlockCompactStyle: CSSProperties = {
+  gap: 2,
+  paddingTop: 0,
 }
 
 const brandUnitRowStyle: CSSProperties = {
@@ -2025,6 +2074,12 @@ const brandBadgeStyle: CSSProperties = {
   aspectRatio: '1 / 1',
 }
 
+const brandBadgeCompactStyle: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+}
+
 const brandBadgeImageStyle: CSSProperties = {
   width: '100%',
   height: '100%',
@@ -2041,6 +2096,10 @@ const brandNameStyle: CSSProperties = {
   color: '#0F172A',
 }
 
+const brandNameCompactStyle: CSSProperties = {
+  fontSize: 24,
+}
+
 const brandSubtitleStyle: CSSProperties = {
   marginTop: 0,
   fontSize: 13,
@@ -2048,9 +2107,18 @@ const brandSubtitleStyle: CSSProperties = {
   color: '#5B6882',
 }
 
+const brandSubtitleCompactStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.28,
+}
+
 const stepsRowStyle: CSSProperties = {
   display: 'flex',
   gap: 8,
+}
+
+const stepsRowCompactStyle: CSSProperties = {
+  gap: 6,
 }
 
 const stepsRowRtlStyle: CSSProperties = {
@@ -2998,6 +3066,11 @@ const authStageStyle: CSSProperties = {
   justifyItems: 'center',
   alignContent: 'center',
   placeSelf: 'center',
+}
+
+const authStageTopAlignedStyle: CSSProperties = {
+  alignContent: 'start',
+  placeSelf: 'stretch',
 }
 
 const authStageExpandedEmailStyle: CSSProperties = {

@@ -40,6 +40,7 @@ interface Profile {
 }
 
 const SESSION_INIT_TIMEOUT_MS = 8000
+const SIGN_UP_TIMEOUT_MS = 15000
 const PROFILE_LOAD_TIMEOUT_MS = 8000
 const OAUTH_ONBOARDING_CONTEXT_KEY = 'regli:oauth-onboarding-context'
 const OAUTH_PROVIDER_STORAGE_KEY = 'regli:oauth-provider'
@@ -288,6 +289,7 @@ export function useAuth() {
   const appleBootstrapPromiseRef = useRef<Promise<Profile | null> | null>(null)
   const appleBootstrapUserIdRef = useRef<string | null>(null)
   const pendingOAuthProviderRef = useRef<'google' | 'apple' | null>(readPendingOAuthProvider())
+  const signUpInFlightRef = useRef(false)
 
   useEffect(() => {
     profileStateRef.current = profile
@@ -788,6 +790,15 @@ export function useAuth() {
       serviceAttributes?: ServiceAttributes | null
       legalAcceptance?: PendingLegalAcceptanceContext | null
     }) => {
+      if (signUpInFlightRef.current) {
+        console.log('[useAuth] signUp ignored because a request is already in flight', {
+          email,
+          role,
+        })
+        return { ok: false }
+      }
+
+      signUpInFlightRef.current = true
       setAuthError(null)
 
       const safeRole: AppRole = role === 'admin' ? 'client' : role
@@ -817,7 +828,7 @@ export function useAuth() {
               },
             },
           }),
-          SESSION_INIT_TIMEOUT_MS,
+          SIGN_UP_TIMEOUT_MS,
           'Sign up timed out'
         )
 
@@ -893,8 +904,84 @@ export function useAuth() {
         await loadProfile(newUser)
         return { ok: true }
       } catch (err) {
-        setAuthError(getErrorMessage(err, 'Failed to sign up'))
+        const errorMessage = getErrorMessage(err, 'Failed to sign up')
+        const isTimeoutError = errorMessage.toLowerCase().includes('timed out')
+
+        if (isTimeoutError) {
+          console.warn('[useAuth] signUp timed out; checking current auth session before showing an error', {
+            email,
+            role: safeRole,
+          })
+
+          try {
+            const { data: sessionData, error: sessionError } = await withTimeout(
+              supabase.auth.getSession(),
+              5000,
+              'Session recovery timed out',
+            )
+
+            const recoveredSession = sessionData.session ?? null
+            const recoveredUser = recoveredSession?.user ?? null
+
+            console.log('[useAuth] signUp timeout recovery session result', {
+              email,
+              hasSession: !!recoveredSession,
+              recoveredUserId: recoveredUser?.id ?? null,
+              sessionError: sessionError?.message ?? null,
+            })
+
+            if (recoveredUser) {
+              setSession(recoveredSession)
+              setUser(recoveredUser)
+              await loadProfile(recoveredUser)
+              console.log('[useAuth] signUp recovered successfully after timeout using current session', {
+                email,
+                recoveredUserId: recoveredUser.id,
+              })
+              return { ok: true }
+            }
+
+            const { data: userData, error: userError } = await withTimeout(
+              supabase.auth.getUser(),
+              5000,
+              'User recovery timed out',
+            )
+
+            const currentUser = userData.user ?? null
+            console.log('[useAuth] signUp timeout recovery user result', {
+              email,
+              hasUser: !!currentUser,
+              recoveredUserId: currentUser?.id ?? null,
+              userError: userError?.message ?? null,
+            })
+
+            if (currentUser) {
+              setUser(currentUser)
+              if (recoveredSession) {
+                setSession(recoveredSession)
+              }
+              await loadProfile(currentUser)
+              console.log('[useAuth] signUp recovered successfully after timeout using current user', {
+                email,
+                recoveredUserId: currentUser.id,
+              })
+              return { ok: true }
+            }
+          } catch (recoveryError) {
+            console.warn('[useAuth] signUp timeout recovery check failed', {
+              email,
+              error: getErrorMessage(recoveryError, 'Session recovery failed'),
+            })
+          }
+
+          setAuthError('The connection is taking longer than usual. Please try again.')
+          return { ok: false }
+        }
+
+        setAuthError(errorMessage)
         return { ok: false }
+      } finally {
+        signUpInFlightRef.current = false
       }
     },
     [loadProfile]

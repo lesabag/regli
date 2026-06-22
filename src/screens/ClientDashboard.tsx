@@ -677,6 +677,7 @@ export default function ClientDashboard({
   const [recipientEditorOpen, setRecipientEditorOpen] = useState(false)
   const [dogNameSheetSaving, setDogNameSheetSaving] = useState(false)
   const [dogNameSheetError, setDogNameSheetError] = useState<string | null>(null)
+  const [dogSizeValidationError, setDogSizeValidationError] = useState<string | null>(null)
   const [babysitterServiceDetails, setBabysitterServiceDetails] = useState('')
   const [fixedVisitIssueDescription, setFixedVisitIssueDescription] = useState('')
   const [babysitterDurationHours, setBabysitterDurationHours] = useState(
@@ -2268,6 +2269,7 @@ export default function ClientDashboard({
   const openDogNameSheet = useCallback(() => {
     const isBabysitterRequest = requestServiceType === 'baby_sitter'
     setDogNameSheetError(null)
+    setDogSizeValidationError(null)
     setShowDogNameSheet(true)
     setDogNameDraft(isBabysitterRequest ? babysitterServiceDetails : '')
     setDogSizeDraft(null)
@@ -2277,6 +2279,7 @@ export default function ClientDashboard({
   const closeDogNameSheet = useCallback(() => {
     if (dogNameSheetSaving) return
     setDogNameSheetError(null)
+    setDogSizeValidationError(null)
     setShowDogNameSheet(false)
     setRecipientEditorOpen(false)
   }, [dogNameSheetSaving])
@@ -2284,6 +2287,7 @@ export default function ClientDashboard({
   const submitDogNameSheet = useCallback(async () => {
     const nextName = normalizeDogName(dogNameDraft)
     setDogNameSheetError(null)
+    setDogSizeValidationError(null)
 
     if (requestServiceType === 'baby_sitter') {
       if (!nextName) return
@@ -2300,8 +2304,8 @@ export default function ClientDashboard({
     }
 
     if (!dogSizeDraft) {
-      setDogNameSheetError(
-        isRtl ? 'בחרו גודל כלב לפני השמירה.' : 'Choose a dog size before saving.',
+      setDogSizeValidationError(
+        isRtl ? 'בחרו גודל כלב' : 'Please select dog size',
       )
       return
     }
@@ -4359,7 +4363,7 @@ export default function ClientDashboard({
     : (isRtl ? '+ הוסף כלב' : '+ Add dog')
   const canSaveDogNameSheet = isBabySitterMode
     ? !!normalizeDogName(dogNameDraft)
-    : (!!normalizeDogName(dogNameDraft) && !!dogSizeDraft) || selectedDogPetIds.length > 0
+    : !!normalizeDogName(dogNameDraft) || selectedDogPetIds.length > 0
   const showBookingSubjectSuggestions = true
   const shouldShowBookingSubjectCaption = false
   const dogSelectorBlock = (
@@ -4403,9 +4407,6 @@ export default function ClientDashboard({
           <div style={dogInputChevronStyle}>›</div>
         </div>
       </button>
-      {isDogNameGuided && (
-        <div style={guidedFieldHelperStyle}>Start here</div>
-      )}
     </div>
   )
 
@@ -5798,16 +5799,7 @@ export default function ClientDashboard({
                   )}
 
                   {isSelectedServiceAvailable && !isSheetCollapsed ? (
-                    <div
-                      style={{
-                        ...compactPaymentWrapStyle,
-                        ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
-                        ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
-                      }}
-                    >
-                      {isPaymentGuided && (
-                        <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
-                      )}
+                    <div style={compactPaymentWrapStyle}>
                       {unifiedPricingPaymentCard}
                     </div>
                   ) : (
@@ -5929,7 +5921,19 @@ export default function ClientDashboard({
             }}
           >
             <div style={stickyActionZoneStyle}>
-              <div style={unifiedPaymentRowWrapStyle}>{compactPaymentCardContent}</div>
+              <div style={unifiedPaymentRowWrapStyle}>
+                {isPaymentGuided && (
+                  <div style={guidedFieldHintAboveStyle}>{t('booking.addPaymentMethod')}</div>
+                )}
+                <div
+                  style={{
+                    ...(isPaymentGuided ? paymentGuidedFieldShellStyle : null),
+                    ...(isPaymentGuided && shouldAnimateGuidedField ? guidedFieldAnimationStyle : null),
+                  }}
+                >
+                  {compactPaymentCardContent}
+                </div>
+              </div>
               {shouldShowGuidanceCtaHelper && (
                 <div style={guidedCtaHelperStyle}>{t('booking.completeHighlightedField')}</div>
               )}
@@ -6344,7 +6348,12 @@ export default function ClientDashboard({
                   {!isBabySitterMode && (
                     <div style={recipientInlineEditorStyle}>
                       <div style={recipientSectionLabelStyle}>{dogSizeSectionLabel}</div>
-                      <div style={dogSizeSelectorStyle}>
+                      <div
+                        style={{
+                          ...dogSizeSelectorStyle,
+                          ...(dogSizeValidationError ? dogSizeSelectorErrorStyle : null),
+                        }}
+                      >
                         {DOG_SIZE_OPTIONS.map((size) => {
                           const selected = dogSizeDraft === size
                           return (
@@ -6354,6 +6363,7 @@ export default function ClientDashboard({
                               onClick={() => {
                                 setDogSizeDraft(size)
                                 setDogNameSheetError(null)
+                                setDogSizeValidationError(null)
                               }}
                               style={{
                                 ...dogSizeOptionStyle,
@@ -6366,6 +6376,9 @@ export default function ClientDashboard({
                           )
                         })}
                       </div>
+                      {dogSizeValidationError ? (
+                        <div style={dogSizeValidationErrorStyle}>{dogSizeValidationError}</div>
+                      ) : null}
                     </div>
                   )}
 
@@ -9075,6 +9088,13 @@ const dogSizeSelectorStyle: React.CSSProperties = {
   gap: 6,
 }
 
+const dogSizeSelectorErrorStyle: React.CSSProperties = {
+  border: '1px solid rgba(185, 28, 28, 0.22)',
+  borderRadius: 14,
+  background: 'rgba(254, 242, 242, 0.68)',
+  padding: 8,
+}
+
 const dogSizeOptionStyle: React.CSSProperties = {
   minWidth: 44,
   height: 34,
@@ -9105,6 +9125,13 @@ const dogNameSheetErrorStyle: React.CSSProperties = {
   fontWeight: 700,
   lineHeight: 1.35,
   padding: '8px 10px',
+}
+
+const dogSizeValidationErrorStyle: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  lineHeight: 1.35,
+  color: '#B91C1C',
 }
 
 const dogNameSheetActionsStyle: React.CSSProperties = {
@@ -9565,8 +9592,8 @@ const fixedVisitGuidanceTextStyle: React.CSSProperties = {
 
 const unifiedPaymentRowWrapStyle: React.CSSProperties = {
   borderTop: '1px solid rgba(191, 219, 254, 0.52)',
-  paddingTop: 8,
-  marginTop: 2,
+  paddingTop: 12,
+  marginTop: 10,
 }
 
 const stickyCtaWrapBabysitterStyle: React.CSSProperties = {
