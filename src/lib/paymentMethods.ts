@@ -1,12 +1,9 @@
-import { invokeEdgeFunction } from '../services/supabaseClient'
+import { PaymentService } from '../payments/PaymentService'
+import type { SavedCard } from '../payments/types'
 
-export interface SavedCard {
-  id: string
-  brand: string
-  last4: string
-  expMonth?: number
-  expYear?: number
-}
+const stripePaymentService = new PaymentService({ provider: 'stripe' })
+
+export type { SavedCard } from '../payments/types'
 
 export type PaymentMethodType = 'saved_card' | 'apple_pay'
 
@@ -60,47 +57,30 @@ function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-interface GetOrCreateResponse {
-  customerId: string
-  cards: SavedCard[]
-}
-
 export async function fetchSavedCards(): Promise<{ customerId: string | null; cards: SavedCard[] }> {
-  const { data, error } = await invokeEdgeFunction<GetOrCreateResponse>(
-    'manage-payment-method',
-    { body: { action: 'get-or-create-customer' } }
-  )
-
-  if (error || !data) {
-    console.error('[paymentMethods] fetchSavedCards error:', error)
+  try {
+    return await stripePaymentService.listSavedPaymentMethods()
+  } catch (error) {
+    console.error(
+      '[paymentMethods] fetchSavedCards error:',
+      error instanceof Error ? error.message : String(error),
+    )
     return { customerId: null, cards: [] }
   }
-
-  return { customerId: data.customerId, cards: data.cards }
-}
-
-interface SetupIntentResponse {
-  clientSecret: string
 }
 
 export async function requestSetupIntent(): Promise<{ clientSecret: string | null; error: string | null }> {
-  const { data, error } = await invokeEdgeFunction<SetupIntentResponse>(
-    'manage-payment-method',
-    { body: { action: 'create-setup-intent' } }
-  )
-
-  if (error || !data) {
-    return { clientSecret: null, error: error ?? 'Failed to create setup' }
+  try {
+    const data = await stripePaymentService.createSetup()
+    return { clientSecret: data.clientSecret, error: null }
+  } catch (error) {
+    return {
+      clientSecret: null,
+      error: error instanceof Error ? error.message : 'Failed to create setup',
+    }
   }
-
-  return { clientSecret: data.clientSecret, error: null }
 }
 
 export async function detachPaymentMethod(paymentMethodId: string): Promise<{ error: string | null }> {
-  const { error } = await invokeEdgeFunction(
-    'manage-payment-method',
-    { body: { action: 'detach-payment-method', paymentMethodId } }
-  )
-
-  return { error }
+  return stripePaymentService.detachSavedPaymentMethod(paymentMethodId)
 }
