@@ -14,9 +14,28 @@ import type {
   PaymentWebhookResult,
   SellerStatus,
 } from './types'
+import {
+  createSellerDraft,
+  createSellerOnboardingLink,
+  getPayMeConfig,
+  getSellerStatus as getPayMeSellerStatus,
+  isPayMeConfigured,
+  parsePayMeWebhookEvent,
+  PayMeError,
+} from './payme'
 
-function notImplemented(operation: string): never {
-  throw new Error(`PayMe ${operation} is not implemented yet.`)
+function notImplemented(operation: string, detail: string): never {
+  throw new Error(`PayMe ${operation} is not implemented yet. ${detail}`)
+}
+
+function assertProviderConfigured(): void {
+  if (!isPayMeConfigured()) {
+    const config = getPayMeConfig()
+    throw new PayMeError(
+      `PayMe ${config.environment} is not configured. Set VITE_PAYME_BASE_URL, VITE_PAYME_PARTNER_ID, and VITE_PAYME_CLIENT_KEY.`,
+      { code: 'not_configured' },
+    )
+  }
 }
 
 export class PayMeProvider implements PaymentProvider {
@@ -27,20 +46,20 @@ export class PayMeProvider implements PaymentProvider {
   }
 
   async createSellerAccount(): Promise<CreateSellerAccountResponse> {
-    // TODO(payme): implement seller onboarding / account creation
-    return notImplemented('seller onboarding')
+    assertProviderConfigured()
+    return createSellerDraft({})
   }
 
   async createSellerOnboardingLink(
-    _request: CreateSellerOnboardingLinkRequest = {},
+    request: CreateSellerOnboardingLinkRequest = {},
   ): Promise<CreateSellerOnboardingLinkResponse> {
-    // TODO(payme): implement seller verification continuation / onboarding resume
-    return notImplemented('seller onboarding link')
+    assertProviderConfigured()
+    return createSellerOnboardingLink(request)
   }
 
   async getSellerStatus(): Promise<SellerStatus> {
-    // TODO(payme): implement seller verification + payout readiness status
-    return notImplemented('seller status')
+    assertProviderConfigured()
+    return getPayMeSellerStatus()
   }
 
   async createPayment(
@@ -49,34 +68,50 @@ export class PayMeProvider implements PaymentProvider {
     // TODO(payme): implement charge creation
     // TODO(payme): implement platform fee support
     // TODO(payme): implement split payments / seller allocation
-    return notImplemented('payment creation')
+    return notImplemented(
+      'payment creation',
+      'Create sandbox charge flow after seller onboarding and webhook verification are confirmed.',
+    )
   }
 
   async createRefund(_request: CreateRefundRequest): Promise<CreateRefundResponse> {
     // TODO(payme): implement refunds
-    return notImplemented('refunds')
+    return notImplemented(
+      'refunds',
+      'Wire refunds after sandbox payment capture and event reconciliation are available.',
+    )
   }
 
   async createSetup(): Promise<PaymentSetupIntentResponse> {
     // TODO(payme): implement tokenization / saved cards setup
-    return notImplemented('payment method setup')
+    return notImplemented(
+      'payment method setup',
+      'Route card tokenization through a server-side Edge Function if PayMe requires secret signing.',
+    )
   }
 
   async listSavedPaymentMethods(): Promise<PaymentMethodCustomerResponse> {
     // TODO(payme): implement tokenized card listing
-    return notImplemented('saved payment methods')
+    return notImplemented(
+      'saved payment methods',
+      'Expose saved-card listing after tokenization and customer vault behavior are defined.',
+    )
   }
 
   async detachSavedPaymentMethod(
     _paymentMethodId: string,
   ): Promise<DetachPaymentMethodResponse> {
     // TODO(payme): implement token removal / saved card detach
-    return notImplemented('saved payment method detach')
+    return notImplemented(
+      'saved payment method detach',
+      'Implement token deletion after PayMe vault APIs are confirmed.',
+    )
   }
 
-  async handleWebhook(_payload: PaymentWebhookPayload): Promise<PaymentWebhookResult> {
+  async handleWebhook(payload: PaymentWebhookPayload): Promise<PaymentWebhookResult> {
     // TODO(payme): implement webhooks
     // TODO(payme): implement payout lifecycle events
-    return notImplemented('webhook handling')
+    assertProviderConfigured()
+    return parsePayMeWebhookEvent(payload)
   }
 }
