@@ -13,6 +13,8 @@ import {
   hasProviderIssue,
 } from '../utils/completionReview'
 import { getProviderEarnings } from '../lib/payoutTruth'
+import { PaymentService } from '../payments/PaymentService'
+import type { SellerStatus } from '../payments/types'
 import i18n from '../i18n'
 
 interface CapacitorAppState {
@@ -261,6 +263,17 @@ const ACTIVE_LOCATION_BROADCAST_MS = 5_000
 const CONNECT_STATUS_RETRY_DELAY_MS = 1_000
 const CONNECT_STATUS_MAX_ATTEMPTS = 3
 const REALTIME_SUBSCRIBED_HYDRATION_THROTTLE_MS = 4_000
+const stripePaymentService = new PaymentService({ provider: 'stripe' })
+
+function mapSellerStatusToConnectStatus(status: SellerStatus): ConnectStatus {
+  return {
+    connected: status.connected,
+    stripe_connect_account_id: status.sellerAccountId,
+    stripe_connect_onboarding_complete: status.onboardingComplete,
+    payouts_enabled: status.payoutsEnabled,
+    charges_enabled: status.chargesEnabled,
+  }
+}
 
 function logDispatchRealtime(message: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return
@@ -1988,24 +2001,19 @@ export function useWalkerFlow(profileId: string, profileName: string) {
           if (!hasAuth) {
             lastErrorMessage = 'Authentication issue. Please refresh and try again.'
           } else {
-            const { data, error } = await invokeEdgeFunction<ConnectStatus>('get-connect-status')
-            if (error) {
-              lastErrorMessage = error || 'Failed to load payout account status.'
-            } else if (!data) {
-              lastErrorMessage = 'Failed to load payout account status.'
-            } else {
-              const nextStatus = data as ConnectStatus
-              setConnectStatus(nextStatus)
-              setConnectError(null)
-              console.log('[payout-status] connect_status_loaded', {
-                walkerId: profileId,
-                connected: nextStatus.connected,
-                onboardingComplete: nextStatus.stripe_connect_onboarding_complete,
-                payoutsEnabled: nextStatus.payouts_enabled,
-                chargesEnabled: nextStatus.charges_enabled,
-              })
-              return nextStatus
-            }
+            const sellerStatus = await stripePaymentService.getSellerStatus()
+            const nextStatus = mapSellerStatusToConnectStatus(sellerStatus)
+            setConnectStatus(nextStatus)
+            setConnectError(null)
+            console.log('[payout-status] connect_status_loaded', {
+              walkerId: profileId,
+              provider: sellerStatus.provider,
+              connected: nextStatus.connected,
+              onboardingComplete: nextStatus.stripe_connect_onboarding_complete,
+              payoutsEnabled: nextStatus.payouts_enabled,
+              chargesEnabled: nextStatus.charges_enabled,
+            })
+            return nextStatus
           }
         } catch {
           lastErrorMessage = 'Failed to load payout account status.'
@@ -3255,35 +3263,18 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
-      const { data: acctData, error: acctErr } = await invokeEdgeFunction<{ accountId?: string; error?: string }>('create-connect-account')
-      if (acctErr) {
-        setConnectError(acctErr || 'Failed to create connect account')
-        setConnectLoading(false)
-        return
-      }
-      const acct = acctData as { accountId?: string; error?: string } | null
-      if (!acct?.accountId) {
-        setConnectError(acct?.error || 'Failed to create connect account')
+      const acct = await stripePaymentService.createSellerAccount()
+      if (!acct.accountId) {
+        setConnectError('Failed to create connect account')
         setConnectLoading(false)
         return
       }
 
-      const { data: linkData, error: linkErr } = await invokeEdgeFunction<{ url?: string; error?: string }>(
-        'create-connect-onboarding-link',
-        {
-          body: {
-            useNativeDeepLink: Capacitor.isNativePlatform(),
-          },
-        },
-      )
-      if (linkErr) {
-        setConnectError(linkErr || 'Failed to get onboarding link')
-        setConnectLoading(false)
-        return
-      }
-      const link = linkData as { url?: string; error?: string } | null
-      if (!link?.url) {
-        setConnectError(link?.error || 'Failed to get onboarding link')
+      const link = await stripePaymentService.createSellerOnboardingLink({
+        useNativeDeepLink: Capacitor.isNativePlatform(),
+      })
+      if (!link.url) {
+        setConnectError('Failed to get onboarding link')
         setConnectLoading(false)
         return
       }
@@ -3306,22 +3297,11 @@ export function useWalkerFlow(profileId: string, profileName: string) {
         return
       }
 
-      const { data, error } = await invokeEdgeFunction<{ url?: string; error?: string }>(
-        'create-connect-onboarding-link',
-        {
-          body: {
-            useNativeDeepLink: Capacitor.isNativePlatform(),
-          },
-        },
-      )
-      if (error) {
-        setConnectError(error || 'Failed to get onboarding link')
-        setConnectLoading(false)
-        return
-      }
-      const link = data as { url?: string; error?: string } | null
-      if (!link?.url) {
-        setConnectError(link?.error || 'Failed to get onboarding link')
+      const link = await stripePaymentService.createSellerOnboardingLink({
+        useNativeDeepLink: Capacitor.isNativePlatform(),
+      })
+      if (!link.url) {
+        setConnectError('Failed to get onboarding link')
         setConnectLoading(false)
         return
       }
