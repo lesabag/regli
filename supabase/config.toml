@@ -25,6 +25,9 @@ verify_jwt = false
 [functions.create-connect-onboarding-link]
 verify_jwt = false
 
+[functions.create-payme-seller]
+verify_jwt = true
+
 [functions.create-payment-intent]
 verify_jwt = false
 

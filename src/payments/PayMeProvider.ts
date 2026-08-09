@@ -1,3 +1,4 @@
+import { invokeEdgeFunction } from '../services/supabaseClient'
 import type { PaymentProvider } from './PaymentProvider'
 import type {
   CreatePaymentIntentRequest,
@@ -19,6 +20,16 @@ function notImplemented(operation: string): never {
   throw new Error(`PayMe ${operation} is not implemented yet.`)
 }
 
+// Client-safe response from the create-payme-seller edge function. Never carries
+// PayMe secrets (see supabase/functions/create-payme-seller).
+type PaymeCreateSellerEdgeResponse = {
+  success?: boolean
+  skipped?: boolean
+  sellerPaymeId?: string
+  onboardingStatus?: string
+  signupUrl?: string | null
+}
+
 export class PayMeProvider implements PaymentProvider {
   readonly id = 'payme' as const
 
@@ -27,8 +38,23 @@ export class PayMeProvider implements PaymentProvider {
   }
 
   async createSellerAccount(): Promise<CreateSellerAccountResponse> {
-    // TODO(payme): implement seller onboarding / account creation
-    return notImplemented('seller onboarding')
+    // Phase 1: create the PayMe Marketplace seller via the secure edge function.
+    // `source: 'onboarding'` marks this as the automatic provider-onboarding path,
+    // which the server gates behind PAYME_SELLER_ONBOARDING_ENABLED.
+    const { data, error } = await invokeEdgeFunction<PaymeCreateSellerEdgeResponse>(
+      'create-payme-seller',
+      { body: { source: 'onboarding' } },
+    )
+
+    if (error) {
+      throw new Error(error)
+    }
+
+    return {
+      accountId: data?.sellerPaymeId ?? null,
+      provider: this.id,
+      raw: data ?? null,
+    }
   }
 
   async createSellerOnboardingLink(
