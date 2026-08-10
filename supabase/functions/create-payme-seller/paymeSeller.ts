@@ -13,6 +13,9 @@ export const PAYME_DEFAULT_BASE_URL = 'https://sandbox.payme.io'
 // the CHECK constraint in 2026080701_payme_seller_onboarding.sql.
 export const PAYME_ONBOARDING_STATUS = {
   notStarted: 'not_started',
+  // `creating` is a short-lived claim state: exactly one request may transition
+  // not_started/failed -> creating before contacting PayMe (see classifyClaimOutcome).
+  creating: 'creating',
   created: 'created',
   pending: 'pending',
   completed: 'completed',
@@ -29,6 +32,7 @@ export interface PaymeCreateSellerRaw {
   status_code?: unknown
   status_error_code?: unknown
   status_error_details?: unknown
+  status_additional_info?: unknown
   seller_payme_id?: unknown
   seller_public_key?: { uuid?: unknown } | null
   seller_dashboard_signup_link?: unknown
@@ -120,34 +124,73 @@ export function resolveExistingSeller(
   )
 }
 
-/**
- * Whether the request is allowed to actually contact PayMe.
- *
- * The automatic provider-onboarding path sends `source: 'onboarding'` and is
- * gated by the server-side PAYME_SELLER_ONBOARDING_ENABLED flag (must equal the
- * string "true"). Any other invocation (e.g. an explicit manual/test call that
- * omits `source`) bypasses the flag so the function stays callable for testing.
- */
-export function shouldContactPayme(params: {
-  source: string | null | undefined
-  flagValue: string | null | undefined
-}): boolean {
-  if (params.source !== 'onboarding') return true
-  return params.flagValue === 'true'
+// ==========================================================================
+// EXPLICIT SOURCE CLASSIFICATION
+// ==========================================================================
+//
+// There are exactly two recognized intents. Everything else fails safe so an
+// arbitrary/unknown `source` can never accidentally bypass a safety gate or reach
+// PayMe.
+//
+//   'onboarding'    -> REAL provider data; gated by PAYME_SELLER_ONBOARDING_ENABLED.
+//                      flag != "true" => skip (no PayMe call).
+//   'sandbox'       -> the fixed SANDBOX_SELLER_IDENTITY; explicit manual sandbox
+//                      testing. A request with NO source is treated as sandbox to
+//                      preserve the established manual invocation contract.
+//   'unknown'       -> anything else; rejected, never contacts PayMe.
+export type SellerRequestIntent = 'onboarding' | 'sandbox' | 'unknown'
+
+export function classifySellerRequest(
+  source: string | null | undefined,
+): SellerRequestIntent {
+  const s = typeof source === 'string' ? source.trim() : ''
+  if (s === 'onboarding') return 'onboarding'
+  // No source (established manual contract) or the explicit 'sandbox' token.
+  if (s === '' || s === 'sandbox') return 'sandbox'
+  return 'unknown'
+}
+
+export interface SellerRequestDecision {
+  intent: SellerRequestIntent
+  // 'proceed' -> build payloadKind and contact PayMe.
+  // 'skip'    -> onboarding while the flag is off (safe no-op).
+  // 'reject'  -> unknown/unsupported source; never contacts PayMe.
+  action: 'proceed' | 'skip' | 'reject'
+  payloadKind: 'provider' | 'sandbox' | null
 }
 
 /**
- * The static, sandbox-verified seller identity produced by
- * {@link buildCreateSellerRequestBody} may ONLY be used for manual integration
- * testing. It must NEVER be used by the automatic provider-onboarding flow,
- * because doing so would register real PayMe sellers under a fixed fake test
- * identity. Returns true only for explicit/manual invocations (source is not
- * 'onboarding').
+ * The single, explicit gate. Maps (source, flag) to exactly one decision. This
+ * replaces the previous loose `source !== 'onboarding'` checks so unknown sources
+ * fail safe and only the intended paths may reach PayMe.
+ */
+export function decideSellerRequest(params: {
+  source: string | null | undefined
+  flagValue: string | null | undefined
+}): SellerRequestDecision {
+  const intent = classifySellerRequest(params.source)
+  switch (intent) {
+    case 'onboarding':
+      return params.flagValue === 'true'
+        ? { intent, action: 'proceed', payloadKind: 'provider' }
+        : { intent, action: 'skip', payloadKind: null }
+    case 'sandbox':
+      return { intent, action: 'proceed', payloadKind: 'sandbox' }
+    case 'unknown':
+    default:
+      return { intent, action: 'reject', payloadKind: null }
+  }
+}
+
+/**
+ * The fixed sandbox identity may be built ONLY for the explicit sandbox intent.
+ * The real-data onboarding path and unknown sources return false — the sandbox
+ * identity is impossible from any path that could carry real provider data.
  */
 export function mayUseSandboxSellerIdentity(
   source: string | null | undefined,
 ): boolean {
-  return source !== 'onboarding'
+  return classifySellerRequest(source) === 'sandbox'
 }
 
 // ==========================================================================
@@ -158,13 +201,14 @@ export function mayUseSandboxSellerIdentity(
 // PayMe sandbox in Postman. They are not tied to any real provider and must
 // NEVER be used to register a seller on behalf of a real provider.
 //
-// Reachability is intentionally constrained on TWO axes so this identity can
-// never be created accidentally through ordinary provider registration:
-//   1. `shouldContactPayme()` — the onboarding path only reaches PayMe when the
-//      PAYME_SELLER_ONBOARDING_ENABLED flag is exactly "true".
-//   2. `mayUseSandboxSellerIdentity()` — even then, the onboarding path is
-//      refused; only explicit/manual invocations (no `source: 'onboarding'`)
-//      may build this payload.
+// Reachability is intentionally constrained so this identity can never be created
+// accidentally through ordinary provider registration or the manual test seam:
+//   1. `decideSellerRequest()` classifies intent explicitly — only the 'sandbox'
+//      intent (explicit/absent source) resolves to payloadKind 'sandbox'. The
+//      real-data 'onboarding' intent never does, and unknown sources are rejected
+//      before any payload is built.
+//   2. `mayUseSandboxSellerIdentity()` returns true ONLY for the 'sandbox' intent,
+//      so the onboarding path is refused this identity.
 //
 // PHASE 2 TODO(payme-phase2): DELETE this constant and replace it with real
 // per-provider field mapping (name, social id, birthdate, bank details, contact
@@ -215,4 +259,161 @@ export function buildSandboxSellerRequestBody(
     payme_client_key: clientKey,
     ...SANDBOX_SELLER_IDENTITY,
   }
+}
+
+// ==========================================================================
+// PHASE 2A — MINIMAL REAL PROVIDER SELLER PAYLOAD
+// ==========================================================================
+//
+// Per PayMe's official guidance, create-seller only needs a minimal identity:
+// seller_email, seller_first_name, seller_phone. The provider completes all
+// KYC/banking directly in PayMe Hosted Onboarding (via seller_dashboard_signup_link),
+// and PayMe owns that data — Regli deliberately does NOT collect or store social
+// id, birthdate, gender, bank details, etc.
+//
+// The real-data 'onboarding' path builds this payload from the authenticated
+// provider's OWN profile data — never from SANDBOX_SELLER_IDENTITY. Which payload
+// a request may build is decided by decideSellerRequest() above.
+//
+// SECURITY: none of the functions below ever log identity values. Callers log
+// only field NAMES (see `missing`) and non-secret status codes.
+
+// Non-secret subset of a provider's profile used for the minimal PayMe seller.
+// No KYC/bank fields: those are owned by PayMe Hosted Onboarding.
+export interface ProviderProfileFields {
+  email?: unknown
+  full_name?: unknown
+  whatsapp_number?: unknown
+}
+
+export interface NormalizedProviderSeller {
+  firstName: string | null
+  email: string | null
+  phone: string | null
+}
+
+/**
+ * Derive `seller_first_name` from Regli's single `full_name` field: the first
+ * non-empty whitespace-delimited token. This is NOT an invented legal name and
+ * NO last name is derived (PayMe does not require one for the minimal request).
+ */
+function deriveFirstName(fullName: string | null): string | null {
+  if (!fullName) return null
+  const first = fullName.trim().split(/\s+/).filter(Boolean)[0]
+  return first ?? null
+}
+
+/**
+ * Assemble the minimal seller input from data Regli already has. `seller_phone`
+ * uses the provider's whatsapp number (Regli has no dedicated phone column).
+ */
+export function normalizeProviderSellerInput(
+  profile: ProviderProfileFields | null | undefined,
+): NormalizedProviderSeller {
+  const p = profile ?? {}
+  return {
+    firstName: deriveFirstName(asNonEmptyString(p.full_name)),
+    email: asNonEmptyString(p.email),
+    phone: asNonEmptyString(p.whatsapp_number),
+  }
+}
+
+// Minimal PayMe create-seller fields required before we may contact PayMe.
+export const REQUIRED_PROVIDER_SELLER_FIELDS = [
+  'seller_email',
+  'seller_first_name',
+  'seller_phone',
+] as const
+
+export type ProviderSellerValidation =
+  | { ok: true }
+  | { ok: false; missing: string[] }
+
+/**
+ * Validate that the minimal identity is present. Returns the missing PayMe field
+ * NAMES (never values) so callers can log/return a safe, structured error.
+ */
+export function validateProviderSellerInput(
+  n: NormalizedProviderSeller,
+): ProviderSellerValidation {
+  const missing: string[] = []
+  if (!n.email) missing.push('seller_email')
+  if (!n.firstName) missing.push('seller_first_name')
+  if (!n.phone) missing.push('seller_phone')
+  return missing.length === 0 ? { ok: true } : { ok: false, missing }
+}
+
+export type ProviderSellerBuildResult =
+  | { ok: true; body: Record<string, unknown> }
+  | { ok: false; missing: string[] }
+
+/**
+ * Build the MINIMAL PayMe create-seller request body from real provider data.
+ * Injects PAYME_PARTNER_CLIENT_KEY server-side (never hardcoded) and returns a
+ * structured validation error instead of a body when the minimal identity is
+ * incomplete — the caller must NOT contact PayMe in that case.
+ *
+ * Only seller_email / seller_first_name / seller_phone are sent. KYC/banking is
+ * collected by PayMe Hosted Onboarding. If a marketplace config requires an extra
+ * field, PayMe returns error code 19 (see isPaymeRequiredFieldError).
+ *
+ * NEVER log the returned body: it carries the partner credential.
+ */
+export function buildProviderSellerRequestBody(
+  clientKey: string,
+  n: NormalizedProviderSeller,
+): ProviderSellerBuildResult {
+  const validation = validateProviderSellerInput(n)
+  if (!validation.ok) return { ok: false, missing: validation.missing }
+
+  return {
+    ok: true,
+    body: {
+      payme_client_key: clientKey,
+      seller_email: n.email,
+      seller_first_name: n.firstName,
+      seller_phone: n.phone,
+    },
+  }
+}
+
+// PayMe error code 19 = a marketplace-specific required field is missing; PayMe
+// identifies it by name (via status_additional_info). This lets us surface a
+// safe, actionable error without exposing any raw response contents.
+export const PAYME_MISSING_FIELD_ERROR_CODE = 19
+
+export function isPaymeRequiredFieldError(
+  raw: PaymeCreateSellerRaw | null | undefined,
+): boolean {
+  return !!raw && raw.status_code !== 0 && raw.status_error_code === PAYME_MISSING_FIELD_ERROR_CODE
+}
+
+/**
+ * Extract the missing field NAME from status_additional_info, but ONLY when it
+ * is unambiguously a schema field name (e.g. `seller_last_name`). Anything that
+ * could carry a value or free text is rejected -> null. Never returns values.
+ */
+export function extractSafeMissingFieldName(
+  raw: PaymeCreateSellerRaw | null | undefined,
+): string | null {
+  const info = asNonEmptyString(raw?.status_additional_info)
+  if (!info) return null
+  return /^(seller|payme)_[a-z0-9_]+$/.test(info.trim()) ? info.trim() : null
+}
+
+/**
+ * Decide what a request should do after attempting the atomic "claim" (the
+ * conditional UPDATE not_started/failed -> creating). The claim itself is the
+ * lock (enforced by Postgres row locking); this only interprets the result:
+ *  - claimed              -> 'proceed'        (this request creates the seller)
+ *  - not claimed + id     -> 'return_existing'(another request already created it)
+ *  - not claimed + no id  -> 'in_progress'    (another request is creating it now)
+ */
+export function classifyClaimOutcome(params: {
+  claimed: boolean
+  existingSellerId: string | null | undefined
+}): 'proceed' | 'return_existing' | 'in_progress' {
+  if (params.claimed) return 'proceed'
+  if (asNonEmptyString(params.existingSellerId)) return 'return_existing'
+  return 'in_progress'
 }
