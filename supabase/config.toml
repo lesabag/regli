@@ -28,6 +28,15 @@ verify_jwt = false
 [functions.create-payme-seller]
 verify_jwt = true
 
+# PayMe Partner-level callback receiver. PUBLIC on purpose: PayMe calls it
+# server-to-server and cannot present a Regli end-user JWT, so JWT verification is
+# disabled for THIS function only (create-payme-seller above stays verify_jwt =
+# true). Callbacks are treated as UNTRUSTED and change no business state until
+# PayMe's authenticity/signature contract is implemented — see
+# TODO(payme-callback-auth) in the function.
+[functions.payme-partner-callback]
+verify_jwt = false
+
 [functions.create-payment-intent]
 verify_jwt = false
 
