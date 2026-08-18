@@ -106,6 +106,59 @@ export interface CreateSellerAccountResponse {
   raw?: unknown
 }
 
+// ---------------------------------------------------------------------------
+// Provider Account Activation Fee (one-time J5 authorize -> capture / void).
+// These carry ONLY safe, client-visible orchestration data — never card, bank,
+// KYC, secret, or PayMe credential values.
+// ---------------------------------------------------------------------------
+
+// Authoritative, server-provided activation-fee quote. The client displays these
+// values but never computes them (see src/config/activationFee.ts). All amounts are
+// in agorot; the server charges exactly `grossAgorot` for the J5 authorization.
+export interface ProviderActivationFeeQuote {
+  currency: string
+  netAgorot: number
+  vatAgorot: number
+  grossAgorot: number
+}
+
+export interface GetProviderActivationFeeQuoteResponse {
+  success: boolean
+  provider: PaymentProviderId
+  quote: ProviderActivationFeeQuote | null
+  raw?: unknown
+}
+
+export interface AuthorizeProviderActivationFeeResponse {
+  success: boolean
+  provider: PaymentProviderId
+  // Regli-internal activation state after the call (see ProviderActivationState).
+  state?: string
+  // Hosted PayMe J5 page where the provider enters their card. Never null-safe to
+  // navigate elsewhere — the provider only ever sees PayMe's own page.
+  saleUrl?: string | null
+  authorizationExpiresAt?: string | null
+  // True when the server flag left the operation a no-op (nothing authorized).
+  skipped?: boolean
+  raw?: unknown
+}
+
+export interface CaptureProviderActivationFeeResponse {
+  success: boolean
+  provider: PaymentProviderId
+  state?: string
+  skipped?: boolean
+  raw?: unknown
+}
+
+export interface VoidProviderActivationFeeResponse {
+  success: boolean
+  provider: PaymentProviderId
+  state?: string
+  skipped?: boolean
+  raw?: unknown
+}
+
 export interface CreateSellerOnboardingLinkRequest {
   useNativeDeepLink?: boolean
 }

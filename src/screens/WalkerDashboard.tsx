@@ -12,6 +12,19 @@ import LegalDocumentModal from '../components/LegalDocumentModal'
 import DeleteAccountModal from '../components/DeleteAccountModal'
 import GroupedHistory from '../components/GroupedHistory'
 import ProviderPricingPreferences from '../components/ProviderPricingPreferences'
+import ProviderPaymentActivation from '../components/ProviderPaymentActivation'
+import ProviderReadinessCard from '../components/ProviderReadinessCard'
+import { type PaymeSellerSnapshot } from '../payments/providerPaymentSetupState'
+import {
+  isProviderPaymentReady,
+  type ProviderActivationState,
+} from '../payments/providerActivationState'
+import {
+  buildReadinessUpdate,
+  readProviderReadiness,
+  READY_FOR_ACTIVATION_COLUMN,
+  READY_FOR_ACTIVATION_AT_COLUMN,
+} from '../payments/providerReadiness'
 import type { HistoryItem } from '../components/GroupedHistory'
 import { useProviderDashboardCards, type ProviderDashboardCardKey } from '../hooks/useProviderDashboardCards'
 import { useProviderInsights } from '../hooks/useProviderInsights'
@@ -934,7 +947,106 @@ export default function WalkerDashboard({
   const [burgerOpen, setBurgerOpen] = useState(false)
   const [menuPage, setMenuPage] = useState<MenuPage>('main')
   const [showStripeGate, setShowStripeGate] = useState(false)
+  const [showPaymeActivation, setShowPaymeActivation] = useState(false)
+  // Provider activation READINESS (Stage A) — a Regli-only intent flag. Marking
+  // ready persists a boolean ONLY (see providerReadiness.ts): it never contacts
+  // PayMe, never creates a Seller, and never makes the provider dispatch-eligible.
+  const [readyForActivation, setReadyForActivation] = useState(false)
+  const [readinessBusy, setReadinessBusy] = useState(false)
+  const [readinessError, setReadinessError] = useState<string | null>(null)
+  // Server-authoritative provider payment-activation state (provider_activation).
+  // Read-only here: the client never mutates it (edge functions do). Paid-order
+  // eligibility is derived ONLY from this being 'payment_ready'.
+  const [activationState, setActivationState] = useState<ProviderActivationState | null>(null)
   const [showOnboardingWow, setShowOnboardingWow] = useState(false)
+
+  // Dormant client rollout gate for the PayMe explicit-activation UI. OFF by
+  // default: Stripe Connect is the live provider payment path today, so this keeps
+  // the existing online flow unchanged. Enabling it only SHOWS the activation gate;
+  // it can NEVER create a PayMe Seller (or incur its per-provider setup cost) while
+  // the server flag PAYME_SELLER_ONBOARDING_ENABLED is false — create-payme-seller
+  // returns `skipped` and the gate surfaces a safe "setup unavailable" state. This
+  // is a UI rollout switch, not a bypass of the server flag.
+  const paymeActivationUiEnabled = import.meta.env.VITE_PAYME_ACTIVATION_UI === 'true'
+
+  // Provider's persisted PayMe seller state, used only to decide start-vs-resume
+  // and paid-order eligibility (never to create anything). The PayMe columns are
+  // not yet part of this screen's profile prop (Phase 2 will extend the fetch);
+  // until then this resolves to 'not_started', which correctly blocks eligibility.
+  const paymeSellerSnapshot = useMemo<PaymeSellerSnapshot>(() => {
+    const p = profile as {
+      payme_seller_id?: string | null
+      payme_onboarding_status?: string | null
+    }
+    return {
+      paymeSellerId: p.payme_seller_id ?? null,
+      onboardingStatus: p.payme_onboarding_status ?? null,
+      signupUrl: null,
+    }
+  }, [profile])
+
+  // Stage B seam: payment activation is requested by a LATER, admin/demand-driven
+  // signal — never auto-derived from readiness. It is intentionally pinned false in
+  // this phase (no demand engine / admin trigger implemented yet, see Phase 2C), so
+  // the costly seller-creating gate (Stage B) is never auto-promoted from readiness.
+  const paymentActivationRequested = false
+
+  // Load the provider's persisted readiness flag. Guarded by the dormant rollout
+  // flag so production (Stripe-track) issues no extra query. Reading readiness is a
+  // plain profile SELECT — it never contacts PayMe.
+  // Fetch the owner-readable activation state (owner-scoped RLS; SELECT only).
+  const refreshActivationState = useCallback(async () => {
+    const { data } = await supabase
+      .from('provider_activation')
+      .select('activation_state')
+      .eq('provider_id', profile.id)
+      .maybeSingle()
+    const state = (data as { activation_state?: string } | null)?.activation_state
+    setActivationState((state as ProviderActivationState | undefined) ?? null)
+  }, [profile.id])
+
+  useEffect(() => {
+    if (!paymeActivationUiEnabled) return
+    let cancelled = false
+    void (async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select(`${READY_FOR_ACTIVATION_COLUMN}, ${READY_FOR_ACTIVATION_AT_COLUMN}`)
+        .eq('id', profile.id)
+        .maybeSingle()
+      if (cancelled) return
+      setReadyForActivation(readProviderReadiness(data).readyForActivation)
+      await refreshActivationState()
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [paymeActivationUiEnabled, profile.id, refreshActivationState])
+
+  // Mark or withdraw activation readiness.
+  //
+  // COST INVARIANT — READINESS BOUNDARY: this persists a Regli-only intent flag
+  // ONLY. It MUST NOT create a PayMe Seller and has ZERO PayMe setup cost — no Edge
+  // Function, no signup URL, no Hosted Onboarding, no external PayMe navigation. The
+  // update payload (buildReadinessUpdate) carries only the two readiness columns.
+  const setReadiness = useCallback(
+    async (ready: boolean) => {
+      if (readinessBusy) return
+      setReadinessBusy(true)
+      setReadinessError(null)
+      const { error } = await supabase
+        .from('profiles')
+        .update(buildReadinessUpdate(ready, new Date().toISOString()))
+        .eq('id', profile.id)
+      if (error) {
+        setReadinessError(error.message)
+      } else {
+        setReadyForActivation(ready)
+      }
+      setReadinessBusy(false)
+    },
+    [profile.id, readinessBusy],
+  )
   const [stripeReturnNotice, setStripeReturnNotice] = useState<string | null>(null)
   const [dashboardCardNotice, setDashboardCardNotice] = useState<string | null>(null)
   const [activeOptionalHomeCard, setActiveOptionalHomeCard] = useState<ProviderDashboardCardKey | null>(null)
@@ -3067,6 +3179,28 @@ export default function WalkerDashboard({
       return
     }
     if (!flow.isOnline) {
+      // PayMe paid-order eligibility gate (dormant behind PAYME_ACTIVATION_UI).
+      //
+      // COST + ELIGIBILITY INVARIANT: going online (like availability/service
+      // configuration) does NOT imply payment activation and MUST NOT create a
+      // PayMe Seller. Readiness alone never makes a provider dispatch-eligible —
+      // eligibility requires the full chain (payment activation -> seller created
+      // -> PayMe onboarding -> complete). When a PayMe-track provider is not yet
+      // eligible, block going online and route them to the readiness card; the
+      // costly seller-creating gate (Stage B) is a SEPARATE, admin/demand-driven
+      // step and is never opened here. The live provider payment path today is
+      // Stripe Connect, so this branch is pinned off (see paymeActivationUiEnabled)
+      // and leaves the Stripe flow below unchanged.
+      // CANONICAL PAID-ORDER ELIGIBILITY: only when activation reaches
+      // 'payment_ready' (fee authorized -> seller created -> KYC approved -> fee
+      // captured). Readiness, fee_authorized, seller_created, kyc_pending, and even
+      // kyc_approved-before-capture are ALL insufficient. Availability/service
+      // configuration is independent and never implies eligibility.
+      if (paymeActivationUiEnabled && !isProviderPaymentReady(activationState)) {
+        setBurgerOpen(true)
+        setMenuPage('settings')
+        return
+      }
       const ok = await flow.toggleOnline()
       if (!ok) {
         setShowStripeGate(true)
@@ -3075,7 +3209,7 @@ export default function WalkerDashboard({
     }
     setShowStripeGate(false)
     await flow.toggleOnline()
-  }, [flow, hasSelectedProfileService, serviceSelectionRequiredLabel])
+  }, [activationState, flow, hasSelectedProfileService, paymeActivationUiEnabled, serviceSelectionRequiredLabel])
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -4404,6 +4538,31 @@ export default function WalkerDashboard({
               </div>
             </>
           )}
+
+          {/* Stage A — provider readiness. Persists intent only; zero PayMe cost.
+              Gated by the dormant rollout flag; Stripe Connect stays the live path. */}
+          {paymeActivationUiEnabled ? (
+            <ProviderReadinessCard
+              ready={readyForActivation}
+              busy={readinessBusy}
+              error={readinessError}
+              paymentActivationRequested={paymentActivationRequested}
+              onMarkReady={() => void setReadiness(true)}
+              onWithdraw={() => void setReadiness(false)}
+              onStartPaymentActivation={() => setShowPaymeActivation(true)}
+            />
+          ) : null}
+
+          {/* Stage B — payment activation gate. The ONLY seller-creating path; opened
+              only via the readiness card's payment CTA, which itself appears only when
+              payment activation has been requested (admin/demand seam). */}
+          <ProviderPaymentActivation
+            open={showPaymeActivation}
+            snapshot={paymeSellerSnapshot}
+            activationState={activationState}
+            onClose={() => setShowPaymeActivation(false)}
+            onStateChanged={() => void refreshActivationState()}
+          />
 
           {showOnboardingWow && (
             <>

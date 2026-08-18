@@ -28,6 +28,22 @@ verify_jwt = false
 [functions.create-payme-seller]
 verify_jwt = true
 
+# Provider Account Activation Fee orchestration (J5 authorize / capture / void).
+# All require an authenticated provider — the provider_id ALWAYS comes from the
+# JWT, never the request body. PayMe credentials + Regli's own seller id stay
+# server-side. All three are gated OFF behind PAYME_SELLER_ONBOARDING_ENABLED.
+[functions.payme-provider-activation-quote]
+verify_jwt = true
+
+[functions.payme-authorize-provider-activation]
+verify_jwt = true
+
+[functions.payme-capture-provider-activation]
+verify_jwt = true
+
+[functions.payme-void-provider-activation]
+verify_jwt = true
+
 # PayMe Partner-level callback receiver. PUBLIC on purpose: PayMe calls it
 # server-to-server and cannot present a Regli end-user JWT, so JWT verification is
 # disabled for THIS function only (create-payme-seller above stays verify_jwt =

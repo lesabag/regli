@@ -3,6 +3,8 @@ import { PayMeProvider } from './PayMeProvider'
 import { StripeProvider } from './StripeProvider'
 import { resolvePaymentProvider } from './providerResolver'
 import type {
+  AuthorizeProviderActivationFeeResponse,
+  CaptureProviderActivationFeeResponse,
   CreatePaymentIntentRequest,
   CreatePaymentIntentResponse,
   CreateRefundRequest,
@@ -11,6 +13,7 @@ import type {
   CreateSellerOnboardingLinkRequest,
   CreateSellerOnboardingLinkResponse,
   DetachPaymentMethodResponse,
+  GetProviderActivationFeeQuoteResponse,
   PaymentMethodCustomerResponse,
   PaymentProviderId,
   PaymentProviderResolverInput,
@@ -19,6 +22,7 @@ import type {
   PaymentWebhookResult,
   PrepareNativePaymentSheetResponse,
   SellerStatus,
+  VoidProviderActivationFeeResponse,
 } from './types'
 
 const paymentProviders: Record<PaymentProviderId, PaymentProvider> = {
@@ -61,6 +65,30 @@ export class PaymentService {
     context: PaymentProviderResolverInput = {},
   ): Promise<CreateSellerAccountResponse> {
     return this.getProvider(context).createSellerAccount()
+  }
+
+  getProviderActivationFeeQuote(
+    context: PaymentProviderResolverInput = {},
+  ): Promise<GetProviderActivationFeeQuoteResponse> {
+    return this.getProvider(context).getProviderActivationFeeQuote()
+  }
+
+  authorizeProviderActivationFee(
+    context: PaymentProviderResolverInput = {},
+  ): Promise<AuthorizeProviderActivationFeeResponse> {
+    return this.getProvider(context).authorizeProviderActivationFee()
+  }
+
+  captureProviderActivationFee(
+    context: PaymentProviderResolverInput = {},
+  ): Promise<CaptureProviderActivationFeeResponse> {
+    return this.getProvider(context).captureProviderActivationFee()
+  }
+
+  voidProviderActivationFee(
+    context: PaymentProviderResolverInput = {},
+  ): Promise<VoidProviderActivationFeeResponse> {
+    return this.getProvider(context).voidProviderActivationFee()
   }
 
   createSellerOnboardingLink(

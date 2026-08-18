@@ -1,6 +1,8 @@
 import { invokeEdgeFunction } from '../services/supabaseClient'
 import type { PaymentProvider } from './PaymentProvider'
 import type {
+  AuthorizeProviderActivationFeeResponse,
+  CaptureProviderActivationFeeResponse,
   CreatePaymentIntentRequest,
   CreatePaymentIntentResponse,
   CreateRefundRequest,
@@ -9,11 +11,13 @@ import type {
   CreateSellerOnboardingLinkRequest,
   CreateSellerOnboardingLinkResponse,
   DetachPaymentMethodResponse,
+  GetProviderActivationFeeQuoteResponse,
   PaymentMethodCustomerResponse,
   PaymentSetupIntentResponse,
   PaymentWebhookPayload,
   PaymentWebhookResult,
   SellerStatus,
+  VoidProviderActivationFeeResponse,
 } from './types'
 
 type StripeConnectStatusResponse = {
@@ -60,6 +64,25 @@ export class StripeProvider implements PaymentProvider {
       provider: this.id,
       raw: data ?? null,
     }
+  }
+
+  // The Provider Account Activation Fee is a PayMe-track concept. Stripe (Connect)
+  // has no equivalent, so these are unsupported and never invoked for Stripe. This
+  // preserves Stripe behavior entirely — no Stripe path calls these methods.
+  async getProviderActivationFeeQuote(): Promise<GetProviderActivationFeeQuoteResponse> {
+    throw new Error('Stripe provider activation fee is not applicable.')
+  }
+
+  async authorizeProviderActivationFee(): Promise<AuthorizeProviderActivationFeeResponse> {
+    throw new Error('Stripe provider activation fee is not applicable.')
+  }
+
+  async captureProviderActivationFee(): Promise<CaptureProviderActivationFeeResponse> {
+    throw new Error('Stripe provider activation fee is not applicable.')
+  }
+
+  async voidProviderActivationFee(): Promise<VoidProviderActivationFeeResponse> {
+    throw new Error('Stripe provider activation fee is not applicable.')
   }
 
   async createSellerOnboardingLink(

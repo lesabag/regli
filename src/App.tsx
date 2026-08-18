@@ -14,7 +14,6 @@ import { identify, resetIdentity, track, startFlushLoop, AnalyticsEvent } from '
 import { handleNativeStripeURLCallback, initializeNativeStripe } from './lib/nativeStripe'
 import { emitPushDeepLink, parsePushDeepLink, PUSH_DEEP_LINK_EVENT, type ParsedPushDeepLink } from './lib/pushNotifications'
 import { usePushNotifications } from './hooks/usePushNotifications'
-import { triggerPaymeSellerOnboarding } from './payments/onboardingTrigger'
 import { disposeFirstInteractionPerf, initFirstInteractionPerf } from './utils/firstInteractionPerf'
 import { warmHapticsBridge } from './utils/haptics'
 import i18n from './i18n'
@@ -614,10 +613,12 @@ export default function App() {
     if (pendingWow === 'provider') {
       setProviderWowToken((value) => value + 1)
       window.sessionStorage.removeItem('regli:onboarding-wow')
-      // Phase 1 PayMe seller onboarding — fires once per provider registration,
-      // non-blocking; gated server-side by PAYME_SELLER_ONBOARDING_ENABLED.
-      // Never affects registration/auth (see triggerPaymeSellerOnboarding).
-      void triggerPaymeSellerOnboarding('walker')
+      // COST INVARIANT: creating a PayMe Seller has a per-provider setup cost, so
+      // it must NOT be triggered by registration/onboarding. Completing provider
+      // registration deliberately does NOT contact PayMe. Seller creation happens
+      // ONLY behind an explicit provider activation action (see
+      // src/payments/providerActivation.ts). Do not move any PayMe call back into
+      // this registration effect.
       return
     }
     if (pendingWow === 'customer') {

@@ -1,4 +1,6 @@
 import type {
+  AuthorizeProviderActivationFeeResponse,
+  CaptureProviderActivationFeeResponse,
   CreatePaymentIntentRequest,
   CreatePaymentIntentResponse,
   CreateRefundRequest,
@@ -7,18 +9,26 @@ import type {
   CreateSellerOnboardingLinkRequest,
   CreateSellerOnboardingLinkResponse,
   DetachPaymentMethodResponse,
+  GetProviderActivationFeeQuoteResponse,
   PaymentMethodCustomerResponse,
   PaymentProviderId,
   PaymentSetupIntentResponse,
   PaymentWebhookPayload,
   PaymentWebhookResult,
   SellerStatus,
+  VoidProviderActivationFeeResponse,
 } from './types'
 
 export interface PaymentProvider {
   readonly id: PaymentProviderId
   getProviderName(): string
   createSellerAccount(): Promise<CreateSellerAccountResponse>
+  // Provider Account Activation Fee — one-time J5 authorize / capture / void.
+  // Authoritative, server-provided fee quote (client displays, never computes it).
+  getProviderActivationFeeQuote(): Promise<GetProviderActivationFeeQuoteResponse>
+  authorizeProviderActivationFee(): Promise<AuthorizeProviderActivationFeeResponse>
+  captureProviderActivationFee(): Promise<CaptureProviderActivationFeeResponse>
+  voidProviderActivationFee(): Promise<VoidProviderActivationFeeResponse>
   createSellerOnboardingLink(
     request?: CreateSellerOnboardingLinkRequest,
   ): Promise<CreateSellerOnboardingLinkResponse>
